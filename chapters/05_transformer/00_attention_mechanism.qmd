@@ -4,79 +4,487 @@ subtitle: "Query·Key·Value와 스케일드 닷프로덕트 — 이 책의 중�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+현대 AI의 거의 전부가 한 줄의 식 위에 서 있다.
 
-현대 AI의 거의 전부가 이 한 식 위에 서 있다. 이 장은 그 식을 기호 하나하나까지 분해한다.
+$$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V$$
+
+GPT도, Whisper도, Stable Diffusion의 텍스트 조건 주입도, CLIP도 이 식을 반복해서 쓴다.
+이 장은 그 식을 기호 하나하나까지 분해한다.
+왜 세 개의 행렬이 필요한지, 왜 하필 $\sqrt{d_k}$ 로 나누는지, 그리고 그 대가로 무엇을 지불하는지.
 
 ---
 
-## 이 장에서 다루는 것
+## 어텐션은 미분 가능한 딕셔너리 조회다
 
-- 어텐션을 '미분 가능한 딕셔너리 조회'로 읽기
-- Query·Key·Value의 역할 분리와 그 필요성
-- 유사도 점수: 내적, 가산, 일반 이중선형
-- 스케일드 닷프로덕트: 왜 √d_k 로 나누는가 (분산 유도)
-- softmax 정규화와 가중합
-- Attention(Q,K,V) = softmax(QKᵀ/√d_k)V 전체 유도
-- 행렬 형태와 배치 처리, 텐서 shape 추적
-- 계산 복잡도 O(n²d)와 메모리 O(n²)
-- 어텐션과 커널 방법·최근접 이웃의 관계
-- 어텐션 맵 읽는 법과 그 해석의 한계
+파이썬 딕셔너리를 생각해보자.
+
+```python
+d = {"고양이": [0.2, 0.9], "강아지": [0.8, 0.1]}
+d["고양이"]      # → [0.2, 0.9]
+```
+
+여기서 일어나는 일은 세 단계다.
+
+1. **질의(query)** `"고양이"` 를 받는다.
+2. 저장된 **키(key)** 들과 비교해 일치하는 것을 찾는다.
+3. 일치한 키의 **값(value)** 을 돌려준다.
+
+문제는 2단계가 **딱딱하다**는 것이다. 정확히 일치하면 1, 아니면 0.
+미분이 안 되니 학습에 쓸 수 없고, `"고양이과 동물"` 같은 부분적 일치도 다루지 못한다.
+
+어텐션은 이 조회를 **부드럽게(soft)** 만든다.
+
+- 일치/불일치 대신 **유사도 점수**를 계산한다.
+- 하나만 고르는 대신 **모든 값의 가중 평균**을 돌려준다.
+- 가중치는 softmax로 정규화해 합이 1이 되게 한다.
+
+::: {.key-concept}
+**핵심**: 어텐션 = 딕셔너리 조회의 미분 가능한 버전.
+
+$$\text{조회 결과} = \sum_{j} \underbrace{\text{유사도}(q, k_j)}_{\text{가중치, 합}=1} \cdot v_j$$
+
+딱딱한 조회는 가중치가 원-핫이고, 어텐션은 그것을 부드럽게 편 것이다.
+:::
+
+### 왜 Q, K, V를 따로 두는가
+
+같은 입력에서 세 개를 뽑는 게 낭비처럼 보인다. 하나로 하면 안 될까?
+
+안 된다. 세 역할이 서로 다르기 때문이다.
+
+| 역할 | 질문 | 누구의 성질인가 |
+|------|------|-----------------|
+| **Query** $q_i$ | "나는 무엇을 찾고 있는가" | 정보를 **받는** 쪽 |
+| **Key** $k_j$ | "나는 무엇으로 검색되는가" | 정보를 **주는** 쪽의 색인 |
+| **Value** $v_j$ | "내가 실제로 전달할 내용은 무엇인가" | 정보를 **주는** 쪽의 내용 |
+
+Key와 Value를 분리하는 것이 특히 중요하다.
+"검색되는 방식"과 "전달되는 내용"이 달라야 하기 때문이다.
+
+> `"그것"` 이라는 대명사 토큰이 앞의 `"고양이"` 를 찾는 상황을 생각해보자.
+> 검색은 *"나는 앞에 나온 명사를 찾는다"* 라는 문법적 성질로 이뤄지지만(Key),
+> 실제로 가져와야 할 것은 *"고양이라는 의미"* 다(Value).
+> 하나의 벡터로 두 역할을 다 하면 이 둘이 서로를 방해한다.
+
+실제로는 입력 $X \in \mathbb{R}^{n \times d}$ 에 학습되는 행렬 세 개를 곱해 만든다.
+
+$$Q = XW_Q, \quad K = XW_K, \quad V = XW_V$$
 
 ---
 
 ## G5.0.1 — 어텐션 3단계 분해
 
-점수 → softmax → 가중합을 실제 숫자로 따라가는 계산 시각화
+식을 한 번에 보지 말고 세 단계로 끊어 보자.
+쿼리 위치를 옮겨가며 **점수 → softmax → 가중합**이 실제 숫자로 어떻게 흘러가는지 확인한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 쿼리 위치 슬라이더
+```{python}
+#| label: fig-attention-steps
+#| fig-cap: "쿼리 하나가 값들의 가중 평균을 만들기까지. 슬라이더로 쿼리 위치를 바꾸세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import attention, viz
+
+# 작은 예제: 토큰 6개, d_k = 4
+tokens = ["나는", "어제", "빨간", "사과를", "먹었", "다"]
+n, d_k = len(tokens), 4
+
+rng = np.random.default_rng(7)
+Q = rng.normal(size=(n, d_k))
+K = rng.normal(size=(n, d_k))
+V = rng.normal(size=(n, d_k))
+
+scores = Q @ K.T / np.sqrt(d_k)          # 1단계
+weights = attention.softmax(scores)      # 2단계
+out = weights @ V                        # 3단계
+
+fig = make_subplots(
+    rows=1, cols=3,
+    subplot_titles=("① 점수 qᵢ·kⱼ/√d_k", "② softmax 가중치 (합=1)", "③ 가중합 = 출력 벡터"),
+    column_widths=[0.36, 0.36, 0.28],
+)
+
+q0 = 3  # 초기 쿼리 위치: "사과를"
+
+fig.add_trace(go.Bar(x=tokens, y=scores[q0], marker_color=viz.ACCENT,
+                     name="점수", showlegend=False), row=1, col=1)
+fig.add_trace(go.Bar(x=tokens, y=weights[q0], marker_color=viz.GREEN,
+                     name="가중치", showlegend=False), row=1, col=2)
+fig.add_trace(go.Bar(x=[f"d{i}" for i in range(d_k)], y=out[q0],
+                     marker_color=viz.WARM, name="출력", showlegend=False), row=1, col=3)
+
+steps = []
+for i in range(n):
+    steps.append(dict(
+        method="update",
+        label=tokens[i],
+        args=[{"y": [scores[i], weights[i], out[i]]},
+              {"annotations": [
+                  dict(text="① 점수 qᵢ·kⱼ/√d_k", x=0.15, y=1.06, xref="paper",
+                       yref="paper", showarrow=False, font=dict(size=13)),
+                  dict(text="② softmax 가중치 (합=1)", x=0.53, y=1.06, xref="paper",
+                       yref="paper", showarrow=False, font=dict(size=13)),
+                  dict(text="③ 가중합 = 출력 벡터", x=0.90, y=1.06, xref="paper",
+                       yref="paper", showarrow=False, font=dict(size=13)),
+                  dict(text=f"최대 가중치: <b>{tokens[int(np.argmax(weights[i]))]}</b>"
+                            f" ({weights[i].max():.2f})",
+                       x=0.53, y=-0.28, xref="paper", yref="paper",
+                       showarrow=False, font=dict(size=12, color=viz.GREEN)),
+              ]}],
+    ))
+
+fig.update_layout(sliders=[viz.slider(
+    [(s["label"], s["args"][0] | s["args"][1]) for s in steps],
+    prefix="쿼리 토큰 = ", active=q0, pad_t=70,
+)])
+fig.update_yaxes(title_text="점수", row=1, col=1)
+fig.update_yaxes(title_text="가중치", range=[0, 1], row=1, col=2)
+fig.update_yaxes(title_text="값", row=1, col=3)
+
+viz.fig_defaults(fig, height=430)
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=110))
+fig.show()
+```
+
+::: {.interaction-hint}
+슬라이더로 쿼리 토큰을 바꿔보세요. ①의 점수는 음수도 가지지만, ②를 지나면 모두 양수가 되고 합이 1이 됩니다.
+:::
+
+세 단계를 코드로 쓰면 이게 전부다.
+
+```{python}
+#| label: attention-3lines
+#| code-fold: false
+
+scores  = Q @ K.T / np.sqrt(d_k)      # (n, n)  — 모든 쿼리 × 모든 키
+weights = attention.softmax(scores)   # (n, n)  — 행마다 합이 1
+output  = weights @ V                 # (n, d)  — 값들의 가중 평균
+
+print(f"점수    {scores.shape}   범위 [{scores.min():.2f}, {scores.max():.2f}]")
+print(f"가중치  {weights.shape}   행 합 = {weights.sum(axis=1).round(6)}")
+print(f"출력    {output.shape}")
+```
+
+---
+
+## 유사도를 어떻게 잴 것인가
+
+1단계의 "유사도"는 여러 방식이 가능하다. 역사적으로 두 가지가 경쟁했다.
+
+| 방식 | 식 | 특징 |
+|------|-----|------|
+| **가산(additive)** | $v^\top \tanh(W_q q + W_k k)$ | Bahdanau 어텐션. 작은 신경망 하나 |
+| **내적(dot-product)** | $q^\top k$ | 파라미터 없음. 행렬곱 하나로 전체 배치 처리 |
+
+Transformer는 내적을 골랐다. 이유는 품질이 아니라 **속도**다.
+
+> 이론적 복잡도는 비슷하지만, 내적은 고도로 최적화된 행렬 곱셈 코드로 구현할 수 있어
+> 실제로 훨씬 빠르고 메모리 효율이 좋다. — *Attention Is All You Need* (2017)
+
+내적이 유사도인 이유는 기하학적으로 명확하다.
+
+$$q^\top k = \|q\| \|k\| \cos\theta$$
+
+방향이 같으면 크고, 직교하면 0, 반대면 음수다.
+
+---
+
+## G5.0.2 — 왜 $\sqrt{d_k}$ 로 나누는가
+
+식에서 가장 임의적으로 보이는 부분이 $\sqrt{d_k}$ 다.
+이것은 미세 조정이 아니라 **없으면 학습이 안 되는** 필수 항목이다.
+
+이유는 분산 계산에서 나온다. $q$ 와 $k$ 의 각 성분이 평균 0, 분산 1로 독립이라 하자.
+
+$$q^\top k = \sum_{i=1}^{d_k} q_i k_i \quad\Longrightarrow\quad
+\mathrm{Var}(q^\top k) = \sum_{i=1}^{d_k} \mathrm{Var}(q_i k_i) = d_k$$
+
+즉 내적의 **표준편차가 $\sqrt{d_k}$ 에 비례해 커진다.**
+$d_k = 64$ 면 점수가 대략 $\pm 8$ 범위로 흩어지고, $d_k = 512$ 면 $\pm 23$ 까지 벌어진다.
+
+softmax는 입력 규모에 매우 민감하다. 점수가 크게 벌어지면 가장 큰 하나가 거의 1을 독차지하고
+나머지는 0으로 눌린다 — **포화(saturation)** 다. 그러면 그래디언트가 거의 흐르지 않아 학습이 멈춘다.
+
+$\sqrt{d_k}$ 로 나누면 분산이 다시 1로 돌아온다.
+
+```{python}
+#| label: fig-scaling
+#| fig-cap: "차원이 커질 때 스케일링 유무가 만드는 차이. 슬라이더로 d_k를 바꾸세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import attention, viz
+
+rng = np.random.default_rng(0)
+dims = [4, 8, 16, 32, 64, 128, 256, 512]
+n_keys = 12
+
+raw_max, scaled_max, raw_ent, scaled_ent = [], [], [], []
+raw_w, scaled_w = {}, {}
+
+for d_k in dims:
+    q = rng.normal(size=(1, d_k))
+    K = rng.normal(size=(n_keys, d_k))
+    s_raw = (q @ K.T)[0]
+    s_scaled = s_raw / np.sqrt(d_k)
+
+    w_raw = attention.softmax(s_raw)
+    w_scaled = attention.softmax(s_scaled)
+
+    raw_w[d_k], scaled_w[d_k] = w_raw, w_scaled
+    raw_max.append(w_raw.max())
+    scaled_max.append(w_scaled.max())
+    # 엔트로피가 낮을수록 한 곳에 몰렸다는 뜻
+    raw_ent.append(-np.sum(w_raw * np.log(w_raw + 1e-12)))
+    scaled_ent.append(-np.sum(w_scaled * np.log(w_scaled + 1e-12)))
+
+fig = make_subplots(
+    rows=1, cols=2, column_widths=[0.45, 0.55],
+    subplot_titles=("어텐션 가중치 분포", "차원에 따른 최대 가중치"),
+)
+
+d0 = dims[4]
+x_keys = [f"k{i}" for i in range(n_keys)]
+fig.add_trace(go.Bar(x=x_keys, y=raw_w[d0], name="스케일링 없음",
+                     marker_color=viz.WARM), row=1, col=1)
+fig.add_trace(go.Bar(x=x_keys, y=scaled_w[d0], name="÷√d_k",
+                     marker_color=viz.ACCENT), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=dims, y=raw_max, name="스케일링 없음", mode="lines+markers",
+                         line=dict(color=viz.WARM, width=2.5), showlegend=False), row=1, col=2)
+fig.add_trace(go.Scatter(x=dims, y=scaled_max, name="÷√d_k", mode="lines+markers",
+                         line=dict(color=viz.ACCENT, width=2.5), showlegend=False), row=1, col=2)
+fig.add_hline(y=1 / n_keys, line=dict(color="rgba(255,255,255,0.35)", dash="dot"),
+              annotation_text="균등(1/12)", annotation_position="bottom right",
+              row=1, col=2)
+
+fig.update_layout(sliders=[viz.slider(
+    [(str(d), {"y": [raw_w[d], scaled_w[d], raw_max, scaled_max]}) for d in dims],
+    prefix="d_k = ", active=4, pad_t=60,
+)])
+fig.update_xaxes(title_text="키", row=1, col=1)
+fig.update_yaxes(title_text="가중치", range=[0, 1], row=1, col=1)
+fig.update_xaxes(title_text="d_k", type="log", row=1, col=2)
+fig.update_yaxes(title_text="최대 가중치", range=[0, 1.05], row=1, col=2)
+
+viz.fig_defaults(fig, height=440)
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=100), barmode="group")
+fig.show()
+```
+
+::: {.interaction-hint}
+$d_k$ 를 키워보세요. 주황(스케일링 없음)은 최대 가중치가 1로 붙어버립니다 — 사실상 argmax가 되어 그래디언트가 사라집니다. 파랑(÷√d_k)은 차원과 무관하게 분포를 유지합니다.
+:::
+
+::: {.callout-note}
+## 이것은 수치 안정성 문제가 아니다
+
+`softmax` 구현은 최댓값을 빼기 때문에 오버플로는 나지 않는다([0.5 수치 컴퓨팅](../00_foundations/05_numerical_computing.qmd) 참고).
+$\sqrt{d_k}$ 가 막는 것은 **그래디언트 소실**이다.
+
+softmax가 원-핫에 가까워지면 야코비안 $\text{diag}(p) - pp^\top$ 의 모든 원소가 0에 가까워진다.
+$p \approx (1, 0, \dots, 0)$ 이면 $p_i(1-p_i) \approx 0$ 이기 때문이다.
+순전파는 멀쩡히 되지만 역전파로 아무 신호도 돌아오지 않는다.
 :::
 
 ---
 
-## G5.0.2 — √d_k 스케일링의 이유
+## 전체 식 조립하기
 
-스케일링 없이 차원이 커질 때 softmax가 원핫으로 포화되는 현상
+이제 모든 조각이 모였다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 차원 d_k 슬라이더
+$$
+\underbrace{\text{Attention}(Q,K,V)}_{(n \times d_v)} =
+\underbrace{\text{softmax}\left(
+\frac{\overbrace{Q}^{n \times d_k} \overbrace{K^\top}^{d_k \times n}}{\sqrt{d_k}}
+\right)}_{n \times n \text{ — 어텐션 행렬}}
+\underbrace{V}_{n \times d_v}
+$$
+
+**shape를 따라가는 것이 이해의 핵심이다.**
+
+| 단계 | 연산 | 결과 shape | 의미 |
+|------|------|-----------|------|
+| 1 | $QK^\top$ | $(n, n)$ | 모든 토큰 쌍의 유사도 |
+| 2 | $\div \sqrt{d_k}$ | $(n, n)$ | 분산 정규화 |
+| 3 | $\text{softmax}(\cdot)$ | $(n, n)$ | 행마다 합이 1인 가중치 |
+| 4 | $\cdot\, V$ | $(n, d_v)$ | 각 토큰의 새 표현 |
+
+중간의 $(n, n)$ 행렬이 **어텐션 행렬**이다.
+$i$ 행 $j$ 열은 "토큰 $i$ 가 토큰 $j$ 를 얼마나 참조하는가"를 뜻하고, 각 행의 합은 1이다.
+
+그리고 이 $(n,n)$ 이 이 구조의 축복이자 저주다.
+
+---
+
+## G5.0.3 — 어텐션 행렬 읽기
+
+```{python}
+#| label: fig-attention-map
+#| fig-cap: "어텐션 행렬. 행 i = 토큰 i가 각 토큰에 준 가중치 (행 합 = 1)"
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import attention, viz
+
+sent = ["빨간", "사과가", "책상", "위에", "놓여", "있었", "다"]
+n, d_k = len(sent), 16
+
+# 실제 학습된 모델은 아니지만, 헤드가 흔히 배우는 패턴 하나를 재현한다:
+# "이전 토큰에 주목하되 의미적으로 관련된 토큰을 더 본다"
+rng = np.random.default_rng(3)
+base = rng.normal(size=(n, d_k)) * 0.5
+Q = base + rng.normal(size=(n, d_k)) * 0.3
+K = base + rng.normal(size=(n, d_k)) * 0.3
+V = rng.normal(size=(n, d_k))
+
+_, attn = attention.scaled_dot_product_attention(Q, K, V)
+
+fig = viz.heatmap(
+    attn,
+    x_title="키 (참조되는 토큰)",
+    y_title="쿼리 (참조하는 토큰)",
+    title="어텐션 가중치 행렬",
+    text=np.round(attn, 2),
+    hover="쿼리 %{y}<br>키 %{x}<br>가중치 %{z:.3f}<extra></extra>",
+    height=470,
+)
+fig.update_xaxes(tickmode="array", tickvals=list(range(n)), ticktext=sent)
+fig.update_yaxes(tickmode="array", tickvals=list(range(n)), ticktext=sent)
+viz.annotate_box(fig, f"행 합 = {attn.sum(axis=1)[0]:.3f} (모든 행 동일)", color_=viz.ACCENT)
+fig.show()
+```
+
+::: {.interaction-hint}
+칸에 마우스를 올리면 정확한 가중치가 나옵니다. **행 방향으로만** 합이 1이라는 점에 주의하세요 — 열 합은 1이 아닙니다.
+:::
+
+::: {.callout-warning}
+## 어텐션 맵을 "모델의 설명"으로 읽지 말 것
+
+어텐션 가중치가 높다고 그 토큰이 예측에 중요했다는 보장은 없다.
+
+- 가중치가 높아도 해당 Value 벡터의 크기가 작으면 기여는 미미하다.
+- 헤드가 수십 개, 층이 수십 개다. 한 헤드의 맵은 전체 계산의 극히 일부다.
+- 어텐션 분포를 크게 바꿔도 출력이 거의 그대로인 경우가 실증적으로 보고되었다.
+
+인과적 주장을 하려면 활성화 패칭 같은 개입 기법이 필요하다 —
+[12.1 기계적 해석가능성](../12_trust/01_mechanistic.qmd) 참고.
 :::
 
 ---
 
-## G5.0.3 — 어텐션 맵 히트맵
+## 대가: $O(n^2)$
 
-토큰 간 어텐션 가중치 행렬과 강한 연결 하이라이트
+어텐션의 강점과 약점은 같은 곳에서 나온다. **모든 토큰이 모든 토큰을 본다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 문장 입력
+- **강점**: 아무리 멀리 떨어진 두 토큰도 경로 길이 1로 연결된다. RNN이 $O(n)$ 스텝을 거쳐야 했던 것과 대조적이다.
+- **약점**: 어텐션 행렬이 $(n, n)$ 이다. 시퀀스가 2배 길어지면 연산과 메모리가 **4배**가 된다.
+
+```{python}
+#| label: fig-complexity
+#| fig-cap: "시퀀스 길이에 따른 연산량 분해와 어텐션 행렬 메모리"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import attention, viz
+
+d_model, n_heads = 4096, 32
+lengths = np.array([512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072])
+
+proj, quad, mem_gb = [], [], []
+for n in lengths:
+    f = attention.attention_flops(int(n), d_model, n_heads)
+    proj.append(f["qkv_proj"] + f["out_proj"])       # n에 선형
+    quad.append(f["scores"] + f["weighted_sum"])     # n에 이차
+    mem_gb.append(f["attn_bytes"] / 1024 ** 3)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("연산량 분해 (FLOPs)", "어텐션 행렬 메모리"))
+
+fig.add_trace(go.Scatter(x=lengths, y=proj, name="사영 (∝ n·d²)", mode="lines+markers",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=lengths, y=quad, name="어텐션 (∝ n²·d)", mode="lines+markers",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=lengths, y=mem_gb, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.PINK, width=2.5),
+                         fill="tozeroy", fillcolor=viz.hex_rgba(viz.PINK, 0.12)),
+              row=1, col=2)
+
+# 두 항이 뒤집히는 지점: n²d = 4nd²  →  n = 4d
+cross = 4 * d_model
+fig.add_vline(x=cross, line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text=f"n = 4d = {cross}<br>여기서 역전", row=1, col=1)
+
+fig.update_xaxes(title_text="시퀀스 길이 n", type="log", row=1, col=1)
+fig.update_yaxes(title_text="FLOPs", type="log", row=1, col=1)
+fig.update_xaxes(title_text="시퀀스 길이 n", type="log", row=1, col=2)
+fig.update_yaxes(title_text="GB (float32, 32헤드)", type="log", row=1, col=2)
+
+viz.fig_defaults(fig, height=420,
+                 title=f"d_model = {d_model}, 헤드 {n_heads}개 기준")
+fig.show()
+```
+
+::: {.interaction-hint}
+짧은 시퀀스에서는 사영(파랑)이 지배적이고, $n = 4d$ 를 넘어서면 이차항(주황)이 역전합니다. 오른쪽은 어텐션 행렬만의 메모리 — 12만 토큰이면 수백 GB입니다.
+:::
+
+이 그림이 지난 몇 년간의 연구 방향을 설명한다.
+FlashAttention은 $(n,n)$ 행렬을 **아예 만들지 않고** 계산하고,
+희소 어텐션은 일부 칸만 계산하며,
+선형 어텐션은 결합법칙을 재배치해 이차항을 없앤다.
+전부 [5.7 효율적 어텐션](07_efficient_attention.qmd)에서 다룬다.
+
+---
+
+## 어텐션의 정체: 커널 회귀
+
+마지막으로 한 걸음 물러서 보자. 어텐션은 새로운 발명일까?
+
+$$\text{out}_i = \sum_j \frac{\exp(q_i^\top k_j / \sqrt{d_k})}{\sum_{j'} \exp(q_i^\top k_{j'} / \sqrt{d_k})} \, v_j$$
+
+이 형태는 통계학에서 **Nadaraya-Watson 커널 회귀**로 1964년부터 알려져 있었다.
+$\kappa(q,k) = \exp(q^\top k/\sqrt{d_k})$ 를 커널로 두면 정확히 같은 식이다.
+
+어텐션이 새로운 지점은 커널 자체가 아니라 두 가지다.
+
+1. **$q, k, v$ 를 학습한다.** 고정된 특성이 아니라 과제에 맞게 표현을 배운다.
+2. **이것을 층으로 쌓는다.** 한 층의 출력이 다음 층의 입력이 되어, 관계의 관계를 계산한다.
+
+::: {.key-concept}
+어텐션은 [2.5 커널 방법](../02_classical_ml/05_svm_kernels.qmd)의 "명시적으로 계산하지 않고 유사도를 다룬다"는 발상과,
+[2.8 kNN](../02_classical_ml/08_knn_naive_bayes.qmd)의 "가까운 이웃의 값을 가져온다"는 발상을
+**학습 가능한 형태로 통합한 것**이다.
 :::
 
 ---
 
-## G5.0.4 — 복잡도 곡선
+## 요약
 
-n² 메모리·연산이 긴 문맥에서 폭발하는 스케일
+| 개념 | 수식 | 핵심 |
+|------|------|------|
+| 어텐션 | $\text{softmax}(QK^\top/\sqrt{d_k})V$ | 미분 가능한 딕셔너리 조회 |
+| Query | $Q = XW_Q$ | 무엇을 찾는가 (받는 쪽) |
+| Key | $K = XW_K$ | 무엇으로 검색되는가 (주는 쪽 색인) |
+| Value | $V = XW_V$ | 무엇을 전달하는가 (주는 쪽 내용) |
+| 스케일링 | $\div\sqrt{d_k}$ | 내적 분산이 $d_k$ 라서. 없으면 softmax 포화 → 그래디언트 소실 |
+| 어텐션 행렬 | $(n, n)$, 행 합 = 1 | 축복(경로 길이 1)이자 저주(이차 비용) |
+| 복잡도 | 연산 $O(n^2 d)$, 메모리 $O(n^2)$ | $n = 4d$ 부터 이차항이 지배 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시퀀스 길이 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 어텐션 (attention) |  |
-| Query/Key/Value |  |
-| 스케일드 닷프로덕트 |  |
-| softmax 포화 |  |
-| O(n²) 병목 |  |
+여기까지는 $Q, K, V$ 가 어디서 오는지 말하지 않았다.
+셋이 **모두 같은 시퀀스에서** 나올 때 무슨 일이 벌어지는지 — 그리고 마스크 한 장이
+이 구조를 어떻게 언어모델로 바꾸는지가 다음 장이다.
 
 ---
 
-**다음**: [5.1 셀프 어텐션과 마스킹](01_self_attention.qmd) — 자기 자신을 참조하기·인과 마스크 — 시퀀스 모델링의 재정의
+**다음**: [5.1 셀프 어텐션과 마스킹](01_self_attention.qmd) — 자기 자신을 참조하기·인과 마스크
 
 **이전**: [4.6 그래프 신경망](../04_architectures/06_gnn.qmd)
