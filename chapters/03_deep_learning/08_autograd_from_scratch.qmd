@@ -6,6 +6,16 @@ jupyter: ai-ml-study
 
 <!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
 
+::: {.callout-important appearance="simple"}
+## 아직 집필 전인 장입니다
+
+이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
+본문과 실행 가능한 시각화는 아직 없습니다.
+
+다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
+전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.
+:::
+
 PyTorch가 무엇을 하는지 모르면 `.detach()`, `no_grad()`, 인플레이스 연산 오류, 그래디언트 누적이 전부 미신이 된다. 직접 만들면 전부 자명해진다.
 
 ---

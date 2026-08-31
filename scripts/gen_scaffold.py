@@ -133,6 +133,16 @@ def build_stub(part, ch, idx):
         "",
         STUB_MARK,
         "",
+        '::: {.callout-important appearance="simple"}',
+        "## 아직 집필 전인 장입니다",
+        "",
+        "이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,",
+        "본문과 실행 가능한 시각화는 아직 없습니다.",
+        "",
+        "다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.",
+        "전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.",
+        ":::",
+        "",
         ch["why"],
         "",
         "---",
@@ -207,9 +217,16 @@ def write_stubs(dry_run):
 # 3. PLAN.md
 # ──────────────────────────────────────────────────────────────────────
 
+def is_written(part, ch):
+    """본문이 채워진 챕터인가 (STUB 주석이 지워졌는가)."""
+    path = qmd_path(part, ch)
+    return path.exists() and STUB_MARK not in path.read_text(encoding="utf-8")
+
+
 def build_plan():
     total = len(ALL)
     n_graphics = sum(len(ch["graphics"]) for _, ch, _ in ALL)
+    done = [(p, c) for p, c, _ in ALL if is_written(p, c)]
 
     out = [
         "# AI/ML Study — 상세 플래닝 문서",
@@ -227,13 +244,28 @@ def build_plan():
         "- **계산·그래픽**: NumPy / SciPy / Plotly (렌더 타임 의존성은 이 셋으로 제한)",
         "- **딥러닝 프레임워크 코드**: 실행하지 않는 예시 블록으로 제시 (빌드 재현성 우선)",
         "",
+        f"- **집필 완료** {len(done)} / {total} 챕터",
+        "",
         "## 전체 구성",
         "",
-        "| 파트 | 주제 | 챕터 | 이 파트를 마치면 |",
-        "|------|------|------|------------------|",
+        "| 파트 | 주제 | 챕터 | 완료 | 이 파트를 마치면 |",
+        "|------|------|------|------|------------------|",
     ]
     for part in PARTS:
-        out.append(f'| `{part["dir"]}` | {part["title"]} | {len(part["chapters"])} | {part["goal"]} |')
+        n_done = sum(1 for ch in part["chapters"] if is_written(part, ch))
+        out.append(f'| `{part["dir"]}` | {part["title"]} | {len(part["chapters"])} '
+                   f'| {n_done} | {part["goal"]} |')
+
+    out += [
+        "",
+        "### 집필 완료된 장",
+        "",
+    ]
+    if done:
+        for p, c in done:
+            out.append(f'- ✅ **{c["no"]} {c["title"]}** — `chapters/{p["dir"]}/{c["file"]}.qmd`')
+    else:
+        out.append("- (아직 없음)")
 
     out += ["", "---", ""]
 
@@ -245,10 +277,11 @@ def build_plan():
             "",
         ]
         for ch in part["chapters"]:
+            badge = " ✅" if is_written(part, ch) else ""
             out += [
                 "---",
                 "",
-                f'### {ch["no"]} {ch["title"]}',
+                f'### {ch["no"]} {ch["title"]}{badge}',
                 "",
                 f'`chapters/{part["dir"]}/{ch["file"]}.qmd` — *{ch["sub"]}*',
                 "",
