@@ -13,7 +13,7 @@
 - **계산·그래픽**: NumPy / SciPy / Plotly (렌더 타임 의존성은 이 셋으로 제한)
 - **딥러닝 프레임워크 코드**: 실행하지 않는 예시 블록으로 제시 (빌드 재현성 우선)
 
-- **집필 완료** 13 / 123 챕터
+- **집필 완료** 17 / 123 챕터
 
 ## 전체 구성
 
@@ -24,7 +24,7 @@
 | `02_classical_ml` | Part 2: 고전 머신러닝 | 13 | 1 | 정형 데이터 문제에 알고리즘을 고르고, 왜 그 알고리즘이 그렇게 동작하는지 수식과 그림으로 설명할 수 있다. |
 | `03_deep_learning` | Part 3: 딥러닝 기초 | 10 | 0 | 신경망의 순전파·역전파·최적화를 NumPy로 처음부터 구현하고, 학습이 안 될 때 원인을 진단할 수 있다. |
 | `04_architectures` | Part 4: 신경망 아키텍처 | 7 | 0 | CNN·RNN 계열의 귀납 편향을 설명하고, 어텐션이 왜 등장할 수밖에 없었는지 역사적·수학적으로 서술할 수 있다. |
-| `05_transformer` | Part 5: 트랜스포머 | 11 | 7 | Transformer를 NumPy로 처음부터 구현하고, 최신 LLM이 원 논문에서 무엇을 바꿨는지 항목별로 설명할 수 있다. |
+| `05_transformer` | Part 5: 트랜스포머 | 11 | 11 | Transformer를 NumPy로 처음부터 구현하고, 최신 LLM이 원 논문에서 무엇을 바꿨는지 항목별로 설명할 수 있다. |
 | `06_generative` | Part 6: 생성 모델 | 9 | 0 | VAE·GAN·확산 모델의 목적함수를 각각 유도하고, 어떤 상황에서 어떤 계열을 선택할지 판단할 수 있다. |
 | `07_language` | Part 7: 언어 (NLP · LLM) | 16 | 0 | 토크나이저부터 정렬·추론 최적화까지 LLM 스택 전체를 설명하고, 실제 시스템을 설계·평가할 수 있다. |
 | `08_audio` | Part 8: 오디오 · 음성 | 11 | 1 | 파형에서 스펙트로그램까지 신호를 직접 계산하고, 최신 ASR·TTS·오디오 생성 모델의 구조를 설명할 수 있다. |
@@ -47,6 +47,10 @@
 - ✅ **5.4 트랜스포머 블록** — `chapters/05_transformer/04_transformer_block.qmd`
 - ✅ **5.5 인코더-디코더와 세 가지 계열** — `chapters/05_transformer/05_encoder_decoder.qmd`
 - ✅ **5.6 GPT를 처음부터 만들기** — `chapters/05_transformer/06_build_gpt.qmd`
+- ✅ **5.7 효율적 어텐션과 긴 문맥** — `chapters/05_transformer/07_efficient_attention.qmd`
+- ✅ **5.8 전문가 혼합(MoE)** — `chapters/05_transformer/08_mixture_of_experts.qmd`
+- ✅ **5.9 스케일링 법칙** — `chapters/05_transformer/09_scaling_laws.qmd`
+- ✅ **5.10 트랜스포머의 대안** — `chapters/05_transformer/10_alternatives_ssm.qmd`
 - ✅ **8.1 푸리에 변환과 스펙트로그램** — `chapters/08_audio/01_fourier_stft.qmd`
 - ✅ **9.0 이미지의 표현과 처리** — `chapters/09_vision_video/00_image_basics.qmd`
 
@@ -1691,7 +1695,7 @@ BERT·T5·GPT는 같은 부품으로 만든 세 가지 조립품이다. 계열�
 
 ---
 
-### 5.7 효율적 어텐션과 긴 문맥
+### 5.7 효율적 어텐션과 긴 문맥 ✅
 
 `chapters/05_transformer/07_efficient_attention.qmd` — *FlashAttention·희소·선형 어텐션 — n² 병목 깨기*
 
@@ -1723,7 +1727,7 @@ BERT·T5·GPT는 같은 부품으로 만든 세 가지 조립품이다. 계열�
 
 ---
 
-### 5.8 전문가 혼합(MoE)
+### 5.8 전문가 혼합(MoE) ✅
 
 `chapters/05_transformer/08_mixture_of_experts.qmd` — *희소 활성화로 파라미터와 연산을 분리하기*
 
@@ -1756,7 +1760,7 @@ BERT·T5·GPT는 같은 부품으로 만든 세 가지 조립품이다. 계열�
 
 ---
 
-### 5.9 스케일링 법칙
+### 5.9 스케일링 법칙 ✅
 
 `chapters/05_transformer/09_scaling_laws.qmd` — *Kaplan·Chinchilla·연산 최적 — 얼마나 키우고 얼마나 먹일 것인가*
 
@@ -1788,7 +1792,7 @@ BERT·T5·GPT는 같은 부품으로 만든 세 가지 조립품이다. 계열�
 
 ---
 
-### 5.10 트랜스포머의 대안
+### 5.10 트랜스포머의 대안 ✅
 
 `chapters/05_transformer/10_alternatives_ssm.qmd` — *상태공간 모델·Mamba·하이브리드 — 이차 병목 없는 시퀀스 모델*
 
