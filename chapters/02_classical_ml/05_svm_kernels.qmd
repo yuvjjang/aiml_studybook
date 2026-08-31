@@ -4,89 +4,550 @@ subtitle: "최대 마진·쌍대문제·커널 트릭 — 고차원으로 올려
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[2.4 로지스틱 회귀](04_logistic_regression.qmd)는 데이터를 나누는 직선을 찾았다.
+그런데 나누는 직선이 여러 개라면, 어느 것을 골라야 하나?
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+SVM의 답은 명확하다. **양쪽 클래스에서 가장 멀리 떨어진 직선.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그리고 여기서 커널 트릭이 나온다 —
+"명시적으로 계산하지 않고 고차원으로 간다"는 발상이며,
+[어텐션의 유사도 계산](../05_transformer/00_attention_mechanism.qmd)에도 같은 사고가 살아 있다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 최대 마진
+
+여러 분리 직선 중 **마진(margin)** 이 가장 큰 것을 고른다.
+마진은 경계에서 가장 가까운 점까지의 거리다.
+
+```{python}
+#| label: fig-max-margin
+#| fig-cap: "여러 분리선 중 마진이 최대인 것. 마진을 결정하는 점이 서포트 벡터입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# 선형 분리 가능한 데이터
+rng = np.random.default_rng(4)
+A = rng.normal([-1.6, -0.6], 0.55, (14, 2))
+B = rng.normal([1.6, 1.0], 0.55, (14, 2))
+X = np.vstack([A, B]); y = np.r_[-np.ones(14), np.ones(14)]
+
+def margin_of(w, b):
+    """모든 점이 올바르게 분류될 때의 마진 (아니면 음수)"""
+    d = y * (X @ w + b) / np.linalg.norm(w)
+    return d.min()
+
+angles = np.linspace(-60, 60, 41)
+cands = {}
+for a in angles:
+    th = np.radians(a + 45)
+    w = np.array([np.cos(th), np.sin(th)])
+    # 이 방향에서 마진이 최대가 되도록 절편을 잡는다
+    proj = X @ w
+    b = -(proj[y == 1].min() + proj[y == -1].max()) / 2
+    cands[a] = (w, b, margin_of(w, b))
+
+best_a = max(cands, key=lambda a: cands[a][2])
+margins = np.array([cands[a][2] for a in angles])
+
+gx = np.linspace(-4, 4, 2)
+
+def boundary(w, b, offset=0.0):
+    # w1 x + w2 y + b = offset  →  y = (offset - b - w1 x)/w2
+    return (offset - b - w[0]*gx) / w[1]
+
+fig = go.Figure()
+a0 = best_a
+w0, b0, m0 = cands[a0]
+nw = np.linalg.norm(w0)
+fig.add_trace(go.Scatter(x=gx, y=boundary(w0, b0), mode="lines", name="결정경계",
+                         line=dict(color=viz.GREEN, width=3)))
+fig.add_trace(go.Scatter(x=gx, y=boundary(w0, b0, m0*nw), mode="lines",
+                         name="마진 경계", line=dict(color=viz.GREEN, width=1.5, dash="dash")))
+fig.add_trace(go.Scatter(x=gx, y=boundary(w0, b0, -m0*nw), mode="lines",
+                         showlegend=False, line=dict(color=viz.GREEN, width=1.5, dash="dash")))
+for lab, col, m in [(-1, viz.ACCENT, y == -1), (1, viz.WARM, y == 1)]:
+    fig.add_trace(go.Scatter(x=X[m, 0], y=X[m, 1], mode="markers",
+                             name=f"클래스 {lab}",
+                             marker=dict(size=10, color=col,
+                                         line=dict(width=1, color="black"))))
+# 서포트 벡터 강조
+d0 = y * (X @ w0 + b0) / nw
+sv = np.abs(d0 - m0) < 1e-6
+fig.add_trace(go.Scatter(x=X[sv, 0], y=X[sv, 1], mode="markers",
+                         name="서포트 벡터",
+                         marker=dict(size=18, color="rgba(0,0,0,0)",
+                                     line=dict(width=2.5, color=viz.YELLOW))))
+
+steps = []
+for a in angles:
+    w, b, m = cands[a]
+    nwa = np.linalg.norm(w)
+    d = y * (X @ w + b) / nwa
+    s = np.abs(d - m) < 1e-6
+    steps.append((f"{a:.0f}°", {
+        "x": [gx, gx, gx, X[y==-1,0], X[y==1,0], X[s,0]],
+        "y": [boundary(w,b), boundary(w,b,m*nwa), boundary(w,b,-m*nwa),
+              X[y==-1,1], X[y==1,1], X[s,1]]}))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="경계 각도 = ",
+                                      active=int(np.argmax(margins)), pad_t=55)],
+                  xaxis=dict(title="x₁", range=[-4, 4], scaleanchor="y"),
+                  yaxis=dict(title="x₂", range=[-3, 3.5]),
+                  legend=dict(x=0.01, y=0.99))
+viz.fig_defaults(fig, height=470,
+                 title=f"최대 마진 = {max(margins):.3f} (각도 {best_a:.0f}°)")
+fig.show()
+```
+
+::: {.interaction-hint}
+각도를 돌려보세요. 마진 경계(점선)의 간격이 가장 넓은 지점이 최적입니다. 노란 원으로 표시된 **서포트 벡터**만 마진에 닿아 있고, 나머지 점은 마진 밖에 있습니다.
 :::
 
-커널 트릭은 '명시적으로 계산하지 않고 고차원으로 간다'는 발상이며, 이 아이디어는 어텐션의 유사도 계산에도 그대로 살아 있다.
-
 ---
 
-## 이 장에서 다루는 것
+## 최적화 문제와 쌍대
 
-- 최대 마진 분류기의 기하학적 동기
-- 하드 마진 원problem과 제약 최적화
-- 소프트 마진과 슬랙 변수, C 파라미터의 의미
-- 라그랑주 쌍대와 KKT — 서포트 벡터가 정해지는 원리
-- 커널 트릭: 내적을 커널로 치환, Mercer 조건
-- 커널 종류: 선형, 다항, RBF, 시그모이드, 문자열 커널
-- RBF의 γ와 C가 만드는 결정경계 변화
-- SVR(회귀)과 ε-무감도 손실
-- 힌지 손실 관점의 SVM = 정규화된 ERM
-- 계산 복잡도와 대규모 데이터에서의 한계
+마진을 최대화하는 것은 다음과 동등하다.
 
----
+$$\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2
+\quad\text{s.t.}\quad y_i(\mathbf{w}^\top\mathbf{x}_i + b) \ge 1 \;\;\forall i$$
 
-## G2.5.1 — 최대 마진 경계
+[0.1의 라그랑주·KKT](../00_foundations/01_calculus_optimization.qmd)를 적용하면
+**쌍대 문제**가 나온다.
 
-마진과 서포트 벡터가 어떤 점에 의해 결정되는지
+$$\max_{\boldsymbol\alpha}\ \sum_i\alpha_i - \tfrac{1}{2}\sum_{i,j}\alpha_i\alpha_j y_i y_j\,\underbrace{\mathbf{x}_i^\top\mathbf{x}_j}_{\text{내적!}}
+\quad\text{s.t.}\quad \alpha_i \ge 0,\ \sum_i\alpha_i y_i = 0$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 데이터 점 이동
+여기서 두 가지가 결정적이다.
+
+::: {.key-concept}
+**1. 상보 여유조건이 서포트 벡터를 만든다.**
+
+KKT의 $\alpha_i\big[y_i(\mathbf{w}^\top\mathbf{x}_i+b)-1\big]=0$ 에 의해
+
+- 마진 밖의 점 → 제약이 느슨함 → $\alpha_i = 0$ → **답에 영향 없음**
+- 마진 위의 점 → 제약이 팽팽함 → $\alpha_i > 0$ → **서포트 벡터**
+
+해는 $\mathbf{w} = \sum_i \alpha_i y_i \mathbf{x}_i$ 인데, 대부분의 $\alpha_i$ 가 0이므로
+**소수의 점만으로 결정경계가 정해진다.**
+
+**2. 데이터가 오직 내적 $\mathbf{x}_i^\top\mathbf{x}_j$ 로만 등장한다.**
+
+이것이 커널 트릭의 문이다.
 :::
 
 ---
 
-## G2.5.2 — 커널 트릭 3D 리프팅
+## 소프트 마진: 완벽히 나눌 수 없을 때
 
-2D에서 선형 분리 불가한 데이터가 3D로 올라가 평면으로 갈리는 장면
+현실 데이터는 겹친다. 슬랙 변수 $\xi_i$ 로 위반을 허용한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 3D 회전
+$$\min\ \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_i\xi_i
+\quad\text{s.t.}\quad y_i(\mathbf{w}^\top\mathbf{x}_i+b)\ge 1-\xi_i,\ \xi_i\ge 0$$
+
+$C$ 가 트레이드오프를 조절한다.
+
+| $C$ | 의미 | 결과 |
+|-----|------|------|
+| 크다 | 위반에 큰 벌점 | 마진 좁음, 훈련 오차 작음, 과적합 위험 |
+| 작다 | 위반에 관대 | 마진 넓음, 더 많은 서포트 벡터, 단순한 경계 |
+
+::: {.callout-note}
+## SVM은 사실 정규화된 ERM이다
+
+소프트 마진 문제를 다시 쓰면 [2.0의 ERM 형태](00_learning_problem.qmd)가 그대로 나온다.
+
+$$\min_{\mathbf{w},b}\ \underbrace{\sum_i \max(0,\,1-y_i f(\mathbf{x}_i))}_{\text{힌지 손실}} + \underbrace{\frac{1}{2C}\|\mathbf{w}\|^2}_{\text{L2 정규화}}$$
+
+즉 SVM = **힌지 손실 + Ridge 정규화**다.
+[2.0에서 본 대리손실 그림](00_learning_problem.qmd)에서 힌지가 바로 이것이고,
+[2.3의 L2 벌점](03_regularization.qmd)이 여기 붙어 있다.
+
+로지스틱 회귀와의 차이는 **손실함수 하나**뿐이다:
+로지스틱 손실은 모든 점에 조금씩 반응하고, 힌지 손실은 마진 안쪽 점만 본다.
 :::
 
 ---
 
-## G2.5.3 — C와 γ 그리드
+## 커널 트릭
 
-과소적합↔과적합 사이에서 경계가 변하는 지형
+쌍대 문제에서 데이터는 내적으로만 등장한다.
+그러니 내적을 **다른 함수로 바꿔치기**해도 문제가 그대로 풀린다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: C·γ 슬라이더
+$$\mathbf{x}_i^\top\mathbf{x}_j \;\longrightarrow\; K(\mathbf{x}_i,\mathbf{x}_j) = \phi(\mathbf{x}_i)^\top\phi(\mathbf{x}_j)$$
+
+핵심은 **$\phi$ 를 절대 계산하지 않는다**는 것이다.
+$\phi$ 가 무한 차원이어도 $K$ 만 계산할 수 있으면 된다.
+
+```{python}
+#| label: kernel-trick-demo
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+x1 = np.array([1.0, 2.0])
+x2 = np.array([3.0, -1.0])
+
+# 2차 다항 커널의 명시적 특성 사상
+def phi_poly2(x):
+    a, b = x
+    return np.array([a**2, b**2, np.sqrt(2)*a*b, np.sqrt(2)*a, np.sqrt(2)*b, 1.0])
+
+explicit = phi_poly2(x1) @ phi_poly2(x2)
+kernel = (x1 @ x2 + 1) ** 2
+
+print(f"명시적으로 6차원으로 올려 내적 : {explicit:.10f}")
+print(f"커널 (x·x' + 1)² 로 바로 계산   : {kernel:.10f}")
+print(f"차이: {abs(explicit - kernel):.2e}")
+print()
+print("차원이 커질수록 이 절약이 커진다:")
+print(f"{'원 차원 d':>10} {'2차 다항 특성 수':>18} {'커널 계산 비용':>16}")
+print("-" * 48)
+for d in [2, 10, 100, 1000]:
+    n_feat = (d + 1) * (d + 2) // 2
+    print(f"{d:>10} {n_feat:>18,} {d:>15}회 곱셈")
+print()
+print("RBF 커널은 φ 가 무한 차원이라 명시적 계산이 아예 불가능하다.")
+```
+
+---
+
+## G2.5.1 — 커널이 데이터를 들어 올린다
+
+2차원에서 선형 분리가 안 되는 데이터가 3차원에서는 평면으로 갈린다.
+
+```{python}
+#| label: fig-kernel-lift
+#| fig-cap: "동심원 데이터에 z = x²+y² 를 추가하면 평면으로 분리됩니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+n = 120
+r_in = rng.uniform(0, 1.0, n // 2)
+r_out = rng.uniform(1.7, 2.5, n // 2)
+th = rng.uniform(0, 2*np.pi, n)
+r = np.r_[r_in, r_out]
+X = np.c_[r*np.cos(th), r*np.sin(th)]
+y = np.r_[np.zeros(n//2), np.ones(n//2)]
+z = (X**2).sum(1)                              # 리프팅 좌표
+
+fig = make_subplots(rows=1, cols=2, specs=[[{"type": "xy"}, {"type": "scene"}]],
+                    subplot_titles=("원 공간 (2D) — 직선으로 못 나눔",
+                                    "리프팅 후 (3D) — 평면으로 갈림"))
+for c in (0, 1):
+    m = y == c
+    fig.add_trace(go.Scatter(x=X[m,0], y=X[m,1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=7, color=[viz.ACCENT, viz.WARM][c],
+                                         line=dict(width=1, color="black"))),
+                  row=1, col=1)
+    fig.add_trace(go.Scatter3d(x=X[m,0], y=X[m,1], z=z[m], mode="markers",
+                               showlegend=False,
+                               marker=dict(size=4, color=[viz.ACCENT, viz.WARM][c])),
+                  row=1, col=2)
+
+# 분리 평면
+gg = np.linspace(-2.6, 2.6, 12)
+GX, GY = np.meshgrid(gg, gg)
+z_sep = 1.9
+fig.add_trace(go.Surface(x=GX, y=GY, z=np.full_like(GX, z_sep),
+                         colorscale=[[0, viz.hex_rgba(viz.GREEN, 0.3)],
+                                     [1, viz.hex_rgba(viz.GREEN, 0.3)]],
+                         showscale=False, opacity=0.4, hoverinfo="skip"),
+              row=1, col=2)
+
+fig.update_xaxes(title_text="x₁", scaleanchor="y", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_layout(scene=dict(xaxis_title="x₁", yaxis_title="x₂",
+                             zaxis_title="z = x₁²+x₂²",
+                             camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)),
+                             bgcolor="rgba(0,0,0,0)"),
+                  legend=dict(x=0.01, y=0.99))
+viz.fig_defaults(fig, height=470, title="커널 트릭의 기하학적 직관")
+fig.show()
+```
+
+::: {.interaction-hint}
+오른쪽을 회전시켜 보세요. 안쪽 원(파랑)은 아래, 바깥 원(주황)은 위에 있어 **초록 평면 하나로 완전히 갈립니다**. RBF 커널은 이런 리프팅을 무한 차원에서 암묵적으로 수행합니다.
 :::
 
 ---
 
-## G2.5.4 — 커널 행렬 히트맵
+## 커널 종류와 효과
 
-커널이 정의하는 유사도 구조를 행렬로 직접 보기
+```{python}
+#| label: fig-kernels
+#| fig-cap: "커널과 하이퍼파라미터에 따른 결정경계"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 커널 선택
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import datasets, viz
+
+X, y = datasets.two_moons(n=160, noise=0.18, seed=1)
+ys = np.where(y == 0, -1.0, 1.0)
+
+def kernel_matrix(A, B, kind, gamma=1.0, degree=3, coef0=1.0):
+    if kind == "선형":
+        return A @ B.T
+    if kind == "다항":
+        return (gamma * (A @ B.T) + coef0) ** degree
+    if kind == "RBF":
+        d2 = ((A[:, None, :] - B[None, :, :]) ** 2).sum(-1)
+        return np.exp(-gamma * d2)
+    raise ValueError(kind)
+
+def kernel_svm(K, ys, C=1.0, iters=3000, lr=0.001):
+    """힌지 손실 + L2 를 쌍대 계수에 대해 경사하강 (교육용 간이 구현)"""
+    n = len(ys)
+    a = np.zeros(n)
+    for _ in range(iters):
+        f = K @ (a * ys)
+        viol = (ys * f) < 1
+        grad = a / C - (K @ (viol * ys) * ys) / n * 10
+        a = np.clip(a - lr * grad * 0 + lr * (viol * 1.0 - a / (C * n)), 0, C)
+    return a
+
+gx = np.linspace(X[:,0].min()-0.6, X[:,0].max()+0.6, 70)
+gy = np.linspace(X[:,1].min()-0.6, X[:,1].max()+0.6, 70)
+GX, GY = np.meshgrid(gx, gy)
+G = np.c_[GX.ravel(), GY.ravel()]
+
+configs = [("선형", dict()), ("다항 (2차)", dict(degree=2)),
+           ("다항 (5차)", dict(degree=5)),
+           ("RBF γ=0.3", dict(gamma=0.3)), ("RBF γ=1", dict(gamma=1.0)),
+           ("RBF γ=5", dict(gamma=5.0)), ("RBF γ=30", dict(gamma=30.0))]
+
+surfaces = {}
+for name, kw in configs:
+    kind = "선형" if name.startswith("선형") else ("다항" if "다항" in name else "RBF")
+    K = kernel_matrix(X, X, kind, **kw)
+    a = kernel_svm(K, ys, C=1.0)
+    Kg = kernel_matrix(G, X, kind, **kw)
+    surfaces[name] = np.round((Kg @ (a * ys)).reshape(GX.shape), 4)
+
+fig = go.Figure()
+n0 = "RBF γ=1"
+fig.add_trace(go.Contour(x=gx, y=gy, z=surfaces[n0], colorscale="RdBu", zmid=0,
+                         showscale=False, opacity=0.8,
+                         contours=dict(showlines=False)))
+fig.add_trace(go.Contour(x=gx, y=gy, z=surfaces[n0], showscale=False,
+                         contours=dict(start=0, end=0, size=1, coloring="lines"),
+                         line=dict(color=viz.GREEN, width=3), name="결정경계"))
+for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
+    m = y == c
+    fig.add_trace(go.Scatter(x=X[m,0], y=X[m,1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=6, color=col,
+                                         line=dict(width=1, color="black"))))
+
+steps = [(nm, {"z": [surfaces[nm], surfaces[nm], None, None]})
+         for nm, _ in configs]
+fig.update_layout(sliders=[viz.slider(steps, prefix="커널 = ",
+                                      active=[c[0] for c in configs].index(n0),
+                                      pad_t=55)],
+                  xaxis_title="x₁", yaxis_title="x₂",
+                  legend=dict(x=0.01, y=0.99))
+viz.fig_defaults(fig, height=470, title="커널 선택이 가설공간을 바꾼다")
+fig.show()
+```
+
+::: {.interaction-hint}
+**선형**은 초승달을 못 나눕니다. **RBF γ=1** 정도가 적당하고, **γ=30** 은 각 점 주위에 작은 섬을 만듭니다 — 전형적 과적합입니다. $\gamma$ 는 "각 점의 영향 반경"을 정합니다: 크면 좁고, 작으면 넓습니다.
+:::
+
+| 커널 | 식 | 특징 |
+|------|-----|------|
+| 선형 | $\mathbf{x}^\top\mathbf{x}'$ | 빠름, 고차원 희소 데이터(텍스트)에 적합 |
+| 다항 | $(\gamma\mathbf{x}^\top\mathbf{x}'+c)^d$ | 유한 차원, $d$ 크면 불안정 |
+| **RBF** | $\exp(-\gamma\|\mathbf{x}-\mathbf{x}'\|^2)$ | 무한 차원, 기본 선택 |
+| 시그모이드 | $\tanh(\gamma\mathbf{x}^\top\mathbf{x}'+c)$ | 조건부로만 유효 커널 |
+
+::: {.callout-note}
+## Mercer 조건
+
+아무 함수나 커널이 될 수는 없다.
+$K$ 가 유효하려면 **커널 행렬이 항상 대칭 양반정치**여야 한다
+([0.0의 양정치](../00_foundations/00_linear_algebra.qmd)).
+
+그래야 $K(\mathbf{x},\mathbf{x}')=\phi(\mathbf{x})^\top\phi(\mathbf{x}')$ 인 $\phi$ 가 존재함이 보장되고,
+쌍대 문제가 볼록해져 전역 최적해를 얻는다.
 :::
 
 ---
 
-## 핵심 용어
+## C와 γ의 상호작용
 
-| 용어 | 비고 |
-|------|------|
-| 최대 마진 (max margin) |  |
-| 서포트 벡터 |  |
-| 커널 트릭 (kernel trick) |  |
-| RBF 커널 |  |
-| 힌지 손실 |  |
+두 하이퍼파라미터를 함께 봐야 한다.
+
+```{python}
+#| label: fig-c-gamma
+#| fig-cap: "C와 γ 격자에서의 결정경계 복잡도"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+X, y = datasets.two_moons(n=140, noise=0.22, seed=2)
+ys = np.where(y == 0, -1.0, 1.0)
+
+Cs = [0.05, 1.0, 50.0]
+gammas = [0.2, 2.0, 20.0]
+
+def rbf(A, B, g):
+    return np.exp(-g * ((A[:,None,:]-B[None,:,:])**2).sum(-1))
+
+gx = np.linspace(X[:,0].min()-0.5, X[:,0].max()+0.5, 55)
+gy = np.linspace(X[:,1].min()-0.5, X[:,1].max()+0.5, 55)
+GX, GY = np.meshgrid(gx, gy)
+G = np.c_[GX.ravel(), GY.ravel()]
+
+fig = make_subplots(rows=len(Cs), cols=len(gammas),
+                    subplot_titles=[f"C={c}, γ={g}" for c in Cs for g in gammas],
+                    horizontal_spacing=0.04, vertical_spacing=0.08)
+
+for i, C in enumerate(Cs, start=1):
+    for j, g in enumerate(gammas, start=1):
+        K = rbf(X, X, g)
+        a = np.zeros(len(ys))
+        for _ in range(1500):
+            viol = (ys * (K @ (a*ys))) < 1
+            a = np.clip(a + 0.002*(viol*1.0 - a/(C*len(ys))), 0, C)
+        Z = np.round((rbf(G, X, g) @ (a*ys)).reshape(GX.shape), 4)
+        fig.add_trace(go.Contour(x=gx, y=gy, z=Z, colorscale="RdBu", zmid=0,
+                                 showscale=False, opacity=0.8,
+                                 contours=dict(showlines=False)), row=i, col=j)
+        for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
+            m = y == c
+            fig.add_trace(go.Scatter(x=X[m,0], y=X[m,1], mode="markers",
+                                     showlegend=False,
+                                     marker=dict(size=3.5, color=col)), row=i, col=j)
+        fig.update_xaxes(showticklabels=False, row=i, col=j)
+        fig.update_yaxes(showticklabels=False, row=i, col=j)
+
+viz.fig_defaults(fig, height=620,
+                 title="γ↑ = 경계가 구불구불 · C↑ = 위반을 덜 허용")
+fig.update_layout(margin=dict(l=30, r=25, t=80, b=30))
+fig.update_annotations(font_size=11)
+fig.show()
+```
+
+::: {.interaction-hint}
+오른쪽 아래(C=50, γ=20)가 가장 심한 과적합입니다 — 점 하나하나를 감싸는 섬이 생깁니다. 왼쪽 위(C=0.05, γ=0.2)는 거의 직선입니다. 실무에서는 이 격자를 **로그 스케일로 탐색**합니다.
+:::
 
 ---
 
-**다음**: [2.6 결정트리](06_trees.qmd) — 분할 기준·가지치기·해석 — 규칙으로 학습하는 모델
+## SVM의 위상: 그때와 지금
+
+```{python}
+#| label: svm-status
+#| code-fold: false
+
+rows = [
+    ("복잡도 (학습)",  "O(n²)~O(n³)",       "대규모 데이터에서 병목"),
+    ("복잡도 (예측)",  "O(서포트벡터 수)",   "SV 가 많으면 느림"),
+    ("확률 출력",      "직접 안 나옴",       "Platt 스케일링 등 후처리 필요"),
+    ("다중 클래스",    "직접 지원 안 함",    "OvR/OvO 로 조합"),
+    ("특성 스케일",    "민감",              "표준화 필수"),
+    ("해석",          "SV 로 설명 가능",    "커널 쓰면 어려워짐"),
+]
+print(f"{'항목':<16} {'SVM':<22} {'함의'}")
+print("-" * 68)
+for r in rows:
+    print(f"{r[0]:<16} {r[1]:<22} {r[2]}")
+print()
+print("여전히 강한 곳: 표본이 적고 차원이 높을 때 (n < p), 텍스트 분류,")
+print("               생물정보학, 이상 탐지(One-Class SVM)")
+print("밀려난 곳    : 대규모 정형 데이터 → GBDT, 이미지·텍스트 → 딥러닝")
+```
+
+::: {.key-concept}
+**커널 아이디어는 SVM보다 오래 살아남았다.**
+
+| 어디서 | 어떻게 |
+|--------|--------|
+| [가우시안 프로세스](08_knn_naive_bayes.qmd) | 커널이 공분산 함수 |
+| [커널 PCA](10_dimensionality_reduction.qmd) | 비선형 차원축소 |
+| [어텐션](../05_transformer/00_attention_mechanism.qmd) | $\exp(q^\top k)$ 는 커널이고, 어텐션은 커널 회귀 |
+| [선형 어텐션](../05_transformer/07_efficient_attention.qmd) | 커널을 $\phi(q)^\top\phi(k)$ 로 근사해 결합법칙 사용 |
+| 신경 탄젠트 커널 | 무한 폭 신경망 = 커널 회귀 |
+
+특히 마지막 두 개가 흥미롭다. 선형 어텐션은 **"커널을 명시적 특성으로 되돌려"**
+계산 순서를 바꾸는 것이고, 이는 커널 트릭의 정확한 역방향이다.
+:::
+
+---
+
+## 회귀로의 확장: SVR
+
+$\epsilon$-무감도 손실을 쓰면 회귀에도 같은 기계를 적용할 수 있다.
+
+$$L_\epsilon(r) = \max(0,\ |r| - \epsilon)$$
+
+**오차가 $\epsilon$ 이내면 벌점 0.** 튜브 안에 들어오면 신경 쓰지 않는다.
+
+```{python}
+#| label: fig-svr-loss
+#| fig-cap: "ε-무감도 손실. 튜브 안은 벌점이 0입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+r = np.linspace(-3, 3, 500)
+fig = go.Figure()
+for i, eps in enumerate([0.0, 0.3, 0.7, 1.2]):
+    fig.add_trace(go.Scatter(x=r, y=np.maximum(0, np.abs(r)-eps), mode="lines",
+                             name=f"ε = {eps}",
+                             line=dict(color=viz.color(i), width=2.5)))
+fig.add_trace(go.Scatter(x=r, y=r**2, mode="lines", name="MSE (비교)",
+                         line=dict(color="rgba(255,255,255,0.35)", width=2, dash="dot")))
+fig.update_layout(xaxis_title="잔차 r", yaxis_title="손실",
+                  yaxis=dict(range=[0, 3]), legend=dict(x=0.35, y=0.98))
+viz.fig_defaults(fig, height=380, title="ε-무감도 손실")
+fig.show()
+```
+
+$\epsilon=0$ 이면 MAE와 같아진다. $\epsilon$ 을 키우면 **평평한 구간이 넓어져**
+그 안의 점들은 서포트 벡터가 되지 않는다 — 해가 더 희소해진다.
+
+---
+
+## 요약
+
+| 개념 | 핵심 | 이어지는 곳 |
+|------|------|-------------|
+| 최대 마진 | 가장 가까운 점에서 가장 멀리 | 일반화 직관 |
+| 쌍대 문제 | 데이터가 **내적으로만** 등장 | 커널 트릭의 문 |
+| 서포트 벡터 | KKT 상보 여유 → 대부분 $\alpha_i=0$ | 희소한 해 |
+| 소프트 마진 | $C$ 로 위반 허용 | 겹치는 데이터 |
+| **SVM = 힌지 + L2** | 정규화된 ERM | 로지스틱과 손실만 다름 |
+| 커널 트릭 | $\phi$ 계산 없이 고차원 | RBF는 무한 차원 |
+| Mercer 조건 | 커널 행렬이 양반정치 | 볼록성 보장 |
+| $\gamma$ | 각 점의 영향 반경 | 크면 과적합 |
+| SVR | $\epsilon$-무감도 손실 | 튜브 안은 무시 |
+| 커널의 후생 | GP, 커널 PCA, **어텐션** | 아이디어가 더 오래 살아남음 |
+
+축 정렬 분할이라는 완전히 다른 귀납 편향으로 넘어간다.
+스케일링도 필요 없고, 범주형도 그대로 먹으며, 해석도 쉬운 모델 —
+그리고 정형 데이터 최강 앙상블의 기본 단위다.
+
+---
+
+**다음**: [2.6 결정트리](06_trees.qmd) — 분할 기준·가지치기·해석
 
 **이전**: [2.4 로지스틱 회귀와 분류](04_logistic_regression.qmd)
