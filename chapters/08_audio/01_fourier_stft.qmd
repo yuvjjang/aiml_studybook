@@ -4,80 +4,456 @@ subtitle: "DFT·윈도우·STFT — 시간을 주파수로 펼치기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+Whisper도, wav2vec 2.0도, 거의 모든 TTS 모델도 원시 파형을 그대로 먹지 않는다.
+먼저 **스펙트로그램**으로 바꾼다.
 
-스펙트로그램은 사실상 모든 오디오 모델의 입력이다. STFT의 파라미터 하나가 모델 성능을 좌우하는데, 그 이유는 시간-주파수 해상도 트레이드오프에 있다.
+이유는 단순하다. 16kHz로 1초를 녹음하면 16,000개의 숫자가 나오는데,
+그 숫자열을 눈으로 보면 아무것도 읽히지 않는다.
+같은 신호를 시간-주파수 평면에 펼치면 모음의 포먼트, 자음의 파열, 음의 높낮이가 한눈에 보인다.
 
----
-
-## 이 장에서 다루는 것
-
-- 푸리에 급수에서 푸리에 변환으로
-- 이산 푸리에 변환(DFT)의 정의와 행렬 형태
-- 고속 푸리에 변환(FFT)과 O(n log n)
-- 크기 스펙트럼과 위상 스펙트럼, 위상을 버리는 대가
-- 스펙트럼 누설(leakage)과 윈도우 함수(Hann, Hamming, Blackman)
-- 단시간 푸리에 변환(STFT): 프레임 길이, 홉 길이, 오버랩
-- 시간-주파수 해상도 트레이드오프 (불확정성 원리)
-- 스펙트로그램과 로그 스케일 표시
-- 역 STFT와 Griffin-Lim 위상 복원
-- 대안 변환: 멜 스펙트로그램(다음 장), CQT, 웨이블릿
+그리고 이 변환에는 조절 손잡이가 몇 개 있다.
+그 손잡이 하나가 모델 성능을 좌우하는데, 왜 그런지는 **시간-주파수 해상도 트레이드오프**로 설명된다.
+이 장은 그 구조를 처음부터 세운다.
 
 ---
 
-## G8.1.1 — DFT 기저 분해
+## 이산 푸리에 변환: 정현파로 분해하기
 
-신호를 각 주파수 정현파와 내적해 성분을 뽑아내는 과정
+핵심 아이디어는 한 문장이다. **어떤 신호든 정현파의 합으로 쓸 수 있다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 주파수 빈 선택
+길이 $N$ 의 신호 $x[n]$ 에 대해, 이산 푸리에 변환(DFT)은
+
+$$X[k] = \sum_{n=0}^{N-1} x[n]\, e^{-i 2\pi k n / N}, \qquad k = 0, 1, \dots, N-1$$
+
+복잡해 보이지만 하는 일은 [0.0 선형대수](../00_foundations/00_linear_algebra.qmd)의 **내적**이다.
+
+$$X[k] = \langle x, \; \mathbf{e}_k \rangle, \qquad \mathbf{e}_k[n] = e^{i 2\pi k n / N}$$
+
+즉 신호 $x$ 를 주파수 $k$ 짜리 복소 정현파와 내적해서
+"이 신호에 그 주파수 성분이 얼마나 들어 있는가"를 잰다.
+$N$ 개의 기저 벡터 $\mathbf{e}_k$ 는 서로 직교하므로, 이것은 **기저 변환**이다 — 정보 손실이 없다.
+
+| 얻는 것 | 뜻 |
+|---------|-----|
+| $\|X[k]\|$ | 크기(magnitude) — 그 주파수가 얼마나 센가 |
+| $\arg X[k]$ | 위상(phase) — 그 정현파가 언제 시작하는가 |
+
+실수 신호에서는 $X[k]$ 가 켤레 대칭이라 절반만 있으면 된다.
+그래서 `np.fft.rfft` 는 $N/2+1$ 개만 돌려준다.
+
+::: {.callout-note}
+## FFT는 다른 변환이 아니다
+
+DFT를 정의대로 계산하면 $O(N^2)$ 이다. 고속 푸리에 변환(FFT)은 **같은 값을 $O(N\log N)$ 에 구하는 알고리즘**이다.
+
+$N = 16{,}000$ 이면 $2.6\times10^8$ 회가 $2\times10^5$ 회로 줄어든다 — 1000배 이상이다.
+스펙트로그램을 실시간으로 뽑을 수 있는 이유가 이것이다.
 :::
 
 ---
 
-## G8.1.2 — 윈도우와 누설
+## G8.1.1 — DFT는 내적이다
 
-직사각 윈도우의 사이드로브와 Hann 윈도우의 개선
+정현파 세 개를 더한 신호에서, DFT가 각 성분을 어떻게 집어내는지 본다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 윈도우 종류 전환
+```{python}
+#| label: fig-dft-basis
+#| fig-cap: "신호를 각 주파수의 정현파와 내적해 성분을 뽑아냅니다. 슬라이더로 검사 주파수를 바꾸세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import audio, viz
+
+sr, dur = 1000, 0.5
+t = audio.time_axis(dur, sr)
+
+# 40Hz, 90Hz, 160Hz 를 서로 다른 세기로 섞은 신호
+components = [(40, 1.0), (90, 0.6), (160, 0.35)]
+x = sum(a * np.sin(2 * np.pi * f * t) for f, a in components)
+
+freqs, mag = audio.dft_magnitude(x, sr)
+mask = freqs <= 250
+freqs, mag = freqs[mask], mag[mask]
+
+probe_freqs = [20, 40, 60, 90, 120, 160, 200]
+products = {f: x * np.sin(2 * np.pi * f * t) for f in probe_freqs}
+
+fig = make_subplots(
+    rows=3, cols=1, row_heights=[0.3, 0.3, 0.4], vertical_spacing=0.10,
+    subplot_titles=("신호 x(t) = 40Hz + 0.6·90Hz + 0.35·160Hz",
+                    "x(t) × 검사 정현파 — 이 곡선의 평균이 성분 크기",
+                    "크기 스펙트럼 |X(f)|"),
+)
+
+f0 = 90
+fig.add_trace(go.Scatter(x=t, y=x, mode="lines", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=1.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=t, y=products[f0], mode="lines", showlegend=False,
+                         line=dict(color=viz.WARM, width=1.2),
+                         fill="tozeroy", fillcolor=viz.hex_rgba(viz.WARM, 0.18)),
+              row=2, col=1)
+fig.add_trace(go.Scatter(x=freqs, y=mag, mode="lines", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2)), row=3, col=1)
+fig.add_trace(go.Scatter(x=[f0, f0], y=[0, mag.max()], mode="lines", showlegend=False,
+                         line=dict(color=viz.WARM, width=2, dash="dash")), row=3, col=1)
+
+steps = []
+for f in probe_freqs:
+    m = products[f].mean()
+    steps.append((f"{f}", {
+        "x": [t, t, freqs, [f, f]],
+        "y": [x, products[f], mag, [0, mag.max()]],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="검사 주파수 = ", suffix=" Hz",
+                                      active=probe_freqs.index(f0), pad_t=45)])
+fig.update_xaxes(title_text="시간 (s)", row=2, col=1)
+fig.update_xaxes(title_text="주파수 (Hz)", row=3, col=1)
+fig.update_yaxes(title_text="진폭", row=1, col=1)
+fig.update_yaxes(title_text="곱", row=2, col=1)
+fig.update_yaxes(title_text="|X(f)|", row=3, col=1)
+
+viz.fig_defaults(fig, height=640)
+fig.update_layout(margin=dict(l=60, r=30, t=60, b=90))
+fig.show()
+```
+
+::: {.interaction-hint}
+검사 주파수를 40, 90, 160Hz에 맞춰보세요. **곱한 곡선이 대부분 양수 쪽으로 치우쳐** 평균이 0이 아닙니다 — 신호에 그 성분이 있다는 뜻입니다. 20이나 120Hz에서는 곱이 양·음으로 고르게 상쇄되어 평균이 0에 가깝습니다.
 :::
 
 ---
 
-## G8.1.3 — STFT 해상도 트레이드오프
+## 스펙트럼 누설과 윈도우
 
-프레임을 늘리면 주파수는 선명해지고 시간은 뭉개지는 대비
+여기까지는 깨끗한 이야기다. 하지만 DFT에는 조용한 가정이 하나 숨어 있다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 프레임 길이 슬라이더
+**DFT는 유한한 신호 토막이 무한히 반복된다고 가정한다.**
+
+신호를 $N$ 샘플에서 자를 때, 그 지점의 값이 시작 값과 다르면
+반복된 신호에 **불연속점**이 생긴다. 그리고 불연속은 온갖 주파수를 만들어낸다.
+실제로는 없는 주파수 성분이 스펙트럼에 번져 나타난다 — **스펙트럼 누설(leakage)** 이다.
+
+해결책은 신호 양 끝을 부드럽게 0으로 눌러주는 것이다. 이것이 **윈도우 함수**다.
+
+$$x_w[n] = x[n] \cdot w[n]$$
+
+| 윈도우 | 특징 | 쓰임 |
+|--------|------|------|
+| 직사각(rect) | 윈도우를 안 쓴 것 | 주엽이 가장 좁지만 누설 최악 |
+| Hann | 사이드로브 −31dB, 부드러운 감쇠 | **오디오 기본값** |
+| Hamming | 첫 사이드로브가 더 낮음 (−41dB) | 음성 처리 관례 |
+| Blackman | 사이드로브 −58dB, 주엽 넓음 | 약한 성분을 강한 성분 옆에서 찾을 때 |
+
+---
+
+## G8.1.2 — 윈도우가 누설을 막는 방식
+
+주파수가 빈(bin) 중심에 딱 맞지 않는 정현파 하나를 분석해본다.
+이때 누설이 가장 잘 드러난다.
+
+```{python}
+#| label: fig-window-leakage
+#| fig-cap: "빈 중심에서 벗어난 단일 정현파. 윈도우를 바꿔가며 누설 정도를 비교합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import audio, viz
+
+sr, N = 1000, 512
+t = np.arange(N) / sr
+
+# 빈 간격은 sr/N ≈ 1.95Hz. 100.9Hz 는 빈 중심에서 벗어나 누설이 뚜렷하다
+x = np.sin(2 * np.pi * 100.9 * t)
+
+names = ["rect", "hann", "hamming", "blackman"]
+labels = {"rect": "직사각 (윈도우 없음)", "hann": "Hann",
+          "hamming": "Hamming", "blackman": "Blackman"}
+
+wins, specs = {}, {}
+for nm in names:
+    w = audio.window(nm, N)
+    wins[nm] = w
+    X = np.fft.rfft(x * w)
+    db = 20 * np.log10(np.maximum(np.abs(X), 1e-12) / np.abs(X).max())
+    specs[nm] = np.maximum(db, -100)
+
+fr = np.fft.rfftfreq(N, 1 / sr)
+sel = (fr >= 60) & (fr <= 145)
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.36, 0.64],
+                    subplot_titles=("윈도우 모양 w[n]", "스펙트럼 (dB) — 누설 비교"))
+
+n0 = "hann"
+fig.add_trace(go.Scatter(x=np.arange(N), y=wins[n0], mode="lines", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         fill="tozeroy", fillcolor=viz.hex_rgba(viz.ACCENT, 0.15)),
+              row=1, col=1)
+
+# 모든 윈도우의 스펙트럼을 흐리게 깔아 비교 기준으로 삼는다
+for nm in names:
+    fig.add_trace(go.Scatter(x=fr[sel], y=specs[nm][sel], mode="lines",
+                             name=labels[nm], opacity=0.35,
+                             line=dict(width=1.2)), row=1, col=2)
+fig.add_trace(go.Scatter(x=fr[sel], y=specs[n0][sel], mode="lines", name="선택된 윈도우",
+                         line=dict(color=viz.YELLOW, width=3)), row=1, col=2)
+
+steps = []
+for nm in names:
+    ys = [wins[nm]] + [specs[k][sel] for k in names] + [specs[nm][sel]]
+    steps.append((labels[nm], {"y": ys}))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="윈도우 = ",
+                                      active=names.index(n0), pad_t=60)])
+fig.update_xaxes(title_text="샘플 n", row=1, col=1)
+fig.update_yaxes(title_text="w[n]", range=[-0.05, 1.05], row=1, col=1)
+fig.update_xaxes(title_text="주파수 (Hz)", row=1, col=2)
+fig.update_yaxes(title_text="dB (최대 대비)", range=[-100, 5], row=1, col=2)
+
+viz.fig_defaults(fig, height=450, title="100.9Hz 정현파 · N=512, 빈 간격 1.95Hz")
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=100), legend=dict(x=0.62, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+직사각 윈도우는 봉우리 옆이 **−13dB 정도에서 완만하게** 퍼집니다. Hann/Blackman으로 바꾸면 옆자락이 훨씬 아래로 떨어집니다. 대신 중앙 봉우리가 **넓어지는** 것도 보세요 — 공짜가 아닙니다.
 :::
 
 ---
 
-## G8.1.4 — 스펙트로그램
+## STFT: 시간을 되찾기
 
-치프·화음·음성 신호의 스펙트로그램과 그 안의 구조
+DFT는 신호 전체의 주파수 내용을 알려주지만, **언제** 그 주파수가 있었는지는 알려주지 않는다.
+음성처럼 시간에 따라 내용이 변하는 신호에는 치명적이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 신호 선택
+해법은 단순하다. **짧은 조각으로 잘라서 각각 DFT를 한다.**
+
+$$X[m, k] = \sum_{n=0}^{L-1} x[mH + n]\, w[n]\, e^{-i2\pi kn/L}$$
+
+- $L$ = 프레임 길이(`n_fft`) — 한 조각의 샘플 수
+- $H$ = 홉 길이(`hop`) — 조각을 얼마나 이동시킬지
+- $m$ = 프레임 번호, $k$ = 주파수 빈
+
+결과 $X[m,k]$ 는 2차원 배열이다. 그 크기를 dB로 그린 것이 **스펙트로그램**이다.
+
+---
+
+## G8.1.3 — 시간-주파수 해상도 트레이드오프
+
+여기가 이 장의 핵심이다. 프레임 길이 $L$ 하나가 두 해상도를 동시에 결정한다.
+
+$$\Delta f = \frac{f_s}{L} \quad (\text{주파수 해상도}), \qquad
+\Delta t = \frac{L}{f_s} \quad (\text{시간 해상도})$$
+
+$$\Rightarrow \quad \Delta f \cdot \Delta t = 1$$
+
+**둘의 곱이 상수다.** 하나를 좋게 하면 다른 하나가 반드시 나빠진다.
+
+```{python}
+#| label: fig-stft-tradeoff
+#| fig-cap: "프레임 길이를 바꾸면 시간 해상도와 주파수 해상도가 반대로 움직입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import audio, viz
+
+sr = 4000
+
+# 두 사건이 섞인 신호:
+#   (1) 서서히 올라가는 스윕 — 시간 해상도가 낮으면 뭉갠다
+#   (2) 짧은 클릭 두 번 — 시간 해상도가 낮으면 하나로 보인다
+t = audio.time_axis(1.0, sr)
+sig = 0.7 * audio.chirp(200, 900, 1.0, sr)
+sig += 0.6 * np.sin(2 * np.pi * 1200 * t)          # 고정 톤 (주파수 해상도 확인용)
+sig += 0.6 * np.sin(2 * np.pi * 1260 * t)          # 60Hz 떨어진 두 번째 톤
+for click_t in (0.35, 0.38):                        # 30ms 간격 클릭 두 개
+    i = int(click_t * sr)
+    sig[i:i + 12] += 2.5 * np.hanning(12)
+
+n_ffts = [64, 128, 256, 512, 1024, 2048]
+spec_data = {}
+for L in n_ffts:
+    H = max(L // 8, 8)
+    S = audio.stft(sig, n_fft=L, hop=H)
+    tt, ff = audio.stft_axes(sig, sr, L, H)
+    spec_data[L] = (audio.spectrogram_db(S, floor_db=-65), tt, ff, sr / L, L / sr)
+
+L0 = 256
+db0, tt0, ff0, df0, dt0 = spec_data[L0]
+
+fig = go.Figure(go.Heatmap(z=db0, x=tt0, y=ff0, colorscale="Viridis",
+                           zmin=-65, zmax=0,
+                           colorbar=dict(title="dB", thickness=12, outlinewidth=0)))
+
+steps = []
+for L in n_ffts:
+    db, tt, ff, df, dt = spec_data[L]
+    steps.append((str(L), {"z": [db], "x": [tt], "y": [ff]}))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="프레임 길이 n_fft = ",
+                        active=n_ffts.index(L0), pad_t=55)],
+    xaxis_title="시간 (s)", yaxis_title="주파수 (Hz)",
+    yaxis=dict(range=[0, 1600]),
+)
+viz.fig_defaults(fig, height=470,
+                 title="스윕 + 1200/1260Hz 두 톤 + 30ms 간격 클릭 2개")
+fig.show()
+```
+
+::: {.interaction-hint}
+**n_fft = 64~128**: 클릭 두 개가 또렷이 분리되지만, 1200과 1260Hz는 한 줄로 뭉칩니다.
+**n_fft = 1024~2048**: 두 톤이 두 줄로 갈라지지만, 클릭이 세로로 길게 번져 하나처럼 보입니다.
+**n_fft = 256~512**가 음성에서 흔히 쓰이는 절충점입니다 (16kHz에서 25ms 프레임).
+:::
+
+::: {.key-concept}
+**이것은 구현의 한계가 아니라 원리적 한계다.**
+
+$\Delta f \cdot \Delta t \ge \text{상수}$ 는 신호의 시간 폭과 대역폭 사이의 부등식이며,
+양자역학의 불확정성 원리와 **수학적으로 같은 정리**다
+(위치·운동량 대신 시간·주파수일 뿐).
+
+그래서 "시간도 정확하고 주파수도 정확한" 변환은 존재하지 않는다.
+CQT, 웨이블릿, 다중 해상도 기법들은 이 한계를 없애는 것이 아니라
+**주파수 대역마다 다르게 배분**하는 것이다.
 :::
 
 ---
 
-## 핵심 용어
+## 실무 설정값
 
-| 용어 | 비고 |
-|------|------|
-| DFT/FFT |  |
-| 윈도우 함수 |  |
-| STFT |  |
-| 스펙트로그램 |  |
-| 시간-주파수 해상도 |  |
-| Griffin-Lim |  |
+음성·오디오 모델에서 관례적으로 쓰이는 값들과 그 근거.
+
+```{python}
+#| label: stft-settings
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+
+settings = [
+    ("음성 인식 (16kHz)",  16000, 400,  160),   # 25ms 프레임, 10ms 홉
+    ("TTS / 보코더 (22kHz)", 22050, 1024, 256),
+    ("음악 분석 (44.1kHz)",  44100, 2048, 512),
+]
+
+print(f"{'용도':<22} {'sr':>7} {'n_fft':>6} {'hop':>5} "
+      f"{'프레임':>7} {'홉':>7} {'Δf':>8} {'중첩':>6}")
+print("-" * 78)
+for name, sr, n_fft, hop in settings:
+    print(f"{name:<22} {sr:>7} {n_fft:>6} {hop:>5} "
+          f"{n_fft/sr*1000:>6.1f}ms {hop/sr*1000:>6.1f}ms "
+          f"{sr/n_fft:>7.1f}Hz {(1-hop/n_fft)*100:>5.0f}%")
+```
+
+::: {.callout-note}
+## 왜 25ms 프레임 / 10ms 홉인가
+
+음성의 **준정상성(quasi-stationarity)** 때문이다.
+성도(vocal tract)의 모양은 20~30ms 정도 구간에서는 거의 변하지 않는다.
+그보다 짧으면 주파수 정보가 부족하고, 길면 여러 음소가 한 프레임에 섞인다.
+
+10ms 홉(60% 중첩)은 음소 경계를 놓치지 않을 만큼 촘촘하면서
+연산량이 감당되는 지점이다. 이 값은 1980년대에 정착해 지금도 그대로 쓰인다.
+:::
 
 ---
 
-**다음**: [8.2 멜 스케일과 MFCC](02_mel_mfcc.qmd) — 인간 청각을 흉내낸 특성 — 딥러닝 이전과 이후
+## 위상을 버리는 대가
+
+스펙트로그램을 만들 때 우리는 $|X[m,k]|$ 만 남기고 **위상 $\arg X[m,k]$ 를 버린다.**
+
+인식 과제에서는 합리적이다. 사람의 청각도 위상에 상대적으로 둔감하다.
+하지만 **소리를 다시 만들어야 할 때** 문제가 된다 —
+TTS 모델이 멜 스펙트로그램을 출력하면, 그것을 파형으로 되돌려야 한다.
+
+```{python}
+#| label: fig-phase
+#| fig-cap: "같은 크기 스펙트럼, 다른 위상. 파형은 전혀 다르지만 스펙트로그램은 거의 같습니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import audio, viz
+
+sr = 2000
+t = audio.time_axis(0.25, sr)
+freqs_c = [100, 200, 300, 400, 500]
+amps = [1.0, 0.7, 0.5, 0.35, 0.25]
+
+rng = np.random.default_rng(4)
+variants = {
+    "위상 정렬 (모두 0)": np.zeros(len(freqs_c)),
+    "무작위 위상 A": rng.uniform(0, 2 * np.pi, len(freqs_c)),
+    "무작위 위상 B": rng.uniform(0, 2 * np.pi, len(freqs_c)),
+}
+
+waves, spectra = {}, {}
+for name, ph in variants.items():
+    y = sum(a * np.sin(2 * np.pi * f * t + p)
+            for f, a, p in zip(freqs_c, amps, ph))
+    waves[name] = y
+    fr, mg = audio.dft_magnitude(y, sr)
+    keep = fr <= 650
+    spectra[name] = (fr[keep], mg[keep])
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("파형 (시간 영역)", "크기 스펙트럼"))
+
+for i, (name, y) in enumerate(waves.items()):
+    fig.add_trace(go.Scatter(x=t[:250], y=y[:250], mode="lines", name=name,
+                             line=dict(color=viz.color(i), width=2)), row=1, col=1)
+    fr, mg = spectra[name]
+    fig.add_trace(go.Scatter(x=fr, y=mg, mode="lines", showlegend=False,
+                             line=dict(color=viz.color(i), width=2,
+                                       dash=["solid", "dash", "dot"][i])),
+                  row=1, col=2)
+
+fig.update_xaxes(title_text="시간 (s)", row=1, col=1)
+fig.update_yaxes(title_text="진폭", row=1, col=1)
+fig.update_xaxes(title_text="주파수 (Hz)", row=1, col=2)
+fig.update_yaxes(title_text="|X(f)|", row=1, col=2)
+viz.fig_defaults(fig, height=400,
+                 title="크기 스펙트럼은 위상을 구별하지 못한다")
+fig.update_layout(legend=dict(x=0.01, y=1.15, orientation="h"))
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽 세 파형은 육안으로 완전히 다릅니다. 오른쪽 스펙트럼 세 개는 **정확히 겹칩니다**. 스펙트로그램만으로는 이 셋을 구별할 수 없습니다.
+:::
+
+이 정보 손실이 **보코더**라는 별도 모델이 필요한 이유다.
+Griffin-Lim은 반복 추정으로 위상을 복원하고(느리고 품질이 제한적),
+HiFi-GAN 같은 신경망 보코더는 그 대응을 아예 학습해버린다 —
+[8.8 보코더와 신경 오디오 코덱](08_vocoders_codecs.qmd)에서 다룬다.
+
+---
+
+## 요약
+
+| 개념 | 수식 | 핵심 |
+|------|------|------|
+| DFT | $X[k]=\sum_n x[n]e^{-i2\pi kn/N}$ | 정현파 기저와의 내적 = 기저 변환 |
+| FFT | — | 같은 DFT를 $O(N\log N)$ 에 |
+| 누설 | — | 유한 절단이 만드는 불연속 → 가짜 주파수 |
+| 윈도우 | $x[n]w[n]$ | 양 끝을 눌러 누설 억제. 대신 주엽이 넓어짐 |
+| STFT | $X[m,k]$ | 짧은 조각마다 DFT → 시간축 회복 |
+| 해상도 | $\Delta f \cdot \Delta t = 1$ | 원리적 한계. 절충만 가능 |
+| 음성 표준 | 25ms 프레임 / 10ms 홉 | 성도의 준정상성 구간 |
+| 위상 손실 | $\|X\|$ 만 사용 | 인식엔 무해, 합성엔 치명적 → 보코더 필요 |
+
+다음 장은 이 선형 주파수 축을 **인간 청각에 맞게 휘어서**
+멜 스펙트로그램과 MFCC를 만든다 — 지금도 음성 모델의 표준 입력이다.
+
+---
+
+**다음**: [8.2 멜 스케일과 MFCC](02_mel_mfcc.qmd) — 인간 청각을 흉내낸 특성
 
 **이전**: [8.0 소리와 디지털 신호](00_sound_and_sampling.qmd)
