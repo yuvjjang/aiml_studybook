@@ -4,76 +4,571 @@ subtitle: "벡터·행렬·고유값·SVD — 데이터와 모델의 공통 언�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+데이터는 행렬이고, 모델은 그 행렬에 가하는 변환이다.
 
-데이터는 행렬이고 모델은 그 행렬에 가하는 선형변환이다. 임베딩·어텐션·PCA는 모두 같은 선형대수 어휘로 쓰인다.
+이미지 한 장은 픽셀 값의 행렬이고, 문장 하나는 토큰 임베딩을 쌓은 행렬이며,
+사용자-상품 구매 기록도 행렬이다. 그리고 신경망의 층 하나는 결국 행렬 곱셈 하나다.
 
----
+$$\text{임베딩} \cdot W_Q, \quad QK^\top, \quad \text{PCA}, \quad \text{LoRA의 } BA$$
 
-## 이 장에서 다루는 것
-
-- 벡터공간, 기저, 차원 — 데이터 한 점 = 벡터
-- 내적, 노름(L1/L2/L∞), 코사인 유사도 — '가깝다'의 정의
-- 행렬 = 선형변환. 곱셈의 세 가지 해석(행 조합/열 조합/외적 합)
-- 행렬식, 계수(rank), 역행렬, 의사역행렬
-- 고유값·고유벡터 — 변환이 방향을 바꾸지 않는 축
-- 대각화와 스펙트럼 정리, 대칭행렬과 양정치성
-- 특이값 분해(SVD) — 모든 행렬에 통하는 분해, 저계수 근사
-- 노름과 조건수 — 왜 어떤 행렬은 계산이 불안정한가
-- 텐서와 브로드캐스팅 — NumPy/PyTorch 의 shape 규칙
+이 책 전체에서 반복될 이 표현들은 전부 같은 어휘로 쓰여 있다.
+이 장은 그 어휘를 세운다 — 다만 정리와 증명을 나열하는 대신,
+**각 개념이 나중에 어디서 다시 나오는지**를 표시하면서.
 
 ---
 
-## G0.0.1 — 선형변환의 시각화
+## 벡터: 데이터 한 점
 
-단위 격자와 단위원이 행렬 A에 의해 어떻게 늘어나고 회전하는지 실시간 표시
+$n$ 개의 숫자를 묶은 것이 벡터다. 하지만 세 가지로 읽을 수 있고, 셋 다 필요하다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 행렬 원소 슬라이더
+| 읽는 법 | 예시 | 쓰이는 곳 |
+|---------|------|-----------|
+| **숫자 목록** | 키 175, 몸무게 70, 나이 30 | 정형 데이터의 한 행 |
+| **공간의 점** | $\mathbb{R}^3$ 의 좌표 | 군집화, 차원축소 |
+| **방향과 크기** | 원점에서 뻗은 화살표 | 그래디언트, 임베딩 |
+
+머신러닝에서는 세 번째 관점이 특히 중요하다.
+임베딩 벡터를 다룰 때 우리가 실제로 신경 쓰는 것은 **방향**이지 크기가 아니기 때문이다.
+
+### 내적: "가깝다"의 정의
+
+두 벡터의 내적은
+
+$$\mathbf{u} \cdot \mathbf{v} = \sum_i u_i v_i = \|\mathbf{u}\|\,\|\mathbf{v}\|\cos\theta$$
+
+오른쪽 등식이 핵심이다. **내적은 방향의 일치도에 크기를 곱한 것**이다.
+
+여기서 크기의 영향을 빼면 코사인 유사도가 된다.
+
+$$\cos\theta = \frac{\mathbf{u}\cdot\mathbf{v}}{\|\mathbf{u}\|\|\mathbf{v}\|}$$
+
+::: {.key-concept}
+[5.0 어텐션](../05_transformer/00_attention_mechanism.qmd)의 $QK^\top$ 은 **모든 쿼리와 모든 키의 내적**이다.
+"토큰 $i$ 가 토큰 $j$ 에 얼마나 주목하는가"는 결국 두 벡터가 얼마나 같은 방향을 보는가다.
+:::
+
+### 노름: 크기를 재는 여러 방법
+
+크기에도 선택지가 있다. $p$-노름은
+
+$$\|\mathbf{x}\|_p = \left(\sum_i |x_i|^p\right)^{1/p}$$
+
+$p=2$ 는 유클리드 거리(우리가 아는 그 길이), $p=1$ 은 성분 절댓값의 합,
+$p\to\infty$ 는 가장 큰 성분의 절댓값이다.
+
+이 선택이 왜 중요한지는 정규화에서 드러난다.
+
+---
+
+## G0.0.1 — 노름 단위구: 왜 L1이 희소해를 만드는가
+
+"크기가 1인 점들의 집합"이 노름마다 다른 모양을 갖는다.
+이 모양 차이 하나가 [2.3 정규화](../02_classical_ml/03_regularization.qmd)에서 Lasso와 Ridge의 성질을 가른다.
+
+```{python}
+#| label: fig-norm-balls
+#| fig-cap: "p-노름 단위구. p를 바꾸면 모양이 마름모(p=1)에서 원(p=2), 정사각형(p→∞)으로 변합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# 단위구 {x : ||x||_p = 1} 를 극좌표로 그린다
+theta = np.linspace(0, 2 * np.pi, 721)
+c, s = np.cos(theta), np.sin(theta)
+
+p_values = [0.5, 0.7, 1.0, 1.3, 1.6, 2.0, 3.0, 5.0, 10.0, 50.0]
+
+def unit_ball(p):
+    # 방향 (c, s) 에서 ||r*(c,s)||_p = 1 이 되는 r
+    r = (np.abs(c) ** p + np.abs(s) ** p) ** (-1.0 / p)
+    return r * c, r * s
+
+balls = {p: unit_ball(p) for p in p_values}
+
+# 최소제곱 해가 놓이는 직선 (제약과 만나는 지점이 정규화 해)
+line_x = np.linspace(-1.8, 1.8, 50)
+line_y = 1.15 - 0.55 * line_x
+
+fig = go.Figure()
+
+x0, y0 = balls[2.0]
+fig.add_trace(go.Scatter(x=x0, y=y0, mode="lines", name="단위구 ‖x‖ₚ = 1",
+                         line=dict(color=viz.ACCENT, width=3),
+                         fill="toself", fillcolor=viz.hex_rgba(viz.ACCENT, 0.12)))
+fig.add_trace(go.Scatter(x=line_x, y=line_y, mode="lines", name="손실 등고선(예시)",
+                         line=dict(color=viz.WARM, width=2, dash="dash")))
+
+# 축 강조 — L1에서 해가 여기 걸리면 그 좌표가 정확히 0이 된다
+fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.25)", width=1))
+fig.add_vline(x=0, line=dict(color="rgba(255,255,255,0.25)", width=1))
+
+steps = []
+for p in p_values:
+    bx, by = balls[p]
+    label = "∞" if p >= 50 else f"{p:g}"
+    steps.append((label, {"x": [bx, line_x], "y": [by, line_y]}))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="p = ", active=5, pad_t=55)],
+    xaxis=dict(range=[-1.9, 1.9], title="x₁", scaleanchor="y",
+               zeroline=False),
+    yaxis=dict(range=[-1.9, 1.9], title="x₂", zeroline=False),
+    legend=dict(x=0.02, y=0.98),
+)
+viz.fig_defaults(fig, title="p-노름 단위구", height=480)
+fig.show()
+```
+
+::: {.interaction-hint}
+$p=1$ 로 내려보세요. 마름모의 **꼭짓점이 축 위에** 있습니다. 손실 등고선(주황)이 이 제약 영역과 처음 만나는 지점은 대개 꼭짓점이고, 거기서는 한 좌표가 정확히 0입니다 — 이것이 Lasso가 특성을 골라내는 기하학적 이유입니다. $p=2$ 의 원에는 튀어나온 꼭짓점이 없어 정확히 0이 되는 일이 거의 없습니다.
 :::
 
 ---
 
-## G0.0.2 — 고유벡터 찾기
+## 행렬: 선형변환
 
-벡터 v를 회전시키며 Av 와 v 의 방향이 일치하는 순간(고유벡터)을 표시
+$m \times n$ 행렬 $A$ 는 $\mathbb{R}^n$ 의 벡터를 $\mathbb{R}^m$ 으로 보내는 함수다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 각도 슬라이더
+$$A\mathbf{x} = \mathbf{y}$$
+
+"선형"이 뜻하는 것은 두 가지 성질뿐이다.
+
+$$A(\mathbf{u}+\mathbf{v}) = A\mathbf{u}+A\mathbf{v}, \qquad A(c\mathbf{x}) = cA\mathbf{x}$$
+
+기하학적으로는 **원점을 고정하고, 직선을 직선으로 보내며, 평행선을 평행하게 유지하는** 변환이다.
+격자가 격자로 남는다 — 늘어나고 기울어질 뿐.
+
+### 행렬 곱셈을 읽는 세 가지 방법
+
+$A\mathbf{x}$ 를 계산할 때 머릿속에 무엇을 떠올리느냐가 이후 이해를 좌우한다.
+
+| 관점 | 식 | 유용한 곳 |
+|------|-----|-----------|
+| **행 × 벡터** | $y_i = \mathbf{a}_i^\top \mathbf{x}$ | 각 출력이 입력의 가중합 (뉴런 하나) |
+| **열의 선형결합** | $A\mathbf{x} = \sum_j x_j \mathbf{a}_{:,j}$ | 열공간, 최소제곱의 기하 |
+| **외적의 합** | $AB = \sum_k \mathbf{a}_{:,k}\mathbf{b}_{k,:}$ | SVD, 저계수 근사, LoRA |
+
+세 번째가 가장 낯설지만 가장 자주 쓰인다.
+[7.6 LoRA](../07_language/06_finetuning_peft.qmd)가 $\Delta W = BA$ 로 파라미터를 줄이는 것도,
+SVD가 행렬을 rank-1 조각으로 쪼개는 것도 이 관점이다.
+
+---
+
+## G0.0.2 — 선형변환이 공간에 하는 일
+
+행렬 $A$ 를 항등행렬에서 목표 행렬로 서서히 바꿔가며,
+격자와 단위원이 어떻게 변형되는지 본다.
+
+```{python}
+#| label: fig-linear-transform
+#| fig-cap: "선형변환의 시각화. 슬라이더로 항등행렬 I에서 A로 이동합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+A = np.array([[2.0, 1.0],
+              [0.5, 1.5]])
+I = np.eye(2)
+
+# 격자선 (변환 전 좌표)
+lim, n_lines, res = 2.5, 11, 40
+grid_pts = []
+coords = np.linspace(-lim, lim, n_lines)
+fine = np.linspace(-lim, lim, res)
+for c in coords:                       # 세로선
+    grid_pts.append(np.c_[np.full(res, c), fine])
+for c in coords:                       # 가로선
+    grid_pts.append(np.c_[fine, np.full(res, c)])
+
+theta = np.linspace(0, 2 * np.pi, 200)
+circle = np.c_[np.cos(theta), np.sin(theta)]
+basis = np.array([[1.0, 0.0], [0.0, 1.0]])
+
+def transform(t):
+    """t=0 → 항등, t=1 → A 로 선형 보간"""
+    M = (1 - t) * I + t * A
+    gx, gy = [], []
+    for seg in grid_pts:
+        out = seg @ M.T
+        gx += list(out[:, 0]) + [None]
+        gy += list(out[:, 1]) + [None]
+    cir = circle @ M.T
+    b = basis @ M.T
+    return M, (gx, gy), cir, b
+
+ts = np.linspace(0, 1, 21)
+frames_data = {round(t, 2): transform(t) for t in ts}
+
+M0, (gx0, gy0), cir0, b0 = frames_data[0.0]
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=gx0, y=gy0, mode="lines", showlegend=False,
+                         line=dict(color="rgba(255,255,255,0.18)", width=1),
+                         hoverinfo="skip"))
+fig.add_trace(go.Scatter(x=cir0[:, 0], y=cir0[:, 1], mode="lines", name="단위원 → 타원",
+                         line=dict(color=viz.ACCENT, width=3)))
+fig.add_trace(go.Scatter(x=[0, b0[0, 0]], y=[0, b0[0, 1]], mode="lines+markers",
+                         name="e₁ 의 상", line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=[0, 10])))
+fig.add_trace(go.Scatter(x=[0, b0[1, 0]], y=[0, b0[1, 1]], mode="lines+markers",
+                         name="e₂ 의 상", line=dict(color=viz.GREEN, width=3),
+                         marker=dict(size=[0, 10])))
+
+steps = []
+for t in ts:
+    M, (gx, gy), cir, b = frames_data[round(t, 2)]
+    det = np.linalg.det(M)
+    steps.append((f"{t:.2f}", {
+        "x": [gx, cir[:, 0], [0, b[0, 0]], [0, b[1, 0]]],
+        "y": [gy, cir[:, 1], [0, b[0, 1]], [0, b[1, 1]]],
+    }))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="t = ", active=0, pad_t=55)],
+    xaxis=dict(range=[-4, 4], title="x₁", scaleanchor="y", zeroline=False),
+    yaxis=dict(range=[-4, 4], title="x₂", zeroline=False),
+    legend=dict(x=0.02, y=0.98),
+)
+viz.fig_defaults(
+    fig, height=500,
+    title=f"A = [[{A[0,0]:g}, {A[0,1]:g}], [{A[1,0]:g}, {A[1,1]:g}]]  ·  det A = {np.linalg.det(A):.2f}")
+fig.show()
+```
+
+::: {.interaction-hint}
+격자가 **기울어지되 평행은 유지**되는 것을 보세요. 단위원은 항상 타원이 됩니다 — 이 타원의 두 축이 곧 특이값입니다(아래 SVD 참고). 행렬식 $\det A = 2.25$ 는 넓이가 2.25배로 늘었다는 뜻입니다.
+:::
+
+::: {.callout-note}
+## 행렬식이 알려주는 것
+
+$\det A$ 는 **부피 배율**이다.
+
+- $|\det A| > 1$: 공간이 팽창 · $|\det A| < 1$: 수축
+- $\det A < 0$: 방향이 뒤집힘(거울 반사)
+- $\det A = 0$: 공간이 납작해짐 → **정보가 소실되고 역행렬이 없다**
+
+$\det A = 0$ 인 상황이 실무에서 나타나는 이름이 [다중공선성](../02_classical_ml/02_linear_regression.qmd)이다.
+특성 두 개가 완전히 상관되면 데이터 행렬이 납작해지고, 정규방정식의 역행렬 계산이 무너진다.
 :::
 
 ---
 
-## G0.0.3 — SVD 저계수 근사
+## 고유값과 고유벡터: 변환이 건드리지 않는 축
 
-이미지 행렬을 k개 특이값으로 재구성 — k에 따른 화질/압축률 변화
+대부분의 벡터는 $A$ 를 통과하면 방향이 바뀐다. 그런데 **방향이 그대로인** 특별한 벡터가 있다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: rank k 슬라이더
+$$A\mathbf{v} = \lambda \mathbf{v}$$
+
+이 $\mathbf{v}$ 가 고유벡터, $\lambda$ 가 고유값이다.
+변환의 "축"이라고 볼 수 있다 — 그 방향으로는 늘리거나 줄이기만 할 뿐 회전시키지 않는다.
+
+왜 중요한가? 행렬을 **반복 적용**할 때 답이 나온다.
+
+$$A^k \mathbf{v} = \lambda^k \mathbf{v}$$
+
+복잡한 행렬 거듭제곱이 스칼라 거듭제곱으로 바뀐다.
+[4.2 RNN](../04_architectures/02_rnn.qmd)의 그래디언트 소실·폭발이 정확히 이 식으로 설명된다 —
+$|\lambda| < 1$ 이면 지수적으로 사라지고, $|\lambda| > 1$ 이면 폭발한다.
+
+---
+
+## G0.0.3 — 고유벡터 찾기
+
+벡터 $\mathbf{v}$ 를 한 바퀴 돌리면서 $A\mathbf{v}$ 와 비교한다.
+둘의 방향이 일치하는 순간이 고유벡터다.
+
+```{python}
+#| label: fig-eigenvector
+#| fig-cap: "v를 회전시키며 Av와의 각도를 관찰. 각도가 0°가 되는 지점이 고유벡터입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+A = np.array([[2.0, 1.0],
+              [1.0, 1.5]])          # 대칭 → 고유벡터가 직교
+eigvals, eigvecs = np.linalg.eigh(A)
+
+angles = np.linspace(0, np.pi, 181)   # 방향만 보므로 반 바퀴면 충분
+V = np.c_[np.cos(angles), np.sin(angles)]
+AV = V @ A.T
+
+# v 와 Av 사이 각도 (방향 불일치도)
+cos_sim = np.sum(V * AV, axis=1) / (np.linalg.norm(V, axis=1) * np.linalg.norm(AV, axis=1))
+misalign = np.degrees(np.arccos(np.clip(np.abs(cos_sim), -1, 1)))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
+                    subplot_titles=("v 와 Av", "방향 불일치 각도"))
+
+i0 = 20
+fig.add_trace(go.Scatter(x=[0, V[i0, 0]], y=[0, V[i0, 1]], mode="lines+markers",
+                         name="v", line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=[0, 10])), row=1, col=1)
+fig.add_trace(go.Scatter(x=[0, AV[i0, 0]], y=[0, AV[i0, 1]], mode="lines+markers",
+                         name="Av", line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=[0, 10])), row=1, col=1)
+
+# 고유벡터 방향 참조선
+for k in range(2):
+    e = eigvecs[:, k] * 3
+    fig.add_trace(go.Scatter(x=[-e[0], e[0]], y=[-e[1], e[1]], mode="lines",
+                             name=f"고유벡터 λ={eigvals[k]:.2f}",
+                             line=dict(color=viz.GREEN if k else viz.PINK,
+                                       width=1.5, dash="dot")), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=np.degrees(angles), y=misalign, mode="lines",
+                         showlegend=False, line=dict(color=viz.YELLOW, width=2.5)),
+              row=1, col=2)
+fig.add_trace(go.Scatter(x=[np.degrees(angles[i0])], y=[misalign[i0]], mode="markers",
+                         showlegend=False, marker=dict(size=12, color=viz.ACCENT)),
+              row=1, col=2)
+
+steps = []
+for i in range(0, 181, 4):
+    steps.append((f"{np.degrees(angles[i]):.0f}°", {
+        "x": [[0, V[i, 0]], [0, AV[i, 0]], None, None,
+              np.degrees(angles), [np.degrees(angles[i])]],
+        "y": [[0, V[i, 1]], [0, AV[i, 1]], None, None,
+              misalign, [misalign[i]]],
+    }))
+
+# 참조선은 고정 — 슬라이더가 건드리지 않도록 원래 값으로 되돌린다
+for label, args in steps:
+    ev0, ev1 = eigvecs[:, 0] * 3, eigvecs[:, 1] * 3
+    args["x"][2] = [-ev0[0], ev0[0]]
+    args["y"][2] = [-ev0[1], ev0[1]]
+    args["x"][3] = [-ev1[0], ev1[0]]
+    args["y"][3] = [-ev1[1], ev1[1]]
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="v 의 각도 = ",
+                                      active=i0 // 4, pad_t=60)])
+fig.update_xaxes(range=[-3.2, 3.2], title_text="x₁", scaleanchor="y", row=1, col=1)
+fig.update_yaxes(range=[-3.2, 3.2], title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="v 의 각도 (°)", row=1, col=2)
+fig.update_yaxes(title_text="v 와 Av 사이 각 (°)", row=1, col=2)
+
+viz.fig_defaults(fig, height=460,
+                 title=f"고유값 λ₁={eigvals[0]:.3f}, λ₂={eigvals[1]:.3f}")
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=95), legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+오른쪽 곡선이 **0으로 내려가는 두 지점**을 찾아보세요. 그 각도에서 파란 화살표와 주황 화살표가 같은 직선 위에 놓입니다. $A$ 가 대칭행렬이라 두 고유벡터는 정확히 직교합니다(90° 차이).
+:::
+
+::: {.callout-note}
+## 대칭행렬이 특별한 이유
+
+$A = A^\top$ 이면 (스펙트럼 정리):
+
+- 고유값이 **항상 실수**다
+- 고유벡터를 **직교 정규 기저**로 잡을 수 있다
+- $A = Q\Lambda Q^\top$ 로 분해된다 ($Q$ 는 직교행렬)
+
+머신러닝에서 대칭행렬이 계속 등장하는 것은 우연이 아니다.
+**공분산 행렬**($\Sigma = \frac{1}{n}X^\top X$), **헤시안**, **그람 행렬**, **커널 행렬**이 모두 대칭이다.
+그래서 [2.10 PCA](../02_classical_ml/10_dimensionality_reduction.qmd)의 주성분이 서로 직교한다.
+
+여기에 $\mathbf{x}^\top A\mathbf{x} > 0$ 까지 성립하면 **양정치(positive definite)** 라 부르고,
+모든 고유값이 양수다. 헤시안이 양정치인 지점이 곧 국소 최소점이다 —
+[0.1 최적화](01_calculus_optimization.qmd)에서 다시 만난다.
 :::
 
 ---
 
-## G0.0.4 — 노름 단위구 비교
+## 특이값 분해(SVD): 모든 행렬에 통하는 분해
 
-L1·L2·L∞ 단위구 모양 비교 — 왜 L1이 희소해를 만드는가
+고유분해에는 제약이 있다. 정사각 행렬이어야 하고, 대각화가 안 되는 경우도 있다.
+**SVD는 그런 제약이 없다.** 어떤 $m\times n$ 행렬이든 분해된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: p 슬라이더
+$$A = U\Sigma V^\top = \sum_{i=1}^{r} \sigma_i \, \mathbf{u}_i \mathbf{v}_i^\top$$
+
+- $V$: 입력 공간의 직교 기저 (무엇을 보는가)
+- $\Sigma$: 특이값 $\sigma_1 \ge \sigma_2 \ge \dots \ge 0$ (각 방향을 얼마나 늘리는가)
+- $U$: 출력 공간의 직교 기저 (어디로 보내는가)
+
+오른쪽 형태가 결정적이다. **행렬 하나가 rank-1 조각들의 가중합으로 쪼개진다.**
+그리고 가중치 $\sigma_i$ 는 크기순으로 정렬되어 있다.
+
+앞의 큰 항 $k$ 개만 남기면 최적의 rank-$k$ 근사가 된다(에카르트-영 정리).
+
+$$A_k = \sum_{i=1}^{k} \sigma_i \mathbf{u}_i \mathbf{v}_i^\top$$
+
+---
+
+## G0.0.4 — SVD 저계수 근사
+
+이미지 행렬을 특이값 $k$ 개로 재구성한다. $k$ 를 늘려가며 무엇이 먼저 복원되는지 본다.
+
+```{python}
+#| label: fig-svd
+#| fig-cap: "SVD 저계수 근사. k를 늘리면 큰 구조부터 세부까지 순서대로 복원됩니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+img = datasets.image_grid(96)
+U, S, Vt = np.linalg.svd(img, full_matrices=False)
+
+energy = np.cumsum(S ** 2) / np.sum(S ** 2)
+ks = [1, 2, 3, 5, 8, 12, 20, 32, 48, 96]
+recons = {k: (U[:, :k] * S[:k]) @ Vt[:k] for k in ks}
+
+# 원본 대비 저장 비용: k(m+n+1) vs m*n
+m, n = img.shape
+ratio = {k: k * (m + n + 1) / (m * n) for k in ks}
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("rank-k 재구성", "특이값 스펙트럼과 누적 에너지"))
+
+k0 = 8
+fig.add_trace(go.Heatmap(z=recons[k0], colorscale="gray", showscale=False,
+                         zmin=0, zmax=1), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=np.arange(1, len(S) + 1), y=S, mode="lines",
+                         name="특이값 σᵢ", line=dict(color=viz.ACCENT, width=2.5)),
+              row=1, col=2)
+fig.add_trace(go.Scatter(x=np.arange(1, len(S) + 1), y=energy * S.max(), mode="lines",
+                         name="누적 에너지 (우측 스케일)",
+                         line=dict(color=viz.GREEN, width=2, dash="dash")), row=1, col=2)
+fig.add_trace(go.Scatter(x=[k0, k0], y=[0, S.max()], mode="lines", showlegend=False,
+                         line=dict(color=viz.WARM, width=2)), row=1, col=2)
+
+steps = []
+for k in ks:
+    steps.append((str(k), {
+        "z": [recons[k], None, None, None],
+        "x": [None, np.arange(1, len(S) + 1), np.arange(1, len(S) + 1), [k, k]],
+        "y": [None, S, energy * S.max(), [0, S.max()]],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="k = ",
+                                      active=ks.index(k0), pad_t=60)])
+fig.update_yaxes(autorange="reversed", showticklabels=False, row=1, col=1)
+fig.update_xaxes(showticklabels=False, row=1, col=1)
+fig.update_xaxes(title_text="특이값 순번 i", type="log", row=1, col=2)
+fig.update_yaxes(title_text="σᵢ", row=1, col=2)
+
+viz.fig_defaults(fig, height=470,
+                 title=f"96×96 행렬 · k=8이면 상위 {energy[7]*100:.1f}% 에너지를 "
+                       f"원본의 {ratio[8]*100:.0f}% 저장량으로")
+fig.update_layout(margin=dict(l=45, r=30, t=70, b=95), legend=dict(x=0.5, y=0.98))
+fig.show()
+```
+
+::: {.interaction-hint}
+$k=1$ 에서 시작해 올려보세요. 큰 밝기 구조가 먼저 잡히고 원·사각형 경계, 마지막에 줄무늬가 복원됩니다. 특이값 곡선이 급격히 떨어지는 것이 압축이 가능한 이유입니다.
+:::
+
+::: {.key-concept}
+**저계수 구조는 이 책 전체에 반복된다.**
+
+| 어디서 | 어떻게 |
+|--------|--------|
+| [PCA](../02_classical_ml/10_dimensionality_reduction.qmd) | 데이터 행렬의 SVD, 상위 성분만 남김 |
+| [LoRA](../07_language/06_finetuning_peft.qmd) | 가중치 갱신을 $\Delta W = BA$ (rank $r$) 로 제약 |
+| [Linformer](../05_transformer/07_efficient_attention.qmd) | 어텐션 행렬을 저계수로 근사 |
+| 추천 시스템 | 사용자-상품 행렬 분해 |
+
+전부 "중요한 방향은 몇 개 안 된다"는 같은 가정 위에 있다.
 :::
 
 ---
 
-## 핵심 용어
+## 텐서와 브로드캐스팅: 코드에서의 선형대수
 
-| 용어 | 비고 |
-|------|------|
-| 고유값 (eigenvalue) |  |
-| 특이값 분해 (SVD) |  |
-| 계수 (rank) |  |
-| 양정치 (positive definite) |  |
-| 조건수 (condition number) |  |
+실제 코드에서는 2차원을 넘어선다. 어텐션 하나만 봐도 `(배치, 헤드, 시퀀스, 차원)` 4차원이다.
+
+**shape를 추적하는 습관이 디버깅의 90%다.**
+
+```{python}
+#| label: shapes
+#| code-fold: false
+
+import numpy as np
+
+B, H, N, D = 2, 4, 6, 8          # 배치, 헤드, 시퀀스 길이, 헤드 차원
+
+Q = np.random.randn(B, H, N, D)
+K = np.random.randn(B, H, N, D)
+
+# 마지막 두 축만 행렬곱, 앞의 (B, H)는 그대로 유지된다
+scores = Q @ K.transpose(0, 1, 3, 2)
+print(f"Q       {Q.shape}")
+print(f"Kᵀ      {K.transpose(0, 1, 3, 2).shape}")
+print(f"scores  {scores.shape}   ← (B, H, N, N)")
+
+# 브로드캐스팅: 마스크 (N, N) 하나가 모든 배치·헤드에 자동 적용된다
+mask = np.triu(np.ones((N, N), dtype=bool), k=1)
+masked = np.where(mask, -np.inf, scores)
+print(f"mask    {mask.shape} → 브로드캐스트 → {masked.shape}")
+```
+
+브로드캐스팅 규칙은 단순하다. **뒤에서부터 축을 맞추되, 크기가 1이거나 없으면 늘린다.**
+
+| A | B | 결과 | 설명 |
+|---|---|------|------|
+| `(5, 3)` | `(3,)` | `(5, 3)` | 뒤 축 일치, 앞은 복제 |
+| `(5, 1)` | `(1, 3)` | `(5, 3)` | 양쪽 다 확장 |
+| `(2,4,6,6)` | `(6, 6)` | `(2,4,6,6)` | 마스크 적용 |
+| `(5, 3)` | `(5,)` | **오류** | 뒤 축이 3 vs 5 |
 
 ---
 
-**다음**: [0.1 미적분과 최적화](01_calculus_optimization.qmd) — 그래디언트·연쇄법칙·볼록성 — 학습이 일어나는 메커니즘
+## 조건수: 왜 어떤 계산은 불안정한가
+
+마지막으로 실무에서 자주 문제가 되는 양 하나.
+
+$$\kappa(A) = \frac{\sigma_{\max}}{\sigma_{\min}}$$
+
+가장 큰 특이값과 가장 작은 특이값의 비다.
+$\kappa$ 가 크면 입력의 작은 변화가 출력에서 크게 증폭된다 — **불량 조건(ill-conditioned)** 이다.
+
+```{python}
+#| label: condition-number
+#| code-fold: false
+
+import numpy as np
+
+for rho in [0.0, 0.9, 0.99, 0.9999]:
+    X = np.array([[1.0, 1.0], [1.0, 1.0 + (1 - rho)]])
+    k = np.linalg.cond(X)
+    print(f"두 열의 상관 ρ={rho:<7} → 조건수 κ = {k:>12,.1f}")
+```
+
+두 특성이 거의 같아질수록 조건수가 폭발한다.
+이것이 [다중공선성](../02_classical_ml/02_linear_regression.qmd)이 회귀 계수를 요동치게 만드는 메커니즘이고,
+Ridge 정규화가 $X^\top X + \lambda I$ 로 대각을 부풀려 이를 완화하는 이유다.
+
+---
+
+## 요약
+
+| 개념 | 수식 | 기하학적 의미 | 이 책에서 다시 나오는 곳 |
+|------|------|---------------|--------------------------|
+| 내적 | $\mathbf{u}\cdot\mathbf{v} = \|u\|\|v\|\cos\theta$ | 방향 일치도 × 크기 | 어텐션 점수, 코사인 유사도 |
+| $p$-노름 | $(\sum|x_i|^p)^{1/p}$ | 단위구의 모양 | L1 희소성, 그래디언트 클리핑 |
+| 행렬 | $A\mathbf{x}$ | 격자를 늘리고 기울이는 변환 | 모든 신경망 층 |
+| 행렬식 | $\det A$ | 부피 배율 | 정규화 흐름의 야코비안 |
+| 고유값 | $A\mathbf{v}=\lambda\mathbf{v}$ | 변환이 회전시키지 않는 축 | RNN 그래디언트 소실, PCA |
+| 대칭행렬 | $A=Q\Lambda Q^\top$ | 직교 축으로 분해 | 공분산, 헤시안, 커널 |
+| SVD | $A=\sum\sigma_i\mathbf{u}_i\mathbf{v}_i^\top$ | rank-1 조각의 가중합 | PCA, LoRA, 저계수 근사 |
+| 조건수 | $\sigma_{\max}/\sigma_{\min}$ | 증폭 배율 | 다중공선성, 수치 불안정 |
+
+이 장은 "공간이 어떻게 변형되는가"를 다뤘다.
+다음 장은 그 위에서 **어느 방향으로 움직여야 손실이 줄어드는가**를 묻는다 — 학습이 일어나는 곳이다.
+
+---
+
+**다음**: [0.1 미적분과 최적화](01_calculus_optimization.qmd) — 그래디언트·연쇄법칙·볼록성
