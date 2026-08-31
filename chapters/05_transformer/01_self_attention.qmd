@@ -4,78 +4,438 @@ subtitle: "자기 자신을 참조하기·인과 마스크 — 시퀀스 모델�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[5.0](00_attention_mechanism.qmd)에서는 $Q$, $K$, $V$ 가 어디서 오는지 말하지 않았다.
+그 셋이 **모두 같은 시퀀스에서** 나오면 무슨 일이 벌어지는가 — 이 장의 주제다.
 
-셀프 어텐션은 순환 없이 시퀀스 내 모든 관계를 한 번에 계산한다. 인과 마스크 한 장이 이 구조를 언어모델로 바꾼다.
+답은 놀랍도록 강력하다. 문장 하나가 자기 자신을 참조해 각 단어의 표현을 갱신한다.
+"그것"이 무엇을 가리키는지, "은행"이 금융기관인지 강둑인지가 **문맥에서 결정**된다.
 
----
-
-## 이 장에서 다루는 것
-
-- 셀프 어텐션: Q, K, V가 모두 같은 시퀀스에서 나올 때
-- 크로스 어텐션: 디코더가 인코더를 참조할 때
-- 순열 등변성 — 셀프 어텐션이 순서를 모른다는 사실
-- 인과(causal) 마스크와 자기회귀 언어모델
-- 패딩 마스크와 가변 길이 배치
-- prefix LM, 양방향 마스크 등 마스킹 변형
-- 어텐션의 수용영역: 한 층에서 전역 참조
-- RNN·CNN·셀프어텐션의 경로 길이·복잡도·병렬성 비교표
-- 셀프 어텐션의 귀납 편향이 약하다는 것의 의미(데이터 요구량)
+그리고 여기에 마스크 한 장을 얹으면 이 구조가 언어모델이 된다.
+GPT와 BERT의 차이는 사실상 그 마스크 한 장이다.
 
 ---
 
-## G5.1.1 — 마스크 패턴 갤러리
+## 셀프 어텐션: 세 개가 모두 같은 곳에서
 
-인과·양방향·prefix·패딩 마스크 행렬을 나란히 비교
+입력 시퀀스 $X \in \mathbb{R}^{n\times d}$ 하나에서 셋을 모두 뽑는다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 마스크 종류 전환
+$$Q = XW_Q, \quad K = XW_K, \quad V = XW_V$$
+
+$$\text{SelfAttn}(X) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V$$
+
+각 토큰이 **동시에** 세 역할을 한다.
+
+- 질문하는 자 (내가 무엇을 찾는지)
+- 검색되는 자 (남이 나를 어떻게 찾는지)
+- 내용을 주는 자 (실제로 전달할 것)
+
+크로스 어텐션과 대비하면 차이가 분명해진다.
+
+| | 셀프 어텐션 | 크로스 어텐션 |
+|---|---|---|
+| $Q$ 출처 | 시퀀스 $X$ | 시퀀스 $X$ (디코더) |
+| $K, V$ 출처 | **같은 $X$** | **다른 시퀀스 $Y$** (인코더 출력) |
+| 하는 일 | 내부 관계 파악 | 외부 정보 가져오기 |
+| 쓰이는 곳 | 모든 Transformer 층 | 번역 디코더, [Stable Diffusion 텍스트 조건](../06_generative/07_latent_diffusion.qmd) |
+
+---
+
+## 셀프 어텐션은 순서를 모른다
+
+여기서 이 구조의 가장 중요한 성질이 나온다. 그리고 이것은 **결함**이다.
+
+토큰 순서를 섞으면 어떻게 될까?
+$P$ 를 순열 행렬이라 하면
+
+$$\text{SelfAttn}(PX) = P \cdot \text{SelfAttn}(X)$$
+
+출력도 **정확히 같은 순서로 섞여 나올 뿐**, 값 자체는 바뀌지 않는다.
+이것을 **순열 등변성(permutation equivariance)** 이라 한다.
+
+즉 셀프 어텐션에게 "나는 너를 좋아해"와 "너는 나를 좋아해"는 구별되지 않는다.
+
+---
+
+## G5.1.1 — 순열 등변성 직접 확인
+
+말로만 하면 믿기 어려우니 수치로 확인한다.
+
+```{python}
+#| label: fig-permutation
+#| fig-cap: "토큰 순서를 섞어도 각 토큰의 출력 벡터는 그대로 따라옵니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import attention, viz
+
+rng = np.random.default_rng(11)
+tokens = ["나는", "너를", "좋아", "한다"]
+n, d = len(tokens), 8
+
+X = rng.normal(size=(n, d))
+Wq, Wk, Wv = [rng.normal(size=(d, d)) * 0.4 for _ in range(3)]
+
+def self_attn(Xin):
+    Q, K, V = Xin @ Wq, Xin @ Wk, Xin @ Wv
+    return attention.scaled_dot_product_attention(Q, K, V)
+
+out_orig, attn_orig = self_attn(X)
+
+perm = np.array([1, 0, 3, 2])          # 토큰 순서 뒤섞기
+out_perm, attn_perm = self_attn(X[perm])
+
+# 섞인 출력을 원래 순서로 되돌리면 원본과 같아야 한다
+inv = np.argsort(perm)
+restored = out_perm[inv]
+max_diff = np.abs(restored - out_orig).max()
+
+fig = make_subplots(
+    rows=1, cols=3, column_widths=[0.34, 0.34, 0.32],
+    subplot_titles=("원래 순서의 출력", "섞은 뒤 되돌린 출력", "차이 |차|"),
+)
+
+common = dict(colorscale="RdBu", zmid=0, zmin=-1.2, zmax=1.2, showscale=False)
+fig.add_trace(go.Heatmap(z=np.round(out_orig, 4), **common), row=1, col=1)
+fig.add_trace(go.Heatmap(z=np.round(restored, 4), **common), row=1, col=2)
+fig.add_trace(go.Heatmap(z=np.round(np.abs(restored - out_orig), 12),
+                         colorscale="Greys", showscale=False), row=1, col=3)
+
+for c in (1, 2, 3):
+    fig.update_yaxes(tickmode="array", tickvals=list(range(n)), ticktext=tokens,
+                     autorange="reversed", row=1, col=c)
+    fig.update_xaxes(title_text="차원", row=1, col=c)
+
+viz.fig_defaults(fig, height=330,
+                 title=f"순열 등변성 검증 · 최대 차이 = {max_diff:.2e} (수치 오차 수준)")
+fig.show()
+```
+
+```{python}
+#| label: perm-numbers
+#| code-fold: false
+
+print(f"원래 순서 : {tokens}")
+print(f"섞은 순서 : {[tokens[i] for i in perm]}")
+print(f"되돌린 출력과 원본의 최대 차이: {max_diff:.3e}")
+print()
+print("→ 순서 정보가 계산에 전혀 반영되지 않는다.")
+print("  위치 인코딩 없이는 어순이 다른 문장을 구별할 수 없다.")
+```
+
+::: {.key-concept}
+이것이 [5.3 위치 인코딩](03_positional_encoding.qmd)이 **필수**인 이유다.
+CNN은 커널 위치가, RNN은 순차 처리가 순서를 자동으로 담지만,
+셀프 어텐션은 순서 정보를 **입력에 명시적으로 주입**해야 한다.
+
+역설적이게도 이 "결함"이 장점이기도 하다.
+순서 가정이 없으니 이미지 패치([ViT](../09_vision_video/02_vit.qmd)),
+그래프 노드, 집합 데이터에도 그대로 쓸 수 있다.
 :::
 
 ---
 
-## G5.1.2 — 인과 마스크의 효과
+## 마스킹: 무엇을 보지 못하게 할 것인가
 
-미래 토큰이 −∞로 막혀 softmax에서 0이 되는 과정
+마스크는 어텐션 점수를 $-\infty$ 로 만들어 softmax 후 가중치를 정확히 0으로 만든다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 위치 슬라이더
+$$\text{scores}_{ij} \leftarrow
+\begin{cases}
+-\infty & \text{if mask}_{ij} \\
+\dfrac{q_i^\top k_j}{\sqrt{d_k}} & \text{otherwise}
+\end{cases}$$
+
+$e^{-\infty} = 0$ 이므로 그 자리는 남은 항들끼리 정규화된다 — 행 합은 여전히 1이다.
+
+마스크의 **모양** 하나가 모델 계열을 결정한다.
+
+---
+
+## G5.1.2 — 마스크 패턴 갤러리
+
+```{python}
+#| label: fig-masks
+#| fig-cap: "마스크 행렬만으로 모델 계열이 구분됩니다. 노란색 = 참조 가능, 검정 = 차단."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import attention, viz
+
+n = 10
+prefix_len = 4
+lengths = [10, 7, 4]          # 패딩 예시용
+
+masks = {
+    "양방향 (BERT / 인코더)": np.zeros((n, n), dtype=bool),
+    "인과 (GPT / 디코더)": attention.causal_mask(n),
+    "prefix LM (앞 4토큰은 양방향)": None,
+    "슬라이딩 윈도우 (w=3)": None,
+    "패딩 (실제 길이 7)": None,
+}
+
+# prefix LM: 접두부끼리는 서로 보고, 그 뒤는 인과적
+pm = attention.causal_mask(n).copy()
+pm[:prefix_len, :prefix_len] = False
+masks["prefix LM (앞 4토큰은 양방향)"] = pm
+
+# 슬라이딩 윈도우: 인과 + 최근 w개만
+w = 3
+i_idx = np.arange(n)[:, None]
+j_idx = np.arange(n)[None, :]
+masks["슬라이딩 윈도우 (w=3)"] = (j_idx > i_idx) | (i_idx - j_idx >= w)
+
+# 패딩 마스크
+masks["패딩 (실제 길이 7)"] = attention.padding_mask([7] * n, n)
+
+names = list(masks)
+fig = make_subplots(rows=1, cols=len(names), subplot_titles=names,
+                    horizontal_spacing=0.025)
+
+for c, nm in enumerate(names, start=1):
+    m = masks[nm].astype(float)
+    fig.add_trace(go.Heatmap(z=1 - m, colorscale=[[0, "#111111"], [1, viz.YELLOW]],
+                             showscale=False,
+                             hovertemplate="쿼리 %{y} → 키 %{x}<extra></extra>"),
+                  row=1, col=c)
+    fig.update_yaxes(autorange="reversed", showticklabels=(c == 1),
+                     title_text="쿼리 i" if c == 1 else None, row=1, col=c)
+    fig.update_xaxes(title_text="키 j", row=1, col=c)
+
+viz.fig_defaults(fig, height=300, title="어텐션 마스크 패턴")
+fig.update_layout(margin=dict(l=45, r=20, t=75, b=45))
+fig.update_annotations(font_size=11)
+fig.show()
+```
+
+::: {.interaction-hint}
+행 $i$ 를 따라 읽으면 "토큰 $i$ 가 볼 수 있는 것"입니다. 인과 마스크는 아래삼각형만 노란색 — 각 토큰이 자기 자신과 과거만 봅니다. prefix LM은 왼쪽 위 4×4 블록이 꽉 차 있어 그 구간만 양방향입니다.
+:::
+
+| 마스크 | 모델 | 학습 목표 |
+|--------|------|-----------|
+| 양방향 (없음) | BERT, ViT, 인코더 | 마스크드 토큰 복원 |
+| 인과 (하삼각) | GPT, LLaMA, 디코더 | 다음 토큰 예측 |
+| prefix LM | T5의 일부, UL2 | 조건부 생성 |
+| 슬라이딩 윈도우 | Mistral, Longformer | 긴 문맥 효율화 |
+| 패딩 | 모든 가변 길이 배치 | (구조가 아니라 구현 문제) |
+
+---
+
+## 인과 마스크가 언어모델을 만든다
+
+인과 마스크의 의미는 정확히 이것이다.
+
+> **토큰 $i$ 는 자기 자신과 그 앞의 토큰만 볼 수 있다.**
+
+왜 필요한가? 학습 방식 때문이다.
+
+자기회귀 언어모델은 "다음 토큰 맞히기"를 학습한다.
+그런데 Transformer는 시퀀스 전체를 **한 번에** 처리한다.
+마스크가 없으면 위치 5에서 다음 토큰을 예측할 때 위치 6의 정답이 이미 보인다 — 커닝이다.
+
+인과 마스크가 있으면 **한 번의 순전파로 $n$ 개 위치의 예측을 동시에, 그러나 정직하게** 학습할 수 있다.
+이것이 RNN 대비 학습 속도의 핵심 이점이다.
+
+---
+
+## G5.1.3 — 마스크가 가중치를 0으로 만드는 과정
+
+```{python}
+#| label: fig-causal-effect
+#| fig-cap: "같은 점수 행렬에 인과 마스크를 적용하기 전과 후"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import attention, viz
+
+rng = np.random.default_rng(5)
+sent = ["<s>", "고양이", "가", "생선", "을", "먹었", "다"]
+n, d_k = len(sent), 16
+
+base = rng.normal(size=(n, d_k)) * 0.6
+Q = base + rng.normal(size=(n, d_k)) * 0.35
+K = base + rng.normal(size=(n, d_k)) * 0.35
+V = rng.normal(size=(n, d_k))
+
+_, attn_free = attention.scaled_dot_product_attention(Q, K, V)
+_, attn_causal = attention.scaled_dot_product_attention(
+    Q, K, V, mask=attention.causal_mask(n))
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("마스크 없음 (양방향)",
+                                                    "인과 마스크 적용"),
+                    horizontal_spacing=0.12)
+
+for c, A in enumerate([attn_free, attn_causal], start=1):
+    fig.add_trace(go.Heatmap(z=np.round(A, 3), colorscale="Blues", zmin=0, zmax=1,
+                             showscale=(c == 2),
+                             text=np.round(A, 2), texttemplate="%{text}",
+                             textfont=dict(size=9),
+                             colorbar=dict(thickness=12, outlinewidth=0),
+                             hovertemplate="쿼리 %{y}<br>키 %{x}<br>가중치 %{z:.3f}"
+                                           "<extra></extra>"),
+                  row=1, col=c)
+    fig.update_xaxes(tickmode="array", tickvals=list(range(n)), ticktext=sent,
+                     tickangle=-40, row=1, col=c)
+    fig.update_yaxes(tickmode="array", tickvals=list(range(n)), ticktext=sent,
+                     autorange="reversed", row=1, col=c)
+
+viz.fig_defaults(fig, height=420,
+                 title="상삼각이 정확히 0이 되고, 남은 항끼리 다시 정규화된다")
+fig.show()
+```
+
+```{python}
+#| label: causal-check
+#| code-fold: false
+
+import numpy as np
+
+upper = attn_causal[np.triu_indices(n, k=1)]
+print(f"미래 위치 가중치 최댓값 : {upper.max():.2e}   (정확히 0)")
+print(f"각 행의 합               : {np.round(attn_causal.sum(axis=1), 6)}")
+print()
+print("첫 토큰은 자기 자신만 볼 수 있으므로 가중치가 1.0 하나뿐이다:")
+print(f"  {np.round(attn_causal[0], 3)}")
+```
+
+::: {.interaction-hint}
+왼쪽에서는 "고양이"가 뒤쪽 "먹었"을 참조합니다. 오른쪽에서는 그 칸이 0이 되고, 대신 왼쪽 항들의 가중치가 커집니다 — **합이 1로 유지되도록 재분배**되기 때문입니다.
+:::
+
+::: {.callout-warning}
+## 마스크는 −∞ 로, 0 으로가 아니다
+
+흔한 구현 실수 하나.
+
+```python
+# 틀림 — 가중치를 계산한 뒤 0으로 만들면 행 합이 1이 아니게 된다
+attn = softmax(scores)
+attn = attn * mask        # 합이 1보다 작아짐
+
+# 맞음 — softmax 이전에 점수를 -inf 로
+scores = scores.masked_fill(mask, float("-inf"))
+attn = softmax(scores)    # 남은 항끼리 정규화되어 합 = 1
+```
+
+실무에서는 `-inf` 대신 `-1e9` 같은 큰 음수를 쓰기도 한다.
+fp16에서 `-inf` 가 `NaN` 을 만드는 경우가 있어서다
+([0.5 수치 컴퓨팅](../00_foundations/05_numerical_computing.qmd)).
+단, 한 행이 **전부** 마스킹되면 `-inf` 는 `NaN` 을 만든다 — 패딩 처리에서 실제로 겪는 버그다.
 :::
 
 ---
 
-## G5.1.3 — 경로 길이 비교
+## 왜 순환을 버릴 수 있었나
 
-RNN(O(n))·CNN(O(log n))·어텐션(O(1))의 정보 이동 거리
+이 장의 구조가 왜 RNN을 대체했는지는 세 지표로 정리된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시퀀스 길이 슬라이더
+```{python}
+#| label: fig-path-length
+#| fig-cap: "정보가 시퀀스 양 끝을 오가는 데 필요한 층 수와, 층당 병렬성"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+ns = np.array([8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096])
+k = 3   # CNN 커널 크기
+
+path = {
+    "RNN":            ns.astype(float),                       # O(n)
+    "CNN (k=3)":      np.ceil(np.log(ns) / np.log(k)),        # O(log_k n)
+    "셀프 어텐션":     np.ones_like(ns, dtype=float),          # O(1)
+}
+d = 512
+cost = {
+    "RNN":            ns * d * d,          # 순차 — 병렬 불가
+    "CNN (k=3)":      k * ns * d * d,
+    "셀프 어텐션":     ns * ns * d,
+}
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("최대 경로 길이 (정보 전달 거리)",
+                                    "층당 연산량"))
+
+for i, name in enumerate(path):
+    fig.add_trace(go.Scatter(x=ns, y=path[name], mode="lines+markers", name=name,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=ns, y=cost[name], mode="lines+markers", name=name,
+                             line=dict(color=viz.color(i), width=2.5),
+                             showlegend=False), row=1, col=2)
+
+fig.update_xaxes(title_text="시퀀스 길이 n", type="log")
+fig.update_yaxes(title_text="층 수", type="log", row=1, col=1)
+fig.update_yaxes(title_text="FLOPs (d=512)", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="RNN · CNN · 셀프 어텐션 비교")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+| | 경로 길이 | 층당 복잡도 | 병렬화 |
+|---|---|---|---|
+| RNN | $O(n)$ | $O(n d^2)$ | **불가** (순차 의존) |
+| CNN | $O(\log_k n)$ | $O(k n d^2)$ | 가능 |
+| 셀프 어텐션 | $O(1)$ | $O(n^2 d)$ | 가능 |
+
+::: {.key-concept}
+셀프 어텐션이 이긴 이유는 연산량이 적어서가 아니다 — **오히려 긴 시퀀스에서는 더 비싸다.**
+
+이긴 이유는 두 가지다.
+
+1. **경로 길이 $O(1)$** — 첫 단어와 마지막 단어가 한 층에서 직접 연결된다.
+   RNN의 그래디언트 소실 문제가 원천적으로 사라진다.
+2. **완전 병렬** — 시퀀스 전체를 GPU가 한 번에 처리한다.
+   RNN은 $n$ 스텝을 순서대로 기다려야 해서 하드웨어를 놀린다.
+
+즉 **"연산을 더 쓰더라도 병렬화 가능한 연산으로 바꾼 것"** 이 승리 요인이다.
+이 교환이 스케일링을 가능하게 했다.
 :::
 
 ---
 
-## G5.1.4 — 순열 등변성 실험
+## 대가: 귀납 편향이 거의 없다
 
-위치 인코딩 없이 순서를 바꿔도 출력이 그대로 따라오는 현상
+셀프 어텐션은 데이터에 대해 거의 아무것도 가정하지 않는다.
+"가까운 토큰이 더 관련 있다"는 상식조차 넣지 않는다 — 학습으로 알아내야 한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 토큰 섞기 버튼
-:::
+| 아키텍처 | 내장된 가정 | 결과 |
+|----------|-------------|------|
+| CNN | 지역성, 평행이동 등변성 | 적은 데이터로도 학습 |
+| RNN | 순차성, 최근성 편향 | 시퀀스에 자연스러움 |
+| 셀프 어텐션 | **거의 없음** | 데이터가 많아야 이김 |
 
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 셀프 어텐션 |  |
-| 크로스 어텐션 |  |
-| 인과 마스크 |  |
-| 순열 등변성 |  |
-| 패딩 마스크 |  |
+이것이 [ViT가 대규모 데이터에서만 CNN을 이기는 이유](../09_vision_video/02_vit.qmd)이고,
+[스케일링 법칙](09_scaling_laws.qmd)이 Transformer에서 특히 잘 통하는 이유이기도 하다.
+가정을 적게 넣을수록, 데이터를 늘렸을 때 얻는 것이 많다.
 
 ---
 
-**다음**: [5.2 멀티헤드 어텐션](02_multi_head.qmd) — 여러 표현 부분공간에서 동시에 — 헤드는 무엇을 배우는가
+## 요약
+
+| 개념 | 핵심 | 이어지는 곳 |
+|------|------|-------------|
+| 셀프 어텐션 | $Q,K,V$ 가 모두 같은 $X$ 에서 | 모든 Transformer 층 |
+| 크로스 어텐션 | $K,V$ 만 다른 시퀀스에서 | 번역 디코더, 확산 모델 조건 |
+| 순열 등변성 | 순서를 모름 — 결함이자 범용성 | [5.3 위치 인코딩](03_positional_encoding.qmd) |
+| 마스크 | 점수를 $-\infty$ 로 (0이 아니라) | 구현 주의 |
+| 인과 마스크 | 자기 자신 + 과거만 | GPT 계열, 병렬 학습 |
+| 양방향 | 제약 없음 | BERT 계열 |
+| 경로 길이 $O(1)$ | 그래디언트 소실 해소 | RNN을 대체한 이유 |
+| 병렬성 | 시퀀스 전체 동시 처리 | 스케일링의 전제 |
+| 약한 귀납 편향 | 데이터가 많아야 이김 | ViT, 스케일링 법칙 |
+
+지금까지는 어텐션을 **한 번** 계산했다.
+다음 장은 그것을 여러 갈래로 쪼개면 왜 더 나은지를 다룬다 — 멀티헤드 어텐션이다.
+
+---
+
+**다음**: [5.2 멀티헤드 어텐션](02_multi_head.qmd) — 여러 표현 부분공간에서 동시에
 
 **이전**: [5.0 어텐션 메커니즘](00_attention_mechanism.qmd)
