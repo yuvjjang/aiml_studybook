@@ -4,88 +4,632 @@ subtitle: "연쇄법칙의 효율적 구현 — 딥러닝을 가능하게 한 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+역전파는 새로운 수학이 아니다. **연쇄법칙을 영리한 순서로 적용하는 것**뿐이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그런데 그 순서가 전부를 바꾼다.
+같은 그래디언트를 계산하는데 순서를 잘못 잡으면 수천 배 느려진다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그리고 역전파를 손으로 유도해보지 않으면
+그래디언트 소실·폭발, 잔차 연결, 그래디언트 클리핑이 전부 마법처럼 보인다.
+[5.6에서 GPT를 만들 때](../05_transformer/06_build_gpt.qmd) 이미 한 번 했지만,
+여기서는 그 기계를 처음부터 조립한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 계산 그래프
+
+모든 신경망은 기본 연산의 그래프다.
+각 노드는 국소 연산이고, **국소 미분만 알면** 전체 그래디언트를 조립할 수 있다.
+
+간단한 예로 시작한다.
+
+$$f(x, y, z) = (x + y)\cdot z$$
+
+```{python}
+#| label: fig-computation-graph
+#| fig-cap: "순전파는 값을, 역전파는 그래디언트를 흘려보냅니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+x, y, z = 2.0, -3.0, 4.0
+q = x + y          # -1
+f = q * z          # -4
+
+# 역전파: 출력에서 시작해 국소 미분을 곱해가며 뒤로
+df_df = 1.0
+df_dq = z * df_df          # 곱셈 노드: 상대편 값
+df_dz = q * df_df
+df_dx = 1.0 * df_dq        # 덧셈 노드: 그대로 전달
+df_dy = 1.0 * df_dq
+
+nodes = {
+    "x": (0.0, 2.0, x, df_dx), "y": (0.0, 1.0, y, df_dy),
+    "z": (0.0, 0.0, z, df_dz),
+    "q = x+y": (1.0, 1.5, q, df_dq), "f = q·z": (2.0, 0.9, f, df_df),
+}
+edges = [("x", "q = x+y"), ("y", "q = x+y"), ("q = x+y", "f = q·z"), ("z", "f = q·z")]
+
+fig = go.Figure()
+for a, b in edges:
+    xa, ya, *_ = nodes[a]; xb, yb, *_ = nodes[b]
+    fig.add_trace(go.Scatter(x=[xa, xb], y=[ya, yb], mode="lines", showlegend=False,
+                             line=dict(color="rgba(255,255,255,0.3)", width=2),
+                             hoverinfo="skip"))
+for name, (px, py, val, grad) in nodes.items():
+    fig.add_trace(go.Scatter(x=[px], y=[py], mode="markers+text",
+                             showlegend=False,
+                             marker=dict(size=52, color=viz.hex_rgba(viz.ACCENT, 0.35),
+                                         line=dict(width=2, color=viz.ACCENT)),
+                             text=[name], textposition="middle center",
+                             textfont=dict(size=11)))
+    fig.add_annotation(x=px, y=py-0.30, text=f"값 <b>{val:g}</b>",
+                       showarrow=False, font=dict(size=11, color=viz.GREEN))
+    fig.add_annotation(x=px, y=py-0.48, text=f"∂f/∂ = <b>{grad:g}</b>",
+                       showarrow=False, font=dict(size=11, color=viz.WARM))
+
+fig.update_layout(xaxis=dict(visible=False, range=[-0.5, 2.6]),
+                  yaxis=dict(visible=False, range=[-0.7, 2.5]))
+viz.fig_defaults(fig, height=380,
+                 title="초록 = 순전파 값 · 주황 = 역전파 그래디언트")
+fig.show()
+```
+
+```{python}
+#| label: graph-verify
+#| code-fold: false
+
+import numpy as np
+
+def f_fn(x, y, z):
+    return (x + y) * z
+
+eps = 1e-6
+print(f"{'변수':>4} {'해석적':>10} {'수치적':>12}")
+print("-" * 30)
+for name, (vx, vy, vz), ana in [("x", (x+eps, y, z), df_dx),
+                                 ("y", (x, y+eps, z), df_dy),
+                                 ("z", (x, y, z+eps), df_dz)]:
+    num = (f_fn(*vx if False else (vx, vy, vz)) - f_fn(x, y, z)) / eps
+    print(f"{name:>4} {ana:>10.4f} {num:>12.4f}")
+```
+
+::: {.key-concept}
+**노드별 국소 규칙**
+
+| 연산 | 순전파 | 역전파 (들어온 그래디언트 $g$) |
+|------|--------|-------------------------------|
+| $a+b$ | $a+b$ | 양쪽 모두 $g$ — **분배기** |
+| $a\cdot b$ | $ab$ | $a$ 로 $bg$, $b$ 로 $ag$ — **교환기** |
+| $\max(a,b)$ | 큰 쪽 | 큰 쪽만 $g$, 나머지 0 — **라우터** |
+| 분기 (같은 값 재사용) | 복사 | 들어온 것들의 **합** |
+
+마지막 규칙이 자주 실수가 나는 곳이다.
+한 변수를 여러 곳에서 쓰면 그래디언트가 **더해진다**.
+[5.6의 weight tying](../05_transformer/06_build_gpt.qmd)에서
+임베딩 행렬에 그래디언트가 두 번 기여한 것이 이 규칙이다.
 :::
 
-역전파를 손으로 유도해보지 않으면 그래디언트 폭발·소실, 잔차 연결, 그래디언트 클리핑이 모두 마법처럼 보인다.
-
 ---
 
-## 이 장에서 다루는 것
+## 왜 역방향인가
 
-- 계산 그래프와 순전파/역전파의 대칭
-- 스칼라 연쇄법칙에서 벡터·행렬 연쇄법칙으로
-- 국소 그래디언트와 역방향 누적(reverse-mode AD)
-- 왜 forward-mode 가 아니라 reverse-mode 인가 (비용 분석)
-- MLP 전체의 역전파 수식 손유도
-- softmax + 교차엔트로피의 그래디언트가 단순해지는 이유
-- 그래디언트 검사(numerical gradient check)
-- 메모리 비용과 활성화 체크포인팅
-- 그래디언트 흐름 진단: 층별 그래디언트 노름
+핵심 질문. 연쇄법칙을 앞에서부터 곱해도 되는데 왜 뒤에서부터 하는가?
 
----
+$$\frac{\partial L}{\partial \theta} =
+\underbrace{\frac{\partial L}{\partial h_N}}_{1\times d_N}
+\underbrace{\frac{\partial h_N}{\partial h_{N-1}}}_{d_N\times d_{N-1}} \cdots
+\underbrace{\frac{\partial h_1}{\partial \theta}}_{d_1\times P}$$
 
-## G3.1.1 — 계산 그래프 역전파
+행렬 곱은 결합법칙이 성립하므로 어느 쪽부터 곱해도 결과가 같다.
+그런데 **비용이 완전히 다르다.**
 
-간단한 식의 순전파 값과 역전파 그래디언트를 노드마다 표시
+```{python}
+#| label: fig-forward-vs-reverse
+#| fig-cap: "출력이 하나(손실)이므로 역방향이 압도적으로 싸다"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 노드 단계 재생
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# 층 크기 d, 층 수 L, 입력 파라미터 수 P
+d, L = 512, 24
+Ps = np.array([10, 100, 1000, 10_000, 100_000, 1_000_000])
+
+# forward-mode: 각 입력 방향마다 전체를 한 번씩 → P 번
+fwd = Ps * L * d * d * 2
+# reverse-mode: 출력이 스칼라 1개 → 한 번의 역방향 순회
+rev = np.full_like(Ps, L * d * d * 2, dtype=float)
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=Ps, y=fwd, mode="lines+markers",
+                         name="forward-mode (입력 수에 비례)",
+                         line=dict(color=viz.WARM, width=2.5)))
+fig.add_trace(go.Scatter(x=Ps, y=rev, mode="lines+markers",
+                         name="reverse-mode (역전파)",
+                         line=dict(color=viz.ACCENT, width=2.5)))
+fig.update_layout(xaxis_title="파라미터 수 P", xaxis_type="log",
+                  yaxis_title="그래디언트 계산 FLOPs", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=400,
+                 title=f"{L}층, 폭 {d} · 손실은 스칼라 하나")
+fig.show()
+```
+
+```{python}
+#| label: mode-comparison
+#| code-fold: false
+
+print(f"{'입력 수':>10} {'출력 수':>10} {'유리한 방식':>16}   이유")
+print("-" * 66)
+cases = [(1, 1_000_000, "forward"), (1_000_000, 1, "reverse"),
+         (1000, 1000, "비슷함")]
+for n_in, n_out, best in cases:
+    reason = ("입력이 적으니 앞에서부터" if best == "forward"
+              else "출력이 적으니 뒤에서부터" if best == "reverse"
+              else "둘 다 비슷한 비용")
+    print(f"{n_in:>10,} {n_out:>10,} {best:>16}   {reason}")
+print()
+print("딥러닝은 항상 오른쪽 경우다: 파라미터 수십억 개 → 손실 스칼라 1개.")
+print("그래서 reverse-mode(역전파)가 유일하게 현실적인 선택이다.")
+```
+
+::: {.key-concept}
+**비용의 비대칭**
+
+- **forward-mode**: 입력 방향 하나당 한 번 순회 → 비용이 **입력 수**에 비례
+- **reverse-mode**: 출력 하나당 한 번 순회 → 비용이 **출력 수**에 비례
+
+딥러닝의 손실은 항상 **스칼라 하나**다.
+그래서 역방향 한 번이면 **모든 파라미터의 그래디언트**가 나온다.
+
+이것이 "역전파는 순전파의 약 2배 비용"이라는 경험칙의 근거이고,
+[0.5에서 본 $C \approx 6ND$](../00_foundations/05_numerical_computing.qmd)의
+6이라는 숫자(순전파 2 + 역전파 4)가 나오는 곳이다.
 :::
 
 ---
 
-## G3.1.2 — 층별 그래디언트 노름
+## MLP의 역전파 유도
 
-깊이에 따라 그래디언트가 소실/폭발하는 스케일 변화
+이제 실제 신경망에 적용한다. 한 층은 세 단계다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 깊이 슬라이더
+$$\mathbf{z} = \mathbf{h}W + \mathbf{b}, \qquad
+\mathbf{a} = \sigma(\mathbf{z}), \qquad
+\text{다음 층으로}$$
+
+역방향으로 가면:
+
+$$\begin{aligned}
+\frac{\partial L}{\partial W} &= \mathbf{h}^\top \frac{\partial L}{\partial \mathbf{z}} \\
+\frac{\partial L}{\partial \mathbf{b}} &= \textstyle\sum_{\text{배치}} \frac{\partial L}{\partial \mathbf{z}} \\
+\frac{\partial L}{\partial \mathbf{h}} &= \frac{\partial L}{\partial \mathbf{z}} W^\top \\
+\frac{\partial L}{\partial \mathbf{z}_{\text{이전}}} &= \frac{\partial L}{\partial \mathbf{h}} \odot \sigma'(\mathbf{z}_{\text{이전}})
+\end{aligned}$$
+
+**세 줄이면 어떤 MLP든 역전파할 수 있다.**
+
+```{python}
+#| label: backprop-core
+#| code-fold: show
+#| code-summary: "역전파 핵심 (src/nn.py 에서 발췌)"
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+def backward_core(model, cache, dout):
+    """MLP 역전파 — 층을 역순으로 훑으며 세 규칙을 적용."""
+    act, dact = nn.ACTIVATIONS[model.act_name]
+    grads = {}
+    d = dout                                    # dL/dz (출력층)
+
+    for i in reversed(range(len(model.W))):
+        h_in = cache["a"][i-1] if i > 0 else cache["X"]
+
+        grads[f"W{i}"] = h_in.T @ d             # ① 가중치
+        grads[f"b{i}"] = d.sum(0)               # ② 편향 (배치 합)
+        if i == 0:
+            break
+        dh = d @ model.W[i].T                   # ③ 아래 층으로
+        d = dh * dact(cache["z"][i-1], cache["a"][i-1])   # 활성화 통과
+    return grads
+
+# 검증: src/nn.py 구현과 일치하는가
+rng = np.random.default_rng(0)
+X, y = rng.normal(size=(16, 5)), rng.normal(size=(16, 3))
+m = nn.MLP([5, 12, 8, 3], activation="tanh", seed=1)
+out, cache = m.forward(X, training=False)
+_, dout = nn.mse_loss(out, y)
+
+g_ours = backward_core(m, cache, dout)
+g_lib = m.backward(cache, dout)
+print("위 구현과 src/nn.py 의 최대 차이:",
+      f"{max(np.abs(g_ours[k] - g_lib[k]).max() for k in g_ours):.2e}")
+```
+
+---
+
+## 그래디언트 검사: 유일한 신뢰 근거
+
+역전파는 **조용히 틀린다.** 손실이 여전히 조금 내려가서 버그를 눈치채기 어렵다.
+
+유일한 방어책은 수치 미분과 대조하는 것이다.
+
+$$\frac{\partial L}{\partial\theta_i} \approx \frac{L(\theta+\epsilon e_i) - L(\theta-\epsilon e_i)}{2\epsilon}$$
+
+**중심 차분**을 쓰는 이유는 오차가 $O(\epsilon^2)$ 이기 때문이다
+(전방 차분은 $O(\epsilon)$).
+
+```{python}
+#| label: fig-grad-check-eps
+#| fig-cap: "ε이 너무 크면 근사 오차, 너무 작으면 소거 오차가 지배합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import nn, viz
+
+rng = np.random.default_rng(0)
+X, y = rng.normal(size=(20, 4)), rng.normal(size=(20, 2))
+model = nn.MLP([4, 10, 6, 2], activation="tanh", seed=3)
+_, grads = model.loss_and_grads(X, y, loss="mse", training=False)
+
+W = model.W[0]
+i, j = 2, 3
+ana = grads["W0"][i, j]
+
+epss = np.logspace(-12, -1, 45)
+err_center, err_forward = [], []
+for e in epss:
+    old = W[i, j]
+    W[i, j] = old + e; lp, _ = model.loss_and_grads(X, y, training=False)
+    W[i, j] = old - e; lm, _ = model.loss_and_grads(X, y, training=False)
+    W[i, j] = old;     l0, _ = model.loss_and_grads(X, y, training=False)
+    err_center.append(abs((lp - lm)/(2*e) - ana) / (abs(ana) + 1e-30))
+    err_forward.append(abs((lp - l0)/e - ana) / (abs(ana) + 1e-30))
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=epss, y=err_center, mode="lines+markers",
+                         name="중심 차분 O(ε²)",
+                         line=dict(color=viz.ACCENT, width=2.5)))
+fig.add_trace(go.Scatter(x=epss, y=err_forward, mode="lines+markers",
+                         name="전방 차분 O(ε)",
+                         line=dict(color=viz.WARM, width=2.5)))
+best = epss[int(np.argmin(err_center))]
+fig.add_vline(x=best, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text=f"최적 ε ≈ {best:.0e}")
+fig.update_layout(xaxis_title="ε", xaxis_type="log",
+                  yaxis_title="상대오차", yaxis_type="log",
+                  legend=dict(x=0.35, y=0.98))
+viz.fig_defaults(fig, height=410, title="유한차분의 ε 선택")
+fig.show()
+```
+
+::: {.interaction-hint}
+V자 곡선입니다. **오른쪽**(큰 ε)은 테일러 근사 오차가 지배하고, **왼쪽**(작은 ε)은 [0.5의 치명적 소거](../00_foundations/05_numerical_computing.qmd)가 지배합니다. 중심 차분이 전방 차분보다 훨씬 낮은 바닥에 도달합니다.
+:::
+
+```{python}
+#| label: grad-check-run
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+rng = np.random.default_rng(0)
+Xr, yr = rng.normal(size=(24, 5)), rng.normal(size=(24, 2))
+Xc, yc = rng.normal(size=(24, 5)), rng.integers(0, 3, 24)
+
+print(f"{'설정':<24} {'최대 상대오차':>14}  판정")
+print("-" * 52)
+cases = [
+    ("relu, MSE",        dict(sizes=[5,8,6,2], activation="relu"),  Xr, yr, "mse"),
+    ("tanh, MSE",        dict(sizes=[5,8,2],   activation="tanh"),  Xr, yr, "mse"),
+    ("gelu, MSE",        dict(sizes=[5,7,2],   activation="gelu"),  Xr, yr, "mse"),
+    ("relu, softmax-CE", dict(sizes=[5,9,3],   activation="relu"),  Xc, yc, "softmax_ce"),
+    ("6층 tanh",         dict(sizes=[5,8,8,8,8,2], activation="tanh"), Xr, yr, "mse"),
+]
+for name, kw, X, y, ls in cases:
+    m = nn.MLP(seed=1, **kw)
+    w, _ = nn.grad_check(m, X, y, loss=ls, n_sample=6)
+    print(f"{name:<24} {w:>14.2e}  {'통과' if w < 1e-6 else '실패'}")
+print()
+print("10⁻⁶ 이하면 유도가 맞다. 10⁻² 이상이면 어딘가 틀렸다 —")
+print("대개 전치를 빠뜨렸거나 배치 축 합산을 잘못한 것이다.")
+```
+
+---
+
+## 그래디언트가 사라지고 폭발하는 이유
+
+역전파는 **야코비안의 곱**이다.
+
+$$\frac{\partial L}{\partial \mathbf{h}_1} =
+\frac{\partial L}{\partial \mathbf{h}_L}\prod_{\ell=2}^{L}\frac{\partial \mathbf{h}_\ell}{\partial \mathbf{h}_{\ell-1}}$$
+
+$L$ 개의 행렬을 곱한다. 각 항의 크기가 평균적으로 $c$ 라면 전체는 $c^L$ 이다.
+
+**$c$ 가 1에서 조금만 벗어나도 지수적으로 벌어진다.**
+
+```{python}
+#| label: fig-vanishing-exploding
+#| fig-cap: "층을 거슬러 갈수록 그래디언트 노름이 지수적으로 변합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+rng = np.random.default_rng(0)
+depth = 24
+X = rng.normal(size=(64, 32))
+y = rng.normal(size=(64, 32))
+
+setups = {
+    "sigmoid + small init":  dict(activation="sigmoid", init="small"),
+    "sigmoid + xavier":      dict(activation="sigmoid", init="xavier"),
+    "tanh + xavier":         dict(activation="tanh",    init="xavier"),
+    "relu + xavier":         dict(activation="relu",    init="xavier"),
+    "relu + he":             dict(activation="relu",    init="he"),
+}
+norms = {}
+for name, kw in setups.items():
+    m = nn.MLP([32]*(depth+1), seed=0, **kw)
+    _, cache = m.forward(X, training=False)
+    _, dout = nn.mse_loss(cache["out"], y)
+    g = m.backward(cache, dout)
+    norms[name] = [float(np.linalg.norm(g[f"W{i}"])) for i in range(depth)]
+
+fig = go.Figure()
+for i, (name, ns) in enumerate(norms.items()):
+    fig.add_trace(go.Scatter(x=np.arange(1, depth+1), y=ns, mode="lines+markers",
+                             name=name, line=dict(color=viz.color(i), width=2.5)))
+fig.update_layout(xaxis_title="층 (1 = 입력에 가장 가까움)",
+                  yaxis_title="‖∂L/∂W‖", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.02))
+viz.fig_defaults(fig, height=430,
+                 title=f"{depth}층 망의 층별 그래디언트 노름")
+fig.show()
+```
+
+```{python}
+#| label: vanish-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'설정':<26} {'1층':>12} {'12층':>12} {'24층':>12} {'1층/24층':>12}")
+print("-" * 78)
+for name, ns in norms.items():
+    r = ns[0] / max(ns[-1], 1e-300)
+    print(f"{name:<26} {ns[0]:>12.3e} {ns[11]:>12.3e} {ns[-1]:>12.3e} {r:>12.2e}")
+print()
+print("→ sigmoid + 작은 초기화는 입력층 그래디언트가 사실상 0 이다.")
+print("  그 층들은 학습되지 않는다. 이것이 1990~2000년대 딥러닝의 벽이었다.")
+```
+
+::: {.interaction-hint}
+**sigmoid + small init**(파랑)은 입력 쪽으로 갈수록 그래디언트가 수십 자릿수 떨어집니다. **relu + he**는 층이 깊어져도 비슷한 크기를 유지합니다. 이 차이가 [3.7 초기화](07_initialization.qmd)의 전부입니다.
+:::
+
+::: {.key-concept}
+**시그모이드가 특히 나쁜 이유**
+
+$\sigma'(z) = \sigma(z)(1-\sigma(z))$ 의 **최댓값이 0.25**다
+([3.2 활성화](02_activations.qmd)에서 다시 본다).
+
+층마다 최대 0.25를 곱하니, 24층이면 최선의 경우에도 $0.25^{24} \approx 10^{-15}$ 다.
+실제로는 포화 영역에서 더 작다.
+
+ReLU의 도함수는 활성 영역에서 정확히 **1**이다.
+곱해도 크기가 변하지 않는다 — 그래서 깊은 망이 학습 가능해졌다.
 :::
 
 ---
 
-## G3.1.3 — 수치 그래디언트 검증
+## 잔차 연결이 하는 일
 
-해석적 그래디언트와 수치 근사가 일치하는 ε 구간
+$\mathbf{y} = \mathbf{x} + F(\mathbf{x})$ 의 미분을 보자.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: ε 슬라이더
+$$\frac{\partial \mathbf{y}}{\partial \mathbf{x}} = I + \frac{\partial F}{\partial \mathbf{x}}$$
+
+**항등행렬이 더해져 있다.** 곱의 사슬에서 각 항이
+
+$$\prod_\ell \left(I + \frac{\partial F_\ell}{\partial \mathbf{h}}\right)$$
+
+가 되어, $\partial F/\partial h$ 가 아무리 작아도 **1이 남는다.**
+그래디언트가 완전히 죽지 않는다.
+
+```{python}
+#| label: fig-residual-gradient
+#| fig-cap: "잔차 연결 유무에 따른 층별 그래디언트 전달"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng = np.random.default_rng(1)
+depth, d = 40, 64
+
+def propagate(residual, gain=0.6, n_trials=20):
+    """야코비안 곱을 시뮬레이션 — 잔차 유무만 다르게"""
+    out = []
+    for t in range(n_trials):
+        r = np.random.default_rng(t)
+        g = r.normal(size=(1, d))
+        ns = [float(np.linalg.norm(g))]
+        for _ in range(depth):
+            J = r.normal(0, gain/np.sqrt(d), (d, d))
+            g = g @ (J + np.eye(d)) if residual else g @ J
+            ns.append(float(np.linalg.norm(g)))
+        out.append(ns)
+    return np.array(out).mean(0)
+
+plain = propagate(False)
+res = propagate(True)
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=np.arange(depth+1), y=plain, mode="lines",
+                         name="잔차 없음 (∏ J)",
+                         line=dict(color=viz.WARM, width=3)))
+fig.add_trace(go.Scatter(x=np.arange(depth+1), y=res, mode="lines",
+                         name="잔차 있음 (∏ (I + J))",
+                         line=dict(color=viz.ACCENT, width=3)))
+fig.add_hline(y=plain[0], line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="출력층 그래디언트 크기")
+fig.update_layout(xaxis_title="거슬러 올라간 층 수",
+                  yaxis_title="그래디언트 노름 (평균 20회)", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.15))
+viz.fig_defaults(fig, height=410,
+                 title="잔차 연결은 그래디언트 고속도로를 만든다")
+fig.show()
+```
+
+```{python}
+#| label: residual-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'':<14} {'0층 (출력)':>12} {'20층':>12} {'40층 (입력)':>14}")
+print("-" * 56)
+print(f"{'잔차 없음':<14} {plain[0]:>12.3e} {plain[20]:>12.3e} {plain[-1]:>14.3e}")
+print(f"{'잔차 있음':<14} {res[0]:>12.3e} {res[20]:>12.3e} {res[-1]:>14.3e}")
+print()
+print(f"40층을 거친 뒤 배율:  잔차 없음 {plain[-1]/plain[0]:.2e}   "
+      f"잔차 있음 {res[-1]/res[0]:.2e}")
+print()
+print("→ 잔차 연결은 그래디언트가 '지나가는 길'을 항상 열어둔다.")
+print("  ResNet 이전에 깊은 망이 학습되지 않았던 이유이자, 해결책이다.")
+```
+
+---
+
+## 메모리: 순전파 값을 저장해야 한다
+
+역전파는 순전파의 **중간 결과**를 필요로 한다
+($\partial L/\partial W = \mathbf{h}^\top \partial L/\partial\mathbf{z}$ 에서 $\mathbf{h}$).
+
+그래서 메모리 비용이 **깊이에 비례**한다.
+
+```{python}
+#| label: fig-activation-memory
+#| fig-cap: "활성화 저장 메모리와 체크포인팅의 효과"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+B, d = 32, 4096
+depths = np.array([12, 24, 48, 96, 192, 384])
+bytes_per = 2                                   # bf16
+
+full = B * d * depths * bytes_per / 1024**3
+# 체크포인팅: sqrt(L) 개만 저장하고 나머지는 재계산
+ckpt = B * d * np.sqrt(depths) * bytes_per / 1024**3
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=depths, y=full, mode="lines+markers",
+                         name="전부 저장 (O(L))",
+                         line=dict(color=viz.WARM, width=2.5)))
+fig.add_trace(go.Scatter(x=depths, y=ckpt, mode="lines+markers",
+                         name="체크포인팅 (O(√L))",
+                         line=dict(color=viz.ACCENT, width=2.5)))
+fig.add_hline(y=80, line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text="H100 80GB")
+fig.update_layout(xaxis_title="층 수", xaxis_type="log",
+                  yaxis_title="활성화 메모리 (GB)", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=400,
+                 title=f"배치 {B}, 폭 {d}, bf16 기준")
+fig.show()
+```
+
+::: {.key-concept}
+**활성화 체크포인팅**
+
+일부 층의 활성화만 저장하고, 역전파 때 **필요한 구간을 다시 순전파해** 복원한다.
+
+- 메모리: $O(L) \to O(\sqrt{L})$
+- 연산: 약 **1.3배** 증가 (순전파를 한 번 더)
+
+[5.7 FlashAttention](../05_transformer/07_efficient_attention.qmd)의 재계산과 같은 발상이다.
+메모리가 병목일 때 연산으로 바꾸는 교환이며,
+[11.2 분산 학습](../11_systems/02_distributed_training.qmd)에서 대형 모델 학습의 필수 기법이 된다.
 :::
 
 ---
 
-## G3.1.4 — softmax-CE 그래디언트
+## 진단: 층별 그래디언트를 보라
 
-그래디언트가 (예측 − 정답) 으로 깔끔해지는 것을 수치로 확인
+학습이 안 될 때 가장 먼저 볼 것 중 하나다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 로짓 슬라이더
-:::
+```{python}
+#| label: gradient-diagnostics
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn, datasets
+
+X, y = datasets.two_moons(n=300, noise=0.2, seed=0)
+
+print("건강한 망 vs 병든 망의 층별 그래디언트/가중치 비율")
+print("(이 비율이 1e-3 ~ 1e-2 이면 건강, 1e-6 이하면 그 층은 거의 안 움직인다)")
+print()
+for name, kw in [("relu + he (건강)",      dict(activation="relu", init="he")),
+                 ("sigmoid + small (병듦)", dict(activation="sigmoid", init="small"))]:
+    m = nn.MLP([2] + [32]*8 + [2], seed=0, **kw)
+    _, g = m.loss_and_grads(X, y, loss="softmax_ce")
+    print(f"  {name}")
+    ratios = []
+    for i in range(len(m.W)):
+        r = np.linalg.norm(g[f"W{i}"]) / (np.linalg.norm(m.W[i]) + 1e-30)
+        ratios.append(r)
+    print("    " + "  ".join(f"{r:.1e}" for r in ratios))
+    print()
+```
+
+| 증상 | 원인 후보 |
+|------|-----------|
+| 앞쪽 층 비율이 $10^{-6}$ 이하 | 그래디언트 소실 → 활성화·초기화 |
+| 비율이 $10^{-1}$ 이상 | 그래디언트 폭발 → 클리핑, 학습률↓ |
+| 특정 층만 0 | 죽은 ReLU, 또는 그 층이 우회됨 |
+| 전부 정확히 0 | 순전파에서 그래프가 끊김 (구현 버그) |
+| NaN | [수치 불안정](../00_foundations/05_numerical_computing.qmd) |
 
 ---
 
-## 핵심 용어
+## 요약
 
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 역전파 (backpropagation) |  |
-| 계산 그래프 |  |
-| reverse-mode AD |  |
-| 그래디언트 검사 |  |
-| 활성화 체크포인팅 |  |
+| 계산 그래프 | 국소 미분만 알면 전체를 조립 |
+| 덧셈/곱셈/max | 분배기 / 교환기 / 라우터 |
+| **분기는 합** | 같은 변수를 여러 번 쓰면 그래디언트가 더해짐 |
+| reverse-mode | 출력이 스칼라 → 한 번 순회로 전부 |
+| forward-mode | 입력이 적을 때만 유리 |
+| MLP 역전파 | 세 줄: $h^\top d$, $\sum d$, $dW^\top$ |
+| **그래디언트 검사** | 중심 차분, $\epsilon\approx10^{-5}$, 목표 $<10^{-6}$ |
+| 소실·폭발 | 야코비안 곱 → $c^L$ |
+| 시그모이드 | $\sigma'$ 최대 0.25 → 깊으면 필연적 소실 |
+| 잔차 연결 | $I + \partial F$ — 1이 남는다 |
+| 활성화 메모리 | $O(L)$, 체크포인팅으로 $O(\sqrt{L})$ |
+
+역전파는 그래디언트를 **계산**한다.
+그 그래디언트로 **어떻게 움직일지**는 별개의 문제이고,
+그 전에 각 층에서 무엇을 통과시킬지 — 활성화 함수를 먼저 본다.
 
 ---
 
-**다음**: [3.2 활성화 함수](02_activations.qmd) — sigmoid·ReLU·GELU·SwiGLU — 비선형성의 선택지
+**다음**: [3.2 활성화 함수](02_activations.qmd) — sigmoid·ReLU·GELU·SwiGLU
 
 **이전**: [3.0 퍼셉트론에서 MLP까지](00_perceptron_mlp.qmd)
