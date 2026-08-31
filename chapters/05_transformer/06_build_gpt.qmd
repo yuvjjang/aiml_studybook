@@ -1,93 +1,693 @@
 ---
 title: "5.6 GPT를 처음부터 만들기"
-subtitle: "토크나이저부터 생성까지 — 200줄로 동작하는 언어모델"
+subtitle: "토크나이저부터 생성까지 — NumPy로 동작하는 언어모델"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+읽어서 아는 것과 만들어서 아는 것은 다르다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장에서는 지금까지 배운 부품을 전부 조립해 **실제로 학습되고 문장을 생성하는 언어모델**을 만든다.
+PyTorch 없이 NumPy만 쓴다. 역전파도 직접 유도한다.
+그래야 `loss.backward()` 한 줄 뒤에서 무슨 일이 일어나는지 알 수 있다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+만들 것은 이렇다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-읽어서 아는 것과 만들어서 아는 것은 다르다. 이 장을 끝내면 LLM 코드베이스를 열었을 때 낯선 것이 거의 없다.
-
----
-
-## 이 장에서 다루는 것
-
-- 설계: 문자 수준 토크나이저 → 임베딩 → N블록 → LM 헤드
-- 데이터 준비: 청킹, 입력/타깃 시프트, 배치 구성
-- 임베딩 + 위치 인코딩 구현
-- 인과 셀프 어텐션 구현 (마스크·softmax·shape 검증)
-- 멀티헤드 구현: reshape/transpose 트릭
-- FFN·잔차·LayerNorm 결합해 블록 완성
-- 가중치 묶기와 파라미터 수 확인
-- 학습 루프: AdamW, 스케줄, 그래디언트 클리핑, 검증 손실
-- 생성: 자기회귀 디코딩, 온도·top-k 적용
-- KV 캐시를 붙여 생성 속도 개선하기
-- 여기서 실제 LLM까지 남은 거리 (데이터·스케일·정렬)
-
----
-
-## G5.6.1 — 토크나이즈 → 텐서
-
-문자열이 토큰 ID, 임베딩 행렬로 변환되는 전 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 예문 입력
-:::
-
----
-
-## G5.6.2 — 학습 곡선
-
-직접 학습한 미니 GPT의 손실 감소와 생성 품질 변화
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 스텝 슬라이더
-:::
-
----
-
-## G5.6.3 — 샘플 생성 진행
-
-토큰이 하나씩 붙으며 문장이 만들어지는 과정과 각 스텝 확률 분포
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 생성 스텝 재생
-:::
-
----
-
-## G5.6.4 — KV 캐시 효과
-
-캐시 유무에 따른 토큰당 연산량 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 생성 길이 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 구성 | 선택 |
 |------|------|
-| 미니 GPT |  |
-| 인과 셀프 어텐션 구현 |  |
-| weight tying |  |
-| 자기회귀 생성 |  |
-| KV 캐시 |  |
+| 토크나이저 | 문자 수준 (BPE는 [7.1](../07_language/01_tokenization.qmd)에서) |
+| 아키텍처 | decoder-only, pre-LN, 3층 |
+| 차원 | $d=64$, 헤드 4개, 문맥 64토큰 |
+| 위치 | 학습형 절대 임베딩 |
+| 최적화 | AdamW + warmup + cosine + 그래디언트 클리핑 |
+| 검증 | **수치 그래디언트 검사** |
 
 ---
 
-**다음**: [5.7 효율적 어텐션과 긴 문맥](07_efficient_attention.qmd) — FlashAttention·희소·선형 어텐션 — n² 병목 깨기
+## 1. 데이터와 토크나이저
+
+가장 단순한 토크나이저: 등장하는 문자마다 번호를 매긴다.
+
+```{python}
+#| label: data-prep
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import attention
+
+TEXT = ("to be or not to be that is the question "
+        "whether tis nobler in the mind to suffer "
+        "the slings and arrows of outrageous fortune "
+        "or to take arms against a sea of troubles "
+        "and by opposing end them to die to sleep "
+        "no more and by a sleep to say we end "
+        "the heartache and the thousand natural shocks "
+        "that flesh is heir to tis a consummation "
+        "devoutly to be wished to die to sleep "
+        "to sleep perchance to dream ay theres the rub ") * 14
+
+chars = sorted(set(TEXT))
+stoi = {c: i for i, c in enumerate(chars)}
+itos = {i: c for c, i in stoi.items()}
+data = np.array([stoi[c] for c in TEXT])
+V = len(chars)
+
+print(f"어휘 {V}자: {''.join(chars)!r}")
+print(f"데이터 {len(data)} 토큰")
+print(f"'to be' → {[stoi[c] for c in 'to be']}")
+```
+
+학습 데이터는 **입력을 한 칸 민 것**이 정답이다.
+위치 $i$ 에서 위치 $i+1$ 의 토큰을 맞히는 것이 목표다.
+
+```{python}
+#| label: shift-demo
+#| code-fold: false
+
+BLOCK = 64
+i = 0
+x_demo, y_demo = data[i:i + 8], data[i + 1:i + 9]
+print("입력 :", "".join(itos[t] for t in x_demo), "→", x_demo.tolist())
+print("정답 :", "".join(itos[t] for t in y_demo), "→", y_demo.tolist())
+print()
+print("한 시퀀스에서 8개 예측이 동시에 학습된다 (인과 마스크 덕분):")
+for k in range(4):
+    ctx = "".join(itos[t] for t in x_demo[:k + 1])
+    print(f'  "{ctx}" → {itos[y_demo[k]]!r}')
+```
+
+---
+
+## 2. 순전파
+
+[5.4](04_transformer_block.qmd)의 블록을 그대로 쌓는다.
+중간 결과를 `cache` 에 저장하는 이유는 역전파에서 필요하기 때문이다 —
+프레임워크가 자동으로 해주는 그 일이다.
+
+```{python}
+#| label: model-def
+#| code-fold: show
+#| code-summary: "MiniGPT 클래스 — 순전파 (펼쳐서 보기)"
+
+C_GELU = np.sqrt(2 / np.pi)
+
+def gelu(x):
+    return 0.5 * x * (1 + np.tanh(C_GELU * (x + 0.044715 * x ** 3)))
+
+def dgelu(x):
+    u = C_GELU * (x + 0.044715 * x ** 3)
+    t = np.tanh(u)
+    return 0.5 * (1 + t) + 0.5 * x * (1 - t ** 2) * C_GELU * (1 + 3 * 0.044715 * x ** 2)
+
+def layer_norm(x, eps=1e-5):
+    mu = x.mean(-1, keepdims=True)
+    std = np.sqrt(x.var(-1, keepdims=True) + eps)
+    return (x - mu) / std, std
+
+def dlayer_norm(dy, y, std):
+    """스케일·시프트 없는 LayerNorm 역전파."""
+    return (dy - dy.mean(-1, keepdims=True)
+            - y * (dy * y).mean(-1, keepdims=True)) / std
+
+
+class MiniGPT:
+    def __init__(self, V, block=64, d=64, h=4, n_layer=3, seed=0):
+        self.V, self.block, self.d, self.h, self.L = V, block, d, h, n_layer
+        self.dk = d // h
+        rng = np.random.default_rng(seed)
+        s = 0.02                                   # LLM 관례적 초기화 표준편차
+        P = {"wte": rng.normal(0, s, (V, d)),      # 토큰 임베딩
+             "wpe": rng.normal(0, s, (block, d))}  # 위치 임베딩
+        for l in range(n_layer):
+            for name in "qkvo":
+                P[f"{name}{l}"] = rng.normal(0, s, (d, d))
+            P[f"f1{l}"] = rng.normal(0, s, (d, 4 * d)); P[f"b1{l}"] = np.zeros(4 * d)
+            P[f"f2{l}"] = rng.normal(0, s, (4 * d, d)); P[f"b2{l}"] = np.zeros(d)
+        self.P = P
+        self.mask = attention.causal_mask(block)
+
+    def n_params(self):
+        return sum(v.size for v in self.P.values())
+
+    def forward(self, idx, want_cache=False):
+        P, T = self.P, len(idx)
+        m = self.mask[:T, :T]
+        cache = {"idx": idx, "T": T, "layers": []}
+
+        x = P["wte"][idx] + P["wpe"][:T]            # 토큰 + 위치
+        for l in range(self.L):
+            # ── 어텐션 서브층 (pre-LN) ──
+            h1, s1 = layer_norm(x)
+            Q, K, Vv = h1 @ P[f"q{l}"], h1 @ P[f"k{l}"], h1 @ P[f"v{l}"]
+            Qh = Q.reshape(T, self.h, self.dk).transpose(1, 0, 2)
+            Kh = K.reshape(T, self.h, self.dk).transpose(1, 0, 2)
+            Vh = Vv.reshape(T, self.h, self.dk).transpose(1, 0, 2)
+            scores = np.einsum("hid,hjd->hij", Qh, Kh) / np.sqrt(self.dk)
+            scores = np.where(m, -np.inf, scores)   # 인과 마스크
+            A = attention.softmax(scores)
+            oh = np.einsum("hij,hjd->hid", A, Vh)
+            concat = oh.transpose(1, 0, 2).reshape(T, self.d)
+            x = x + concat @ P[f"o{l}"]             # 잔차
+
+            # ── FFN 서브층 ──
+            h2, s2 = layer_norm(x)
+            pre = h2 @ P[f"f1{l}"] + P[f"b1{l}"]
+            act = gelu(pre)
+            x = x + act @ P[f"f2{l}"] + P[f"b2{l}"]  # 잔차
+
+            cache["layers"].append(dict(h1=h1, s1=s1, Qh=Qh, Kh=Kh, Vh=Vh, A=A,
+                                        concat=concat, h2=h2, s2=s2, pre=pre, act=act))
+
+        hf, sf = layer_norm(x)                      # pre-LN 은 마지막 정규화 필수
+        logits = hf @ P["wte"].T                    # weight tying
+        cache.update(hf=hf, sf=sf)
+        return (logits, cache) if want_cache else logits
+
+    def loss(self, idx, targets):
+        p = attention.softmax(self.forward(idx))
+        return -np.mean(np.log(p[np.arange(len(targets)), targets] + 1e-12))
+```
+
+```{python}
+#| label: sanity-check
+#| code-fold: false
+
+model = MiniGPT(V, block=BLOCK, d=64, h=4, n_layer=3, seed=0)
+idx, tgt = data[:BLOCK], data[1:BLOCK + 1]
+
+print(f"파라미터 {model.n_params():,}개")
+print(f"로짓 shape {model.forward(idx).shape}   (T, V)")
+print()
+print(f"초기 손실       {model.loss(idx, tgt):.4f}")
+print(f"균등 예측이면    {np.log(V):.4f}   (= log V)")
+print()
+print("→ 두 값이 비슷해야 정상이다. 크게 다르면 초기화나 구현에 버그가 있다.")
+```
+
+::: {.key-concept}
+**초기 손실 $\approx \log V$ 는 가장 값싼 sanity check다.**
+
+학습 전 모델은 아무것도 모르므로 모든 토큰에 균등한 확률 $1/V$ 를 줘야 하고,
+그때 교차엔트로피는 $-\log(1/V) = \log V$ 다
+([0.4 정보이론](../00_foundations/04_information_theory.qmd)).
+
+이 값이 크게 벗어나면 — 예를 들어 10배 크면 — 초기화 스케일이 잘못됐거나
+로짓 계산에 버그가 있다는 뜻이다. [3.9 학습 실전](../03_deep_learning/09_training_practice.qmd)의 첫 번째 점검 항목이다.
+:::
+
+---
+
+## 3. 역전파를 손으로
+
+프레임워크가 해주는 일을 직접 한다. 순전파의 **역순**으로 연쇄법칙을 적용한다.
+
+핵심 규칙 몇 가지만 알면 된다.
+
+| 순전파 | 역전파 |
+|--------|--------|
+| $Y = XW$ | $dW = X^\top dY$, $dX = dY\,W^\top$ |
+| $y = x_1 + x_2$ (잔차) | $dx_1 = dx_2 = dy$ — **그대로 양쪽으로** |
+| $A = \text{softmax}(S)$ | $dS = A \odot (dA - \sum_j dA_j A_j)$ |
+| softmax + 교차엔트로피 | $d\text{logits} = (p - y)/T$ |
+
+```{python}
+#| label: backward
+#| code-fold: show
+#| code-summary: "역전파 구현 (펼쳐서 보기)"
+
+def loss_and_grads(self, idx, targets):
+    P = self.P
+    logits, c = self.forward(idx, want_cache=True)
+    T = c["T"]
+    probs = attention.softmax(logits)
+    loss = -np.mean(np.log(probs[np.arange(T), targets] + 1e-12))
+
+    G = {k: np.zeros_like(v) for k, v in P.items()}
+
+    # 손실 → 로짓 : (예측 − 정답)
+    dlogits = probs.copy()
+    dlogits[np.arange(T), targets] -= 1.0
+    dlogits /= T
+
+    # logits = hf @ wte.T  (weight tying 이라 wte 에 두 번 기여한다)
+    G["wte"] += dlogits.T @ c["hf"]
+    dx = dlayer_norm(dlogits @ P["wte"], c["hf"], c["sf"])
+
+    for l in reversed(range(self.L)):
+        L_ = c["layers"][l]
+
+        # ── FFN 서브층 ──
+        dffn = dx                                   # 잔차: 그대로 통과
+        G[f"f2{l}"] += L_["act"].T @ dffn
+        G[f"b2{l}"] += dffn.sum(0)
+        dpre = (dffn @ P[f"f2{l}"].T) * dgelu(L_["pre"])
+        G[f"f1{l}"] += L_["h2"].T @ dpre
+        G[f"b1{l}"] += dpre.sum(0)
+        dx = dx + dlayer_norm(dpre @ P[f"f1{l}"].T, L_["h2"], L_["s2"])
+
+        # ── 어텐션 서브층 ──
+        dattn = dx
+        G[f"o{l}"] += L_["concat"].T @ dattn
+        doh = (dattn @ P[f"o{l}"].T).reshape(T, self.h, self.dk).transpose(1, 0, 2)
+
+        dA = np.einsum("hid,hjd->hij", doh, L_["Vh"])
+        dVh = np.einsum("hij,hid->hjd", L_["A"], doh)
+        A = L_["A"]
+        dscores = A * (dA - (dA * A).sum(-1, keepdims=True))   # softmax 역전파
+        dscores /= np.sqrt(self.dk)
+        dQh = np.einsum("hij,hjd->hid", dscores, L_["Kh"])
+        dKh = np.einsum("hij,hid->hjd", dscores, L_["Qh"])
+
+        dQ = dQh.transpose(1, 0, 2).reshape(T, self.d)
+        dK = dKh.transpose(1, 0, 2).reshape(T, self.d)
+        dV = dVh.transpose(1, 0, 2).reshape(T, self.d)
+        G[f"q{l}"] += L_["h1"].T @ dQ
+        G[f"k{l}"] += L_["h1"].T @ dK
+        G[f"v{l}"] += L_["h1"].T @ dV
+        dh1 = dQ @ P[f"q{l}"].T + dK @ P[f"k{l}"].T + dV @ P[f"v{l}"].T
+        dx = dx + dlayer_norm(dh1, L_["h1"], L_["s1"])
+
+    np.add.at(G["wte"], c["idx"], dx)      # 같은 토큰이 여러 번 나오면 누적
+    G["wpe"][:T] += dx
+    return loss, G
+
+MiniGPT.loss_and_grads = loss_and_grads
+```
+
+::: {.callout-note}
+## `np.add.at` 을 쓰는 이유
+
+임베딩 조회 `wte[idx]` 의 역전파는 "해당 행에 그래디언트를 더하기"다.
+그런데 같은 토큰이 시퀀스에 여러 번 나오면 **누적**되어야 한다.
+
+`G["wte"][idx] += dx` 는 중복 인덱스에서 마지막 값만 남기므로 **틀린다.**
+`np.add.at` 은 중복을 제대로 누적한다. PyTorch의 `index_add_` 와 같은 연산이다.
+:::
+
+---
+
+## 4. 그래디언트 검사
+
+역전파는 조용히 틀리기 쉽다. 손실은 여전히 조금 내려가서 버그를 눈치채기 어렵다.
+
+그래서 **수치 미분과 비교한다.** 유한차분으로 구한 값과 일치하면 유도가 맞은 것이다.
+
+$$\frac{\partial L}{\partial \theta_i} \approx \frac{L(\theta + \epsilon e_i) - L(\theta - \epsilon e_i)}{2\epsilon}$$
+
+```{python}
+#| label: grad-check
+#| code-fold: false
+
+loss0, G = model.loss_and_grads(idx, tgt)
+rng = np.random.default_rng(1)
+
+print("해석적 그래디언트 vs 수치 미분 (상대오차)")
+print("-" * 46)
+worst = 0.0
+for key in ["wte", "wpe", "q0", "o1", "f12", "b20", "k2", "v1"]:
+    flat, gf = model.P[key].ravel(), G[key].ravel()
+    errs = []
+    for i in rng.choice(flat.size, 5, replace=False):
+        old, eps = flat[i], 1e-5
+        flat[i] = old + eps; lp = model.loss(idx, tgt)
+        flat[i] = old - eps; lm = model.loss(idx, tgt)
+        flat[i] = old
+        num = (lp - lm) / (2 * eps)
+        errs.append(abs(num - gf[i]) / max(abs(num) + abs(gf[i]), 1e-12))
+    worst = max(worst, max(errs))
+    print(f"  {key:>5}  {max(errs):.2e}")
+print("-" * 46)
+print(f"  최대   {worst:.2e}   →  {'통과' if worst < 1e-4 else '실패'}")
+```
+
+::: {.key-concept}
+상대오차가 $10^{-6}$ 수준이면 유도가 맞다.
+$10^{-2}$ 이상이면 어딘가 틀렸다 — 대개 전치를 빠뜨렸거나 축을 잘못 잡은 것이다.
+
+$\epsilon$ 을 너무 작게 잡으면(예: $10^{-10}$) 부동소수점 소거 때문에 오히려 부정확해진다
+([0.5 수치 컴퓨팅](../00_foundations/05_numerical_computing.qmd)). $10^{-5}$ 근처가 적당하다.
+:::
+
+---
+
+## 5. 학습
+
+AdamW에 warmup + cosine 스케줄과 그래디언트 클리핑을 얹는다 —
+[3.4 최적화](../03_deep_learning/04_optimizers.qmd)에서 다룬 표준 레시피다.
+
+```{python}
+#| label: training
+#| code-fold: show
+#| code-summary: "학습 루프 (펼쳐서 보기)"
+
+import time
+
+lr, beta1, beta2, eps_adam, wd = 3e-3, 0.9, 0.95, 1e-8, 0.01
+n_steps, B, WARMUP = 260, 6, 40
+
+M_ = {k: np.zeros_like(v) for k, v in model.P.items()}   # 1차 모멘트
+V_ = {k: np.zeros_like(v) for k, v in model.P.items()}   # 2차 모멘트
+
+rng = np.random.default_rng(7)
+hist, lrs, gnorms = [], [], []
+t0 = time.time()
+
+for step in range(1, n_steps + 1):
+    # 미니배치: 무작위 위치에서 BLOCK 길이 조각 B개
+    total, accum = 0.0, {k: np.zeros_like(v) for k, v in model.P.items()}
+    for _ in range(B):
+        i = rng.integers(0, len(data) - BLOCK - 1)
+        l, g = model.loss_and_grads(data[i:i + BLOCK], data[i + 1:i + BLOCK + 1])
+        total += l / B
+        for k in accum:
+            accum[k] += g[k] / B
+
+    # 그래디언트 클리핑
+    gnorm = np.sqrt(sum((g ** 2).sum() for g in accum.values()))
+    clip = min(1.0, 1.0 / (gnorm + 1e-9))
+
+    # warmup + cosine 스케줄
+    cur_lr = lr * min(1.0, step / WARMUP) * 0.5 * (1 + np.cos(np.pi * step / n_steps))
+
+    for k in model.P:
+        g = accum[k] * clip
+        M_[k] = beta1 * M_[k] + (1 - beta1) * g
+        V_[k] = beta2 * V_[k] + (1 - beta2) * g ** 2
+        mhat = M_[k] / (1 - beta1 ** step)
+        vhat = V_[k] / (1 - beta2 ** step)
+        # AdamW: weight decay 를 그래디언트가 아니라 갱신에 직접 적용
+        model.P[k] -= cur_lr * (mhat / (np.sqrt(vhat) + eps_adam) + wd * model.P[k])
+
+    hist.append(total); lrs.append(cur_lr); gnorms.append(gnorm)
+
+train_time = time.time() - t0
+print(f"학습 {n_steps}스텝 · {train_time:.1f}초")
+print(f"손실 {hist[0]:.4f} → {hist[-1]:.4f}")
+print(f"퍼플렉서티 {np.exp(hist[0]):.1f} → {np.exp(hist[-1]):.1f}  (어휘 {V}자 중)")
+```
+
+```{python}
+#| label: fig-training
+#| fig-cap: "학습 곡선, 학습률 스케줄, 그래디언트 노름"
+
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+steps_ax = np.arange(1, len(hist) + 1)
+fig = make_subplots(rows=1, cols=3,
+                    subplot_titles=("손실", "학습률 (warmup + cosine)", "그래디언트 노름"))
+
+fig.add_trace(go.Scatter(x=steps_ax, y=hist, mode="lines", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_hline(y=np.log(V), line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="log V (무작위)", row=1, col=1)
+fig.add_trace(go.Scatter(x=steps_ax, y=lrs, mode="lines", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_vline(x=WARMUP, line=dict(color=viz.WARM, dash="dot"),
+              annotation_text="warmup 끝", row=1, col=2)
+fig.add_trace(go.Scatter(x=steps_ax, y=gnorms, mode="lines", showlegend=False,
+                         line=dict(color=viz.PINK, width=2)), row=1, col=3)
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="클리핑 임계", row=1, col=3)
+
+fig.update_xaxes(title_text="스텝")
+fig.update_yaxes(title_text="교차엔트로피", row=1, col=1)
+fig.update_yaxes(title_text="lr", row=1, col=2)
+fig.update_yaxes(title_text="‖g‖", row=1, col=3)
+viz.fig_defaults(fig, height=340, title=f"{model.n_params():,} 파라미터 · {train_time:.0f}초 학습")
+fig.show()
+```
+
+::: {.interaction-hint}
+손실이 $\log V$(노란 점선)에서 시작해 내려갑니다. 가운데 그림에서 학습률이 40스텝 동안 올라갔다가(warmup) 코사인으로 내려오는 것을, 오른쪽에서 그래디언트 노름이 대부분 클리핑 임계 위에 있어 실제로 클리핑이 작동하고 있음을 볼 수 있습니다.
+:::
+
+---
+
+## 6. 생성
+
+학습된 모델로 문장을 만든다. 매 스텝 다음 토큰의 확률분포를 얻고, 거기서 하나를 뽑는다.
+
+온도와 top-k가 그 뽑는 방식을 조절한다 ([7.9 디코딩 전략](../07_language/09_decoding.qmd)에서 자세히).
+
+```{python}
+#| label: generate-def
+#| code-fold: false
+
+def generate(self, idx, n_new, temperature=1.0, top_k=None, seed=0):
+    rng = np.random.default_rng(seed)
+    out = list(idx)
+    for _ in range(n_new):
+        ctx = np.array(out[-self.block:])          # 문맥 창을 넘으면 잘라낸다
+        logits = self.forward(ctx)[-1] / max(temperature, 1e-6)
+        if top_k:                                   # 상위 k개만 남기고 나머지 차단
+            logits = np.where(logits < np.sort(logits)[-top_k], -np.inf, logits)
+        p = attention.softmax(logits)
+        out.append(int(rng.choice(len(p), p=p)))
+    return out
+
+MiniGPT.generate = generate
+
+prompt = "to be "
+ids = [stoi[c] for c in prompt]
+for temp in [0.4, 0.8, 1.2]:
+    txt = "".join(itos[i] for i in model.generate(ids, 60, temp, top_k=8, seed=3))
+    print(f"T={temp}:  {txt!r}")
+```
+
+문자 수준 모델이 15만 파라미터로 몇 초 학습한 결과다.
+문법적으로 맞는 문장은 아니지만 — **공백 위치, 흔한 단어 조각, 문자 조합 규칙**을 배웠다.
+이것이 다음 토큰 예측만으로 얻어진다는 점이 요점이다.
+
+```{python}
+#| label: fig-generation
+#| fig-cap: "생성 각 스텝의 확률분포. 모델이 무엇을 후보로 두는지 보여줍니다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+ctx = [stoi[c] for c in "to be or not to b"]
+steps_shown, dists, ctx_labels = [], [], []
+cur = list(ctx)
+rng_g = np.random.default_rng(0)
+
+for s in range(10):
+    logits = model.forward(np.array(cur[-model.block:]))[-1]
+    p = attention.softmax(logits)
+    dists.append(p)
+    ctx_labels.append("".join(itos[t] for t in cur[-18:]))
+    cur.append(int(np.argmax(p)))          # 여기서는 greedy 로 진행
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=[repr(c)[1:-1] for c in chars], y=dists[0],
+                     marker_color=viz.ACCENT, showlegend=False))
+
+steps_sl = []
+for i, p in enumerate(dists):
+    top = chars[int(np.argmax(p))]
+    steps_sl.append((f"{i+1}", {"y": [p]}))
+
+fig.update_layout(
+    sliders=[viz.slider(steps_sl, prefix="생성 스텝 = ", active=0, pad_t=55)],
+    xaxis_title="다음 문자 후보", yaxis_title="확률",
+    yaxis=dict(range=[0, 1.0]),
+)
+viz.fig_defaults(fig, height=360,
+                 title=f"문맥: {ctx_labels[0]!r} 이후 각 스텝의 예측 분포")
+fig.show()
+```
+
+::: {.interaction-hint}
+스텁을 넘겨보면 분포 모양이 스텝마다 달라집니다. 어떤 위치에서는 한 문자에 확률이 몰리고(확신), 어떤 위치에서는 여러 후보에 퍼집니다(모호). 온도는 이 분포를 뾰족하게/평평하게 만드는 조작입니다.
+:::
+
+---
+
+## 7. KV 캐시
+
+생성할 때 매번 문맥 전체를 다시 순전파하는 것은 낭비다.
+[5.5](05_encoder_decoder.qmd)에서 본 대로, **인과 마스크 덕분에 과거 토큰의 $K$·$V$ 는 절대 변하지 않는다.**
+
+그러니 저장해두고 새 토큰의 것만 이어붙이면 된다.
+
+```{python}
+#| label: kv-cache
+#| code-fold: show
+#| code-summary: "KV 캐시 생성 (펼쳐서 보기)"
+
+def generate_cached(self, idx, n_new, temperature=1.0, top_k=None, seed=0):
+    P, rng = self.P, np.random.default_rng(seed)
+    out = list(idx)
+    kv = [{"K": None, "V": None} for _ in range(self.L)]
+
+    def step(tok_ids, start):
+        T = len(tok_ids)
+        x = P["wte"][np.asarray(tok_ids)] + P["wpe"][start:start + T]
+        for l in range(self.L):
+            h1, _ = layer_norm(x)
+            Qh = (h1 @ P[f"q{l}"]).reshape(T, self.h, self.dk).transpose(1, 0, 2)
+            Kh = (h1 @ P[f"k{l}"]).reshape(T, self.h, self.dk).transpose(1, 0, 2)
+            Vh = (h1 @ P[f"v{l}"]).reshape(T, self.h, self.dk).transpose(1, 0, 2)
+
+            if kv[l]["K"] is None:                  # 첫 호출: 캐시 생성
+                kv[l]["K"], kv[l]["V"] = Kh, Vh
+            else:                                   # 이후: 이어붙이기만
+                kv[l]["K"] = np.concatenate([kv[l]["K"], Kh], axis=1)
+                kv[l]["V"] = np.concatenate([kv[l]["V"], Vh], axis=1)
+
+            Kall, Vall = kv[l]["K"], kv[l]["V"]
+            S = np.einsum("hid,hjd->hij", Qh, Kall) / np.sqrt(self.dk)
+            qpos = np.arange(start, start + T)[:, None]
+            kpos = np.arange(Kall.shape[1])[None, :]
+            S = np.where(kpos > qpos, -np.inf, S)
+            A = attention.softmax(S)
+            oh = np.einsum("hij,hjd->hid", A, Vall)
+            x = x + oh.transpose(1, 0, 2).reshape(T, self.d) @ P[f"o{l}"]
+            h2, _ = layer_norm(x)
+            x = x + gelu(h2 @ P[f"f1{l}"] + P[f"b1{l}"]) @ P[f"f2{l}"] + P[f"b2{l}"]
+        hf, _ = layer_norm(x)
+        return hf @ P["wte"].T
+
+    logits = step(out, 0)[-1]                       # prefill: 프롬프트 전체
+    pos = len(out)
+    for _ in range(n_new):                          # decode: 한 토큰씩
+        lg = logits / max(temperature, 1e-6)
+        if top_k:
+            lg = np.where(lg < np.sort(lg)[-top_k], -np.inf, lg)
+        p = attention.softmax(lg)
+        nxt = int(rng.choice(len(p), p=p))
+        out.append(nxt)
+        logits = step([nxt], pos)[-1]               # 새 토큰 1개만 순전파
+        pos += 1
+    return out
+
+MiniGPT.generate_cached = generate_cached
+```
+
+```{python}
+#| label: kv-verify
+#| code-fold: false
+
+import time
+
+n_new = 50
+t0 = time.time(); a = model.generate(ids, n_new, 0.8, 8, seed=3); t_plain = time.time() - t0
+t0 = time.time(); b = model.generate_cached(ids, n_new, 0.8, 8, seed=3); t_cache = time.time() - t0
+
+print(f"무캐시 : {''.join(itos[i] for i in a)!r}")
+print(f"캐시   : {''.join(itos[i] for i in b)!r}")
+print()
+print(f"출력이 완전히 동일한가: {a == b}")
+print(f"시간   무캐시 {t_plain*1000:.0f}ms   캐시 {t_cache*1000:.0f}ms   "
+      f"({t_plain/t_cache:.1f}배 빠름)")
+```
+
+::: {.key-concept}
+**캐시는 근사가 아니다 — 출력이 비트 단위로 같다.**
+
+인과 마스크가 "과거는 미래에 영향받지 않는다"를 보장하므로,
+재계산과 캐시 재사용이 수학적으로 동일하다. 순수한 공짜 이득이다.
+
+대신 **메모리**를 쓴다. 그리고 그 메모리가 실제 LLM에서는 모델 가중치를 압도한다
+([5.2에서 본 그림](02_multi_head.qmd)). 그래서 GQA, PagedAttention, 양자화된 캐시가 나온다
+([7.14 추론 최적화](../07_language/14_inference_optimization.qmd)).
+:::
+
+---
+
+## 8. 여기서 실제 LLM까지
+
+우리가 만든 것과 GPT-4급 모델의 차이를 정리하면, 무엇이 본질이고 무엇이 규모인지 보인다.
+
+```{python}
+#| label: gap-table
+#| code-fold: false
+
+rows = [
+    ("파라미터",   f"{model.n_params():,}",        "~1조 (MoE 포함)"),
+    ("층",         "3",                             "80~120"),
+    ("d_model",    "64",                            "8192~18432"),
+    ("문맥",       f"{BLOCK}",                      "128K~1M"),
+    ("토크나이저", f"문자 {V}종",                    "BPE 10만~20만"),
+    ("학습 토큰",  f"{len(data):,}",                "15조~30조"),
+    ("학습 연산",  f"{train_time:.0f}초 (노트북)",   "수천만 GPU-시간"),
+    ("정렬",       "없음",                          "SFT + RLHF/DPO"),
+]
+print(f"{'항목':<12} {'이 장의 모델':<22} {'프런티어 LLM'}")
+print("-" * 64)
+for a, b, c in rows:
+    print(f"{a:<12} {b:<22} {c}")
+```
+
+::: {.callout-note}
+## 구조는 같다
+
+놀라운 점은 **아키텍처 자체는 거의 바뀌지 않는다**는 것이다.
+프런티어 모델도 이 장의 코드와 같은 블록을 쌓는다. 바뀌는 것은:
+
+- **부품 교체**: LayerNorm→RMSNorm, GELU→SwiGLU, 학습형 위치→RoPE, MHA→GQA ([5.4](04_transformer_block.qmd))
+- **규모**: 파라미터와 데이터 ([5.9 스케일링 법칙](09_scaling_laws.qmd))
+- **데이터 품질**: 실제로 가장 큰 차이를 만드는 부분 ([7.5 사전학습 데이터](../07_language/05_pretraining_data.qmd))
+- **정렬**: 지시를 따르게 만드는 후처리 ([7.7 정렬](../07_language/07_alignment.qmd))
+- **인프라**: 분산 학습, 효율적 어텐션 ([5.7](07_efficient_attention.qmd), [11.2](../11_systems/02_distributed_training.qmd))
+:::
+
+### PyTorch로 옮기면
+
+같은 모델을 프레임워크로 쓰면 이 정도로 줄어든다.
+역전파를 직접 유도한 지금은 이 코드가 무엇을 감추고 있는지 보일 것이다.
+
+```python
+# 실행하지 않는 참고 코드 — 이 책의 렌더 의존성은 NumPy/SciPy/Plotly 로 제한된다
+import torch, torch.nn as nn
+
+class Block(nn.Module):
+    def __init__(self, d, h):
+        super().__init__()
+        self.ln1, self.ln2 = nn.LayerNorm(d), nn.LayerNorm(d)
+        self.attn = nn.MultiheadAttention(d, h, batch_first=True)
+        self.ffn = nn.Sequential(nn.Linear(d, 4*d), nn.GELU(), nn.Linear(4*d, d))
+
+    def forward(self, x, mask):
+        h = self.ln1(x)
+        x = x + self.attn(h, h, h, attn_mask=mask, need_weights=False)[0]
+        return x + self.ffn(self.ln2(x))
+
+# 학습 루프 — 우리가 직접 쓴 역전파가 이 한 줄로 대체된다
+loss = F.cross_entropy(model(x).view(-1, V), y.view(-1))
+loss.backward()          # ← 3절 전체
+optimizer.step()         # ← 5절의 AdamW 갱신
+```
+
+---
+
+## 요약
+
+| 만든 것 | 검증한 것 |
+|---------|-----------|
+| 문자 토크나이저 + 시프트 데이터 | — |
+| pre-LN decoder-only 3층 | 초기 손실 $\approx \log V$ |
+| 손으로 유도한 역전파 | **수치 미분과 상대오차 $10^{-6}$** |
+| AdamW + warmup/cosine + 클리핑 | 손실 감소, 클리핑 실제 작동 |
+| 온도·top-k 생성 | 온도에 따른 출력 변화 |
+| KV 캐시 | **출력 동일 + 수 배 가속** |
+
+| 얻어가야 할 것 | |
+|---|---|
+| 초기 손실 = $\log V$ | 가장 값싼 버그 탐지 |
+| 그래디언트 검사 | 역전파 구현의 유일한 신뢰 근거 |
+| 잔차의 역전파 | 그래디언트가 **그대로** 양쪽으로 |
+| `np.add.at` | 중복 인덱스 누적 |
+| KV 캐시 | 근사가 아니라 정확히 같은 계산 |
+
+Transformer의 부품을 전부 조립해봤다.
+남은 것은 이 구조를 **크게, 빠르게** 만드는 문제다 —
+다음 장부터는 $O(n^2)$ 병목, 희소 활성화, 스케일링 법칙을 다룬다.
+
+---
+
+**다음**: [5.7 효율적 어텐션과 긴 문맥](07_efficient_attention.qmd) — FlashAttention·희소·선형 어텐션
 
 **이전**: [5.5 인코더-디코더와 세 가지 계열](05_encoder_decoder.qmd)
