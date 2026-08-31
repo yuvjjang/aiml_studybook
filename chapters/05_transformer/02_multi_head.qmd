@@ -4,78 +4,399 @@ subtitle: "여러 표현 부분공간에서 동시에 — 헤드는 무엇을 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+셀프 어텐션 한 번은 **하나의 관계**만 포착한다.
 
-헤드를 나누는 것은 파라미터를 늘리는 게 아니라 쪼개는 것이다. 왜 쪼개는 게 이득인지가 이 장의 핵심이다.
+softmax는 확률분포 하나를 만든다. 그리고 그 분포는 대개 한두 곳에 집중된다.
+그런데 "그것이 무엇을 가리키는가"와 "이 동사의 주어는 누구인가"와 "이 형용사가 꾸미는 명사는 무엇인가"는
+전부 다른 종류의 관계다. 하나의 어텐션으로 셋을 동시에 표현할 수 없다.
 
----
-
-## 이 장에서 다루는 것
-
-- 단일 헤드의 한계: 한 번의 softmax는 한 종류의 관계만
-- 헤드 분할: d_model → h × d_k, 파라미터 수가 그대로인 이유
-- 각 헤드의 독립 사영과 병렬 계산, 연결 후 출력 사영 W_O
-- shape 추적: (B, h, n, d_k) 텐서 흐름 전체
-- 헤드가 학습하는 패턴: 위치, 구문, 이전 토큰, induction head
-- 헤드 중복성과 가지치기(head pruning) 연구
-- MQA(Multi-Query)와 GQA(Grouped-Query): KV 캐시를 줄이기
-- MLA(Multi-head Latent Attention) 같은 최근 변형
-- 헤드 수와 헤드 차원의 트레이드오프
+해법은 단순하다. **여러 번 한다.** 다만 파라미터를 늘리는 게 아니라 **쪼갠다**.
 
 ---
 
-## G5.2.1 — 헤드 분할 도식
+## 헤드로 쪼개기
 
-d_model이 h개로 쪼개져 병렬 처리되고 다시 합쳐지는 흐름
+$d_{\text{model}}$ 차원을 $h$ 개의 헤드로 나눈다. 각 헤드는 $d_k = d_{\text{model}}/h$ 차원을 맡는다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 헤드 수 슬라이더
+$$\text{head}_i = \text{Attention}(XW_Q^{(i)},\; XW_K^{(i)},\; XW_V^{(i)})$$
+
+$$\text{MHA}(X) = \big[\text{head}_1;\dots;\text{head}_h\big]\, W_O$$
+
+여기서 자주 오해가 생긴다.
+
+::: {.key-concept}
+**멀티헤드는 파라미터를 $h$ 배로 늘리지 않는다.**
+
+$W_Q^{(i)} \in \mathbb{R}^{d\times d_k}$ 가 $h$ 개 있으면 총 $h \cdot d \cdot d_k = d \cdot d$ 다.
+단일 헤드일 때의 $W_Q \in \mathbb{R}^{d \times d}$ 와 **정확히 같다.**
+
+구현도 그래서 간단하다. $d\times d$ 행렬 하나로 사영한 뒤 `reshape` 으로 쪼갠다.
+즉 멀티헤드는 **같은 예산을 여러 부분공간에 나눠 쓰는 것**이다.
 :::
+
+---
+
+## G5.2.1 — 텐서가 쪼개지고 합쳐지는 과정
+
+shape 추적이 이 장의 절반이다. 실제 배열로 따라간다.
+
+```{python}
+#| label: mha-shapes
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import attention
+
+n, d, h = 6, 12, 3          # 토큰 6개, d_model=12, 헤드 3개
+d_k = d // h
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(n, d))
+Wq, Wk, Wv, Wo = [rng.normal(size=(d, d)) * 0.3 for _ in range(4)]
+
+print(f"입력 X                     {X.shape}")
+Q = X @ Wq
+print(f"XWq (한 번에 사영)          {Q.shape}")
+Q_split = Q.reshape(n, h, d_k)
+print(f"reshape (n, h, d_k)        {Q_split.shape}")
+Q_heads = Q_split.transpose(1, 0, 2)
+print(f"transpose (h, n, d_k)      {Q_heads.shape}   ← 헤드가 앞으로")
+print()
+
+out, attn = attention.multi_head_attention(X, Wq, Wk, Wv, Wo, n_heads=h)
+print(f"헤드별 어텐션 attn          {attn.shape}   ← (h, n, n)")
+print(f"concat 후 W_O 통과 → 출력    {out.shape}   ← 입력과 같은 shape")
+print()
+
+n_params_single = 4 * d * d
+n_params_multi = 4 * d * d
+print(f"단일 헤드 파라미터 수: {n_params_single}")
+print(f"{h}개 헤드 파라미터 수:  {n_params_multi}   ← 동일")
+```
+
+```{python}
+#| label: fig-head-split
+#| fig-cap: "d_model이 헤드로 쪼개져 병렬 처리되고 다시 합쳐지는 흐름"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+d_model = 12
+head_counts = [1, 2, 3, 4, 6, 12]
+
+fig = go.Figure()
+
+def blocks(h):
+    """헤드 분할을 색 블록으로 표현"""
+    dk = d_model // h
+    xs, ys, colors, texts = [], [], [], []
+    for i in range(h):
+        for j in range(dk):
+            xs.append(i * dk + j)
+            ys.append(0)
+            colors.append(viz.color(i))
+            texts.append(f"head {i+1}")
+    return xs, colors, texts, dk
+
+h0 = 3
+xs, colors, texts, dk0 = blocks(h0)
+fig.add_trace(go.Bar(x=xs, y=[1] * d_model, marker_color=colors,
+                     text=texts, hovertemplate="차원 %{x}<br>%{text}<extra></extra>",
+                     showlegend=False, width=0.92))
+
+steps = []
+for h in head_counts:
+    xs, colors, texts, dk = blocks(h)
+    steps.append((f"{h} (d_k={dk})",
+                  {"marker": [dict(color=colors)], "text": [texts]}))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="헤드 수 h = ",
+                        active=head_counts.index(h0), pad_t=55)],
+    xaxis=dict(title="d_model 차원 인덱스", tickmode="linear", dtick=1),
+    yaxis=dict(showticklabels=False, range=[0, 1.3]),
+    bargap=0.06,
+)
+viz.fig_defaults(fig, height=280,
+                 title="d_model = 12 를 h개 헤드로 분할 (총 차원은 항상 12)")
+fig.update_layout(margin=dict(l=55, r=30, t=60, b=95))
+fig.show()
+```
+
+::: {.interaction-hint}
+헤드 수를 바꿔도 **전체 폭은 항상 12**입니다. 헤드를 늘리면 각 헤드가 좁아지고, 줄이면 넓어집니다. $h=12$ 면 헤드마다 1차원씩 — 너무 좁아 유사도를 재기 어렵습니다.
+:::
+
+---
+
+## 헤드마다 다른 것을 본다
+
+여러 헤드를 두는 이유는 각자 다른 패턴을 학습하기 때문이다.
+실제 학습된 모델에서 반복적으로 관찰되는 유형들이 있다.
+
+| 헤드 유형 | 하는 일 |
+|-----------|---------|
+| 이전 토큰 헤드 | 바로 앞 토큰에 집중 (부대각선) |
+| 위치 헤드 | 고정된 상대 거리를 봄 |
+| 구문 헤드 | 동사→주어, 전치사→목적어 등 문법 관계 |
+| 구분자 헤드 | `[SEP]`, 마침표 등에 몰림 (일종의 "쉬는" 헤드) |
+| **induction head** | 앞서 나온 패턴 `[A][B] … [A]` 를 찾아 `[B]` 를 예측 |
+
+마지막 것이 특히 중요하다. induction head는 **문맥 내 학습(in-context learning)의 기계적 근거**로 지목된다.
+프롬프트에 예시를 주면 모델이 따라 하는 능력이, 이 헤드들이 형성되는 시점에 급격히 생긴다
+([12.1 기계적 해석가능성](../12_trust/01_mechanistic.qmd)).
 
 ---
 
 ## G5.2.2 — 헤드별 어텐션 패턴
 
-같은 문장에서 헤드마다 전혀 다른 대각/이전토큰/구문 패턴
+각 헤드가 서로 다른 관계에 반응하도록 $W_Q, W_K$ 를 구성해 그 차이를 보인다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 헤드 선택
+```{python}
+#| label: fig-head-patterns
+#| fig-cap: "같은 문장, 서로 다른 헤드. 헤드를 바꿔가며 비교하세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import attention, viz
+
+sent = ["<s>", "철수", "가", "영희", "에게", "책", "을", "주었", "다"]
+n = len(sent)
+pos = np.arange(n)
+
+# 학습된 모델에서 관찰되는 대표 패턴을 점수 행렬로 직접 구성한다
+# (실제 가중치가 아니라, 각 헤드가 무엇을 배우는지 보여주기 위한 재현)
+i_idx, j_idx = pos[:, None], pos[None, :]
+causal = attention.causal_mask(n)
+
+patterns = {
+    "이전 토큰 헤드": -3.0 * np.abs(i_idx - j_idx - 1),
+    "고정 거리 헤드 (Δ=3)": -2.5 * np.abs(i_idx - j_idx - 3),
+    "첫 토큰(싱크) 헤드": np.where(j_idx == 0, 4.0, -1.0) * np.ones((n, n)),
+    "넓게 퍼진 헤드": -0.25 * np.abs(i_idx - j_idx),
+    "구문 헤드 (조사→명사)": None,
+}
+
+# 조사(가/에게/을)가 바로 앞 명사를 보도록
+synt = -4.0 * np.ones((n, n))
+for q, k in [(2, 1), (4, 3), (6, 5), (7, 1), (7, 5), (8, 7)]:
+    synt[q, k] = 3.0
+np.fill_diagonal(synt, -1.0)
+patterns["구문 헤드 (조사→명사)"] = synt
+
+attns = {}
+for name, scores in patterns.items():
+    s = np.where(causal, -np.inf, scores.astype(float))
+    attns[name] = attention.softmax(s)
+
+names = list(attns)
+n0 = names[0]
+
+fig = go.Figure(go.Heatmap(
+    z=np.round(attns[n0], 3), colorscale="Blues", zmin=0, zmax=1,
+    text=np.round(attns[n0], 2), texttemplate="%{text}", textfont=dict(size=9),
+    colorbar=dict(thickness=12, outlinewidth=0),
+    hovertemplate="쿼리 %{y}<br>키 %{x}<br>%{z:.3f}<extra></extra>"))
+
+steps = [(nm, {"z": [np.round(attns[nm], 3)],
+               "text": [np.round(attns[nm], 2)]}) for nm in names]
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="헤드 = ", active=0, pad_t=55)],
+    xaxis=dict(tickmode="array", tickvals=list(range(n)), ticktext=sent,
+               tickangle=-40, title="키 (참조되는 토큰)"),
+    yaxis=dict(tickmode="array", tickvals=list(range(n)), ticktext=sent,
+               autorange="reversed", title="쿼리 (참조하는 토큰)"),
+)
+viz.fig_defaults(fig, height=480,
+                 title="헤드마다 다른 관계를 포착한다 (인과 마스크 적용)")
+fig.show()
+```
+
+::: {.interaction-hint}
+**이전 토큰 헤드**는 부대각선만 밝습니다. **싱크 헤드**는 모두가 `<s>` 를 봅니다 — 실제 LLM에서 매우 흔하며, 딱히 볼 것이 없을 때 어텐션을 버리는 곳으로 쓰입니다. **구문 헤드**는 "가→철수", "에게→영희" 처럼 문법 관계를 따라갑니다.
+:::
+
+::: {.callout-note}
+## 어텐션 싱크는 버그가 아니라 필요한 장치다
+
+softmax는 **반드시 합이 1**이 되어야 한다. 그런데 "지금은 아무것도 참조할 필요 없음"을 표현할 방법이 없다.
+그래서 모델은 첫 토큰이나 구분자 같은 의미 없는 위치에 가중치를 몰아넣는다 — **어텐션 싱크**다.
+
+이것이 실무에 미치는 영향이 크다.
+긴 문맥 처리에서 앞부분을 잘라내면(sliding window) 싱크가 사라져 성능이 급락한다.
+StreamingLLM은 **첫 몇 토큰을 항상 남겨두는 것**만으로 이 문제를 해결한다
+([5.7 효율적 어텐션](07_efficient_attention.qmd)).
 :::
 
 ---
 
-## G5.2.3 — MHA vs MQA vs GQA
+## $W_O$ 는 무엇을 하는가
 
-KV 헤드 수에 따른 캐시 메모리와 품질의 트레이드오프
+헤드를 이어붙인 뒤 곱하는 $W_O \in \mathbb{R}^{d\times d}$ 를 그냥 형식적인 사영으로 보기 쉽지만,
+$W_O$ 를 헤드별로 쪼개보면 구조가 드러난다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 구조 전환
+$$\text{MHA}(X) = \sum_{i=1}^{h} \text{head}_i \, W_O^{(i)}$$
+
+즉 **연결 후 사영 = 헤드별 사영의 합**이다.
+각 헤드가 독립적으로 잔차 스트림에 자기 몫을 **더한다.**
+
+::: {.key-concept}
+이 형태가 [12.1 해석가능성](../12_trust/01_mechanistic.qmd)의 출발점이다.
+헤드들은 서로 섞이지 않고 각자 잔차 스트림에 기여하므로,
+**한 헤드의 기여를 따로 떼어내 분석하거나 제거할 수 있다.**
+
+$W_O^{(i)}$ 는 "이 헤드가 읽어온 정보를 잔차 스트림의 어느 방향에 쓸 것인가"를 정한다.
 :::
 
 ---
 
-## G5.2.4 — 헤드 제거 실험
+## 헤드는 몇 개가 좋은가
 
-일부 헤드를 지워도 성능이 유지되는 중복성 확인
+트레이드오프가 있다. $d_{\text{model}}$ 이 고정이면 헤드를 늘릴수록 $d_k$ 가 줄어든다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 제거 헤드 선택
+| 헤드 수 | $d_k$ | 장점 | 단점 |
+|---------|-------|------|------|
+| 적음 (1~4) | 큼 | 헤드마다 표현력 충분 | 포착 가능한 관계 종류가 적음 |
+| 많음 (16~64) | 작음 | 다양한 관계 동시 포착 | 헤드가 너무 좁아 유사도가 부실 |
+
+실무에서는 $d_k = 64$ 를 맞추는 것이 관례다 (원 논문 이래로).
+GPT-3의 $d_{\text{model}}=12288$, 헤드 96개 → $d_k = 128$.
+LLaMA-2 70B는 $d_{\text{model}}=8192$, 헤드 64개 → $d_k = 128$.
+
+### 헤드는 상당수가 중복이다
+
+학습된 모델에서 헤드를 하나씩 제거해보면, **대부분의 헤드는 지워도 성능이 거의 안 떨어진다.**
+소수의 핵심 헤드가 일을 하고 나머지는 중복이라는 실증 결과가 여러 번 보고되었다.
+
+```{python}
+#| label: fig-head-pruning
+#| fig-cap: "헤드 중요도는 매우 불균등하다 (일반적으로 관찰되는 형태)"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(3)
+n_heads = 16
+# 소수가 크게 기여하고 나머지는 미미한 멱법칙형 분포
+importance = np.sort(rng.pareto(1.6, n_heads) + 0.02)[::-1]
+importance = importance / importance.sum()
+
+cum_keep = np.cumsum(importance)          # 중요 순으로 남길 때 유지되는 기여도
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("헤드별 기여도", "중요 순으로 k개만 남길 때"))
+
+fig.add_trace(go.Bar(x=[f"h{i+1}" for i in range(n_heads)], y=importance,
+                     marker_color=viz.ACCENT, showlegend=False), row=1, col=1)
+fig.add_trace(go.Scatter(x=list(range(1, n_heads + 1)), y=cum_keep,
+                         mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_hline(y=0.9, line=dict(color=viz.WARM, dash="dash"),
+              annotation_text="기여도 90%", row=1, col=2)
+
+k90 = int(np.searchsorted(cum_keep, 0.9) + 1)
+fig.update_xaxes(title_text="헤드", tickangle=-45, row=1, col=1)
+fig.update_yaxes(title_text="상대 기여도", row=1, col=1)
+fig.update_xaxes(title_text="남긴 헤드 수 k", row=1, col=2)
+fig.update_yaxes(title_text="누적 기여도", range=[0, 1.05], row=1, col=2)
+
+viz.fig_defaults(fig, height=390,
+                 title=f"16개 헤드 중 {k90}개로 기여도 90% 도달 — 나머지는 중복")
+fig.show()
+```
+
+::: {.interaction-hint}
+이 불균등이 [11.4 프루닝](../11_systems/04_efficiency.qmd)의 근거입니다. 다만 "지워도 되는 헤드"는 학습이 끝난 뒤에 정해지는 것이고, **학습 중에는 많은 헤드가 필요합니다** — 어느 헤드가 유용해질지 미리 알 수 없기 때문입니다.
 :::
 
 ---
 
-## 핵심 용어
+## KV 캐시를 줄이는 변형들: MQA·GQA
 
-| 용어 | 비고 |
-|------|------|
-| 멀티헤드 어텐션 |  |
-| 헤드 분할 |  |
-| induction head |  |
-| MQA/GQA |  |
-| W_O |  |
+추론 시점에서 멀티헤드는 심각한 비용을 만든다.
+자기회귀 생성에서는 이전 토큰들의 $K, V$ 를 캐시해두는데,
+**헤드마다 따로 저장**해야 하기 때문이다.
+
+$$\text{KV 캐시 크기} = 2 \times n_{\text{layers}} \times n_{\text{heads}} \times d_k \times n_{\text{tokens}} \times \text{bytes}$$
+
+해법은 $Q$ 헤드는 그대로 두고 $K, V$ 헤드만 공유하는 것이다.
+
+| 방식 | $K,V$ 헤드 수 | 캐시 | 품질 |
+|------|---------------|------|------|
+| MHA (원형) | $h$ | 100% | 기준 |
+| GQA | $g$ (예: 8) | $g/h$ | 거의 동일 |
+| MQA | 1 | $1/h$ | 약간 하락 |
+
+```{python}
+#| label: fig-kv-cache
+#| fig-cap: "KV 캐시 메모리: 문맥이 길어질수록 모델 가중치를 압도합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# LLaMA-2 70B 급 설정
+n_layers, n_heads, d_k = 80, 64, 128
+bytes_per = 2                       # fp16
+weights_gb = 140.0                  # 70B fp16
+
+lens = np.array([1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072])
+batch = 8
+
+def cache_gb(kv_heads):
+    return (2 * n_layers * kv_heads * d_k * lens * batch * bytes_per) / 1024**3
+
+fig = go.Figure()
+for i, (name, kv) in enumerate([("MHA (64 KV헤드)", 64),
+                                ("GQA (8 KV헤드)", 8),
+                                ("MQA (1 KV헤드)", 1)]):
+    fig.add_trace(go.Scatter(x=lens, y=cache_gb(kv), mode="lines+markers", name=name,
+                             line=dict(color=viz.color(i), width=2.5)))
+
+fig.add_hline(y=weights_gb, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="모델 가중치 140GB", annotation_position="bottom right")
+
+fig.update_layout(xaxis_title="문맥 길이 (토큰)", xaxis_type="log",
+                  yaxis_title="KV 캐시 (GB)", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420,
+                 title=f"70B급 모델, 배치 {batch} 기준 KV 캐시")
+fig.show()
+```
+
+::: {.interaction-hint}
+MHA(파랑)는 문맥 3만 토큰 정도에서 이미 **모델 가중치보다 큰 메모리**를 먹습니다. GQA는 같은 지점을 8배 뒤로 밀어냅니다 — 그래서 최근 모델은 거의 전부 GQA를 씁니다. 자세한 서빙 최적화는 [7.14 추론 최적화](../07_language/14_inference_optimization.qmd)에서 다룹니다.
+:::
 
 ---
 
-**다음**: [5.3 위치 인코딩](03_positional_encoding.qmd) — 사인파·학습형·상대·RoPE·ALiBi — 순서를 다시 넣는 방법들
+## 요약
+
+| 개념 | 핵심 | 이어지는 곳 |
+|------|------|-------------|
+| 헤드 분할 | $d = h \times d_k$, 파라미터 수 **불변** | 모든 Transformer |
+| 구현 | 한 번 사영 → `reshape`/`transpose` | 코드 읽기 |
+| 헤드 유형 | 이전토큰·위치·구문·싱크·induction | 해석가능성 |
+| 어텐션 싱크 | softmax 합=1 제약의 부산물 | 긴 문맥 처리 |
+| $W_O$ 분해 | 헤드별 기여의 **합** | 잔차 스트림 분석 |
+| $d_k \approx 64\text{–}128$ | 표현력과 다양성의 절충 | 모델 설계 |
+| 헤드 중복 | 소수가 대부분의 일을 함 | 프루닝 |
+| MQA / GQA | KV 헤드만 공유 → 캐시 감소 | 추론 최적화 |
+
+지금까지 어텐션 블록의 내부를 봤다.
+아직 빠진 것이 하나 있다 — 셀프 어텐션은 [순서를 모른다](01_self_attention.qmd).
+다음 장은 그 순서를 되돌려 넣는 방법들을 다룬다.
+
+---
+
+**다음**: [5.3 위치 인코딩](03_positional_encoding.qmd) — 사인파·RoPE·ALiBi
 
 **이전**: [5.1 셀프 어텐션과 마스킹](01_self_attention.qmd)
