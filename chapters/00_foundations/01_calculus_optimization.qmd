@@ -4,78 +4,549 @@ subtitle: "그래디언트·연쇄법칙·볼록성 — 학습이 일어나는 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+"모델을 학습시킨다"는 말을 정확히 옮기면 이렇게 된다.
 
-'학습'은 손실함수를 최소화하는 최적화다. 역전파는 연쇄법칙 그 자체이고, 옵티마이저 논문은 전부 이 장의 언어로 쓰였다.
+$$\theta^\star = \arg\min_\theta \; L(\theta)$$
+
+파라미터 $\theta$ 를 움직여 손실 $L$ 을 최소화한다. 그게 전부다.
+GPT를 학습시키는 것도, 선형회귀를 푸는 것도 같은 문장이다.
+다만 $\theta$ 가 2개냐 1조 개냐가 다를 뿐이다.
+
+그리고 그 최소화를 실제로 수행하는 도구가 미분이다.
+역전파는 연쇄법칙 그 자체이고, Adam 논문은 이 장의 언어로 쓰여 있다.
 
 ---
 
-## 이 장에서 다루는 것
+## 그래디언트: 가장 가파른 방향
 
-- 미분·편미분·방향미분, 그래디언트 ∇f 의 기하학적 의미
-- 연쇄법칙(chain rule)과 다변수 연쇄법칙 — 역전파의 뼈대
-- 야코비안과 헤시안, 2차 근사(테일러 전개)
-- 볼록함수, 볼록집합, 볼록성이 보장하는 것
-- 경사하강법의 유도와 학습률의 역할
-- 수렴 조건: 립시츠 연속, 강볼록성, 수렴 속도
-- 제약 최적화: 라그랑주 승수, KKT 조건 (SVM 의 전제)
-- 뉴턴법과 준뉴턴(L-BFGS) — 왜 딥러닝에서는 잘 안 쓰는가
-- 안장점, 국소최소, 고차원에서의 손실 지형
+일변수 미분 $f'(x)$ 는 "$x$ 를 조금 늘리면 $f$ 가 얼마나 변하는가"다.
+
+변수가 여러 개면 방향마다 답이 다르다. 각 축 방향의 변화율을 모은 것이 **그래디언트**다.
+
+$$\nabla f = \left[\frac{\partial f}{\partial x_1}, \dots, \frac{\partial f}{\partial x_n}\right]^\top$$
+
+여기서 결정적인 사실 하나. 임의의 단위 방향 $\mathbf{u}$ 로의 변화율(방향미분)은
+
+$$D_{\mathbf{u}}f = \nabla f \cdot \mathbf{u} = \|\nabla f\|\cos\theta$$
+
+[0.0 선형대수](00_linear_algebra.qmd)에서 본 내적이다.
+$\cos\theta$ 가 최대가 되는 것은 $\mathbf{u}$ 가 $\nabla f$ 와 같은 방향일 때다.
+
+::: {.key-concept}
+**그래디언트는 함수가 가장 빠르게 증가하는 방향을 가리키고, 그 크기는 증가율이다.**
+
+따라서 최소화하려면 반대로 가면 된다 — $-\nabla f$ 방향.
+경사하강법의 전부가 이 한 줄이다.
+
+또 하나: 그래디언트는 **등고선에 항상 수직**이다.
+등고선을 따라가면 함수값이 안 변하므로 그 방향의 변화율이 0이고,
+$\nabla f \cdot \mathbf{u} = 0$ 은 직교를 뜻하기 때문이다.
+:::
 
 ---
 
 ## G0.1.1 — 그래디언트 벡터장
 
-등고선 위에 ∇f 화살표 — 그래디언트가 최대 증가 방향임을 시각화
+등고선 위에 $\nabla f$ 를 그려 두 성질을 확인한다.
+화살표가 (1) 오르막을 가리키고 (2) 등고선에 수직인가.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 함수 선택
+```{python}
+#| label: fig-gradient-field
+#| fig-cap: "등고선과 그래디언트 벡터장. 함수를 바꿔가며 관찰하세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+g = np.linspace(-2.5, 2.5, 81)
+X, Y = np.meshgrid(g, g)
+gq = np.linspace(-2.3, 2.3, 15)          # 화살표는 성기게
+XQ, YQ = np.meshgrid(gq, gq)
+
+funcs = {
+    "이차형식 x² + 3y²": (
+        lambda x, y: x**2 + 3*y**2,
+        lambda x, y: (2*x, 6*y)),
+    "긴 협곡 0.1x² + 4y²": (
+        lambda x, y: 0.1*x**2 + 4*y**2,
+        lambda x, y: (0.2*x, 8*y)),
+    "안장 x² − y²": (
+        lambda x, y: x**2 - y**2,
+        lambda x, y: (2*x, -2*y)),
+    "봉우리 두 개": (
+        lambda x, y: -np.exp(-((x-1)**2 + y**2)) - 0.8*np.exp(-((x+1)**2 + y**2)),
+        lambda x, y: (2*(x-1)*np.exp(-((x-1)**2 + y**2))
+                      + 1.6*(x+1)*np.exp(-((x+1)**2 + y**2)),
+                      2*y*np.exp(-((x-1)**2 + y**2))
+                      + 1.6*y*np.exp(-((x+1)**2 + y**2)))),
+}
+
+data = {}
+for name, (f, gr) in funcs.items():
+    Z = f(X, Y)
+    U, V = gr(XQ, YQ)
+    # 화살표 길이 정규화 — 방향이 핵심이라 크기는 눌러 표시
+    mag = np.sqrt(U**2 + V**2) + 1e-9
+    scale = 0.28 / mag.max()
+    data[name] = (np.round(Z, 3), U * scale, V * scale)
+
+n0 = "이차형식 x² + 3y²"
+Z0, U0, V0 = data[n0]
+
+fig = go.Figure()
+fig.add_trace(go.Contour(x=g, y=g, z=Z0, colorscale="Blues", showscale=False,
+                         contours=dict(showlabels=False), opacity=0.9,
+                         line=dict(width=1)))
+fig.add_trace(viz.vector_field(XQ, YQ, U0, V0, scale=1.0,
+                               color_=viz.WARM, name="∇f (오르막 방향)"))
+
+steps = []
+for name, (Z, U, V) in data.items():
+    vf = viz.vector_field(XQ, YQ, U, V, scale=1.0)
+    steps.append((name, {"z": [Z, None], "x": [g, vf.x], "y": [g, vf.y]}))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="함수 = ", active=0, pad_t=55)],
+    xaxis=dict(title="x", scaleanchor="y"), yaxis=dict(title="y"),
+    legend=dict(x=0.01, y=0.99),
+)
+viz.fig_defaults(fig, height=490, title="등고선과 그래디언트")
+fig.show()
+```
+
+::: {.interaction-hint}
+화살표가 등고선을 **직각으로 가로지르는** 것을 보세요. "긴 협곡"에서는 화살표가 거의 세로로만 향합니다 — $y$ 방향 곡률이 훨씬 커서 그렇고, 이것이 경사하강이 지그재그로 흔들리는 원인입니다.
 :::
 
 ---
 
-## G0.1.2 — 경사하강 궤적
+## 경사하강법
 
-학습률이 작을 때/적당할 때/발산할 때의 궤적 비교
+그래디언트가 오르막을 가리키니, 내려가려면 반대로 한 걸음씩 간다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 학습률·시작점 슬라이더
+$$\theta_{t+1} = \theta_t - \eta \, \nabla L(\theta_t)$$
+
+$\eta$ 가 **학습률(learning rate)** 이다. 딥러닝에서 가장 중요한 하이퍼파라미터다.
+
+왜 이 식이 나오는지는 1차 테일러 근사로 보면 명확하다.
+$\theta$ 근처에서
+
+$$L(\theta + \Delta) \approx L(\theta) + \nabla L(\theta)^\top \Delta$$
+
+$\|\Delta\|$ 를 고정한 채 이 값을 최소화하는 $\Delta$ 는 $-\nabla L$ 방향이다 (내적이 최소가 되는 방향).
+즉 경사하강은 **국소 선형 근사를 신뢰하고 그 안에서 최선을 택하는** 것이다.
+
+여기서 $\eta$ 의 의미도 나온다. **선형 근사를 얼마나 멀리까지 믿을 것인가.**
+너무 크게 믿으면 근사가 깨진 곳까지 가서 발산한다.
+
+---
+
+## G0.1.2 — 학습률이 만드는 세 가지 운명
+
+```{python}
+#| label: fig-gradient-descent
+#| fig-cap: "같은 함수, 같은 시작점. 학습률만 바꿉니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# 협곡 함수 — 두 축의 곡률 비가 20:1
+a, b = 0.5, 10.0
+f = lambda x, y: a * x**2 + b * y**2
+grad = lambda x, y: (2 * a * x, 2 * b * y)
+
+g = np.linspace(-3, 3, 120)
+gy = np.linspace(-1.2, 1.2, 120)
+X, Y = np.meshgrid(g, gy)
+Z = np.round(f(X, Y), 3)
+
+start = (-2.6, 1.0)
+lrs = [0.005, 0.02, 0.05, 0.09, 0.098, 0.105, 0.12]
+
+paths = {}
+for lr in lrs:
+    x, y = start
+    px, py = [x], [y]
+    for _ in range(60):
+        dx, dy = grad(x, y)
+        x, y = x - lr * dx, y - lr * dy
+        if not np.isfinite(x) or abs(x) > 1e4 or abs(y) > 1e4:
+            break
+        px.append(x); py.append(y)
+    paths[lr] = (np.array(px), np.array(py))
+
+fig = go.Figure()
+fig.add_trace(go.Contour(x=g, y=gy, z=Z, colorscale="Blues", showscale=False,
+                         opacity=0.85, line=dict(width=1),
+                         contours=dict(start=0, end=12, size=0.6)))
+
+lr0 = 0.05
+px0, py0 = paths[lr0]
+fig.add_trace(go.Scatter(x=px0, y=py0, mode="lines+markers", name="경사하강 궤적",
+                         line=dict(color=viz.WARM, width=2),
+                         marker=dict(size=5, color=viz.WARM)))
+fig.add_trace(go.Scatter(x=[0], y=[0], mode="markers", name="최소점",
+                         marker=dict(size=13, color=viz.GREEN, symbol="star")))
+
+steps = []
+for lr in lrs:
+    px, py = paths[lr]
+    conv = "발산" if len(px) < 61 or abs(px[-1]) > 3 else f"{len(px)-1}스텝"
+    steps.append((f"{lr:g}", {"x": [None, px, [0]], "y": [None, py, [0]]}))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="학습률 η = ", active=lrs.index(lr0), pad_t=55)],
+    xaxis=dict(title="x (완만한 축)", range=[-3, 3]),
+    yaxis=dict(title="y (가파른 축)", range=[-1.2, 1.2]),
+    legend=dict(x=0.01, y=0.99),
+)
+viz.fig_defaults(fig, height=440,
+                 title=f"f = {a}x² + {b}y² · 발산 임계값 η = 1/{b:g} = {1/b:.3f}")
+fig.show()
+```
+
+::: {.interaction-hint}
+$\eta = 0.005$: 너무 조심스러워 60스텝으로도 도착하지 못합니다.
+$\eta = 0.05$: 세로로 튕기면서도 수렴합니다.
+$\eta \ge 0.1$: **발산합니다.** 가파른 축의 곡률이 $2b = 20$ 이라 $\eta > 2/20 = 0.1$ 이면 매 스텝 진폭이 커집니다.
+:::
+
+::: {.callout-note}
+## 학습률 상한은 계산할 수 있다
+
+이차함수 $f = \frac{1}{2}\theta^\top H \theta$ 에서 경사하강이 수렴할 조건은
+
+$$\eta < \frac{2}{\lambda_{\max}(H)}$$
+
+$\lambda_{\max}$ 는 헤시안의 최대 고유값 — **가장 가파른 방향의 곡률**이다.
+
+그런데 수렴 속도는 가장 **완만한** 방향이 결정한다.
+그래서 수렴에 걸리는 스텝 수는 조건수 $\kappa = \lambda_{\max}/\lambda_{\min}$ 에 비례한다.
+위 예에서 $\kappa = 20$ 이라 지그재그가 생긴다.
+
+이 문제를 푸는 것이 [3.4 옵티마이저](../03_deep_learning/04_optimizers.qmd)의 모멘텀과 적응적 학습률이다.
 :::
 
 ---
 
-## G0.1.3 — 볼록 vs 비볼록
+## 연쇄법칙: 역전파의 뼈대
 
-볼록함수는 어디서 출발해도 같은 최소점, 비볼록은 시작점에 의존
+합성함수의 미분.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 함수 전환 버튼
+$$\frac{d}{dx} f(g(x)) = f'(g(x)) \cdot g'(x)$$
+
+신경망은 함수를 층층이 쌓은 거대한 합성함수다.
+
+$$L = \ell\big(f_N(\cdots f_2(f_1(x; \theta_1); \theta_2)\cdots)\big)$$
+
+$\theta_1$ 에 대한 그래디언트를 구하려면 연쇄법칙을 $N$ 번 적용한다.
+
+$$\frac{\partial L}{\partial \theta_1} =
+\frac{\partial L}{\partial f_N}\cdot
+\frac{\partial f_N}{\partial f_{N-1}}\cdots
+\frac{\partial f_2}{\partial f_1}\cdot
+\frac{\partial f_1}{\partial \theta_1}$$
+
+이 **곱의 사슬**이 딥러닝의 두 고질병을 그대로 설명한다.
+
+| 각 항이 | 결과 | 이름 |
+|---------|------|------|
+| 대부분 $<1$ | 곱이 지수적으로 0에 수렴 | 그래디언트 소실 |
+| 대부분 $>1$ | 곱이 지수적으로 폭발 | 그래디언트 폭발 |
+
+::: {.key-concept}
+[4.2 RNN](../04_architectures/02_rnn.qmd)이 긴 시퀀스를 못 배우는 이유,
+[3.7 잔차 연결](../03_deep_learning/07_initialization.qmd)이 깊은 망을 학습 가능하게 만든 이유,
+[3.5 정규화 층](../03_deep_learning/05_normalization.qmd)이 필요한 이유가 전부 이 곱의 사슬에서 나온다.
+
+잔차 연결 $y = x + F(x)$ 의 미분은 $1 + F'(x)$ 다.
+**곱해지는 항에 1이 더해져 있어서** 그래디언트가 완전히 죽지 않는다. 그게 핵심이다.
+:::
+
+### 다변수 연쇄법칙과 야코비안
+
+층의 입출력이 벡터면 미분은 행렬이 된다 — **야코비안**.
+
+$$J = \frac{\partial \mathbf{y}}{\partial \mathbf{x}}, \qquad
+J_{ij} = \frac{\partial y_i}{\partial x_j}$$
+
+연쇄법칙은 야코비안의 행렬곱이 된다.
+
+$$\frac{\partial L}{\partial \mathbf{x}} =
+\left(\frac{\partial \mathbf{y}}{\partial \mathbf{x}}\right)^\top
+\frac{\partial L}{\partial \mathbf{y}}$$
+
+여기서 역전파의 계산 전략이 나온다.
+손실은 **스칼라 하나**이므로, 뒤에서부터 곱해오면 항상 벡터-행렬 곱만 하면 된다.
+앞에서부터 곱하면 거대한 행렬-행렬 곱이 필요하다.
+이것이 forward-mode가 아니라 reverse-mode를 쓰는 이유이고,
+[3.1 역전파](../03_deep_learning/01_backpropagation.qmd)에서 자세히 다룬다.
+
+---
+
+## 헤시안과 2차 근사
+
+그래디언트가 1차 정보라면, 2차 정보는 **곡률**이다.
+
+$$H_{ij} = \frac{\partial^2 f}{\partial x_i \partial x_j}$$
+
+2차 테일러 전개는
+
+$$f(\theta + \Delta) \approx f(\theta) + \nabla f^\top \Delta + \tfrac{1}{2}\Delta^\top H \Delta$$
+
+$H$ 는 대칭행렬이므로 [0.0에서 본 스펙트럼 정리](00_linear_algebra.qmd)가 적용된다.
+고유값의 부호가 임계점($\nabla f = 0$)의 정체를 알려준다.
+
+| 헤시안 고유값 | 임계점 | 고차원에서 |
+|---------------|--------|------------|
+| 전부 양수 (양정치) | 국소 최소 | 드물다 |
+| 전부 음수 | 국소 최대 | 드물다 |
+| **부호가 섞임** | **안장점** | **압도적으로 흔하다** |
+| 일부 0 | 평평한 방향 | 흔하다 |
+
+---
+
+## G0.1.3 — 안장점
+
+고차원 손실 지형에서 그래디언트가 0인 지점은 대부분 국소 최소가 아니라 안장점이다.
+$n$ 차원에서 모든 고유값이 우연히 같은 부호일 확률은 $2^{-n}$ 수준이기 때문이다.
+
+```{python}
+#| label: fig-saddle
+#| fig-cap: "안장점: 한 방향으로는 최소, 다른 방향으로는 최대. 드래그해서 돌려보세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+g = np.linspace(-2, 2, 60)
+X, Y = np.meshgrid(g, g)
+Z = np.round(X**2 - Y**2, 3)
+
+fig = go.Figure()
+fig.add_trace(go.Surface(x=g, y=g, z=Z, colorscale="RdBu", cmid=0,
+                         opacity=0.92, showscale=False,
+                         contours=dict(z=dict(show=True, usecolormap=True,
+                                              project_z=True))))
+
+# 두 주축을 따라간 단면
+fig.add_trace(go.Scatter3d(x=g, y=np.zeros_like(g), z=g**2, mode="lines",
+                           name="y=0 단면 (최소)",
+                           line=dict(color=viz.GREEN, width=6)))
+fig.add_trace(go.Scatter3d(x=np.zeros_like(g), y=g, z=-g**2, mode="lines",
+                           name="x=0 단면 (최대)",
+                           line=dict(color=viz.WARM, width=6)))
+fig.add_trace(go.Scatter3d(x=[0], y=[0], z=[0], mode="markers",
+                           name="임계점 ∇f = 0",
+                           marker=dict(size=7, color=viz.YELLOW)))
+
+fig.update_layout(
+    scene=dict(xaxis=dict(title="x"), yaxis=dict(title="y"),
+               zaxis=dict(title="f = x² − y²"),
+               camera=dict(eye=dict(x=1.6, y=1.5, z=0.9)),
+               bgcolor="rgba(0,0,0,0)"),
+    legend=dict(x=0.01, y=0.99),
+)
+viz.fig_defaults(fig, height=520, title="안장점 f(x,y) = x² − y²")
+fig.update_layout(margin=dict(l=0, r=0, t=60, b=0))
+fig.show()
+```
+
+::: {.interaction-hint}
+원점에서 그래디언트는 정확히 0입니다. 하지만 초록 단면(x축)을 따라가면 **골짜기**이고, 주황 단면(y축)을 따라가면 **봉우리**입니다. 최소점이 아닌데도 경사하강이 여기서 느려집니다.
+:::
+
+::: {.callout-note}
+## 고차원에서 국소 최소는 걱정거리가 아니다
+
+딥러닝 초기에는 "비볼록 손실함수라 국소 최소에 갇힌다"가 큰 우려였다.
+지금의 이해는 다르다.
+
+- 임계점의 대부분은 안장점이다. 안장점은 **빠져나갈 방향이 있다** — 미니배치 잡음이 그 일을 해준다.
+- 실제로 도달하는 국소 최소들은 손실값이 서로 비슷하다는 실증 결과가 많다.
+- 문제는 "갇히는 것"보다 **평평한 영역(plateau)에서 느려지는 것**이다.
+
+그래서 실무의 관심은 국소 최소 탈출이 아니라 학습률 스케줄과 모멘텀에 있다.
 :::
 
 ---
 
-## G0.1.4 — 안장점 3D
+## 볼록성: 보장이 있는 세계
 
-x²−y² 안장점에서 그래디언트가 0이지만 최소가 아닌 상황
+**볼록함수**는 두 점을 잇는 선분이 함수 위에 있는 함수다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 3D 회전
+$$f(\lambda x + (1-\lambda)y) \le \lambda f(x) + (1-\lambda)f(y), \quad \lambda\in[0,1]$$
+
+동등하게, 2차 미분 가능하면 **헤시안이 항상 양반정치**다.
+
+볼록성이 주는 것은 하나지만 그게 크다.
+
+> **모든 국소 최소는 전역 최소다.**
+
+그래서 어디서 출발하든, 어떤 경로로 가든 같은 답에 도달한다.
+
+```{python}
+#| label: fig-convex
+#| fig-cap: "볼록 함수와 비볼록 함수에서 시작점이 결과를 바꾸는지"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+xs = np.linspace(-3.2, 3.2, 400)
+convex = 0.5 * xs**2 + 0.5
+nonconvex = 0.35 * xs**2 + 1.6 * np.sin(2.4 * xs) + 2.6
+
+def descend(f, df, x0, lr=0.06, steps=70):
+    x, path = x0, [x0]
+    for _ in range(steps):
+        x -= lr * df(x)
+        path.append(x)
+    return np.array(path)
+
+d_convex = lambda x: x
+d_noncvx = lambda x: 0.7 * x + 3.84 * np.cos(2.4 * x)
+
+starts = [-2.9, -1.6, -0.4, 0.9, 2.4]
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("볼록 — 어디서 출발해도 같은 답",
+                                    "비볼록 — 시작점이 결과를 정한다"))
+
+fig.add_trace(go.Scatter(x=xs, y=convex, mode="lines", showlegend=False,
+                         line=dict(color="rgba(255,255,255,0.45)", width=2)), row=1, col=1)
+fig.add_trace(go.Scatter(x=xs, y=nonconvex, mode="lines", showlegend=False,
+                         line=dict(color="rgba(255,255,255,0.45)", width=2)), row=1, col=2)
+
+for i, x0 in enumerate(starts):
+    p1 = descend(convex, d_convex, x0)
+    p2 = descend(nonconvex, d_noncvx, x0)
+    fig.add_trace(go.Scatter(x=p1, y=0.5 * p1**2 + 0.5, mode="markers",
+                             showlegend=False, marker=dict(size=4, color=viz.color(i),
+                                                           opacity=0.75)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=[p1[-1]], y=[0.5 * p1[-1]**2 + 0.5], mode="markers",
+                             showlegend=False,
+                             marker=dict(size=12, color=viz.color(i),
+                                         symbol="star")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=p2, y=0.35 * p2**2 + 1.6 * np.sin(2.4 * p2) + 2.6,
+                             mode="markers", showlegend=False,
+                             marker=dict(size=4, color=viz.color(i), opacity=0.75)),
+                  row=1, col=2)
+    fig.add_trace(go.Scatter(x=[p2[-1]],
+                             y=[0.35 * p2[-1]**2 + 1.6 * np.sin(2.4 * p2[-1]) + 2.6],
+                             mode="markers", showlegend=False,
+                             marker=dict(size=12, color=viz.color(i),
+                                         symbol="star")), row=1, col=2)
+
+fig.update_xaxes(title_text="θ")
+fig.update_yaxes(title_text="손실 L(θ)", row=1, col=1)
+viz.fig_defaults(fig, height=400, title="시작점 5개에서 출발한 경사하강 (별 = 도착점)")
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽은 별 5개가 **한 점에 모입니다**. 오른쪽은 각자 가장 가까운 골짜기에 갇혀 흩어집니다. 신경망 손실은 오른쪽 세계인데도 잘 작동하는 이유는 위 안장점 노트에서 설명한 대로입니다.
+:::
+
+| | 볼록 (선형·로지스틱 회귀, SVM) | 비볼록 (신경망) |
+|---|---|---|
+| 해 | 유일 (또는 값이 유일) | 여러 개, 시작점 의존 |
+| 초기화 | 무관 | **중요** |
+| 재현성 | 시드 무관 | 시드마다 다름 |
+| 이론 보장 | 수렴 속도까지 증명됨 | 대부분 경험적 |
+
+---
+
+## 제약 최적화: 라그랑주와 KKT
+
+"$g(x) \le 0$ 을 지키면서 $f(x)$ 를 최소화하라" 같은 문제는 라그랑주 함수로 바꾼다.
+
+$$\mathcal{L}(x, \lambda) = f(x) + \lambda\, g(x), \qquad \lambda \ge 0$$
+
+최적해가 만족해야 하는 조건이 **KKT 조건**이고, 그중 하나가 특히 중요하다.
+
+$$\lambda^\star g(x^\star) = 0 \qquad \text{(상보 여유조건)}$$
+
+즉 각 제약에 대해 **둘 중 하나만 참**이다.
+
+- 제약이 느슨하다($g < 0$) → $\lambda = 0$, 그 제약은 답에 영향을 주지 않는다
+- 제약이 팽팽하다($g = 0$) → $\lambda > 0$ 일 수 있다, 그 제약이 답을 붙잡고 있다
+
+::: {.key-concept}
+[2.5 SVM](../02_classical_ml/05_svm_kernels.qmd)의 **서포트 벡터**가 정확히 이것이다.
+
+마진 경계에 놓인 소수의 점만 $\lambda > 0$ 을 갖고, 나머지 점은 전부 $\lambda = 0$ 이라
+결정경계에 아무 영향도 주지 않는다. 데이터의 대부분을 지워도 답이 안 바뀌는 이유다.
+
+같은 구조가 [2.3 Ridge/Lasso](../02_classical_ml/03_regularization.qmd)의
+"제약 형태 ↔ 페널티 형태" 동등성에도 쓰인다.
 :::
 
 ---
 
-## 핵심 용어
+## 왜 딥러닝은 2차 방법을 안 쓰는가
 
-| 용어 | 비고 |
-|------|------|
-| 그래디언트 (gradient) |  |
-| 연쇄법칙 (chain rule) |  |
-| 헤시안 (Hessian) |  |
-| 볼록성 (convexity) |  |
-| KKT 조건 |  |
+곡률을 알면 더 똑똑하게 갈 수 있다. 뉴턴법은 헤시안의 역행렬을 써서
+
+$$\theta_{t+1} = \theta_t - H^{-1}\nabla L$$
+
+이차함수라면 **한 스텝에** 최소점에 도달한다. 조건수 문제도 없다.
+그런데 딥러닝에서는 거의 안 쓴다.
+
+```{python}
+#| label: hessian-cost
+#| code-fold: false
+
+params = [("작은 MLP", 10_000), ("ResNet-50", 25_000_000), ("7B LLM", 7_000_000_000)]
+
+print(f"{'모델':<12} {'파라미터 n':>16} {'헤시안 원소 n²':>22} {'저장(fp32)':>16}")
+print("-" * 70)
+for name, n in params:
+    h = n * n
+    print(f"{name:<12} {n:>16,} {h:>22.3e} {h*4/1024**4:>13,.0f} TB")
+```
+
+$n^2$ 개 원소를 저장하는 것도, $O(n^3)$ 역행렬을 구하는 것도 불가능하다.
+게다가 신경망의 헤시안은 안장점 근처에서 **음의 고유값**을 가져서, 뉴턴 스텝이 최대점 쪽으로 갈 수도 있다.
+
+그래서 실무는 **1차 방법에 곡률의 흔적만 얹는다.**
+
+| 방법 | 곡률을 어떻게 흉내내나 |
+|------|------------------------|
+| 모멘텀 | 과거 그래디언트의 이동평균 — 협곡 진동 억제 |
+| Adam | 좌표별 그래디언트 제곱의 이동평균 — 대각 헤시안 근사 |
+| L-BFGS | 최근 몇 스텝으로 헤시안 역행렬 저계수 근사 (배치 학습에서만) |
+| Shampoo·Muon | 구조를 활용한 블록 단위 전처리 |
+
+전부 [3.4 최적화 알고리즘](../03_deep_learning/04_optimizers.qmd)에서 유도한다.
 
 ---
 
-**다음**: [0.2 확률](02_probability.qmd) — 분포·기댓값·베이즈 — 불확실성을 다루는 문법
+## 요약
+
+| 개념 | 수식 | 핵심 | 이어지는 곳 |
+|------|------|------|-------------|
+| 그래디언트 | $\nabla f$ | 최대 증가 방향, 등고선에 수직 | 모든 학습 |
+| 경사하강 | $\theta \leftarrow \theta - \eta\nabla L$ | 1차 근사를 믿고 한 걸음 | 옵티마이저 |
+| 학습률 상한 | $\eta < 2/\lambda_{\max}$ | 가파른 축이 발산을 결정 | LR 탐색 |
+| 조건수 | $\lambda_{\max}/\lambda_{\min}$ | 지그재그와 느린 수렴의 원인 | 모멘텀·Adam |
+| 연쇄법칙 | 야코비안의 곱 | 곱의 사슬 → 소실·폭발 | 역전파, 잔차 연결 |
+| 헤시안 | $\partial^2 f$ | 곡률, 임계점의 정체 | 손실 지형 분석 |
+| 안장점 | 고유값 부호 혼재 | 고차원에서 압도적으로 흔함 | 최적화 실무 |
+| 볼록성 | 국소 최소 = 전역 최소 | 초기화 무관, 이론 보장 | 선형모델, SVM |
+| KKT | $\lambda^\star g(x^\star)=0$ | 팽팽한 제약만 답에 영향 | 서포트 벡터 |
+
+지금까지 손실을 **어떻게 줄이는지**를 봤다.
+다음 두 장은 그 손실이 **어디서 오는지**를 묻는다 — 확률과 정보이론이다.
+
+---
+
+**다음**: [0.2 확률](02_probability.qmd) — 분포·기댓값·베이즈
 
 **이전**: [0.0 선형대수](00_linear_algebra.qmd)
