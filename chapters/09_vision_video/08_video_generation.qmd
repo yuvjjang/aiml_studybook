@@ -13,7 +13,7 @@ jupyter: ai-ml-study
 본문과 실행 가능한 시각화는 아직 없습니다.
 
 다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.
+전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
 :::
 
 비디오 생성은 현재 생성 모델의 최전선이며, 계산 비용·시간 일관성·물리적 그럴듯함이라는 세 문제를 동시에 다룬다.

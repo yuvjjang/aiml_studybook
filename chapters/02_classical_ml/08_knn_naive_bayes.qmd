@@ -13,7 +13,7 @@ jupyter: ai-ml-study
 본문과 실행 가능한 시각화는 아직 없습니다.
 
 다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.
+전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
 :::
 
 새 문제에서 가장 먼저 해야 할 일은 단순한 기준선을 세우는 것이다. 이 모델들은 5분 만에 세울 수 있고, 놀랄 만큼 자주 충분하다.

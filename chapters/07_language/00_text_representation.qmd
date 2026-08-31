@@ -13,7 +13,7 @@ jupyter: ai-ml-study
 본문과 실행 가능한 시각화는 아직 없습니다.
 
 다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.
+전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
 :::
 
 한국어·이모지·혼합 스크립트를 다루면 '문자란 무엇인가'부터 다시 물어야 한다. 여기서 생긴 버그는 모델 학습 끝까지 따라온다.

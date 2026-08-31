@@ -38,7 +38,7 @@ $\sqrt{d_k}$ 로 나누지 않으면 어텐션이 어떻게 포화되는지 눈�
 | **12** | [해석가능성과 신뢰](chapters/12_trust/00_interpretability.qmd) | 왜 그렇게 예측했고, 얼마나 믿을 수 있는가 |
 | **A** | [부록](chapters/13_appendix/00_paper_map.qmd) | 논문 지도 · 용어 사전 · 치트시트 |
 
-전체 챕터별 이론·그래픽 상세 목록은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 참고.
+전체 챕터별 이론·그래픽 상세 목록은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 참고.
 
 ## 읽는 방법
 
@@ -53,7 +53,7 @@ $\sqrt{d_k}$ 로 나누지 않으면 어텐션이 어떻게 포화되는지 눈�
   "코드 보기" 버튼을 누르면 그림을 만든 코드가 그대로 나온다.
 - **PyTorch·Hugging Face 코드**는 실행하지 않는 참고 블록으로 제시한다.
   빌드 재현성을 위해 렌더 타임 의존성을 NumPy·SciPy·Plotly 로 제한했기 때문이다.
-- 반복해서 쓰이는 계산은 `src/` 모듈로 분리되어 있다 ([API 문서](https://github.com/yuvjjang/ai-ml-study/blob/main/docs/api.md)).
+- 반복해서 쓰이는 계산은 `src/` 모듈로 분리되어 있다 ([API 문서](https://github.com/yuvjjang/aiml_studybook/blob/main/docs/api.md)).
 :::
 
 ## 전제 지식

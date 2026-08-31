@@ -13,7 +13,7 @@ jupyter: ai-ml-study
 본문과 실행 가능한 시각화는 아직 없습니다.
 
 다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.
+전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
 :::
 
 모델이 GPU 한 장에 안 들어가는 순간 병렬화 전략이 아키텍처만큼 중요해진다. 어떤 축으로 쪼갤지가 통신 비용을 결정한다.

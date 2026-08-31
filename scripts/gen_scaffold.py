@@ -21,6 +21,7 @@ from curriculum import PARTS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 KERNEL = "ai-ml-study"
+REPO_URL = "https://github.com/yuvjjang/aiml_studybook"
 STUB_MARK = "<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->"
 
 
@@ -71,6 +72,8 @@ def build_quarto_yml():
         '  author: "AI/ML Study Project"',
         '  date: "2026"',
         "  language: ko",
+        f"  repo-url: {REPO_URL}",
+        "  repo-actions: [edit, issue]",
         "  search: true",
         "  sidebar:",
         "    style: docked",
@@ -140,7 +143,7 @@ def build_stub(part, ch, idx):
         "본문과 실행 가능한 시각화는 아직 없습니다.",
         "",
         "다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.",
-        "전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.",
+        "전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.",
         ":::",
         "",
         ch["why"],

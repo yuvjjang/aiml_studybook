@@ -8,6 +8,8 @@ book:
   author: "AI/ML Study Project"
   date: "2026"
   language: ko
+  repo-url: https://github.com/yuvjjang/aiml_studybook
+  repo-actions: [edit, issue]
   search: true
   sidebar:
     style: docked
