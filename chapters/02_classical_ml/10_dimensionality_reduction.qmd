@@ -4,102 +4,664 @@ subtitle: "PCA·t-SNE·UMAP·매니폴드 — 고차원을 눈으로 보는 법"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[2.8](08_knn_naive_bayes.qmd)에서 고차원의 거리가 무의미해지는 것을 봤다.
+그런데 현대 AI가 다루는 것은 전부 고차원 벡터다 —
+임베딩은 768차원, 이미지는 수만 차원이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+차원 축소는 두 가지 목적으로 쓰인다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+| 목적 | 요구 | 대표 |
+|------|------|------|
+| **압축·전처리** | 정보 보존, 역변환 가능 | PCA |
+| **시각화** | 2D에서 구조가 보이게 | t-SNE, UMAP |
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-임베딩은 전부 고차원 벡터다. 그것을 이해하고 디버깅하려면 차원 축소가 유일한 창문이며, 그 창문의 왜곡을 알아야 오독하지 않는다.
-
----
-
-## 이 장에서 다루는 것
-
-- 차원 축소의 두 목적: 압축과 시각화
-- PCA: 분산 최대화 유도, 공분산 고유분해, SVD 계산
-- 설명 분산 비율과 성분 수 선택
-- PCA의 한계: 선형성, 스케일 민감성, 해석
-- 커널 PCA와 비선형 확장
-- 매니폴드 가설과 지역 구조 보존
-- MDS, Isomap, LLE, 라플라시안 고유맵
-- t-SNE: KL 목적함수, perplexity, 붐빔 문제, 해석 주의사항
-- UMAP: 퍼지 단체 복합체 직관, n_neighbors·min_dist
-- PCA vs t-SNE vs UMAP — 무엇을 보존하고 무엇을 버리는가
-- 오토인코더로의 다리 (비선형 PCA)
-- 무작위 사영과 존슨-린덴슈트라우스 보조정리
+그리고 두 번째는 위험하다. **보이는 것이 실제 구조가 아닐 수 있기** 때문이다.
+이 장의 절반은 그 함정에 대한 것이다.
 
 ---
 
-## G2.10.1 — PCA 주성분 축
+## PCA: 분산이 큰 방향 찾기
 
-분산이 가장 큰 방향으로 첫 주성분이 정렬되는 모습
+가장 많은 정보를 남기려면 **분산이 가장 큰 방향**으로 사영하면 된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 데이터 회전 슬라이더
-:::
+$$\max_{\|\mathbf{w}\|=1}\ \mathrm{Var}(X\mathbf{w}) = \max_{\|\mathbf{w}\|=1}\ \mathbf{w}^\top\Sigma\mathbf{w}$$
 
----
+이것은 [0.0의 고유값 문제](../00_foundations/00_linear_algebra.qmd) 그 자체다.
+답은 공분산 행렬 $\Sigma$ 의 **최대 고유값에 대응하는 고유벡터**다.
 
-## G2.10.2 — 설명 분산 스크리 플롯
+$\Sigma$ 는 대칭이므로 스펙트럼 정리에 의해 고유벡터들이 직교한다 —
+그래서 주성분들이 서로 직교한다.
 
-누적 설명 분산과 재구성 오차의 트레이드오프
+::: {.key-concept}
+**PCA는 SVD와 같은 것이다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 성분 수 슬라이더
+중심화된 데이터 $X = U\Sigma V^\top$ 에서
+
+- $V$ 의 열 = 주성분 방향 (고유벡터)
+- $\sigma_j^2/(n-1)$ = 그 방향의 분산 (고유값)
+- $U\Sigma$ = 사영된 좌표
+
+실무에서는 공분산 행렬을 만들지 않고 **SVD를 직접** 쓴다.
+$X^\top X$ 를 계산하면 [0.5의 소거](../00_foundations/05_numerical_computing.qmd)로
+조건수가 제곱되어 정밀도를 잃기 때문이다.
 :::
 
 ---
 
-## G2.10.3 — t-SNE perplexity 효과
+## G2.10.1 — 주성분이 무엇을 찾는가
 
-같은 데이터가 perplexity에 따라 전혀 다른 그림이 되는 현상
+```{python}
+#| label: fig-pca-direction
+#| fig-cap: "데이터를 회전시켜도 주성분은 항상 최대 분산 방향을 따라갑니다."
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: perplexity 슬라이더
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+base = rng.normal(size=(250, 2)) @ np.array([[2.4, 0], [0, 0.55]])
+
+angles = list(range(0, 181, 15))
+data = {}
+for a in angles:
+    th = np.radians(a)
+    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+    Xr = base @ R.T
+    Xc = Xr - Xr.mean(0)
+    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+    var = S**2 / (len(Xc) - 1)
+    data[a] = (Xr, Vt, var, Xr.mean(0))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("데이터와 주성분 축", "성분별 설명 분산"))
+a0 = 45
+Xr, Vt, var, mu = data[a0]
+fig.add_trace(go.Scatter(x=Xr[:,0], y=Xr[:,1], mode="markers", name="데이터",
+                         marker=dict(size=5, color=viz.hex_rgba(viz.ACCENT, 0.75))),
+              row=1, col=1)
+for j, col in enumerate([viz.WARM, viz.GREEN]):
+    v = Vt[j] * 2.2 * np.sqrt(var[j])
+    fig.add_trace(go.Scatter(x=[mu[0]-v[0], mu[0]+v[0]], y=[mu[1]-v[1], mu[1]+v[1]],
+                             mode="lines", name=f"PC{j+1}",
+                             line=dict(color=col, width=4)), row=1, col=1)
+fig.add_trace(go.Bar(x=["PC1", "PC2"], y=var/var.sum(),
+                     marker_color=[viz.WARM, viz.GREEN], showlegend=False),
+              row=1, col=2)
+
+steps = []
+for a in angles:
+    Xr_, Vt_, var_, mu_ = data[a]
+    v1 = Vt_[0] * 2.2*np.sqrt(var_[0]); v2 = Vt_[1] * 2.2*np.sqrt(var_[1])
+    steps.append((f"{a}°", {
+        "x": [Xr_[:,0], [mu_[0]-v1[0], mu_[0]+v1[0]], [mu_[0]-v2[0], mu_[0]+v2[0]],
+              ["PC1", "PC2"]],
+        "y": [Xr_[:,1], [mu_[1]-v1[1], mu_[1]+v1[1]], [mu_[1]-v2[1], mu_[1]+v2[1]],
+              var_/var_.sum()]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="데이터 회전 = ",
+                                      active=angles.index(a0), pad_t=55)])
+fig.update_xaxes(title_text="x₁", range=[-7, 7], row=1, col=1)
+fig.update_yaxes(title_text="x₂", range=[-7, 7], scaleanchor="x", row=1, col=1)
+fig.update_yaxes(title_text="설명 분산 비율", range=[0, 1], row=1, col=2)
+viz.fig_defaults(fig, height=430, title="PCA 는 회전에 등변적이다")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+데이터를 회전시키면 주성분 축도 **함께 회전**합니다. 오른쪽 설명 분산 비율은 **전혀 변하지 않습니다** — PCA가 찾는 것은 좌표계가 아니라 데이터 자체의 구조이기 때문입니다.
 :::
 
 ---
 
-## G2.10.4 — t-SNE 해석의 함정
+## 성분 수 선택과 재구성
 
-t-SNE 상의 군집 간 거리와 원공간 거리가 일치하지 않음을 확인
+```{python}
+#| label: fig-pca-reconstruction
+#| fig-cap: "성분 수에 따른 재구성 품질과 누적 설명 분산"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 군집 간 거리 비교
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+# 손글씨 비슷한 합성 이미지 여러 장 (8x8)
+rng = np.random.default_rng(1)
+n_img, size = 400, 12
+imgs = []
+for _ in range(n_img):
+    im = np.zeros((size, size))
+    cx, cy = rng.uniform(3, size-3, 2)
+    r = rng.uniform(2.0, 4.0)
+    yy, xx = np.mgrid[0:size, 0:size]
+    im += np.exp(-(((xx-cx)**2 + (yy-cy)**2) / (2*r**2)))
+    im += 0.4*np.exp(-(((xx-cx+r)**2 + (yy-cy)**2) / (2*(r/2)**2)))
+    im += rng.normal(0, 0.05, (size, size))
+    imgs.append(im.ravel())
+D = np.array(imgs)
+Dc = D - D.mean(0)
+U, S, Vt = np.linalg.svd(Dc, full_matrices=False)
+evr = S**2 / (S**2).sum()
+cum = np.cumsum(evr)
+
+ks = [1, 2, 3, 5, 8, 15, 30, 60, 144]
+recon = {}
+for k in ks:
+    R = (U[:, :k] * S[:k]) @ Vt[:k] + D.mean(0)
+    recon[k] = np.round(R[0].reshape(size, size), 3)
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.27, 0.27, 0.46],
+                    subplot_titles=("원본", "재구성", "설명 분산"))
+k0 = 5
+fig.add_trace(go.Heatmap(z=np.round(D[0].reshape(size,size),3), colorscale="gray",
+                         showscale=False), row=1, col=1)
+fig.add_trace(go.Heatmap(z=recon[k0], colorscale="gray", showscale=False),
+              row=1, col=2)
+fig.add_trace(go.Bar(x=np.arange(1, 31), y=evr[:30], name="성분별",
+                     marker_color=viz.ACCENT), row=1, col=3)
+fig.add_trace(go.Scatter(x=np.arange(1, 31), y=cum[:30], mode="lines+markers",
+                         name="누적", line=dict(color=viz.WARM, width=2.5)),
+              row=1, col=3)
+fig.add_hline(y=0.95, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="95%", row=1, col=3)
+
+steps = [(str(k), {"z": [None, recon[k], None, None]}) for k in ks]
+fig.update_layout(sliders=[viz.slider(steps, prefix="성분 수 k = ",
+                                      active=ks.index(k0), pad_t=55)])
+for c in (1, 2):
+    fig.update_yaxes(autorange="reversed", showticklabels=False, row=1, col=c)
+    fig.update_xaxes(showticklabels=False, row=1, col=c)
+fig.update_xaxes(title_text="성분", row=1, col=3)
+fig.update_yaxes(title_text="비율", row=1, col=3)
+viz.fig_defaults(fig, height=380,
+                 title=f"{size}×{size}={size*size}차원 → k차원")
+fig.update_layout(legend=dict(x=0.72, y=0.98))
+fig.show()
+```
+
+```{python}
+#| label: pca-compression
+#| code-fold: false
+
+import numpy as np
+
+print(f"원 차원 {size*size} · 표본 {n_img}개")
+print()
+print(f"{'k':>5} {'누적 설명분산':>14} {'재구성 MSE':>13} {'저장 비율':>11}")
+print("-" * 48)
+for k in [1, 2, 3, 5, 8, 15, 30, 60]:
+    R = (U[:, :k] * S[:k]) @ Vt[:k]
+    mse = float(np.mean((R - Dc)**2))
+    ratio = k*(n_img + size*size) / (n_img * size*size)
+    print(f"{k:>5} {cum[k-1]:>14.4f} {mse:>13.5f} {ratio:>10.1%}")
+print()
+k95 = int(np.searchsorted(cum, 0.95) + 1)
+print(f"→ 설명 분산 95% 에 필요한 성분: {k95}개 (원 차원의 {k95/(size*size):.0%})")
+```
+
+::: {.interaction-hint}
+$k=1$ 은 평균 얼룩만, $k=5$ 면 대략의 모양이 나오고, $k=30$ 이면 원본과 거의 구별되지 않습니다. 누적 곡선이 빠르게 1에 접근하는 것이 **압축이 가능한 이유**입니다.
 :::
 
 ---
 
-## G2.10.5 — UMAP vs t-SNE
+## PCA의 한계
 
-동일 데이터에서 전역 구조 보존 차이
+::: {.callout-warning}
+## 세 가지 함정
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 방법 전환
+**1. 스케일에 민감하다.**
+분산이 큰 특성이 주성분을 지배한다. 단위가 다르면 반드시 표준화해야 한다.
+
+**2. 분산 ≠ 유용성.**
+분산이 큰 방향이 항상 중요한 방향은 아니다.
+분류에 필요한 정보가 분산이 작은 방향에 있으면 PCA가 그것을 버린다.
+
+**3. 선형이다.**
+곡면 위에 놓인 데이터는 선형 사영으로 펼 수 없다.
+:::
+
+```{python}
+#| label: fig-pca-limits
+#| fig-cap: "PCA가 실패하는 두 경우: 스케일 미표준화와 비선형 구조"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(2)
+
+# (1) 스케일 문제 — 분류에 중요한 축은 x2 인데 x1 의 분산이 훨씬 큼
+n = 300
+x1 = rng.normal(0, 50, n)                    # 큰 스케일, 정보 없음
+lab = rng.integers(0, 2, n)
+x2 = np.where(lab == 0, -1.0, 1.0) + rng.normal(0, 0.3, n)   # 작은 스케일, 정보 있음
+Xs = np.c_[x1, x2]
+
+def pca_project(X, k=1, standardize=False):
+    Z = (X - X.mean(0)) / (X.std(0) if standardize else 1.0)
+    U, S, Vt = np.linalg.svd(Z, full_matrices=False)
+    return (U[:, :k] * S[:k]), Vt[:k]
+
+p_raw, _ = pca_project(Xs, 1, False)
+p_std, _ = pca_project(Xs, 1, True)
+
+# (2) 비선형 — 스위스롤 비슷한 나선
+t = rng.uniform(0.5, 3.0, 300) * np.pi
+Xn = np.c_[t*np.cos(t), t*np.sin(t)] + rng.normal(0, 0.25, (300, 2))
+p_nl, _ = pca_project(Xn, 1, True)
+
+fig = make_subplots(rows=1, cols=3,
+                    subplot_titles=("표준화 없이 PCA (1차원)",
+                                    "표준화 후 PCA (1차원)",
+                                    "비선형 구조 (나선)"))
+for col, (proj, lbl, ttl) in enumerate([(p_raw, lab, None), (p_std, lab, None)], start=1):
+    for c in (0, 1):
+        m = lbl == c
+        fig.add_trace(go.Scatter(x=proj[m, 0], y=rng.normal(0, 0.08, m.sum()),
+                                 mode="markers", showlegend=False,
+                                 marker=dict(size=5, color=viz.color(c))),
+                      row=1, col=col)
+    fig.update_yaxes(showticklabels=False, range=[-0.6, 0.6], row=1, col=col)
+    fig.update_xaxes(title_text="PC1", row=1, col=col)
+
+col_t = (t - t.min()) / (t.max() - t.min())
+fig.add_trace(go.Scatter(x=Xn[:,0], y=Xn[:,1], mode="markers", showlegend=False,
+                         marker=dict(size=5, color=col_t, colorscale="Viridis")),
+              row=1, col=3)
+fig.update_xaxes(title_text="x₁", row=1, col=3)
+fig.update_yaxes(title_text="x₂", row=1, col=3)
+
+viz.fig_defaults(fig, height=350,
+                 title="왼쪽 둘: 같은 데이터, 표준화 여부만 다름")
+fig.update_layout(margin=dict(l=50, r=25, t=75, b=50))
+fig.show()
+```
+
+```{python}
+#| label: pca-scale-numbers
+#| code-fold: false
+
+import numpy as np
+
+def separability(proj, lab):
+    """1차원 사영에서 두 클래스가 얼마나 분리되는가 (표준화된 평균 차)."""
+    a, b = proj[lab == 0, 0], proj[lab == 1, 0]
+    return abs(a.mean() - b.mean()) / np.sqrt(0.5*(a.var() + b.var()))
+
+print(f"두 클래스의 차이는 오직 x₂ 에만 있다 (x₁ 은 순수 잡음, 분산 50배)")
+print()
+print(f"  표준화 없이 PC1 사영 → 분리도 {separability(p_raw, lab):.3f}")
+print(f"  표준화 후   PC1 사영 → 분리도 {separability(p_std, lab):.3f}")
+print()
+print("→ 표준화하지 않으면 PCA 가 잡음 축(x₁)을 제1주성분으로 고른다.")
+print("  분산이 크다고 정보가 많은 것은 아니다.")
+```
+
+---
+
+## 비선형: 매니폴드 가설
+
+고차원 데이터가 실제로는 **저차원 곡면 위에** 놓여 있다는 가정이다.
+
+이미지를 예로 들면, 64×64 흑백 이미지의 공간은 4096차원이지만
+"사람 얼굴 사진"들은 그 안의 훨씬 낮은 차원 부분집합을 차지한다.
+무작위 4096차원 벡터는 거의 항상 잡음이다.
+
+이 가정이 맞다면, 우리가 할 일은 **그 곡면을 펼치는 것**이다.
+
+| 방법 | 보존하려는 것 |
+|------|---------------|
+| MDS | 모든 쌍의 거리 |
+| Isomap | **측지 거리** (곡면을 따라간 거리) |
+| LLE | 국소 선형 재구성 가중치 |
+| **t-SNE** | 국소 이웃 관계 (확률로) |
+| **UMAP** | 국소 + 일부 전역 구조 |
+
+---
+
+## t-SNE: 이웃 관계를 확률로
+
+t-SNE의 아이디어는 이렇다.
+
+1. 고차원에서 "$j$ 가 $i$ 의 이웃일 확률" $p_{ij}$ 를 가우스로 정의
+2. 저차원에서 같은 확률 $q_{ij}$ 를 **t-분포**로 정의
+3. $D_{KL}(P\|Q)$ 를 최소화하도록 저차원 좌표를 경사하강
+
+::: {.key-concept}
+**왜 저차원에서 t-분포를 쓰는가 — 붐빔 문제**
+
+고차원에서 서로 등거리인 점들을 2D에 넣으려면 공간이 부족하다.
+중간 거리의 점들이 전부 가운데로 몰려 뭉개진다.
+
+t-분포는 가우스보다 **꼬리가 두꺼워서**, 같은 확률을 만드는 데
+더 먼 거리를 허용한다. 그래서 중간 거리 점들이 밀려나 공간이 생긴다.
+
+이것이 t-SNE가 SNE보다 잘 작동하는 핵심 이유이고,
+동시에 **거리가 왜곡되는 이유**이기도 하다.
+:::
+
+```{python}
+#| label: tsne-impl
+#| code-fold: show
+#| code-summary: "t-SNE 최소 구현 (펼쳐서 보기)"
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+def pairwise_sq(X):
+    s = (X**2).sum(1)
+    return np.maximum(s[:, None] + s[None, :] - 2*X @ X.T, 0)
+
+def binary_search_sigma(d2_row, target_perp, tries=50):
+    """각 점의 대역폭을 perplexity 목표에 맞춰 이진 탐색."""
+    lo, hi = 1e-20, 1e12
+    target = np.log(target_perp)
+    for _ in range(tries):
+        beta = (lo + hi) / 2
+        p = np.exp(-d2_row * beta)
+        s = p.sum()
+        if s == 0:
+            hi = beta; continue
+        p = p / s
+        H = -np.sum(p[p > 0] * np.log(p[p > 0]))          # 섀넌 엔트로피
+        if H > target:
+            lo = beta
+        else:
+            hi = beta
+    return p
+
+def tsne(X, perplexity=30, n_iter=500, lr=200.0, seed=0):
+    n = len(X)
+    D = pairwise_sq(X)
+    P = np.zeros((n, n))
+    for i in range(n):
+        idx = np.arange(n) != i
+        P[i, idx] = binary_search_sigma(D[i, idx], perplexity)
+    P = (P + P.T) / (2*n)
+    P = np.maximum(P, 1e-12)
+    P4 = P * 4.0                                          # 초기 과장
+
+    rng = np.random.default_rng(seed)
+    Y = rng.normal(0, 1e-4, (n, 2))
+    dY_prev = np.zeros_like(Y)
+    for it in range(n_iter):
+        num = 1.0 / (1.0 + pairwise_sq(Y))                # t-분포 (자유도 1)
+        np.fill_diagonal(num, 0.0)
+        Q = np.maximum(num / num.sum(), 1e-12)
+        Pcur = P4 if it < 100 else P
+        PQ = (Pcur - Q) * num
+        grad = 4.0 * ((np.diag(PQ.sum(1)) - PQ) @ Y)
+        momentum = 0.5 if it < 250 else 0.8
+        dY_prev = momentum * dY_prev - lr * grad
+        Y = Y + dY_prev
+        Y = Y - Y.mean(0)
+    return Y
+```
+
+---
+
+## G2.10.2 — perplexity가 그림을 바꾼다
+
+```{python}
+#| label: fig-tsne-perplexity
+#| fig-cap: "같은 데이터, 다른 perplexity. 그림이 크게 달라집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+# 10차원 공간의 군집 3개 — 크기와 밀도가 다르다
+Xh = np.vstack([
+    rng.normal(0, 0.5, (60, 10)) + np.r_[6, np.zeros(9)],
+    rng.normal(0, 1.5, (60, 10)) + np.r_[np.zeros(5), 6, np.zeros(4)],
+    rng.normal(0, 0.5, (60, 10)) - np.r_[6, np.zeros(9)],
+])
+yh = np.repeat([0, 1, 2], 60)
+
+perps = [5, 15, 30, 50]
+embeds = {p: tsne(Xh, perplexity=p, n_iter=400, seed=1) for p in perps}
+
+fig = make_subplots(rows=1, cols=len(perps),
+                    subplot_titles=[f"perplexity = {p}" for p in perps],
+                    horizontal_spacing=0.03)
+for c, p in enumerate(perps, start=1):
+    Y = embeds[p]
+    for k in range(3):
+        m = yh == k
+        fig.add_trace(go.Scatter(x=Y[m,0], y=Y[m,1], mode="markers",
+                                 showlegend=(c == 1), name=f"군집 {k}",
+                                 marker=dict(size=5, color=viz.color(k))),
+                      row=1, col=c)
+    fig.update_xaxes(showticklabels=False, row=1, col=c)
+    fig.update_yaxes(showticklabels=False, row=1, col=c)
+
+viz.fig_defaults(fig, height=330,
+                 title="10차원 군집 3개 (가운데 군집만 분산이 3배)")
+fig.update_layout(margin=dict(l=30, r=25, t=75, b=30),
+                  legend=dict(x=0.01, y=1.18, orientation="h"))
+fig.show()
+```
+
+::: {.interaction-hint}
+perplexity 5에서는 군집이 잘게 쪼개져 보입니다 — **없는 하위 구조가 만들어진 것**입니다. 30~50에서는 세 군집이 안정적으로 나타납니다. perplexity는 "몇 개의 이웃을 볼 것인가"에 해당하며, 대개 5~50 사이에서 여러 값을 시도해야 합니다.
 :::
 
 ---
 
-## 핵심 용어
+## t-SNE 그림을 읽는 법
 
-| 용어 | 비고 |
+::: {.callout-warning}
+## t-SNE 해석의 네 가지 규칙
+
+**1. 군집 크기는 의미 없다.**
+t-SNE는 밀집된 군집을 부풀리고 퍼진 군집을 압축한다.
+
+**2. 군집 간 거리는 의미 없다.**
+두 군집이 멀리 떨어져 보인다고 실제로 더 다른 것이 아니다.
+
+**3. 무작위 잡음에서도 군집이 보인다.**
+구조가 없어도 t-SNE는 덩어리를 만든다.
+
+**4. 실행할 때마다 다르다.**
+초기화와 최적화가 확률적이라 시드를 바꾸면 그림이 달라진다.
+:::
+
+```{python}
+#| label: fig-tsne-pitfalls
+#| fig-cap: "왼쪽: 원 데이터의 군집 크기와 거리. 오른쪽: t-SNE가 그것을 왜곡합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(3)
+# 2차원에서 시작 — 참 구조를 우리가 안다
+A = rng.normal([0, 0], 0.3, (70, 2))          # 조밀
+B = rng.normal([8, 0], 2.0, (70, 2))          # 퍼짐
+C = rng.normal([20, 0], 0.3, (70, 2))         # 조밀, 아주 멀리
+Xp = np.vstack([A, B, C])
+yp = np.repeat([0, 1, 2], 70)
+
+Yp = tsne(Xp, perplexity=30, n_iter=400, seed=0)
+
+def spread(P, lab, k):
+    Q = P[lab == k]
+    return float(np.sqrt(((Q - Q.mean(0))**2).sum(1).mean()))
+
+def between(P, lab, a, b):
+    return float(np.linalg.norm(P[lab==a].mean(0) - P[lab==b].mean(0)))
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("원 데이터 (참 구조)", "t-SNE 결과"))
+for c, (P, ttl) in enumerate([(Xp, None), (Yp, None)], start=1):
+    for k in range(3):
+        m = yp == k
+        fig.add_trace(go.Scatter(x=P[m,0], y=P[m,1], mode="markers",
+                                 showlegend=(c == 1), name=f"군집 {k}",
+                                 marker=dict(size=5, color=viz.color(k))),
+                      row=1, col=c)
+    fig.update_xaxes(showticklabels=(c == 1), row=1, col=c)
+    fig.update_yaxes(showticklabels=(c == 1), scaleanchor=f"x{c if c>1 else ''}",
+                     row=1, col=c)
+
+viz.fig_defaults(fig, height=380, title="t-SNE 가 크기와 거리를 바꾼다")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+```{python}
+#| label: tsne-distortion
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'':<26} {'원 데이터':>12} {'t-SNE':>12} {'비율 변화'}")
+print("-" * 66)
+for k, nm in enumerate(["군집0 (조밀)", "군집1 (퍼짐)", "군집2 (조밀)"]):
+    o, t = spread(Xp, yp, k), spread(Yp, yp, k)
+    print(f"{nm+' 반경':<26} {o:>12.2f} {t:>12.2f}")
+print()
+o01, o12 = between(Xp, yp, 0, 1), between(Xp, yp, 1, 2)
+t01, t12 = between(Yp, yp, 0, 1), between(Yp, yp, 1, 2)
+print(f"{'군집0↔1 거리':<26} {o01:>12.2f} {t01:>12.2f}")
+print(f"{'군집1↔2 거리':<26} {o12:>12.2f} {t12:>12.2f}")
+print(f"{'두 거리의 비 (1↔2)/(0↔1)':<26} {o12/o01:>12.2f} {t12/t01:>12.2f}")
+print()
+print("→ 원 데이터에서 군집1↔2 가 0↔1 보다 1.5배 멀지만,")
+print("  t-SNE 그림에서는 그 비율이 보존되지 않는다.")
+print("  퍼진 군집1의 반경도 조밀한 군집들과 비슷해졌다.")
+```
+
+---
+
+## UMAP과의 비교
+
+UMAP은 t-SNE와 목적이 비슷하지만 다른 수학을 쓴다
+(퍼지 단체 복합체와 교차엔트로피 기반 목적함수).
+
+```{python}
+#| label: umap-comparison
+#| code-fold: false
+
+rows = [
+    ("이론적 기반",   "확률분포 + KL 발산",      "위상수학 + 교차엔트로피"),
+    ("전역 구조",     "거의 보존 안 됨",         "**상대적으로 더 보존**"),
+    ("속도",         "느림 (O(n²) 또는 근사)",  "**빠름** (ANN 그래프 사용)"),
+    ("새 점 변환",    "불가 (재실행 필요)",      "**가능** (transform 지원)"),
+    ("주요 파라미터",  "perplexity",             "n_neighbors, min_dist"),
+    ("재현성",       "시드 의존",               "시드 의존"),
+]
+print(f"{'':<16} {'t-SNE':<26} {'UMAP'}")
+print("-" * 74)
+for r in rows:
+    print(f"{r[0]:<16} {r[1]:<26} {r[2]}")
+print()
+print("공통 주의: 둘 다 시각화 도구이지, 다운스트림 모델의 입력 전처리로는")
+print("          권장되지 않는다 (비선형 왜곡 + 새 데이터 처리 문제).")
+```
+
+::: {.key-concept}
+**용도별 선택**
+
+| 목적 | 권장 |
 |------|------|
-| PCA |  |
-| 설명 분산 |  |
-| 매니폴드 가설 |  |
-| t-SNE |  |
-| UMAP |  |
-| 무작위 사영 |  |
+| 전처리·압축 (모델 입력) | **PCA** (선형, 역변환 가능, 새 점 처리 쉬움) |
+| 탐색적 시각화 | t-SNE / UMAP (해석에 주의) |
+| 잡음 제거 | PCA 저계수 근사 |
+| 매우 고차원 → 중간 차원 | PCA로 50차원 → 그 다음 t-SNE (관례) |
+| 비선형 압축 + 재구성 | [오토인코더](../06_generative/01_autoencoder.qmd) |
+:::
 
 ---
 
-**다음**: [2.11 모델 평가와 선택](11_model_evaluation.qmd) — 교차검증·지표·ROC·캘리브레이션 — 숫자 하나를 믿기까지
+## 무작위 사영: 놀랍도록 잘 되는 방법
+
+**존슨-린덴슈트라우스 보조정리**: 무작위 선형 사영만으로도
+$O(\log n / \epsilon^2)$ 차원이면 모든 쌍의 거리를 $(1\pm\epsilon)$ 안에서 보존할 수 있다.
+
+원 차원 $d$ 와 무관하다는 점이 놀랍다.
+
+```{python}
+#| label: fig-random-projection
+#| fig-cap: "무작위 사영이 거리를 얼마나 보존하는가"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng = np.random.default_rng(0)
+n, d = 300, 2000
+X = rng.normal(size=(n, d))
+D_true = np.sqrt(((X[:, None] - X[None]) ** 2).sum(-1))
+iu = np.triu_indices(n, 1)
+
+ks = [5, 10, 25, 50, 100, 200, 400, 800]
+errs, p95 = [], []
+for k in ks:
+    R = rng.normal(size=(d, k)) / np.sqrt(k)
+    Xp2 = X @ R
+    Dp = np.sqrt(((Xp2[:, None] - Xp2[None]) ** 2).sum(-1))
+    ratio = Dp[iu] / D_true[iu]
+    errs.append(float(np.abs(ratio - 1).mean()))
+    p95.append(float(np.percentile(np.abs(ratio - 1), 95)))
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ks, y=errs, mode="lines+markers", name="평균 상대 왜곡",
+                         line=dict(color=viz.ACCENT, width=2.5)))
+fig.add_trace(go.Scatter(x=ks, y=p95, mode="lines+markers", name="95 백분위",
+                         line=dict(color=viz.WARM, width=2.5)))
+fig.add_hline(y=0.1, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="10% 왜곡")
+fig.update_layout(xaxis_title="사영 차원 k", xaxis_type="log",
+                  yaxis_title="|거리 비 − 1|", yaxis_type="log",
+                  legend=dict(x=0.6, y=0.98))
+viz.fig_defaults(fig, height=400,
+                 title=f"{d}차원 → k차원 무작위 사영 (표본 {n}개)")
+fig.show()
+```
+
+::: {.interaction-hint}
+2000차원을 **100차원으로 줄여도** 거리 왜곡이 평균 8% 수준입니다. 학습도 필요 없고 계산도 행렬곱 하나뿐입니다. 대규모 시스템에서 전처리로 쓰이는 이유입니다.
+:::
+
+---
+
+## 요약
+
+| 방법 | 보존하는 것 | 선형? | 새 점 | 용도 |
+|------|-------------|-------|-------|------|
+| **PCA** | 분산 (전역) | ✓ | 쉬움 | 압축, 전처리, 잡음 제거 |
+| 커널 PCA | 비선형 분산 | ✗ | 가능 | 비선형 압축 |
+| MDS / Isomap | (측지) 거리 | ✗ | 어려움 | 매니폴드 펼치기 |
+| **t-SNE** | 국소 이웃 | ✗ | **불가** | 시각화만 |
+| **UMAP** | 국소 + 일부 전역 | ✗ | 가능 | 시각화, 빠름 |
+| 무작위 사영 | 거리 (근사) | ✓ | 쉬움 | 대규모 전처리 |
+
+| 반드시 기억할 것 | |
+|---|---|
+| PCA = SVD | 공분산 행렬 만들지 말고 SVD 직접 |
+| 표준화 | 안 하면 큰 스케일 특성이 지배 |
+| 분산 ≠ 정보 | 중요한 축이 분산이 작을 수 있음 |
+| t-SNE 크기 | **의미 없음** |
+| t-SNE 군집 간 거리 | **의미 없음** |
+| t-SNE 잡음 | 구조 없어도 덩어리가 보임 |
+| JL 보조정리 | 무작위 사영도 거리를 보존 |
+
+Part 2의 알고리즘을 다 훑었다.
+남은 두 장은 **그 알고리즘들을 제대로 평가하고 실전에 내놓는** 문제다.
+
+---
+
+**다음**: [2.11 모델 평가와 선택](11_model_evaluation.qmd) — 교차검증·지표·캘리브레이션
 
 **이전**: [2.9 군집화](09_clustering.qmd)
