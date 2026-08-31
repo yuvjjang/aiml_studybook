@@ -4,90 +4,418 @@ subtitle: "희소 활성화로 파라미터와 연산을 분리하기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+지금까지 "모델이 크다"는 말은 "연산이 비싸다"와 같은 뜻이었다.
+파라미터가 2배면 토큰당 연산도 2배다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+MoE는 그 등식을 깬다. **파라미터는 10배로 늘리되 토큰당 연산은 그대로 두는 것**이 가능하다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+방법은 단순하다. 모든 파라미터를 매번 쓰지 않으면 된다.
+토큰마다 **일부 전문가만 골라서** 통과시킨다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-현대 프런티어 모델 상당수가 MoE다. 파라미터 수와 토큰당 연산량이 더 이상 같은 숫자가 아니라는 점이 모든 것을 바꾼다.
+이 구조 때문에 모델 카드를 읽는 법도 바뀐다.
+"총 파라미터 671B, 활성 파라미터 37B" 같은 표기가 등장하는 이유다.
 
 ---
 
-## 이 장에서 다루는 것
+## 밀집 모델의 한계
 
-- 밀집(dense) 모델의 한계: 파라미터를 늘리면 연산도 그대로 늘어난다
-- 조건부 연산(conditional computation)의 아이디어
-- MoE 층 구조: 라우터 + N개의 전문가 FFN
-- top-k 라우팅과 희소 게이팅
-- 부하 불균형 문제와 보조 손실(load balancing loss)
-- 전문가 용량(capacity factor)과 토큰 드롭
-- Switch Transformer(top-1), GShard, Mixtral, DeepSeek-MoE
-- 공유 전문가·세분화 전문가 설계
-- 분산 학습에서의 전문가 병렬화와 통신 비용
-- MoE의 추론 특성: 메모리는 크고 연산은 작다
-- 활성 파라미터 vs 총 파라미터로 모델 비교하기
+[5.4](04_transformer_block.qmd)에서 층당 파라미터가 $12d^2$ 이고,
+그중 FFN이 $8d^2$ — **3분의 2**를 차지하는 것을 봤다.
 
----
+성능을 올리려면 $d$ 를 키워야 하는데, 그러면 파라미터와 연산이 **함께** $d^2$ 로 늘어난다.
 
-## G5.8.1 — 라우팅 시각화
+::: {.key-concept}
+그런데 정말 모든 토큰이 모든 파라미터를 필요로 할까?
 
-각 토큰이 어떤 전문가로 보내지는지 흐름도
+"the"를 처리할 때와 미분방정식을 처리할 때 같은 가중치가 전부 필요하지는 않을 것이다.
+**조건부 연산(conditional computation)** — 입력에 따라 계산 경로를 바꾸자는 발상이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 토큰 선택
+아이디어 자체는 1991년까지 거슬러 올라가지만,
+Transformer의 FFN이 층당 파라미터의 3분의 2를 차지하는 구조 덕분에
+"FFN을 여러 개 두고 골라 쓰기"라는 깔끔한 적용점이 생겼다.
 :::
 
 ---
 
-## G5.8.2 — 부하 분포
+## MoE 층의 구조
 
-균형 손실 유무에 따른 전문가별 토큰 수 분포
+FFN 하나를 $N$ 개의 **전문가**로 바꾸고, 앞에 **라우터**를 둔다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 보조 손실 가중치 슬라이더
+$$
+\begin{aligned}
+g &= \text{softmax}(x W_r) &&\text{라우터: 각 전문가 점수}\\
+\mathcal{T} &= \text{top-}k(g) &&\text{상위 } k \text{개만 선택}\\
+y &= \sum_{i \in \mathcal{T}} \frac{g_i}{\sum_{j\in\mathcal{T}} g_j}\, E_i(x) &&\text{선택된 것만 계산해 가중합}
+\end{aligned}
+$$
+
+핵심은 $k \ll N$ 이라는 것이다. Mixtral은 $N=8$, $k=2$ — 전문가의 4분의 1만 쓴다.
+
+```{python}
+#| label: moe-forward
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import attention
+
+def moe_layer(X, W_router, experts, k=2):
+    """MoE FFN 층. 토큰마다 상위 k개 전문가만 계산한다."""
+    n_tok = X.shape[0]
+    scores = attention.softmax(X @ W_router)          # (토큰, 전문가)
+    topk = np.argsort(-scores, axis=1)[:, :k]         # 상위 k개 인덱스
+
+    out = np.zeros((n_tok, experts[0]["W2"].shape[1]))
+    load = np.zeros(len(experts), dtype=int)
+
+    for t in range(n_tok):
+        sel = topk[t]
+        w = scores[t, sel]
+        w = w / w.sum()                                # 선택된 것끼리 재정규화
+        for wi, e in zip(w, sel):
+            E = experts[e]
+            h = np.maximum(X[t] @ E["W1"] + E["b1"], 0)   # ReLU FFN
+            out[t] += wi * (h @ E["W2"] + E["b2"])
+            load[e] += 1
+    return out, scores, topk, load
+
+rng = np.random.default_rng(0)
+d, d_ff, N_EXP, K = 32, 128, 8, 2
+n_tok = 200
+
+W_router = rng.normal(size=(d, N_EXP)) * 0.5
+experts = [dict(W1=rng.normal(size=(d, d_ff)) * 0.1, b1=np.zeros(d_ff),
+                W2=rng.normal(size=(d_ff, d)) * 0.1, b2=np.zeros(d))
+           for _ in range(N_EXP)]
+
+X = rng.normal(size=(n_tok, d))
+out, scores, topk, load = moe_layer(X, W_router, experts, k=K)
+
+dense_params = d * d_ff * 2
+moe_params = N_EXP * dense_params
+print(f"전문가 {N_EXP}개 중 top-{K} 선택")
+print(f"  총 FFN 파라미터   {moe_params:,}   ({N_EXP}배)")
+print(f"  토큰당 사용 파라미터 {K * dense_params:,}   ({K}배)")
+print(f"  → 파라미터는 {N_EXP}배, 연산은 {K}배만 늘었다")
+```
+
+---
+
+## G5.8.1 — 라우팅과 부하 불균형
+
+MoE의 가장 큰 실전 문제는 **전문가가 골고루 쓰이지 않는다**는 것이다.
+
+라우터가 학습되면서 몇몇 전문가에게 토큰이 몰리고, 나머지는 거의 안 쓰인다.
+그러면 파라미터를 늘린 의미가 없어지고, 분산 학습에서는 특정 GPU만 과부하가 걸린다.
+
+```{python}
+#| label: fig-load-balance
+#| fig-cap: "보조 손실이 없으면 소수 전문가에 토큰이 몰립니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import attention, viz
+
+def simulate_load(bias_strength, n_tok=2000, N=8, k=2, seed=1):
+    """라우터가 특정 전문가를 선호하도록 편향을 준 상황을 모사."""
+    rng = np.random.default_rng(seed)
+    logits = rng.normal(size=(n_tok, N))
+    logits += bias_strength * np.linspace(1.5, -1.5, N)      # 쏠림 유도
+    g = attention.softmax(logits)
+    sel = np.argsort(-g, axis=1)[:, :k]
+    load = np.bincount(sel.ravel(), minlength=N)
+    return load / load.sum()
+
+biases = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+loads = {b: simulate_load(b) for b in biases}
+ideal = 1.0 / 8
+
+# 불균형 지표: 최대 부하 / 이상적 부하
+imbalance = [loads[b].max() / ideal for b in biases]
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("전문가별 토큰 비율", "불균형 지표"))
+
+b0 = 1.0
+fig.add_trace(go.Bar(x=[f"E{i+1}" for i in range(8)], y=loads[b0],
+                     marker_color=viz.ACCENT, showlegend=False), row=1, col=1)
+fig.add_hline(y=ideal, line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text="이상적 균등 (1/8)", row=1, col=1)
+
+fig.add_trace(go.Scatter(x=biases, y=imbalance, mode="lines+markers",
+                         showlegend=False, line=dict(color=viz.WARM, width=2.5)),
+              row=1, col=2)
+fig.add_hline(y=1.0, line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text="완벽 균형", row=1, col=2)
+
+steps = [(f"{b:g}", {"y": [loads[b], imbalance]}) for b in biases]
+fig.update_layout(sliders=[viz.slider(steps, prefix="라우터 쏠림 = ",
+                                      active=biases.index(b0), pad_t=60)])
+fig.update_yaxes(title_text="토큰 비율", range=[0, 0.55], row=1, col=1)
+fig.update_xaxes(title_text="쏠림 강도", row=1, col=2)
+fig.update_yaxes(title_text="최대부하 / 이상부하", row=1, col=2)
+
+viz.fig_defaults(fig, height=420, title="부하 불균형 — MoE 의 핵심 난제")
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=100))
+fig.show()
+```
+
+::: {.interaction-hint}
+쏠림이 0이면 8개 전문가가 균등하게 12.5%씩 가져갑니다. 쏠림이 커지면 E1 하나가 절반 가까이 차지하고 E7·E8은 거의 안 쓰입니다 — 그 파라미터는 낭비입니다.
+:::
+
+### 보조 손실
+
+해법은 손실함수에 균형 항을 더하는 것이다.
+
+$$\mathcal{L} = \mathcal{L}_{\text{LM}} + \alpha \underbrace{N\sum_{i=1}^{N} f_i \cdot P_i}_{\text{부하 균형 손실}}$$
+
+- $f_i$: 전문가 $i$ 에 실제로 배정된 토큰 비율
+- $P_i$: 라우터가 전문가 $i$ 에 준 평균 확률
+
+곱을 최소화하면 둘 다 균등해진다. $f_i$ 는 미분 불가능(argmax)이라
+$P_i$ 를 통해 그래디언트가 흐른다.
+
+```{python}
+#| label: aux-loss
+#| code-fold: false
+
+import numpy as np
+
+def load_balance_loss(f, P):
+    """f: 실제 배정 비율, P: 라우터 평균 확률. 둘 다 합이 1."""
+    N = len(f)
+    return N * np.sum(f * P)
+
+N = 8
+uniform = np.full(N, 1 / N)
+skewed = np.array([0.45, 0.25, 0.12, 0.08, 0.05, 0.03, 0.015, 0.005])
+
+print(f"완벽 균등 분포일 때  : {load_balance_loss(uniform, uniform):.4f}  ← 최솟값 1.0")
+print(f"쏠린 분포일 때       : {load_balance_loss(skewed, skewed):.4f}")
+print(f"완전 붕괴(1개 독점)  : {load_balance_loss(np.eye(N)[0], np.eye(N)[0]):.4f}  ← 최댓값 N")
+print()
+print("→ 균등할 때 1, 한 전문가가 독점하면 N. 이 값을 손실에 더해 쏠림을 벌한다.")
+```
+
+---
+
+## 전문가 용량과 토큰 드롭
+
+분산 학습에서는 각 전문가가 처리할 수 있는 토큰 수에 **상한**이 필요하다.
+GPU마다 미리 버퍼를 잡아야 하기 때문이다.
+
+$$\text{capacity} = \text{capacity factor} \times \frac{\text{토큰 수} \times k}{N}$$
+
+용량을 넘긴 토큰은 **버려진다**(dropped) — 그 전문가를 건너뛰고 잔차만 통과한다.
+
+```{python}
+#| label: fig-capacity
+#| fig-cap: "용량 계수에 따른 토큰 드롭률과 메모리 낭비"
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+N, k, n_tok = 8, 2, 2000
+cfs = np.linspace(1.0, 2.0, 21)
+
+def drop_rate(load_frac, cf):
+    cap = cf * n_tok * k / N
+    assigned = load_frac * n_tok * k
+    dropped = np.maximum(assigned - cap, 0).sum()
+    return dropped / (n_tok * k)
+
+fig = go.Figure()
+for i, b in enumerate([0.0, 1.0, 2.0]):
+    lf = simulate_load(b)
+    rates = [drop_rate(lf, cf) * 100 for cf in cfs]
+    fig.add_trace(go.Scatter(x=cfs, y=rates, mode="lines+markers",
+                             name=f"쏠림 {b:g}",
+                             line=dict(color=viz.color(i), width=2.5)))
+
+# 낭비되는 버퍼 = (용량계수 - 1) 만큼 항상 확보해야 함
+fig.add_trace(go.Scatter(x=cfs, y=(cfs - 1) * 100, mode="lines",
+                         name="추가 확보 메모리 (%)",
+                         line=dict(color=viz.YELLOW, width=2, dash="dash")))
+
+fig.update_layout(xaxis_title="용량 계수 (capacity factor)",
+                  yaxis_title="비율 (%)", legend=dict(x=0.55, y=0.98))
+viz.fig_defaults(fig, height=400,
+                 title="드롭률을 낮추려면 메모리를 더 잡아야 한다")
+fig.show()
+```
+
+::: {.interaction-hint}
+쏠림이 심할수록(초록) 같은 용량 계수에서 더 많이 버려집니다. 용량을 키우면 드롭은 줄지만 노란 점선만큼 메모리를 항상 낭비합니다 — 대부분의 전문가는 그 버퍼를 다 못 씁니다.
 :::
 
 ---
 
-## G5.8.3 — dense vs MoE 비용
+## MoE 계보
 
-총 파라미터는 늘지만 토큰당 FLOPs는 유지되는 관계
+```{python}
+#| label: moe-lineage
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 전문가 수 슬라이더
+rows = [
+    ("Switch Transformer", "2021", "top-1",  "라우팅 단순화, 통신 절감"),
+    ("GShard",             "2020", "top-2",  "대규모 분산, 보조 손실 정립"),
+    ("GLaM",               "2021", "top-2",  "밀집 대비 연산 1/3 로 동등 성능"),
+    ("Mixtral 8x7B",       "2023", "top-2",  "공개 가중치, 총 47B / 활성 13B"),
+    ("DeepSeek-MoE",       "2024", "top-k",  "세분화 전문가 + 공유 전문가"),
+    ("Qwen/그록 등",        "2024~", "다양",   "프런티어 모델의 상당수가 MoE"),
+]
+print(f"{'모델':<22} {'연도':<7} {'라우팅':<8} {'기여'}")
+print("-" * 74)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<7} {r[2]:<8} {r[3]}")
+```
+
+::: {.callout-note}
+## 공유 전문가와 세분화 전문가
+
+DeepSeek-MoE가 제안한 두 가지 개선이 널리 채택되었다.
+
+**세분화(fine-grained)**: 전문가를 더 작게, 더 많이 만든다.
+$N=8, k=2$ 대신 $N=64, k=8$ 처럼. 같은 연산량에서 조합의 수가 훨씬 많아진다
+($\binom{8}{2}=28$ 대 $\binom{64}{8}\approx 4.4\times10^9$).
+
+**공유 전문가(shared expert)**: 항상 활성화되는 전문가를 1~2개 둔다.
+모든 토큰에 공통으로 필요한 지식을 여기에 몰아, 나머지 전문가가 특화에 집중하게 한다.
 :::
 
 ---
 
-## G5.8.4 — 전문가 전문화
+## G5.8.2 — 밀집 vs MoE 비용 구조
 
-특정 도메인·언어 토큰이 특정 전문가에 몰리는 패턴
+MoE의 이득과 비용을 한 화면에서 본다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 선택
+```{python}
+#| label: fig-dense-vs-moe
+#| fig-cap: "전문가 수를 늘릴 때 파라미터는 늘지만 토큰당 연산은 일정합니다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+d, L, k = 4096, 32, 2
+n_experts = np.array([1, 2, 4, 8, 16, 32, 64, 128])
+
+attn_params = 4 * d * d * L
+ffn_dense = 8 * d * d * L
+
+total_params = attn_params + ffn_dense * n_experts
+active_params = attn_params + ffn_dense * np.minimum(k, n_experts)
+mem_gb = total_params * 2 / 1024**3          # fp16 로 전부 적재해야 함
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("파라미터: 총량 vs 활성",
+                                    "필요 메모리 (전부 적재)"))
+
+fig.add_trace(go.Scatter(x=n_experts, y=total_params / 1e9, mode="lines+markers",
+                         name="총 파라미터", line=dict(color=viz.WARM, width=2.5)),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=n_experts, y=active_params / 1e9, mode="lines+markers",
+                         name="활성 파라미터 (토큰당)",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=n_experts, y=mem_gb, mode="lines+markers",
+                         showlegend=False, line=dict(color=viz.PINK, width=2.5),
+                         fill="tozeroy", fillcolor=viz.hex_rgba(viz.PINK, 0.12)),
+              row=1, col=2)
+for gb, label in [(80, "H100 1장"), (640, "H100 8장")]:
+    fig.add_hline(y=gb, line=dict(color=viz.GREEN, dash="dot"),
+                  annotation_text=label, row=1, col=2)
+
+fig.update_xaxes(title_text="전문가 수 N", type="log")
+fig.update_yaxes(title_text="10억 파라미터", type="log", row=1, col=1)
+fig.update_yaxes(title_text="GB (fp16)", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=410, title=f"d={d}, {L}층, top-{k} 기준")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽에서 파란 선(활성 파라미터)이 **완전히 평평합니다** — 전문가를 128개로 늘려도 토큰당 연산은 그대로입니다. 오른쪽이 대가입니다. 쓰지 않는 전문가도 **메모리에는 올라가 있어야** 합니다.
+:::
+
+::: {.key-concept}
+**MoE의 교환은 연산 ↔ 메모리다.**
+
+| | 밀집 모델 | MoE |
+|---|---|---|
+| 총 파라미터 | 적음 | **많음** |
+| 토큰당 연산 | 많음 | **적음** |
+| 필요 VRAM | 적음 | **많음** |
+| 학습 효율 | 기준 | 같은 연산으로 더 나은 손실 |
+| 추론 | 연산 제한 | **메모리 제한** 심화 |
+
+그래서 MoE는 **GPU가 많고 배치가 큰 환경**에 유리하다.
+GPU 한 장에 올려 한 명이 쓰는 상황에서는 밀집 모델이 낫다.
 :::
 
 ---
 
-## 핵심 용어
+## 분산 학습에서의 전문가 병렬
 
-| 용어 | 비고 |
+전문가를 여러 GPU에 나눠 배치하면, 라우팅 결과에 따라 **토큰을 GPU 간에 옮겨야** 한다.
+이것이 `all-to-all` 통신이고, MoE 학습에서 가장 비싼 부분이다.
+
+```
+1. 각 GPU가 자기 토큰의 라우팅을 계산
+2. all-to-all: 토큰을 담당 전문가가 있는 GPU로 전송   ← 통신
+3. 각 GPU가 자기 전문가로 계산
+4. all-to-all: 결과를 원래 GPU로 회수                ← 통신
+```
+
+부하가 불균형하면 특정 GPU가 병목이 되어 나머지가 기다린다.
+보조 손실이 **성능뿐 아니라 학습 속도를 위해서도** 필요한 이유다.
+자세한 병렬화는 [11.2 분산 학습](../11_systems/02_distributed_training.qmd)에서 다룬다.
+
+---
+
+## 모델 비교할 때 무엇을 볼 것인가
+
+::: {.callout-warning}
+## "파라미터 수"만으로 비교하지 말 것
+
+MoE가 등장하면서 파라미터 수는 단일 지표로서 의미를 잃었다.
+
+- **총 파라미터** → 필요한 VRAM, 저장 용량을 결정
+- **활성 파라미터** → 토큰당 연산량, 추론 속도를 결정
+- **학습 연산량(FLOPs)** → 실제로 얼마나 학습됐는지
+
+"671B MoE"와 "70B 밀집"을 나란히 놓으면 전자가 10배 커 보이지만,
+활성 파라미터가 37B라면 토큰당 연산은 오히려 절반 수준이다.
+[5.9 스케일링 법칙](09_scaling_laws.qmd)의 비교도 이 구분 위에서 해야 한다.
+:::
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| MoE |  |
-| top-k 라우팅 |  |
-| 부하 균형 손실 |  |
-| 활성 파라미터 |  |
-| Switch Transformer |  |
+| 조건부 연산 | 입력에 따라 일부 파라미터만 사용 |
+| 라우터 | $\text{softmax}(xW_r)$ 에서 top-$k$ 선택 |
+| 파라미터 vs 연산 | 총 $N$ 배, 활성 $k$ 배 — **분리된다** |
+| 부하 불균형 | MoE의 핵심 난제. 소수 전문가 독점 |
+| 보조 손실 | $N\sum f_i P_i$, 균등=1 · 독점=$N$ |
+| 용량 계수 | 드롭률과 메모리 낭비의 교환 |
+| 세분화·공유 전문가 | 조합 수 증가, 공통 지식 분리 |
+| all-to-all | 전문가 병렬의 통신 비용 |
+| 교환 | **연산을 줄이고 메모리를 쓴다** |
+
+효율을 다루는 두 장을 지났다. 이제 근본적인 질문으로 간다 —
+모델을 얼마나 키우고 데이터를 얼마나 먹여야 하는가.
+그 답은 감이 아니라 측정된 법칙으로 주어진다.
 
 ---
 
-**다음**: [5.9 스케일링 법칙](09_scaling_laws.qmd) — Kaplan·Chinchilla·연산 최적 — 얼마나 키우고 얼마나 먹일 것인가
+**다음**: [5.9 스케일링 법칙](09_scaling_laws.qmd) — Kaplan·Chinchilla·연산 최적
 
 **이전**: [5.7 효율적 어텐션과 긴 문맥](07_efficient_attention.qmd)
