@@ -4,76 +4,432 @@ subtitle: "가설공간·손실·경험적 위험 최소화 — 문제의 형식
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+"데이터로 학습한다"는 말은 일상어로는 충분하지만, 공학적으로는 모호하다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+무엇을 학습하는가? 잘 학습했다는 것을 어떻게 아는가?
+그리고 왜 애초에 학습이 가능한가?
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
-
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-'데이터로 학습한다'는 말을 수학적으로 정확히 정의해두면, 이후 모든 알고리즘이 같은 틀의 변주로 보인다.
+이 장에서 그 말을 수학적으로 정확히 정의한다.
+정의를 한 번 세워두면, 이후 등장하는 모든 알고리즘 —
+선형회귀부터 [트랜스포머](../05_transformer/00_attention_mechanism.qmd)까지 —
+가 **같은 틀의 변주**로 보인다.
 
 ---
 
-## 이 장에서 다루는 것
+## 학습 문제의 세 구성 요소
 
-- 지도/비지도/자기지도/준지도/강화 학습의 구분
-- 입력공간·출력공간·가설공간 H, 학습 = H 안에서의 탐색
-- 손실함수와 위험(risk), 경험적 위험 최소화(ERM)
-- 회귀 손실: MSE, MAE, Huber, quantile — 각각이 추정하는 통계량
-- 분류 손실: 0-1, 로지스틱, 힌지, 지수 — 대리손실(surrogate)의 필요성
-- 귀납 편향(inductive bias) — 공짜 점심 없음 정리
-- 학습·검증·시험 분할과 각각의 역할
-- i.i.d. 가정과 그것이 깨지는 현실의 상황들
+지도학습을 예로 들면 이렇게 형식화된다.
 
----
+| 요소 | 기호 | 뜻 |
+|------|------|-----|
+| 데이터 분포 | $P(x, y)$ | 세상이 데이터를 만들어내는 (알 수 없는) 규칙 |
+| **가설공간** | $\mathcal{H}$ | 우리가 고려하는 함수들의 집합 |
+| **손실함수** | $\ell(\hat{y}, y)$ | 틀렸을 때 얼마나 나쁜가 |
 
-## G2.0.1 — 손실함수 비교
+목표는 **위험(risk)** 을 최소화하는 함수를 찾는 것이다.
 
-MSE·MAE·Huber 가 이상치 하나에 얼마나 다르게 반응하는가
+$$R(h) = \mathbb{E}_{(x,y)\sim P}\big[\ell(h(x),\, y)\big]$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 손실 선택
-:::
+문제는 $P$ 를 모른다는 것이다. 우리에게는 표본 $n$ 개뿐이다.
+그래서 대신 **경험적 위험**을 최소화한다.
 
----
+$$\hat{R}(h) = \frac{1}{n}\sum_{i=1}^{n} \ell(h(x_i),\, y_i)
+\qquad\Longrightarrow\qquad
+\hat{h} = \arg\min_{h \in \mathcal{H}} \hat{R}(h)$$
 
-## G2.0.2 — 대리손실 곡선
+이것이 **경험적 위험 최소화(ERM)** 이고, 사실상 모든 지도학습이 이 형태다.
 
-0-1 손실과 로지스틱·힌지·지수 손실을 마진 함수로 겹쳐 보기
+::: {.key-concept}
+**모델을 고른다 = 가설공간 $\mathcal{H}$ 를 고른다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 마진 축
-:::
+- 선형회귀 → $\mathcal{H}$ = 모든 아핀 함수
+- 깊이 3 결정트리 → $\mathcal{H}$ = 축 정렬 분할 8개로 표현되는 함수들
+- 신경망 → $\mathcal{H}$ = 그 구조로 표현 가능한 모든 함수
 
----
+그리고 **손실함수를 고른다 = 무엇을 틀림으로 볼지 정한다.**
 
-## G2.0.3 — 귀납 편향 실험
-
-같은 점 5개를 지나는 서로 다른 함수들 — 무엇이 '옳은' 답인가
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 가설공간 전환
+이 두 선택이 학습의 전부다. 나머지(최적화 알고리즘, 하이퍼파라미터)는
+$\mathcal{H}$ 안에서 $\hat{R}$ 을 최소화하는 **방법**의 문제다.
 :::
 
 ---
 
-## 핵심 용어
+## 학습의 종류
 
-| 용어 | 비고 |
-|------|------|
-| 경험적 위험 최소화 (ERM) |  |
-| 가설공간 (hypothesis space) |  |
-| 대리손실 (surrogate loss) |  |
-| 귀납 편향 (inductive bias) |  |
+```{python}
+#| label: learning-types
+#| code-fold: false
+
+rows = [
+    ("지도학습",     "(x, y) 쌍",          "y 예측",              "분류, 회귀"),
+    ("비지도학습",   "x 만",               "구조 발견",           "군집화, 차원축소"),
+    ("자기지도학습", "x 만",               "x 일부로 x 나머지 예측", "BERT, GPT, SimCLR"),
+    ("준지도학습",   "레이블 소수 + x 다수", "레이블 효율",         "의사 레이블링"),
+    ("강화학습",     "상태·행동·보상",      "누적 보상 최대화",     "게임, RLHF"),
+]
+print(f"{'종류':<14} {'입력':<22} {'목표':<24} {'예'}")
+print("-" * 78)
+for r in rows:
+    print(f"{r[0]:<14} {r[1]:<22} {r[2]:<24} {r[3]}")
+```
+
+::: {.callout-note}
+## 자기지도학습이 판을 바꾼 이유
+
+레이블은 비싸고 원시 데이터는 무한하다.
+자기지도학습은 **데이터 자체에서 지도 신호를 만들어낸다.**
+
+"다음 토큰 맞히기"([7.2](../07_language/02_language_models.qmd)),
+"가려진 패치 복원하기"([9.3](../09_vision_video/03_ssl_vision.qmd)) 같은 과제는
+레이블이 필요 없으면서도 지도학습의 기계를 그대로 쓴다.
+
+형식적으로는 여전히 ERM이다. 바뀐 것은 $y$ 를 어디서 얻느냐뿐이다.
+:::
 
 ---
 
-**다음**: [2.1 편향-분산과 일반화](01_bias_variance.qmd) — 과적합·학습곡선·이중하강 — 왜 훈련 성능은 믿을 수 없는가
+## 손실함수: 무엇을 틀림으로 볼 것인가
+
+[0.2 확률](../00_foundations/02_probability.qmd)에서 봤듯,
+손실을 고르는 것은 **잡음 분포를 가정하는 것**이다.
+그리고 그 선택이 추정하는 통계량을 바꾼다.
+
+| 손실 | 식 | 최소화하면 얻는 것 | 이상치 |
+|------|-----|---------------------|--------|
+| MSE | $(y-\hat{y})^2$ | 조건부 **평균** | 매우 민감 |
+| MAE | $\|y-\hat{y}\|$ | 조건부 **중앙값** | 강건 |
+| Huber | 작으면 제곱, 크면 선형 | 절충 | 중간 |
+| Quantile | 비대칭 가중 절댓값 | 조건부 **분위수** | 강건 |
+
+---
+
+## G2.0.1 — 이상치 하나가 만드는 차이
+
+같은 데이터에 손실만 바꿔 직선을 맞춘다.
+이상치를 움직여가며 각 손실이 어떻게 반응하는지 본다.
+
+```{python}
+#| label: fig-loss-outlier
+#| fig-cap: "이상치의 위치를 바꿔가며 손실별 회귀선 비교"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+n = 30
+x = np.linspace(0, 10, n)
+y_clean = 1.0 + 0.8 * x + rng.normal(0, 0.6, n)
+
+def fit(x, y, kind, delta=1.5, q=0.5, iters=300, lr=0.02):
+    """경사하강으로 여러 손실을 같은 방식으로 맞춘다."""
+    w, b = 0.0, 0.0
+    for _ in range(iters):
+        r = y - (w * x + b)
+        if kind == "MSE":
+            g = -2 * r
+        elif kind == "MAE":
+            g = -np.sign(r)
+        elif kind == "Huber":
+            g = np.where(np.abs(r) <= delta, -r, -delta * np.sign(r))
+        else:                                    # Quantile
+            g = np.where(r > 0, -q, (1 - q))
+        w -= lr * np.mean(g * x)
+        b -= lr * np.mean(g)
+    return w, b
+
+outlier_ys = [3.0, 8.0, 15.0, 25.0, 40.0, 60.0]
+losses = ["MSE", "MAE", "Huber"]
+xs_line = np.array([0, 10])
+
+fits, resid = {}, {}
+for oy in outlier_ys:
+    y = y_clean.copy()
+    y[n // 2] = oy                               # 가운데 점 하나를 이상치로
+    for L in losses:
+        w, b = fit(x, y, L)
+        fits[(oy, L)] = w * xs_line + b
+    resid[oy] = y
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("적합 결과", "손실 함수 모양"))
+
+oy0 = outlier_ys[3]
+fig.add_trace(go.Scatter(x=x, y=resid[oy0], mode="markers", name="데이터",
+                         marker=dict(size=8, color=viz.YELLOW,
+                                     line=dict(width=1, color="rgba(0,0,0,0.5)"))),
+              row=1, col=1)
+for i, L in enumerate(losses):
+    fig.add_trace(go.Scatter(x=xs_line, y=fits[(oy0, L)], mode="lines", name=L,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+
+r = np.linspace(-4, 4, 400)
+for i, (L, yv) in enumerate([("MSE", r**2),
+                             ("MAE", np.abs(r) * 2),
+                             ("Huber", np.where(np.abs(r) <= 1.5, r**2,
+                                                1.5 * (2*np.abs(r) - 1.5)))]):
+    fig.add_trace(go.Scatter(x=r, y=yv, mode="lines", showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+
+steps = []
+for oy in outlier_ys:
+    ys = [resid[oy]] + [fits[(oy, L)] for L in losses] + [None, None, None]
+    steps.append((f"{oy:g}", {"y": ys}))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="이상치 y값 = ",
+                                      active=3, pad_t=55)])
+fig.update_xaxes(title_text="x", row=1, col=1)
+fig.update_yaxes(title_text="y", range=[-2, 22], row=1, col=1)
+fig.update_xaxes(title_text="잔차 r", row=1, col=2)
+fig.update_yaxes(title_text="손실", range=[0, 12], row=1, col=2)
+viz.fig_defaults(fig, height=430, title="손실함수와 이상치 민감도")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+이상치를 60까지 올려보세요. **MSE 선만 크게 끌려갑니다** — 잔차를 제곱하니 큰 오차에 압도적 가중치가 붙습니다. 오른쪽 그림에서 그 이유가 보입니다: MSE는 이차로 치솟고, MAE는 선형, Huber는 작은 구간만 이차입니다.
+:::
+
+::: {.key-concept}
+**이것은 버그가 아니라 명세다.**
+
+MSE가 이상치에 끌려가는 것은 "조건부 평균을 추정하라"는 지시를 충실히 따른 결과다.
+평균은 원래 이상치에 민감하다.
+
+중앙값을 원하면 MAE를 써야 한다. 손실을 바꾸는 것은 **추정 대상을 바꾸는 것**이다.
+[1.7 시계열](../01_data_science/07_time_series.qmd)이나 배송 시간 예측처럼
+꼬리가 두꺼운 문제에서 MAE·quantile 손실이 기본값인 이유다.
+:::
+
+---
+
+## 분류 손실과 대리손실
+
+분류에서 우리가 정말 최소화하고 싶은 것은 **오분류 횟수**다.
+
+$$\ell_{0\text{-}1}(\hat{y}, y) = \mathbb{1}[\hat{y} \ne y]$$
+
+그런데 이 손실은 쓸 수 없다. **미분이 0이거나 존재하지 않아서** 경사하강이 불가능하다.
+계단 함수라 어느 방향으로 가야 할지 알려주지 않는다.
+
+그래서 **대리손실(surrogate loss)** 을 쓴다 —
+0-1 손실의 위쪽에 놓이면서 미분 가능하고 볼록한 함수.
+
+```{python}
+#| label: fig-surrogate
+#| fig-cap: "마진 m = y·f(x) 에 대한 손실들. 전부 0-1 손실의 상계입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+m = np.linspace(-3, 3, 600)
+
+curves = {
+    "0-1 (진짜 목표)": (m < 0).astype(float),
+    "로지스틱 (log loss)": np.log2(1 + np.exp(-m)),
+    "힌지 (SVM)": np.maximum(0, 1 - m),
+    "지수 (AdaBoost)": np.exp(-m),
+    "제곱": (1 - m) ** 2,
+}
+
+fig = go.Figure()
+for i, (name, y) in enumerate(curves.items()):
+    style = dict(color="white", width=3, dash="dot") if i == 0 else \
+            dict(color=viz.color(i - 1), width=2.5)
+    fig.add_trace(go.Scatter(x=m, y=y, mode="lines", name=name, line=style))
+
+fig.add_vline(x=0, line=dict(color="rgba(255,255,255,0.3)", dash="dash"),
+              annotation_text="결정경계")
+fig.update_layout(xaxis_title="마진 m = y·f(x)   (양수면 정답)",
+                  yaxis_title="손실", yaxis=dict(range=[0, 5]),
+                  legend=dict(x=0.62, y=0.98))
+viz.fig_defaults(fig, height=430, title="대리손실은 0-1 손실의 볼록 상계다")
+fig.show()
+```
+
+::: {.interaction-hint}
+모든 곡선이 흰 점선(0-1) **위에** 있습니다 — 상계라는 뜻이고, 대리손실을 줄이면 오분류율도 줄어듭니다. 왼쪽(크게 틀린 영역)에서 **지수 손실은 폭발**합니다. AdaBoost가 이상치에 약한 이유이고, **제곱 손실은 오른쪽에서 다시 올라갑니다** — 너무 잘 맞혀도 벌하므로 분류에 부적합합니다.
+:::
+
+---
+
+## 귀납 편향: 학습이 가능한 이유
+
+여기서 근본적인 질문이 나온다.
+훈련 데이터를 지나는 함수는 **무한히 많다.** 왜 그중 하나를 고를 수 있는가?
+
+답은 우리가 이미 선택을 했기 때문이다 — **가설공간을 제한**하는 순간
+"이런 종류의 함수가 그럴듯하다"는 가정을 넣은 것이다.
+
+이것이 **귀납 편향(inductive bias)** 이다.
+
+```{python}
+#| label: fig-inductive-bias
+#| fig-cap: "같은 5개 점을 지나는 서로 다른 함수들. 무엇이 '옳은' 답인가?"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+xs = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+ys = np.array([1.0, 2.1, 1.9, 3.2, 3.0])
+grid = np.linspace(-0.6, 4.6, 400)
+
+# 서로 다른 가설공간에서 데이터를 지나거나 근사하는 함수들
+hyps = {}
+hyps["직선 (선형)"] = np.polyval(np.polyfit(xs, ys, 1), grid)
+hyps["4차 다항식 (완전 보간)"] = np.polyval(np.polyfit(xs, ys, 4), grid)
+# 계단 함수 (최근접 이웃)
+idx = np.abs(grid[:, None] - xs[None, :]).argmin(axis=1)
+hyps["계단 (최근접 이웃)"] = ys[idx]
+# 진동 함수 — 점은 지나지만 사이에서 요동
+hyps["보간 + 고주파 진동"] = (np.polyval(np.polyfit(xs, ys, 1), grid)
+                              + 1.2 * np.sin(6 * np.pi * grid)
+                              * np.prod([(grid - x) for x in xs], axis=0) * 0.02)
+
+fig = go.Figure()
+for i, (name, y) in enumerate(hyps.items()):
+    fig.add_trace(go.Scatter(x=grid, y=y, mode="lines", name=name,
+                             line=dict(color=viz.color(i), width=2.5)))
+fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers", name="관측 데이터",
+                         marker=dict(size=13, color=viz.YELLOW, symbol="circle",
+                                     line=dict(width=2, color="black"))))
+
+fig.update_layout(xaxis_title="x", yaxis_title="y", yaxis=dict(range=[-1, 5.5]),
+                  legend=dict(x=0.01, y=0.99))
+viz.fig_defaults(fig, height=430, title="데이터만으로는 답이 정해지지 않는다")
+fig.show()
+```
+
+::: {.key-concept}
+**공짜 점심은 없다 (No Free Lunch)**
+
+모든 가능한 문제에 대해 평균을 내면, **어떤 알고리즘도 무작위 추측보다 낫지 않다.**
+
+이것이 절망적으로 들리지만, 실제로는 그 반대를 말해준다.
+알고리즘이 잘 작동한다면 그것은 **그 알고리즘의 편향이 그 문제의 구조와 맞아떨어졌기** 때문이다.
+
+| 모델 | 내장된 편향 |
+|------|-------------|
+| 선형 모델 | 관계가 선형이다 |
+| [CNN](../04_architectures/00_cnn.qmd) | 지역성, 평행이동 등변성 |
+| [RNN](../04_architectures/02_rnn.qmd) | 순차성, 최근성 |
+| [트리](06_trees.qmd) | 축 정렬 분할, 구간별 상수 |
+| kNN | 가까운 점은 비슷한 값 |
+| [셀프 어텐션](../05_transformer/01_self_attention.qmd) | **거의 없음** → 데이터가 많아야 함 |
+
+그래서 "어떤 모델이 최고인가"는 잘못된 질문이다.
+올바른 질문은 **"이 문제의 구조는 무엇이고, 어떤 편향이 거기 맞는가"** 다.
+:::
+
+---
+
+## 왜 훈련 데이터로 평가하면 안 되는가
+
+ERM은 $\hat{R}$ 을 최소화한다. 그런데 우리가 원하는 것은 $R$ 이다.
+
+$$\hat{R}(\hat{h}) \;\; \text{는} \;\; R(\hat{h}) \;\; \text{의 낙관적 추정이다}$$
+
+이유는 미묘하다. $\hat{h}$ 를 **바로 그 데이터로 골랐기** 때문이다.
+가설공간이 넓을수록, 우연히 훈련 데이터에 잘 맞는 함수를 찾을 가능성이 커진다.
+
+```{python}
+#| label: optimism-demo
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, n_test = 40, 5000
+
+print("y 가 x 와 **아무 관계 없는** 순수 잡음 데이터에서")
+print(f"특성 개수만 늘려가며 선형회귀를 맞춘 결과 (n={n})")
+print()
+print(f"{'특성 수':>8} {'훈련 R²':>10} {'시험 R²':>10}   해석")
+print("-" * 56)
+for p in [1, 5, 10, 20, 35, 39]:
+    X = rng.normal(size=(n, p))
+    y = rng.normal(size=n)                    # x 와 완전히 무관
+    beta = np.linalg.pinv(X) @ y
+    r2_tr = 1 - ((X @ beta - y)**2).sum() / ((y - y.mean())**2).sum()
+    Xte, yte = rng.normal(size=(n_test, p)), rng.normal(size=n_test)
+    r2_te = 1 - ((Xte @ beta - yte)**2).sum() / ((yte - yte.mean())**2).sum()
+    note = "완벽 암기" if r2_tr > 0.95 else ""
+    print(f"{p:>8} {r2_tr:>10.3f} {r2_te:>10.3f}   {note}")
+print()
+print("→ 훈련 R² 는 특성만 늘리면 1까지 올라간다. 신호가 전혀 없는데도.")
+print("  시험 R² 는 0 근처에 머물거나 음수가 된다 (평균 예측보다 나쁨).")
+```
+
+::: {.callout-warning}
+## 데이터를 세 조각으로 나누는 이유
+
+| 분할 | 쓰임 | 몇 번 보는가 |
+|------|------|--------------|
+| **훈련** | 파라미터 학습 | 계속 |
+| **검증** | 하이퍼파라미터·모델 선택 | 여러 번 |
+| **시험** | 최종 성능 보고 | **한 번** |
+
+검증셋도 선택에 반복 사용하면 낙관적이 된다.
+그래서 시험셋은 **모든 결정이 끝난 뒤 딱 한 번** 쓴다.
+
+시험셋 점수를 보고 모델을 고치는 순간, 그것은 더 이상 시험셋이 아니라 검증셋이다.
+자세한 절차는 [2.11 모델 평가와 선택](11_model_evaluation.qmd)에서 다룬다.
+:::
+
+---
+
+## i.i.d. 가정과 그것이 깨질 때
+
+지금까지의 논의는 훈련 데이터와 시험 데이터가 **같은 분포에서 독립적으로** 뽑혔다고 가정했다.
+
+현실에서 이 가정은 자주 깨진다.
+
+| 상황 | 무엇이 깨지나 | 대응 |
+|------|---------------|------|
+| 시계열 | 독립성, 시간에 따른 분포 변화 | 시간 기반 분할 ([1.7](../01_data_science/07_time_series.qmd)) |
+| 같은 사용자의 여러 기록 | 독립성 | 그룹 분할 |
+| 배포 후 환경 변화 | 동일 분포 | 드리프트 모니터링 ([11.6](../11_systems/06_monitoring.qmd)) |
+| 모델이 데이터를 만듦 | 독립성 | 피드백 루프 관리 ([2.12](12_practical_issues.qmd)) |
+
+::: {.key-concept}
+**분할 방식이 i.i.d. 가정을 반영해야 한다.**
+
+같은 환자의 CT 여러 장이 훈련셋과 시험셋에 나뉘어 들어가면,
+모델은 "질병"이 아니라 "이 환자"를 외운다. 점수는 훌륭하고 배포하면 무너진다.
+
+이것이 [데이터 누수](12_practical_issues.qmd)의 가장 흔한 형태이며,
+알고리즘이 아니라 **분할 설계**의 문제다.
+:::
+
+---
+
+## 요약
+
+| 개념 | 정의 | 실무적 의미 |
+|------|------|-------------|
+| 위험 $R(h)$ | 참 분포에서의 기대 손실 | 우리가 원하는 것 |
+| 경험적 위험 $\hat{R}(h)$ | 표본에서의 평균 손실 | 우리가 계산할 수 있는 것 |
+| **ERM** | $\hat{R}$ 최소화 | 거의 모든 지도학습 |
+| 가설공간 $\mathcal{H}$ | 고려하는 함수 집합 | **모델 선택 = $\mathcal{H}$ 선택** |
+| 손실함수 | 무엇을 틀림으로 볼지 | **추정 대상을 결정** (평균/중앙값/분위수) |
+| 대리손실 | 0-1의 볼록 상계 | 미분 가능해야 학습됨 |
+| 귀납 편향 | 모델에 내장된 가정 | 문제 구조와 맞아야 작동 |
+| 공짜 점심 없음 | 만능 알고리즘은 없다 | "최고의 모델"은 없다 |
+| 훈련 성능의 낙관 | 같은 데이터로 골랐으므로 | 분할이 필요한 이유 |
+| i.i.d. | 독립·동일 분포 | 깨지면 분할 설계로 대응 |
+
+이제 틀이 섰다. 다음 장부터는 구체적인 가설공간과 알고리즘으로 들어간다.
+가장 단순하면서 **닫힌 해가 존재하는** 모델 — 선형회귀에서 시작한다.
+
+---
+
+**다음**: [2.1 편향-분산과 일반화](01_bias_variance.qmd) — 왜 훈련 성능은 믿을 수 없는가
 
 **이전**: [1.7 시계열 분석](../01_data_science/07_time_series.qmd)
