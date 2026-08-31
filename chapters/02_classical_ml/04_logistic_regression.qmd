@@ -4,88 +4,587 @@ subtitle: "시그모이드·로그오즈·최대우도 — 확률을 출력하�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+로지스틱 회귀는 고전 모델이지만, 사실 **모든 신경망 분류기의 마지막 층**이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+$$\text{신경망} = \underbrace{f_\theta(x)}_{\text{특성 학습}} \;\to\; \underbrace{\text{softmax}(Wh+b)}_{\text{로지스틱 회귀}}$$
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+[5.6에서 만든 GPT](../05_transformer/06_build_gpt.qmd)의 마지막 줄도 이것이었다.
+그러니 이 장을 제대로 이해하면 딥러닝 분류의 절반을 이해한 것이다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 왜 선형회귀를 쓰면 안 되는가
+
+$y \in \{0, 1\}$ 에 그냥 최소제곱을 적용하면 어떻게 될까?
+
+```{python}
+#| label: fig-why-not-ols
+#| fig-cap: "이진 레이블에 선형회귀를 적용하면 생기는 문제들"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng = np.random.default_rng(3)
+n = 40
+x0 = rng.normal(-1.5, 0.8, n // 2)
+x1 = rng.normal(1.5, 0.8, n // 2)
+x = np.r_[x0, x1]
+y = np.r_[np.zeros(n // 2), np.ones(n // 2)]
+
+grid = np.linspace(-6, 10, 400)
+
+def ols_fit(x, y):
+    X = np.c_[np.ones_like(x), x]
+    return np.linalg.solve(X.T @ X, X.T @ y)
+
+def sigmoid(z):
+    return np.where(z >= 0, 1/(1+np.exp(-z)), np.exp(z)/(1+np.exp(z)))
+
+def logistic_fit(x, y, iters=3000, lr=0.3):
+    w, b = 0.0, 0.0
+    for _ in range(iters):
+        p = sigmoid(w*x + b)
+        w -= lr * np.mean((p - y) * x)
+        b -= lr * np.mean(p - y)
+    return b, w
+
+# 이상치 추가 여부에 따라
+cases = {}
+for name, extra in [("원 데이터", None), ("멀리 떨어진 점 3개 추가", (7.0, 1.0))]:
+    xx, yy = (x, y) if extra is None else (np.r_[x, [extra[0]]*3],
+                                           np.r_[y, [extra[1]]*3])
+    b_o, w_o = ols_fit(xx, yy)
+    b_l, w_l = logistic_fit(xx, yy)
+    cases[name] = (xx, yy, b_o + w_o*grid, sigmoid(b_l + w_l*grid))
+
+fig = go.Figure()
+n0 = "원 데이터"
+xx, yy, ols_line, log_line = cases[n0]
+fig.add_trace(go.Scatter(x=xx, y=yy, mode="markers", name="데이터 (0/1)",
+                         marker=dict(size=9, color=viz.YELLOW,
+                                     line=dict(width=1, color="rgba(0,0,0,0.6)"))))
+fig.add_trace(go.Scatter(x=grid, y=ols_line, mode="lines", name="선형회귀",
+                         line=dict(color=viz.WARM, width=2.5)))
+fig.add_trace(go.Scatter(x=grid, y=log_line, mode="lines", name="로지스틱 회귀",
+                         line=dict(color=viz.ACCENT, width=3)))
+for v in (0.0, 1.0):
+    fig.add_hline(y=v, line=dict(color="rgba(255,255,255,0.3)", dash="dot"))
+
+steps = []
+for name, (xx_, yy_, o_, l_) in cases.items():
+    steps.append((name, {"x": [xx_, grid, grid], "y": [yy_, o_, l_]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="", active=0, pad_t=55)],
+                  xaxis_title="x", yaxis_title="y / P(y=1)",
+                  yaxis=dict(range=[-0.6, 1.6]), legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420, title="이진 레이블에 무엇을 맞출 것인가")
+fig.show()
+```
+
+::: {.interaction-hint}
+선형회귀(주황)는 **0 아래와 1 위로 튀어나갑니다** — 확률로 해석할 수 없습니다. 슬라이더를 넘겨 멀리 떨어진 점을 추가하면 선형회귀 직선이 크게 기울어 결정경계까지 밀립니다. 로지스틱(파랑)은 항상 $[0,1]$ 안에 있고 훨씬 안정적입니다.
 :::
 
-로지스틱 회귀는 '마지막 층 + softmax'와 정확히 같은 구조다. 신경망 분류기를 이해하는 가장 빠른 길은 여기서 시작한다.
+---
+
+## 시그모이드와 로그오즈
+
+해법은 선형 점수를 확률로 **눌러 넣는** 것이다.
+
+$$z = \mathbf{x}^\top\boldsymbol\beta, \qquad
+p = \sigma(z) = \frac{1}{1+e^{-z}}$$
+
+역함수를 보면 이 선택이 왜 자연스러운지 드러난다.
+
+$$z = \log\frac{p}{1-p} = \text{logit}(p)$$
+
+**로지스틱 회귀는 로그오즈를 선형으로 모형화한다.**
+확률은 $[0,1]$ 에 갇혀 있어 선형으로 다루기 나쁘지만,
+로그오즈는 $(-\infty, \infty)$ 전체를 쓴다.
+
+```{python}
+#| label: fig-sigmoid-logit
+#| fig-cap: "시그모이드와 그 역함수 로짓. 확률과 로그오즈의 대응."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+z = np.linspace(-8, 8, 500)
+p = 1 / (1 + np.exp(-z))
+pp = np.linspace(0.002, 0.998, 500)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("시그모이드 σ(z) = 1/(1+e⁻ᶻ)",
+                                    "로짓 log(p/(1−p))"))
+fig.add_trace(go.Scatter(x=z, y=p, mode="lines", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+fig.add_trace(go.Scatter(x=z, y=p*(1-p), mode="lines", name="도함수 σ'(z)=σ(1−σ)",
+                         line=dict(color=viz.WARM, width=2, dash="dash")), row=1, col=1)
+fig.add_hline(y=0.5, line=dict(color=viz.YELLOW, dash="dot"), row=1, col=1)
+fig.add_trace(go.Scatter(x=pp, y=np.log(pp/(1-pp)), mode="lines", showlegend=False,
+                         line=dict(color=viz.GREEN, width=3)), row=1, col=2)
+fig.add_vline(x=0.5, line=dict(color=viz.YELLOW, dash="dot"), row=1, col=2)
+
+fig.update_xaxes(title_text="선형 점수 z", row=1, col=1)
+fig.update_yaxes(title_text="확률 p", row=1, col=1)
+fig.update_xaxes(title_text="확률 p", row=1, col=2)
+fig.update_yaxes(title_text="로그오즈 z", range=[-7, 7], row=1, col=2)
+viz.fig_defaults(fig, height=380, title="확률 ↔ 로그오즈")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.interaction-hint}
+도함수 $\sigma'(z)=\sigma(1-\sigma)$ (주황)가 $z=0$ 에서 최대 0.25이고 양쪽 끝에서 **0으로 사라집니다**. 이것이 [3.2 활성화 함수](../03_deep_learning/02_activations.qmd)에서 다룰 포화 문제이고, 깊은 망에서 시그모이드가 밀려난 이유입니다.
+:::
+
+### 계수 해석: 오즈비
+
+$\beta_j$ 는 **"$x_j$ 를 1 늘리면 로그오즈가 $\beta_j$ 만큼 증가"** 를 뜻한다.
+지수를 취하면 더 읽기 쉽다.
+
+$$e^{\beta_j} = \text{오즈비(odds ratio)}$$
+
+$\beta_j = 0.7$ 이면 $e^{0.7} \approx 2$ — **오즈가 2배**가 된다.
+확률이 2배가 아니라는 점에 주의해야 한다.
 
 ---
 
-## 이 장에서 다루는 것
+## 최대우도 → 교차엔트로피
 
-- 이진 분류의 확률 모델링, 시그모이드와 로짓(로그오즈)
-- 최대우도 → 이진 교차엔트로피 손실 유도
-- 닫힌 해가 없는 이유와 IRLS·경사하강
-- 결정경계가 선형인 이유, 계수의 오즈비 해석
-- 다중 클래스: softmax 회귀, one-vs-rest, one-vs-one
-- 완전 분리(perfect separation)와 계수 발산, 정규화의 필요
-- 생성모델 vs 판별모델: LDA/QDA 와의 비교
-- 임계값 선택과 비용 민감 분류
-- 확률 캘리브레이션 예고 (Platt, isotonic)
+[0.2 확률](../00_foundations/02_probability.qmd)의 방식대로 유도한다.
+각 관측이 베르누이 분포를 따른다고 하면
 
----
+$$p(y_i|\mathbf{x}_i) = p_i^{y_i}(1-p_i)^{1-y_i}$$
 
-## G2.4.1 — 시그모이드와 로짓
+로그우도를 쓰고 부호를 뒤집으면
 
-선형 점수가 확률로 눌리는 과정과 결정경계의 이동
+$$-\log L = -\sum_i\big[y_i\log p_i + (1-y_i)\log(1-p_i)\big]$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 가중치·절편 슬라이더
+이것이 정확히 **이진 교차엔트로피**다
+([0.4 정보이론](../00_foundations/04_information_theory.qmd)에서 본 그 식).
+
+::: {.key-concept}
+**그래디언트가 놀랍도록 단순하다.**
+
+$$\frac{\partial(-\log L)}{\partial\boldsymbol\beta} = \sum_i (p_i - y_i)\,\mathbf{x}_i
+= X^\top(\mathbf{p} - \mathbf{y})$$
+
+시그모이드의 복잡한 미분과 로그의 미분이 **정확히 상쇄**되어
+$(\text{예측} - \text{정답})$ 만 남는다.
+
+[선형회귀의 그래디언트](02_linear_regression.qmd) $X^\top(X\beta - \mathbf{y})$ 와 같은 형태다.
+그리고 [5.6에서 유도한 softmax+교차엔트로피](../05_transformer/06_build_gpt.qmd)의
+`dlogits = probs - onehot` 도 같은 이유로 나온다.
+:::
+
+닫힌 해는 없다. $p_i$ 가 $\beta$ 에 비선형으로 들어가기 때문이다.
+그래서 반복법(경사하강, 뉴턴법/IRLS)으로 푼다.
+
+```{python}
+#| label: fig-training
+#| fig-cap: "경사하강으로 결정경계가 자리 잡는 과정"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+X, yb = datasets.blobs(n=200, centers=((-1.6, -1.0), (1.6, 1.2)),
+                       spread=1.0, seed=0)
+yb = yb.astype(float)
+
+def sigmoid(z):
+    return np.where(z >= 0, 1/(1+np.exp(-z)), np.exp(z)/(1+np.exp(z)))
+
+Xb = np.c_[np.ones(len(X)), X]
+beta = np.zeros(3)
+snaps, losses = {}, []
+checkpoints = [0, 2, 5, 10, 25, 60, 150, 400]
+lr = 0.5
+for step in range(401):
+    p = sigmoid(Xb @ beta)
+    losses.append(-np.mean(yb*np.log(p+1e-12) + (1-yb)*np.log(1-p+1e-12)))
+    if step in checkpoints:
+        snaps[step] = beta.copy()
+    beta -= lr * (Xb.T @ (p - yb)) / len(yb)
+
+gx = np.linspace(X[:, 0].min()-1, X[:, 0].max()+1, 60)
+gy = np.linspace(X[:, 1].min()-1, X[:, 1].max()+1, 60)
+GX, GY = np.meshgrid(gx, gy)
+grid = np.c_[np.ones(GX.size), GX.ravel(), GY.ravel()]
+
+probs = {s: np.round(sigmoid(grid @ b).reshape(GX.shape), 3)
+         for s, b in snaps.items()}
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("예측 확률과 결정경계", "학습 곡선"))
+s0 = 10
+fig.add_trace(go.Contour(x=gx, y=gy, z=probs[s0], colorscale="RdBu",
+                         zmid=0.5, showscale=False, opacity=0.75,
+                         contours=dict(start=0, end=1, size=0.1)), row=1, col=1)
+for c in (0, 1):
+    m = yb == c
+    fig.add_trace(go.Scatter(x=X[m, 0], y=X[m, 1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=6, color=[viz.ACCENT, viz.WARM][c],
+                                         line=dict(width=1, color="black"))),
+                  row=1, col=1)
+fig.add_trace(go.Scatter(x=np.arange(len(losses)), y=losses, mode="lines",
+                         showlegend=False, line=dict(color=viz.GREEN, width=2.5)),
+              row=1, col=2)
+fig.add_trace(go.Scatter(x=[s0], y=[losses[s0]], mode="markers", showlegend=False,
+                         marker=dict(size=12, color=viz.YELLOW)), row=1, col=2)
+
+steps = [(str(s), {"z": [probs[s], None, None, None, None],
+                   "x": [gx, X[yb==0,0], X[yb==1,0], np.arange(len(losses)), [s]],
+                   "y": [gy, X[yb==0,1], X[yb==1,1], losses, [losses[s]]]})
+         for s in checkpoints]
+fig.update_layout(sliders=[viz.slider(steps, prefix="학습 스텝 = ",
+                                      active=checkpoints.index(s0), pad_t=55)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="스텝", row=1, col=2)
+fig.update_yaxes(title_text="교차엔트로피", row=1, col=2)
+viz.fig_defaults(fig, height=430, title="로지스틱 회귀 학습")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+색이 예측 확률입니다(파랑=0, 빨강=1). 스텝 0에서는 전체가 0.5(흰색)였다가, 학습이 진행되며 **경계가 두 군집 사이로 이동**하고 확률 전이가 가팔라집니다.
 :::
 
 ---
 
-## G2.4.2 — 결정경계 학습 애니메이션
+## 결정경계는 왜 선형인가
 
-경사하강 반복에 따라 경계가 자리를 잡아가는 모습
+$p = 0.5$ 인 지점을 찾으면 된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 학습 스텝 재생
+$$\sigma(z) = 0.5 \iff z = 0 \iff \mathbf{x}^\top\boldsymbol\beta = 0$$
+
+**초평면**이다. 확률 표면은 곡면이지만 **등확률선은 전부 평행한 직선**이다.
+
+::: {.callout-note}
+## 비선형 경계가 필요하면
+
+로지스틱 회귀 자체를 바꿀 필요는 없다.
+[2.2의 기저 확장](02_linear_regression.qmd)을 그대로 쓰면 된다.
+
+$x_1^2$, $x_2^2$, $x_1x_2$ 를 특성으로 추가하면 경계가 원·타원·쌍곡선이 된다.
+**파라미터에 대해서는 여전히 선형**이므로 같은 알고리즘이 그대로 돈다.
+
+이것을 자동으로, 학습으로 하는 것이 신경망이다.
 :::
 
 ---
 
-## G2.4.3 — softmax 다중분류
+## 완전 분리: 계수가 무한대로 가는 문제
 
-세 클래스 확률 지형과 온도에 따른 날카로움 변화
+데이터가 완벽히 분리되면 이상한 일이 생긴다.
+**계수를 키울수록 우도가 계속 올라가서 최적해가 무한대에 있다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 온도 슬라이더
+```{python}
+#| label: fig-separation
+#| fig-cap: "겹침이 사라지면 계수가 발산합니다. 정규화가 이를 막습니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def sigmoid(z):
+    return np.where(z >= 0, 1/(1+np.exp(-z)), np.exp(z)/(1+np.exp(z)))
+
+def fit(x, y, lam=0.0, iters=4000, lr=0.5):
+    X = np.c_[np.ones_like(x), x]
+    b = np.zeros(2)
+    for _ in range(iters):
+        p = sigmoid(X @ b)
+        g = X.T @ (p - y) / len(y)
+        g[1] += lam * b[1]                    # 절편은 벌하지 않음
+        b -= lr * g
+    return b
+
+rng = np.random.default_rng(1)
+gaps = [0.0, 0.4, 0.8, 1.2, 1.6, 2.0, 3.0]
+n = 30
+res = {}
+for gap in gaps:
+    x = np.r_[rng.uniform(-2, -gap/2, n), rng.uniform(gap/2, 2, n)]
+    y = np.r_[np.zeros(n), np.ones(n)]
+    res[gap] = (x, y, fit(x, y, 0.0), fit(x, y, 0.5))
+
+coef_plain = [abs(res[g][2][1]) for g in gaps]
+coef_reg = [abs(res[g][3][1]) for g in gaps]
+grid = np.linspace(-3, 3, 300)
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("적합된 확률 곡선", "기울기 계수의 크기"))
+g0 = gaps[3]
+x0, y0, b_p, b_r = res[g0]
+fig.add_trace(go.Scatter(x=x0, y=y0, mode="markers", name="데이터",
+                         marker=dict(size=7, color=viz.YELLOW,
+                                     line=dict(width=1, color="black"))), row=1, col=1)
+fig.add_trace(go.Scatter(x=grid, y=sigmoid(b_p[0]+b_p[1]*grid), mode="lines",
+                         name="정규화 없음", line=dict(color=viz.WARM, width=3)),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=grid, y=sigmoid(b_r[0]+b_r[1]*grid), mode="lines",
+                         name="L2 정규화 (λ=0.5)",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+fig.add_trace(go.Scatter(x=gaps, y=coef_plain, mode="lines+markers",
+                         showlegend=False, line=dict(color=viz.WARM, width=2.5)),
+              row=1, col=2)
+fig.add_trace(go.Scatter(x=gaps, y=coef_reg, mode="lines+markers",
+                         showlegend=False, line=dict(color=viz.ACCENT, width=2.5)),
+              row=1, col=2)
+
+steps = []
+for g in gaps:
+    xx, yy, bp, br = res[g]
+    steps.append((f"{g:g}", {
+        "x": [xx, grid, grid, gaps, gaps],
+        "y": [yy, sigmoid(bp[0]+bp[1]*grid), sigmoid(br[0]+br[1]*grid),
+              coef_plain, coef_reg]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="두 클래스 사이 간격 = ",
+                                      active=3, pad_t=55)])
+fig.update_xaxes(title_text="x", row=1, col=1)
+fig.update_yaxes(title_text="P(y=1)", row=1, col=1)
+fig.update_xaxes(title_text="간격", row=1, col=2)
+fig.update_yaxes(title_text="|β₁|", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=430, title="완전 분리와 정규화")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.interaction-hint}
+간격을 벌리면 주황(정규화 없음) 곡선이 **점점 계단에 가까워지고** 계수가 폭발합니다. 파랑(L2 정규화)은 완만함을 유지합니다. 실무에서 로지스틱 회귀에 기본적으로 정규화를 넣는 이유입니다.
 :::
 
 ---
 
-## G2.4.4 — 완전 분리 발산
+## 다중 클래스: softmax
 
-데이터가 완전히 분리되면 계수가 무한대로 가는 현상
+클래스가 $K$ 개면 각 클래스마다 점수를 만들고 softmax로 정규화한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 분리 정도 슬라이더
+$$p_k = \frac{e^{z_k}}{\sum_{j=1}^{K}e^{z_j}}, \qquad z_k = \mathbf{x}^\top\boldsymbol\beta_k$$
+
+$K=2$ 면 이진 로지스틱과 동등하다.
+그리고 이것이 [언어모델이 다음 토큰을 고르는](../07_language/02_language_models.qmd) 바로 그 구조다 —
+$K$ 가 어휘 크기일 뿐이다.
+
+```{python}
+#| label: fig-softmax-multiclass
+#| fig-cap: "3클래스 softmax 회귀. 온도를 바꾸면 확률이 날카로워집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+X, y = datasets.blobs(n=300, centers=((-2, -1), (2, -1), (0, 2.2)),
+                      spread=0.9, seed=1)
+K = 3
+Y = np.eye(K)[y]
+Xb = np.c_[np.ones(len(X)), X]
+
+def softmax(z):
+    e = np.exp(z - z.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
+
+W = np.zeros((3, K))
+for _ in range(3000):
+    P = softmax(Xb @ W)
+    W -= 0.15 * Xb.T @ (P - Y) / len(y)
+
+gx = np.linspace(X[:,0].min()-1, X[:,0].max()+1, 70)
+gy = np.linspace(X[:,1].min()-1, X[:,1].max()+1, 70)
+GX, GY = np.meshgrid(gx, gy)
+G = np.c_[np.ones(GX.size), GX.ravel(), GY.ravel()]
+
+temps = [0.25, 0.5, 1.0, 2.0, 4.0]
+conf = {}
+for T in temps:
+    P = softmax((G @ W) / T)
+    conf[T] = np.round(P.max(axis=1).reshape(GX.shape), 3)
+
+fig = go.Figure()
+T0 = 1.0
+fig.add_trace(go.Contour(x=gx, y=gy, z=conf[T0], colorscale="Viridis",
+                         showscale=True, opacity=0.8,
+                         colorbar=dict(title="최대 확률", thickness=12, outlinewidth=0)))
+for c in range(K):
+    m = y == c
+    fig.add_trace(go.Scatter(x=X[m,0], y=X[m,1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=6, color=viz.color(c),
+                                         line=dict(width=1, color="black"))))
+
+steps = [(f"{T:g}", {"z": [conf[T], None, None, None]}) for T in temps]
+fig.update_layout(sliders=[viz.slider(steps, prefix="온도 T = ",
+                                      active=temps.index(T0), pad_t=55)],
+                  xaxis_title="x₁", yaxis_title="x₂",
+                  legend=dict(x=0.01, y=0.99))
+viz.fig_defaults(fig, height=470, title="softmax 회귀의 확신도 지형")
+fig.show()
+```
+
+::: {.interaction-hint}
+경계 근처가 어둡습니다 — 모델이 확신하지 못하는 영역입니다. 온도를 낮추면(`T=0.25`) 확신 영역이 넓어지고 경계만 얇게 남습니다. [7.9 디코딩](../07_language/09_decoding.qmd)의 온도가 정확히 이 조작입니다.
 :::
 
 ---
 
-## 핵심 용어
+## 판별 모델 vs 생성 모델
 
-| 용어 | 비고 |
-|------|------|
-| 시그모이드 (sigmoid) |  |
-| 로그오즈 (log-odds) |  |
-| softmax |  |
-| 판별모델 vs 생성모델 |  |
-| 완전 분리 |  |
+로지스틱 회귀는 $p(y|x)$ 를 **직접** 모형화한다 — 판별 모델.
+반대로 각 클래스의 $p(x|y)$ 를 모형화하고 베이즈로 뒤집는 것이 생성 모델이다(LDA, 나이브 베이즈).
+
+```{python}
+#| label: disc-vs-gen
+#| code-fold: false
+
+rows = [
+    ("모형화 대상",    "p(y|x) 직접",           "p(x|y)와 p(y), 베이즈로 뒤집음"),
+    ("가정",           "적음 (경계만)",          "많음 (분포 형태)"),
+    ("가정이 맞을 때",  "보통",                  "**더 효율적** (적은 데이터로)"),
+    ("가정이 틀릴 때",  "**강건**",              "편향됨"),
+    ("데이터가 많으면", "**대체로 우세**",        "가정의 한계에 막힘"),
+    ("새 데이터 생성",  "불가",                  "가능"),
+]
+print(f"{'':<16} {'판별 (로지스틱)':<24} {'생성 (LDA/나이브베이즈)'}")
+print("-" * 74)
+for r in rows:
+    print(f"{r[0]:<16} {r[1]:<24} {r[2]}")
+```
+
+::: {.key-concept}
+**같은 데이터, 다른 답**
+
+가우스 클래스 조건부 분포에 공분산이 같다고 가정하면(LDA),
+결정경계가 로지스틱 회귀와 **같은 형태(선형)** 로 나온다.
+그런데 계수는 다르다 — 추정 방식이 다르기 때문이다.
+
+가정이 맞으면 LDA가 더 효율적이고, 틀리면 로지스틱이 강건하다.
+이것이 [2.8](08_knn_naive_bayes.qmd)에서 다시 나오는 주제다.
+:::
 
 ---
 
-**다음**: [2.5 서포트 벡터 머신과 커널](05_svm_kernels.qmd) — 최대 마진·쌍대문제·커널 트릭 — 고차원으로 올려서 푸는 법
+## 임계값은 0.5가 아니다
+
+분류기가 확률을 출력하면, **어디서 자를지는 별도의 결정**이다.
+
+기본값 0.5는 "두 종류의 오류 비용이 같다"는 가정이다. 대개 사실이 아니다.
+
+```{python}
+#| label: fig-threshold
+#| fig-cap: "임계값에 따른 정밀도·재현율과 비용"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+n_pos, n_neg = 150, 1350                       # 불균형 (양성 10%)
+scores = np.r_[rng.beta(5, 2, n_pos), rng.beta(2, 5, n_neg)]
+labels = np.r_[np.ones(n_pos), np.zeros(n_neg)]
+
+ths = np.linspace(0.01, 0.99, 99)
+prec, rec, f1 = [], [], []
+for t in ths:
+    pred = scores >= t
+    tp = (pred & (labels == 1)).sum()
+    fp = (pred & (labels == 0)).sum()
+    fn = ((~pred) & (labels == 1)).sum()
+    p_ = tp / max(tp + fp, 1); r_ = tp / max(tp + fn, 1)
+    prec.append(p_); rec.append(r_)
+    f1.append(2*p_*r_/max(p_+r_, 1e-9))
+prec, rec, f1 = map(np.array, (prec, rec, f1))
+
+cost_ratios = [1, 3, 10, 30]
+costs = {}
+for cr in cost_ratios:                          # FN 이 FP 보다 cr 배 비쌈
+    c = []
+    for t in ths:
+        pred = scores >= t
+        fp = (pred & (labels == 0)).sum()
+        fn = ((~pred) & (labels == 1)).sum()
+        c.append(fp + cr * fn)
+    costs[cr] = np.array(c)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("정밀도·재현율·F1", "총 비용 (FN 가중치별)"))
+for nm, arr, col in [("정밀도", prec, viz.ACCENT), ("재현율", rec, viz.WARM),
+                     ("F1", f1, viz.GREEN)]:
+    fig.add_trace(go.Scatter(x=ths, y=arr, mode="lines", name=nm,
+                             line=dict(color=col, width=2.5)), row=1, col=1)
+fig.add_vline(x=0.5, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="기본값 0.5", row=1, col=1)
+for i, cr in enumerate(cost_ratios):
+    c = costs[cr]
+    fig.add_trace(go.Scatter(x=ths, y=c/c.max(), mode="lines",
+                             name=f"FN 비용 ×{cr}", showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+    fig.add_vline(x=ths[c.argmin()], line=dict(color=viz.color(i), dash="dot"),
+                  row=1, col=2)
+
+fig.update_xaxes(title_text="임계값")
+fig.update_yaxes(title_text="값", row=1, col=1)
+fig.update_yaxes(title_text="상대 비용", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="임계값 선택은 별도의 의사결정이다")
+fig.update_layout(legend=dict(x=0.02, y=0.35))
+fig.show()
+```
+
+```{python}
+#| label: threshold-table
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'FN 비용 배수':>12} {'최적 임계값':>12} {'그때 재현율':>12} {'그때 정밀도':>12}")
+print("-" * 52)
+for cr in cost_ratios:
+    k = int(costs[cr].argmin())
+    print(f"{cr:>12} {ths[k]:>12.2f} {rec[k]:>12.3f} {prec[k]:>12.3f}")
+print()
+print("→ 놓치는 것(FN)이 비쌀수록 임계값을 낮춰 더 많이 잡아야 한다.")
+print("  0.5 는 두 오류 비용이 같을 때만 최적이다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 식 | 핵심 |
+|------|-----|------|
+| 시그모이드 | $\sigma(z)=1/(1+e^{-z})$ | 선형 점수를 $[0,1]$ 로 |
+| 로짓 | $\log\frac{p}{1-p}=z$ | **로그오즈를 선형 모형화** |
+| 계수 해석 | $e^{\beta_j}$ = 오즈비 | 확률 배수가 아님 |
+| 손실 | 이진 교차엔트로피 | 베르누이 최대우도에서 유도 |
+| **그래디언트** | $X^\top(\mathbf{p}-\mathbf{y})$ | 예측 − 정답. 신경망과 동일 |
+| 닫힌 해 | **없음** | 반복법 필요 |
+| 결정경계 | $\mathbf{x}^\top\beta=0$ | 선형. 기저 확장으로 곡선화 |
+| 완전 분리 | 계수 발산 | 정규화가 필수 |
+| softmax | $e^{z_k}/\sum e^{z_j}$ | 다중 클래스, LM의 출력층 |
+| 판별 vs 생성 | $p(y\|x)$ vs $p(x\|y)$ | 가정 적음/강건 vs 효율적 |
+| 임계값 | 0.5는 기본값일 뿐 | **비용 비율로 정해야** |
+
+선형 경계로는 부족한 문제가 있다.
+다음 장은 **마진을 최대화하고, 커널로 고차원에 올려** 그 한계를 넘는다.
+
+---
+
+**다음**: [2.5 서포트 벡터 머신과 커널](05_svm_kernels.qmd) — 최대 마진·쌍대문제·커널 트릭
 
 **이전**: [2.3 정규화](03_regularization.qmd)
