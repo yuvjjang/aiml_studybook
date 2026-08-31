@@ -4,87 +4,471 @@ subtitle: "분할 기준·가지치기·해석 — 규칙으로 학습하는 모
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+지금까지 본 모델들 — [선형회귀](02_linear_regression.qmd), [로지스틱](04_logistic_regression.qmd),
+[SVM](05_svm_kernels.qmd) — 은 전부 **가중합**으로 예측한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+트리는 완전히 다르다. **질문을 던지고 답에 따라 갈라진다.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+> 나이 < 35인가? → 예: 소득 < 4000인가? → 아니오: 예측 = 0.82
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 다른 귀납 편향이 실전에서 큰 차이를 만든다.
+스케일링이 필요 없고, 범주형을 그대로 먹고, 비선형·상호작용을 자동으로 잡아낸다.
+
+그리고 트리 하나는 약하지만, **모으면 정형 데이터 최강이 된다** —
+[다음 장 앙상블](07_ensembles.qmd)의 기본 단위다.
+
+---
+
+## 재귀적 이진 분할
+
+학습은 단순한 재귀다.
+
+1. 모든 (특성, 임계값) 후보 중 **불순도를 가장 많이 줄이는** 분할을 찾는다
+2. 데이터를 둘로 나눈다
+3. 각 부분에서 1을 반복한다
+4. 정지 조건에 닿으면 잎으로 만들고 예측값을 저장한다
+
+각 분할이 축과 평행하므로, 결정경계는 항상 **직사각형들의 모자이크**가 된다.
+
+---
+
+## G2.6.1 — 트리가 자라는 과정
+
+깊이를 늘려가며 특성공간이 어떻게 쪼개지는지 본다.
+
+```{python}
+#| label: fig-tree-growth
+#| fig-cap: "깊이가 늘수록 특성공간이 직사각형으로 잘게 쪼개집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, trees, viz
+
+X, y = datasets.two_moons(n=220, noise=0.22, seed=0)
+gx = np.linspace(X[:,0].min()-0.4, X[:,0].max()+0.4, 90)
+gy = np.linspace(X[:,1].min()-0.4, X[:,1].max()+0.4, 90)
+
+depths = [1, 2, 3, 4, 6, 8, 12]
+surf, stats = {}, {}
+for d in depths:
+    t = trees.DecisionTree(max_depth=d, random_state=0).fit(X, y)
+    surf[d] = np.round(trees.decision_surface(t, gx, gy), 3)
+    stats[d] = (t.n_leaves(), (t.predict(X) == y).mean())
+
+leaves = [stats[d][0] for d in depths]
+accs = [stats[d][1] for d in depths]
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("결정 영역", "깊이에 따른 잎 수와 훈련 정확도"))
+
+d0 = 4
+fig.add_trace(go.Heatmap(x=gx, y=gy, z=surf[d0], colorscale="RdBu",
+                         zmid=0.5, showscale=False, opacity=0.75), row=1, col=1)
+for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
+    m = y == c
+    fig.add_trace(go.Scatter(x=X[m,0], y=X[m,1], mode="markers", name=f"클래스 {c}",
+                             marker=dict(size=6, color=col,
+                                         line=dict(width=1, color="black"))),
+                  row=1, col=1)
+
+fig.add_trace(go.Scatter(x=depths, y=leaves, mode="lines+markers", name="잎 개수",
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=depths, y=np.array(accs)*max(leaves), mode="lines+markers",
+                         name="훈련 정확도 (우측 스케일)",
+                         line=dict(color=viz.YELLOW, width=2.5, dash="dash")),
+              row=1, col=2)
+
+steps = [(str(d), {"z": [surf[d], None, None, None, None]}) for d in depths]
+fig.update_layout(sliders=[viz.slider(steps, prefix="최대 깊이 = ",
+                                      active=depths.index(d0), pad_t=55)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="최대 깊이", row=1, col=2)
+fig.update_yaxes(title_text="잎 개수", row=1, col=2)
+viz.fig_defaults(fig, height=440, title="트리 성장")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+```{python}
+#| label: growth-table
+#| code-fold: false
+
+print(f"{'최대 깊이':>10} {'잎 개수':>9} {'훈련 정확도':>12}")
+print("-" * 34)
+for d in depths:
+    print(f"{d:>10} {stats[d][0]:>9} {stats[d][1]:>12.3f}")
+print()
+print("→ 깊이를 풀면 훈련 데이터를 완전히 외운다 (정확도 1.0).")
+print("  이것이 트리 하나가 고분산 모델인 이유다.")
+```
+
+::: {.interaction-hint}
+깊이 1은 직선 하나, 깊이 2는 사각형 4개입니다. 깊이가 커지면 **점 하나만 감싸는 좁은 띠**가 생기기 시작합니다 — 전형적 과적합입니다.
 :::
 
-트리는 정형 데이터에서 가장 강력한 앙상블의 기본 단위이며, 스케일링·인코딩 없이도 동작하는 드문 모델이다.
-
 ---
 
-## 이 장에서 다루는 것
+## 분할 기준: 불순도
 
-- 재귀적 이진 분할과 축 정렬 결정경계
-- 분할 기준: 지니 불순도, 엔트로피 정보이득, 분산 감소
-- 탐욕적 학습이 최적 트리를 보장하지 않는 이유
-- 정지 조건과 가지치기(사전/사후), 비용복잡도 가지치기
-- 결측치 처리(대리 분할)와 범주형 처리
-- 트리의 편향: 고카디널리티 특성 선호, 축 정렬의 한계
-- 특성 중요도 계산과 그 편향(불순도 기반 vs 순열 기반)
-- 회귀트리와 계단형 예측
-- CART / ID3 / C4.5 계보
+"좋은 분할"은 자식 노드가 **한 클래스로 순수해지는** 분할이다.
 
----
+| 기준 | 식 | 범위 (2클래스) |
+|------|-----|----------------|
+| 지니 불순도 | $1-\sum_k p_k^2$ | 0 ~ 0.5 |
+| 엔트로피 | $-\sum_k p_k\log_2 p_k$ | 0 ~ 1 |
+| 분산 (회귀) | $\frac{1}{n}\sum(y_i-\bar{y})^2$ | 0 ~ ∞ |
 
-## G2.6.1 — 트리 성장 애니메이션
+분할의 **이득**은 부모 불순도에서 자식들의 가중 평균을 뺀 것이다.
 
-분할이 하나씩 추가될 때마다 특성공간이 쪼개지는 과정
+$$\text{Gain} = I(\text{부모}) - \frac{n_L}{n}I(\text{왼쪽}) - \frac{n_R}{n}I(\text{오른쪽})$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 깊이 슬라이더
+엔트로피를 쓰면 이 값이 [0.4의 상호정보](../00_foundations/04_information_theory.qmd)와 정확히 같다 —
+"분할이 레이블에 대해 알려주는 정보량"이다.
+
+```{python}
+#| label: fig-impurity
+#| fig-cap: "두 불순도 함수. 모양이 비슷해 실제 결과도 거의 같습니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+p = np.linspace(1e-9, 1-1e-9, 500)
+gini_v = 2 * p * (1 - p)                      # 1 − p² − (1−p)²
+ent_v = -(p*np.log2(p) + (1-p)*np.log2(1-p))
+err_v = np.minimum(p, 1-p)
+
+fig = go.Figure()
+for name, v, col in [("지니 (×2 정규화)", gini_v / gini_v.max(), viz.ACCENT),
+                     ("엔트로피 (정규화)", ent_v / ent_v.max(), viz.WARM),
+                     ("오분류율 (정규화)", err_v / err_v.max(), viz.GREEN)]:
+    fig.add_trace(go.Scatter(x=p, y=v, mode="lines", name=name,
+                             line=dict(color=col, width=2.5)))
+fig.add_vline(x=0.5, line=dict(color=viz.YELLOW, dash="dot"))
+fig.update_layout(xaxis_title="클래스 1의 비율 p", yaxis_title="정규화된 불순도",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=390,
+                 title="불순도 함수 (최댓값 1로 맞춰 비교)")
+fig.show()
+```
+
+::: {.callout-note}
+## 왜 오분류율을 분할 기준으로 쓰지 않는가
+
+오분류율(초록)은 **직선 두 개**라 볼록성이 약하다.
+그래서 분할해도 이득이 0으로 계산되는 경우가 생겨, 유용한 분할을 놓친다.
+
+지니와 엔트로피는 **엄격히 오목**해서 불균등한 분할에도 항상 이득을 준다.
+실무에서 둘의 차이는 거의 없고, 지니가 로그 계산이 없어 조금 빠르다.
 :::
 
 ---
 
-## G2.6.2 — 불순도 곡선
+## 축 정렬의 한계
 
-지니와 엔트로피의 모양 비교 — 왜 결과가 비슷한가
+트리의 편향은 명확하다. **분할이 항상 축에 평행하다.**
+대각선 경계는 계단으로 근사해야 한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 클래스 비율 슬라이더
+```{python}
+#| label: fig-axis-aligned
+#| fig-cap: "데이터를 회전시키면 같은 문제가 훨씬 어려워집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import trees, viz
+
+rng = np.random.default_rng(0)
+n = 240
+base = rng.uniform(-2.5, 2.5, (n, 2))
+
+angles = [0, 15, 30, 45]
+results = {}
+for a in angles:
+    th = np.radians(a)
+    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+    Xa = base @ R.T
+    ya = (base[:, 0] > 0).astype(int)          # 회전 전 기준으로 레이블
+    t = trees.DecisionTree(max_depth=6, random_state=0).fit(Xa, ya)
+    gxa = np.linspace(-4, 4, 80); gya = np.linspace(-4, 4, 80)
+    results[a] = (Xa, ya, np.round(trees.decision_surface(t, gxa, gya), 3),
+                  t.n_leaves(), (t.predict(Xa) == ya).mean(), gxa, gya)
+
+fig = make_subplots(rows=1, cols=len(angles),
+                    subplot_titles=[f"{a}° 회전" for a in angles],
+                    horizontal_spacing=0.03)
+for c, a in enumerate(angles, start=1):
+    Xa, ya, Z, nl, acc, gxa, gya = results[a]
+    fig.add_trace(go.Heatmap(x=gxa, y=gya, z=Z, colorscale="RdBu", zmid=0.5,
+                             showscale=False, opacity=0.75), row=1, col=c)
+    for cl, col in [(0, viz.ACCENT), (1, viz.WARM)]:
+        m = ya == cl
+        fig.add_trace(go.Scatter(x=Xa[m,0], y=Xa[m,1], mode="markers",
+                                 showlegend=False,
+                                 marker=dict(size=3, color=col)), row=1, col=c)
+    fig.layout.annotations[c-1].text = f"{a}° 회전<br><sub>잎 {nl}개, 정확도 {acc:.2f}</sub>"
+    fig.update_xaxes(showticklabels=False, row=1, col=c)
+    fig.update_yaxes(showticklabels=False, row=1, col=c)
+
+viz.fig_defaults(fig, height=330, title="같은 난이도의 문제인데 회전만으로 어려워진다")
+fig.update_layout(margin=dict(l=30, r=25, t=85, b=30))
+fig.update_annotations(font_size=11)
+fig.show()
+```
+
+::: {.interaction-hint}
+0°에서는 **분할 하나**로 완벽히 갈립니다. 45°에서는 같은 정보량의 문제인데 잎이 훨씬 많이 필요하고 경계가 계단 모양입니다. 선형 모델이라면 회전에 전혀 영향받지 않았을 문제입니다.
+:::
+
+::: {.key-concept}
+이것이 [2.0의 귀납 편향](00_learning_problem.qmd)이 실제로 작동하는 모습이다.
+
+| | 트리에 유리 | 트리에 불리 |
+|---|---|---|
+| 경계 모양 | 축 정렬, 계단형 | 대각선, 매끄러운 곡선 |
+| 특성 | 이질적 (단위·종류 다름) | 동질적 (픽셀, 임베딩) |
+| 관계 | 구간별 상수, 상호작용 | 부드러운 선형·주기 |
+
+이미지나 임베딩에서 트리가 약한 이유가 여기 있다 —
+그런 데이터는 축 정렬 구조를 갖지 않는다.
 :::
 
 ---
 
-## G2.6.3 — 축 정렬의 한계
+## 회귀 트리: 구간별 상수
 
-대각선 경계를 계단으로 근사하느라 트리가 깊어지는 모습
+회귀에서는 분산을 줄이도록 분할하고, 잎에서 **평균**을 예측한다.
+따라서 예측 함수는 항상 **계단 함수**다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 데이터 회전 슬라이더
+```{python}
+#| label: fig-regression-tree
+#| fig-cap: "회귀 트리는 매끄러운 곡선을 계단으로 근사합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import datasets, trees, viz
+
+x, y, f_true = datasets.polynomial(n=90, noise=0.18, seed=2)
+grid = np.linspace(0, 1, 400)
+truth = np.sin(2*np.pi*grid)
+
+depths = [1, 2, 3, 4, 5, 7, 10]
+preds, info = {}, {}
+for d in depths:
+    t = trees.DecisionTree(task="regress", max_depth=d).fit(x[:, None], y)
+    preds[d] = t.predict(grid[:, None])
+    info[d] = (t.n_leaves(), float(np.mean((t.predict(x[:, None]) - y)**2)))
+
+fig = go.Figure()
+d0 = 3
+fig.add_trace(go.Scatter(x=grid, y=truth, mode="lines", name="참 함수",
+                         line=dict(color="rgba(255,255,255,0.45)", width=2, dash="dash")))
+fig.add_trace(go.Scatter(x=x, y=y, mode="markers", name="데이터",
+                         marker=dict(size=6, color=viz.YELLOW, opacity=0.8,
+                                     line=dict(width=1, color="rgba(0,0,0,0.5)"))))
+fig.add_trace(go.Scatter(x=grid, y=preds[d0], mode="lines", name="회귀 트리",
+                         line=dict(color=viz.ACCENT, width=3, shape="hv")))
+
+steps = [(f"{d} (잎 {info[d][0]})", {"y": [truth, y, preds[d]]}) for d in depths]
+fig.update_layout(sliders=[viz.slider(steps, prefix="깊이 = ",
+                                      active=depths.index(d0), pad_t=55)],
+                  xaxis_title="x", yaxis_title="y",
+                  legend=dict(x=0.02, y=0.02))
+viz.fig_defaults(fig, height=420, title="회귀 트리의 구간별 상수 예측")
+fig.show()
+```
+
+::: {.interaction-hint}
+깊이 1은 계단 2개, 깊이 10은 데이터 점을 거의 그대로 따라갑니다. **외삽이 불가능**하다는 점도 보세요 — $x>1$ 에서는 마지막 잎의 값을 영원히 유지합니다. 선형 모델과의 결정적 차이입니다.
 :::
 
 ---
 
-## G2.6.4 — 가지치기 효과
+## 가지치기: 과적합 억제
 
-비용복잡도 α에 따라 트리가 줄어들고 검증오차가 개선되는 지점
+트리를 끝까지 키우면 훈련 데이터를 외운다. 두 가지 처방이 있다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: α 슬라이더
+**사전 가지치기(pre-pruning)**: 자라는 도중 멈춘다 — `max_depth`, `min_samples_leaf` 등.
+빠르지만 근시안적이다(지금은 이득이 없어도 두 번 더 나누면 좋아질 수 있다).
+
+**사후 가지치기(post-pruning)**: 끝까지 키운 뒤 가지를 되돌린다.
+**비용 복잡도 가지치기**가 표준이다.
+
+$$R_\alpha(T) = \underbrace{R(T)}_{\text{오차}} + \alpha\underbrace{|T|}_{\text{잎 개수}}$$
+
+$\alpha$ 를 키우면 잎이 하나씩 줄어든다 —
+[2.3의 정규화 경로](03_regularization.qmd)와 같은 구조다.
+
+```{python}
+#| label: fig-pruning
+#| fig-cap: "깊이 제한에 따른 훈련·검증 오차. U자의 바닥이 최적 복잡도입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import datasets, trees, viz
+
+X, y = datasets.two_moons(n=300, noise=0.3, seed=5)
+rng = np.random.default_rng(0)
+perm = rng.permutation(len(X))
+tr_i, va_i = perm[:200], perm[200:]
+
+depths = list(range(1, 16))
+tr_err, va_err, n_leaves = [], [], []
+for d in depths:
+    t = trees.DecisionTree(max_depth=d, random_state=0).fit(X[tr_i], y[tr_i])
+    tr_err.append(1 - (t.predict(X[tr_i]) == y[tr_i]).mean())
+    va_err.append(1 - (t.predict(X[va_i]) == y[va_i]).mean())
+    n_leaves.append(t.n_leaves())
+
+best = int(np.argmin(va_err))
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=depths, y=tr_err, mode="lines+markers", name="훈련 오차",
+                         line=dict(color=viz.GREEN, width=2.5)))
+fig.add_trace(go.Scatter(x=depths, y=va_err, mode="lines+markers", name="검증 오차",
+                         line=dict(color=viz.WARM, width=2.5)))
+fig.add_trace(go.Scatter(x=depths, y=np.array(n_leaves)/max(n_leaves)*max(va_err),
+                         mode="lines", name="잎 개수 (스케일 조정)",
+                         line=dict(color="rgba(255,255,255,0.35)", width=2, dash="dot")))
+fig.add_vline(x=depths[best], line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text=f"최적 깊이 {depths[best]}")
+fig.update_layout(xaxis_title="최대 깊이", yaxis_title="오분류율",
+                  legend=dict(x=0.55, y=0.98))
+viz.fig_defaults(fig, height=400, title="트리 복잡도와 일반화")
+fig.show()
+```
+
+---
+
+## 특성 중요도와 그 함정
+
+불순도 감소를 특성별로 합치면 중요도가 나온다.
+쓰기 쉽지만 **알려진 편향**이 있다.
+
+```{python}
+#| label: importance-bias
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import trees
+
+rng = np.random.default_rng(0)
+n = 600
+# y 와 무관한 특성 4개, 카디널리티만 다르게
+X = np.c_[
+    rng.integers(0, 2, n),        # 이진
+    rng.integers(0, 5, n),        # 5개 값
+    rng.integers(0, 50, n),       # 50개 값
+    rng.normal(size=n),           # 연속 (사실상 무한 카디널리티)
+].astype(float)
+y = rng.integers(0, 2, n)         # 순수 잡음 — 어떤 특성도 정보 없음
+
+t = trees.DecisionTree(max_depth=8, random_state=0).fit(X, y)
+imp = t.feature_importance(4)
+
+print("y 는 순수 잡음이라 모든 특성의 참 중요도는 0이다.")
+print()
+print(f"{'특성':<22} {'고유값 수':>10} {'불순도 기반 중요도':>20}")
+print("-" * 56)
+for name, k, v in zip(["이진 (0/1)", "범주형 (5개)", "범주형 (50개)", "연속"],
+                      [2, 5, 50, n], imp):
+    print(f"{name:<22} {k:>10} {v:>20.3f}")
+print()
+print("→ 고유값이 많은 특성일수록 중요도가 부풀려진다.")
+print("  분할 후보가 많아 우연히 좋은 분할을 찾을 기회가 많기 때문이다.")
+```
+
+::: {.callout-warning}
+## 불순도 기반 중요도를 믿지 말 것
+
+두 가지 편향이 있다.
+
+1. **고카디널리티 편향** — 위 실험이 보여주는 것. 연속 특성과 고유값 많은 범주형이 과대평가된다.
+2. **훈련 데이터 기반** — 과적합된 분할의 이득까지 그대로 반영한다.
+
+대안은 **순열 중요도**다. 검증 데이터에서 특성 하나를 섞고 성능이 얼마나 떨어지는지 재는 방식으로,
+훈련 데이터의 편향을 받지 않는다. 다만 상관된 특성에는 별도의 문제가 있다 —
+[12.0 설명 가능성](../12_trust/00_interpretability.qmd)에서 자세히 다룬다.
 :::
 
 ---
 
-## 핵심 용어
+## 트리의 장단 정리
 
-| 용어 | 비고 |
+```{python}
+#| label: tree-pros-cons
+#| code-fold: false
+
+rows = [
+    ("전처리",        "스케일링·정규화 불필요",       "선형 모델은 필수"),
+    ("범주형",        "직접 처리 가능",              "원핫 인코딩 불필요"),
+    ("결측치",        "대리 분할로 처리 가능",        "구현에 따라 다름"),
+    ("비선형·상호작용", "자동으로 포착",              "명시적 특성 공학 불필요"),
+    ("해석",          "규칙 경로로 설명",            "깊으면 어려워짐"),
+    ("외삽",          "**불가능**",                 "훈련 범위 밖은 상수"),
+    ("매끄러운 함수",  "계단으로만 근사",             "축 정렬 편향"),
+    ("안정성",        "**매우 낮음**",              "데이터가 조금 바뀌면 구조가 통째로 바뀜"),
+]
+print(f"{'항목':<18} {'트리':<28} {'비고'}")
+print("-" * 76)
+for r in rows:
+    print(f"{r[0]:<18} {r[1]:<28} {r[2]}")
+```
+
+::: {.key-concept}
+**마지막 항목이 다음 장으로 이어지는 다리다.**
+
+트리는 불안정하다 — 데이터를 조금만 바꿔도 첫 분할이 달라지고,
+그 아래 구조가 전부 바뀐다. 즉 **분산이 매우 크다**
+([2.1 편향-분산](01_bias_variance.qmd)).
+
+그런데 [0.2에서 본 분산 공식](../00_foundations/02_probability.qmd)에 의하면
+불안정한 추정기를 여러 개 평균 내면 분산이 줄어든다.
+
+**약점이 곧 앙상블이 통하는 이유다.** 안정적인 모델을 평균 내면 얻는 게 별로 없다.
+:::
+
+---
+
+## 계보
+
+| 알고리즘 | 연도 | 특징 |
+|----------|------|------|
+| ID3 | 1986 | 정보이득, 범주형만, 다중 분기 |
+| C4.5 | 1993 | 이득비(카디널리티 편향 보정), 연속 특성, 결측치 |
+| **CART** | 1984 | 이진 분할, 지니, 회귀 지원, 비용복잡도 가지치기 |
+
+현대 라이브러리는 대부분 CART 계열이다. 이 장의 [`src/trees.py`](https://github.com/yuvjjang/aiml_studybook/blob/main/src/trees.py) 구현도 그렇다.
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 지니 불순도 (Gini) |  |
-| 정보이득 (information gain) |  |
-| 가지치기 (pruning) |  |
-| CART |  |
+| 학습 | 재귀적 탐욕 이진 분할 |
+| 분할 기준 | 지니 / 엔트로피 / 분산 감소 |
+| 정보이득 | 엔트로피 기준 이득 = **상호정보** |
+| 오분류율 | 볼록성이 약해 기준으로 부적합 |
+| 축 정렬 편향 | 대각 경계를 계단으로 근사 |
+| 회귀 트리 | 구간별 상수, **외삽 불가** |
+| 사전 가지치기 | `max_depth` 등, 빠르지만 근시안적 |
+| 사후 가지치기 | 비용복잡도 $R(T)+\alpha|T|$ |
+| 중요도 편향 | 고카디널리티 특성 과대평가 |
+| **불안정성** | 고분산 → **앙상블의 재료** |
+
+트리 하나는 약하다. 다음 장에서 이것을 수백 개 모아
+정형 데이터에서 여전히 최강인 모델을 만든다.
 
 ---
 
-**다음**: [2.7 앙상블](07_ensembles.qmd) — 배깅·랜덤포레스트·부스팅·GBDT — 약한 모델을 모아 강하게
+**다음**: [2.7 앙상블](07_ensembles.qmd) — 배깅·랜덤포레스트·부스팅·GBDT
 
 **이전**: [2.5 서포트 벡터 머신과 커널](05_svm_kernels.qmd)
