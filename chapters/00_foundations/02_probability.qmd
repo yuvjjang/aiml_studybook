@@ -4,88 +4,478 @@ subtitle: "분포·기댓값·베이즈 — 불확실성을 다루는 문법"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+머신러닝 모델은 대부분 **확률분포**다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+분류기가 출력하는 것은 조건부확률 $p(y|x)$ 이고,
+손실함수는 음의 로그우도이며([0.4 정보이론](04_information_theory.qmd)),
+생성 모델은 데이터 분포 $p(x)$ 자체를 학습한다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
-
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-머신러닝 모델은 대부분 확률분포다. 분류기의 출력은 조건부확률이고, 손실함수는 음의 로그우도이며, 생성모델은 분포 그 자체를 학습한다.
+그래서 "확률을 안다"는 것은 공식을 외우는 게 아니라
+**모델이 무엇을 주장하고 있는지 읽을 줄 아는 것**이다.
+이 장은 그 읽는 법을 세운다.
 
 ---
 
-## 이 장에서 다루는 것
+## 확률변수와 분포
 
-- 표본공간, 사건, 확률의 공리
-- 조건부확률, 독립, 베이즈 정리
-- 확률변수, PMF/PDF/CDF
-- 기댓값·분산·공분산, 기댓값의 선형성
-- 주요 이산분포: 베르누이, 이항, 범주형, 포아송
-- 주요 연속분포: 균등, 정규, 지수, 감마, 베타
-- 다변량 정규분포와 공분산 행렬의 기하학
-- 결합/주변/조건부 분포, 확률의 연쇄법칙
-- 큰 수의 법칙과 중심극한정리
-- 최대우도추정(MLE)과 최대사후추정(MAP) — 정규화의 확률적 해석
+확률변수 $X$ 는 무작위 결과에 숫자를 붙이는 함수다.
+그 숫자가 어떻게 퍼져 있는지가 **분포**다.
 
----
+| 종류 | 기술 방법 | 성질 |
+|------|-----------|------|
+| 이산 | 확률질량함수 $P(X=x)$ | 각 값에 확률, 합이 1 |
+| 연속 | 확률밀도함수 $p(x)$ | **한 점의 확률은 0**, 적분이 1 |
+| 공통 | 누적분포함수 $F(x) = P(X\le x)$ | 단조증가, 0에서 1로 |
 
-## G0.2.1 — 분포 갤러리
+::: {.callout-note}
+## 밀도는 확률이 아니다
 
-주요 분포의 PDF/PMF 를 파라미터를 바꿔가며 관찰
+연속분포에서 $p(x) = 2.5$ 같은 값이 나올 수 있다. 확률이 1을 넘을 수는 없는데?
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 파라미터 슬라이더
+밀도는 **단위 길이당 확률**이다. 확률은 넓이 $p(x)\,dx$ 에서 나온다.
+좁은 구간에 몰려 있으면 밀도가 1을 넘을 수 있다.
+
+이 구분이 실무에서 중요해지는 지점: 연속 분포의 로그우도는 **양수가 될 수 있다.**
+정규화 흐름이나 VAE에서 손실이 음수로 나오는 것이 버그가 아닌 경우가 있다.
 :::
 
 ---
 
-## G0.2.2 — 베이즈 정리 갱신
+## G0.2.1 — 주요 분포 갤러리
 
-사전분포가 관측을 만나 사후분포로 변하는 과정
+각 분포가 어떤 상황을 모형화하는지, 파라미터가 모양을 어떻게 바꾸는지 본다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 사전확률·우도 슬라이더
+```{python}
+#| label: fig-distributions
+#| fig-cap: "주요 분포와 파라미터의 효과. 분포를 바꿔가며 관찰하세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from scipy import stats
+from src import viz
+
+x_cont = np.linspace(-5, 12, 500)
+x_disc = np.arange(0, 21)
+
+# (이름, 종류, x, [파라미터별 (라벨, y)])
+specs = []
+
+specs.append(("정규 N(μ,σ²)", "연속", x_cont,
+              [(f"σ={s}", stats.norm.pdf(x_cont, 3, s)) for s in [0.5, 1, 2, 3]]))
+specs.append(("지수 Exp(λ)", "연속", np.linspace(0, 12, 500),
+              [(f"λ={l}", stats.expon.pdf(np.linspace(0, 12, 500), scale=1/l))
+               for l in [0.3, 0.6, 1.0, 2.0]]))
+specs.append(("베타 Beta(α,β)", "연속", np.linspace(0, 1, 500),
+              [(f"α={a},β={b}", stats.beta.pdf(np.linspace(0, 1, 500), a, b))
+               for a, b in [(0.5, 0.5), (1, 1), (2, 5), (5, 2)]]))
+specs.append(("감마 Gamma(k,θ)", "연속", np.linspace(0, 15, 500),
+              [(f"k={k}", stats.gamma.pdf(np.linspace(0, 15, 500), k, scale=1.5))
+               for k in [1, 2, 4, 8]]))
+specs.append(("이항 B(n,p)", "이산", x_disc,
+              [(f"p={p}", stats.binom.pmf(x_disc, 20, p)) for p in [0.15, 0.3, 0.5, 0.75]]))
+specs.append(("포아송 Pois(λ)", "이산", x_disc,
+              [(f"λ={l}", stats.poisson.pmf(x_disc, l)) for l in [1, 3, 6, 10]]))
+
+fig = go.Figure()
+name0, kind0, x0, series0 = specs[0]
+for i, (lab, y) in enumerate(series0):
+    trace = (go.Scatter(x=x0, y=y, mode="lines", name=lab,
+                        line=dict(color=viz.color(i), width=2.5))
+             if kind0 == "연속" else
+             go.Scatter(x=x0, y=y, mode="markers+lines", name=lab,
+                        line=dict(color=viz.color(i), width=1.5, dash="dot"),
+                        marker=dict(size=7, color=viz.color(i))))
+    fig.add_trace(trace)
+
+steps = []
+for name, kind, xs, series in specs:
+    steps.append((name, {
+        "x": [xs] * 4,
+        "y": [s[1] for s in series],
+        "name": [s[0] for s in series],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="분포 = ", active=0, pad_t=55)],
+                  xaxis_title="x", yaxis_title="확률(밀도)",
+                  legend=dict(x=0.75, y=0.98))
+viz.fig_defaults(fig, height=440, title="확률분포 갤러리")
+fig.show()
+```
+
+::: {.interaction-hint}
+**베타 분포**를 보세요 — $[0,1]$ 위의 분포라 "확률에 대한 확률"을 표현합니다. $\alpha=\beta=1$ 이면 균등, $(2,5)$ 면 낮은 쪽으로 치우칩니다. 베이즈 추론에서 이항분포의 켤레사전분포로 쓰입니다.
+:::
+
+### 어떤 분포를 언제 쓰는가
+
+```{python}
+#| label: dist-usage
+#| code-fold: false
+
+rows = [
+    ("베르누이", "동전 한 번, 클릭 여부",        "이진 분류 출력"),
+    ("범주형",   "주사위 한 번, 다중 선택",      "다중 분류, 언어모델 다음 토큰"),
+    ("이항",     "n번 중 성공 횟수",             "A/B 테스트 전환 수"),
+    ("포아송",   "단위 시간당 사건 수",          "카운트 데이터, 대기열"),
+    ("정규",     "많은 작은 요인의 합",          "회귀 잡음, 가중치 초기화"),
+    ("지수",     "사건까지 대기 시간",           "생존 분석, 지연 모델링"),
+    ("베타",     "0~1 사이 비율의 불확실성",     "확률의 사전분포"),
+    ("감마",     "양수 값, 분산의 사전분포",     "베이지안 모델링"),
+]
+print(f"{'분포':<10} {'모형화하는 상황':<26} {'머신러닝에서'}")
+print("-" * 70)
+for r in rows:
+    print(f"{r[0]:<10} {r[1]:<26} {r[2]}")
+```
+
+---
+
+## 기댓값과 분산
+
+$$\mathbb{E}[X] = \sum_x x\,P(x) \quad\text{또는}\quad \int x\,p(x)\,dx$$
+
+$$\mathrm{Var}(X) = \mathbb{E}[(X-\mathbb{E}[X])^2] = \mathbb{E}[X^2] - (\mathbb{E}[X])^2$$
+
+실무에서 계속 쓰는 성질 두 가지.
+
+| 성질 | 식 | 조건 |
+|------|-----|------|
+| 기댓값의 선형성 | $\mathbb{E}[aX+bY] = a\mathbb{E}[X]+b\mathbb{E}[Y]$ | **독립 불필요** |
+| 분산의 가법성 | $\mathrm{Var}(X+Y) = \mathrm{Var}(X)+\mathrm{Var}(Y)$ | **독립 필요** |
+
+::: {.key-concept}
+분산이 독립을 요구한다는 점이 자주 놓친다.
+일반적으로는
+
+$$\mathrm{Var}(X+Y) = \mathrm{Var}(X) + \mathrm{Var}(Y) + 2\,\mathrm{Cov}(X,Y)$$
+
+[2.7 앙상블](../02_classical_ml/07_ensembles.qmd)이 작동하는 이유가 정확히 이 식이다.
+모델 $M$ 개를 평균 내면 분산이 $\frac{1}{M}\mathrm{Var}$ 로 줄어드는데,
+**모델들의 오차가 상관되어 있으면** 공분산 항이 남아 그만큼 덜 줄어든다.
+그래서 배깅은 일부러 모델을 서로 다르게 만든다.
 :::
 
 ---
 
-## G0.2.3 — 중심극한정리 실험
+## 베이즈 정리: 믿음을 갱신하기
 
-어떤 분포에서 뽑아도 표본평균은 정규분포로 수렴
+$$\underbrace{p(\theta \mid D)}_{\text{사후}} = \frac{\overbrace{p(D \mid \theta)}^{\text{우도}} \; \overbrace{p(\theta)}^{\text{사전}}}{\underbrace{p(D)}_{\text{증거}}}$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 표본크기 n 슬라이더
+읽는 법: **관측 전의 믿음(사전)에 데이터가 말해주는 것(우도)을 곱하면 관측 후의 믿음(사후)이 된다.**
+
+---
+
+## G0.2.2 — 사전분포가 데이터를 만나면
+
+동전의 앞면 확률 $\theta$ 를 추정하는 상황이다.
+관측이 쌓이면서 사후분포가 어떻게 좁아지는지 본다.
+
+```{python}
+#| label: fig-bayes-update
+#| fig-cap: "관측이 늘수록 사전분포의 영향이 줄고 사후분포가 좁아집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from scipy import stats
+from src import viz
+
+theta = np.linspace(0, 1, 500)
+TRUE_P = 0.7
+rng = np.random.default_rng(0)
+flips = rng.random(200) < TRUE_P            # 실제 동전 던지기
+
+priors = {
+    "무정보 Beta(1,1)": (1, 1),
+    "앞면 편향 Beta(8,2)": (8, 2),
+    "뒷면 편향 Beta(2,8)": (2, 8),
+    "강한 공정 믿음 Beta(50,50)": (50, 50),
+}
+n_obs = [0, 1, 3, 5, 10, 25, 50, 100, 200]
+
+# 베타-이항 켤레: 사후 = Beta(a + 앞면수, b + 뒷면수)
+curves = {}
+for pname, (a, b) in priors.items():
+    for n in n_obs:
+        heads = int(flips[:n].sum())
+        curves[(pname, n)] = stats.beta.pdf(theta, a + heads, b + (n - heads))
+
+p0, n0 = "무정보 Beta(1,1)", 10
+fig = go.Figure()
+for i, pname in enumerate(priors):
+    fig.add_trace(go.Scatter(x=theta, y=curves[(pname, n0)], mode="lines",
+                             name=pname, line=dict(color=viz.color(i), width=2.5)))
+fig.add_vline(x=TRUE_P, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text=f"참값 {TRUE_P}")
+
+steps = []
+for n in n_obs:
+    heads = int(flips[:n].sum())
+    steps.append((f"{n}", {"y": [curves[(p, n)] for p in priors]}))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="관측 횟수 = ",
+                                      active=n_obs.index(n0), pad_t=55)],
+                  xaxis_title="θ (앞면 확률)", yaxis_title="사후 밀도",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=430,
+                 title="베타-이항 켤레 사후분포 (참값 0.7 인 동전)")
+fig.show()
+```
+
+::: {.interaction-hint}
+관측 0에서는 네 곡선이 완전히 다릅니다(각자의 사전분포). 관측이 늘수록 **모두 참값 0.7로 수렴**합니다. 다만 "강한 공정 믿음"(빨강)은 사전이 세서 가장 느리게 움직입니다 — 사전분포는 가상의 관측 데이터처럼 작동합니다.
+:::
+
+::: {.key-concept}
+**정규화는 사전분포다.**
+
+[2.3 Ridge/Lasso](../02_classical_ml/03_regularization.qmd)의 정규화 항이
+사실 베이즈 사전분포와 정확히 대응한다.
+
+| 정규화 | 사전분포 | 왜 |
+|--------|----------|-----|
+| L2 (Ridge) | 가우스 $\mathcal{N}(0,\tau^2)$ | $-\log p(\theta) \propto \|\theta\|^2$ |
+| L1 (Lasso) | 라플라스 | $-\log p(\theta) \propto \|\theta\|_1$ |
+| 없음 | 균등(무정보) | 순수 최대우도 |
+
+MAP 추정 $\arg\max_\theta p(D|\theta)p(\theta)$ 를 로그 취하면
+"음의 로그우도 + 정규화 항"이 그대로 나온다.
 :::
 
 ---
 
-## G0.2.4 — 다변량 정규 등고선
+## 큰 수의 법칙과 중심극한정리
 
-상관계수에 따라 타원이 기울어지는 모습 + 고유벡터 축 표시
+두 정리가 통계적 추론 전체를 떠받친다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 공분산 슬라이더
+**큰 수의 법칙(LLN)**: 표본평균이 참 평균으로 수렴한다.
+$$\bar{X}_n \to \mathbb{E}[X] \quad (n\to\infty)$$
+
+**중심극한정리(CLT)**: 원 분포가 무엇이든, 표본평균의 분포는 정규분포로 수렴한다.
+$$\frac{\bar{X}_n - \mu}{\sigma/\sqrt{n}} \to \mathcal{N}(0,1)$$
+
+두 번째가 놀랍다. **원 분포의 모양과 무관하다.**
+
+---
+
+## G0.2.3 — 중심극한정리 직접 확인
+
+기괴한 분포에서 표본을 뽑아 평균을 내면 정말 정규분포가 되는지 본다.
+
+```{python}
+#| label: fig-clt
+#| fig-cap: "어떤 분포에서 뽑아도 표본평균은 정규분포로 수렴합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy import stats
+from src import viz
+
+rng = np.random.default_rng(1)
+N_TRIALS = 1200
+
+sources = {
+    "지수분포 (매우 치우침)": lambda size: rng.exponential(1.0, size),
+    "균등분포": lambda size: rng.uniform(0, 1, size),
+    "이봉분포": lambda size: np.where(rng.random(size) < 0.5,
+                                     rng.normal(-2, 0.4, size),
+                                     rng.normal(2, 0.4, size)),
+    "베르누이 (이산!)": lambda size: (rng.random(size) < 0.3).astype(float),
+}
+ns = [1, 2, 5, 10, 30]
+
+data = {}
+for sname, gen in sources.items():
+    for n in ns:
+        means = gen((N_TRIALS, n)).mean(axis=1)
+        z = (means - means.mean()) / (means.std() + 1e-12)
+        data[(sname, n)] = np.round(z, 3)
+
+fig = make_subplots(rows=1, cols=len(sources), subplot_titles=list(sources),
+                    shared_yaxes=True, horizontal_spacing=0.03)
+
+n0 = 5
+zz = np.linspace(-4, 4, 200)
+for c, sname in enumerate(sources, start=1):
+    fig.add_trace(go.Histogram(x=data[(sname, n0)], nbinsx=45, histnorm="probability density",
+                               marker_color=viz.hex_rgba(viz.ACCENT, 0.75),
+                               showlegend=False), row=1, col=c)
+    fig.add_trace(go.Scatter(x=zz, y=stats.norm.pdf(zz), mode="lines",
+                             name="표준정규", showlegend=(c == 1),
+                             line=dict(color=viz.YELLOW, width=2.5)), row=1, col=c)
+
+steps = []
+for n in ns:
+    ys = []
+    for sname in sources:
+        ys += [data[(sname, n)], None]
+    steps.append((f"{n}", {"x": ys}))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="표본 크기 n = ",
+                                      active=ns.index(n0), pad_t=55)])
+fig.update_xaxes(range=[-4, 4], title_text="표준화된 표본평균")
+fig.update_yaxes(title_text="밀도", row=1, col=1)
+viz.fig_defaults(fig, height=380, title="중심극한정리 (표본평균 1200회)")
+fig.update_layout(margin=dict(l=50, r=25, t=70, b=95), legend=dict(x=0.01, y=1.18))
+fig.show()
+```
+
+::: {.interaction-hint}
+$n=1$ 에서는 원 분포 모양 그대로입니다 — 이봉분포는 봉우리 두 개, 베르누이는 막대 두 개. $n=30$ 만 되어도 전부 노란 정규 곡선에 붙습니다. **이산 분포조차** 연속 정규분포로 수렴합니다.
+:::
+
+::: {.callout-warning}
+## CLT가 통하지 않는 경우
+
+1. **분산이 무한한 분포** — 코시 분포에서는 표본평균이 아무리 커도 수렴하지 않는다.
+2. **강한 의존성** — i.i.d. 가정이 깨지면(시계열, 군집 데이터) 유효 표본 수가 $n$ 보다 작다.
+3. **극단적 치우침 + 작은 $n$** — 이론적으로는 수렴하지만 $n=30$ 으로 부족할 수 있다.
+
+세 번째가 실무에서 자주 문제가 된다. 클릭률처럼 0이 대부분인 데이터에서는
+$n$ 이 수천이어도 정규 근사가 부실할 수 있어, [부트스트랩](03_statistics.qmd)을 쓰는 편이 안전하다.
 :::
 
 ---
 
-## 핵심 용어
+## 다변량 정규분포
 
-| 용어 | 비고 |
-|------|------|
-| 베이즈 정리 (Bayes' theorem) |  |
-| 최대우도추정 (MLE) |  |
-| 공분산 (covariance) |  |
-| 중심극한정리 (CLT) |  |
+$$p(\mathbf{x}) = \frac{1}{\sqrt{(2\pi)^d|\Sigma|}}\exp\!\left(-\tfrac{1}{2}(\mathbf{x}-\boldsymbol\mu)^\top\Sigma^{-1}(\mathbf{x}-\boldsymbol\mu)\right)$$
+
+지수 안의 $(\mathbf{x}-\boldsymbol\mu)^\top\Sigma^{-1}(\mathbf{x}-\boldsymbol\mu)$ 가
+**마할라노비스 거리 제곱**이다 — 공분산을 고려한 거리.
+
+그리고 $\Sigma$ 는 대칭 양정치이므로 [0.0의 스펙트럼 정리](00_linear_algebra.qmd)가 적용된다.
+**고유벡터가 등고선 타원의 축, 고유값의 제곱근이 축의 길이**다.
+
+```{python}
+#| label: fig-mvn
+#| fig-cap: "상관계수가 타원을 기울입니다. 화살표는 공분산 행렬의 고유벡터입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import datasets, viz
+
+g = np.linspace(-3.5, 3.5, 70)
+X, Y = np.meshgrid(g, g)
+pos = np.dstack([X, Y])
+
+rhos = [-0.9, -0.5, 0.0, 0.3, 0.6, 0.9, 0.98]
+dens, arrows = {}, {}
+for rho in rhos:
+    S = np.array([[1.0, rho], [rho, 1.0]])
+    Sinv = np.linalg.inv(S)
+    md = np.einsum("...i,ij,...j->...", pos, Sinv, pos)
+    dens[rho] = np.round(np.exp(-0.5 * md) / (2 * np.pi * np.sqrt(np.linalg.det(S))), 4)
+    w, v = np.linalg.eigh(S)
+    arrows[rho] = (v, np.sqrt(w))
+
+r0 = 0.6
+fig = go.Figure()
+fig.add_trace(go.Contour(x=g, y=g, z=dens[r0], colorscale="Blues", showscale=False,
+                         contours=dict(showlabels=False), line=dict(width=1)))
+v, s = arrows[r0]
+for k in range(2):
+    fig.add_trace(go.Scatter(x=[0, 2 * s[k] * v[0, k]], y=[0, 2 * s[k] * v[1, k]],
+                             mode="lines+markers", name=f"고유벡터 {k+1}",
+                             line=dict(color=[viz.WARM, viz.GREEN][k], width=3),
+                             marker=dict(size=[0, 9])))
+
+steps = []
+for rho in rhos:
+    v, s = arrows[rho]
+    steps.append((f"{rho:g}", {
+        "z": [dens[rho], None, None],
+        "x": [g, [0, 2*s[0]*v[0,0]], [0, 2*s[1]*v[0,1]]],
+        "y": [g, [0, 2*s[0]*v[1,0]], [0, 2*s[1]*v[1,1]]],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="상관계수 ρ = ",
+                                      active=rhos.index(r0), pad_t=55)],
+                  xaxis=dict(title="x₁", scaleanchor="y"), yaxis=dict(title="x₂"),
+                  legend=dict(x=0.01, y=0.99))
+viz.fig_defaults(fig, height=470, title="2차원 정규분포의 등고선과 주축")
+fig.show()
+```
+
+::: {.interaction-hint}
+$\rho=0$ 이면 원, 상관이 커질수록 대각선 방향으로 늘어난 타원이 됩니다. 화살표(고유벡터)가 타원의 축과 정확히 일치하며, $\rho=0.98$ 에서는 한 축이 거의 사라집니다 — 이것이 [PCA](../02_classical_ml/10_dimensionality_reduction.qmd)가 찾는 주성분이고, [다중공선성](../02_classical_ml/02_linear_regression.qmd)의 기하학적 정체입니다.
+:::
 
 ---
 
-**다음**: [0.3 통계적 추론](03_statistics.qmd) — 추정·검정·부트스트랩 — 데이터에서 결론을 끌어내는 규율
+## 최대우도추정
+
+데이터를 가장 그럴듯하게 만드는 파라미터를 찾는다.
+
+$$\hat{\theta}_{\text{MLE}} = \arg\max_\theta \prod_i p(x_i|\theta)
+= \arg\max_\theta \sum_i \log p(x_i|\theta)$$
+
+로그를 취하는 이유는 두 가지다. 곱이 합이 되어 미분이 쉬워지고,
+확률의 곱이 언더플로하는 것을 막는다([0.5 수치 컴퓨팅](05_numerical_computing.qmd)).
+
+::: {.key-concept}
+**손실함수를 고르는 것은 잡음 분포를 가정하는 것이다.**
+
+| 가정한 잡음 | 음의 로그우도 | 우리가 부르는 이름 |
+|-------------|---------------|---------------------|
+| 가우스 | $\frac{1}{2\sigma^2}\sum(y_i-\hat{y}_i)^2$ | **MSE** |
+| 라플라스 | $\frac{1}{b}\sum\|y_i-\hat{y}_i\|$ | **MAE** |
+| 베르누이 | $-\sum[y\log\hat{p} + (1-y)\log(1-\hat{p})]$ | **이진 교차엔트로피** |
+| 범주형 | $-\sum \log \hat{p}_{y_i}$ | **교차엔트로피** |
+
+MSE를 쓴다는 것은 "잡음이 가우스이고 등분산"이라고 주장하는 것이다.
+이상치가 많은 데이터에서 MSE가 무너지는 이유가 여기 있다 —
+가우스는 꼬리가 얇아서 이상치를 "거의 불가능한 사건"으로 보고 크게 벌한다.
+:::
+
+```{python}
+#| label: mle-demo
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+data = rng.normal(5.0, 2.0, 500)
+
+# 정규분포 MLE 는 닫힌 해가 있다
+mu_hat = data.mean()
+sigma_hat = data.std(ddof=0)          # MLE 는 n 으로 나눈다 (편향 추정량)
+sigma_unbiased = data.std(ddof=1)     # 불편 추정량은 n-1
+
+print(f"참값        μ=5.000  σ=2.000")
+print(f"MLE         μ={mu_hat:.3f}  σ={sigma_hat:.3f}   (n 으로 나눔)")
+print(f"불편 추정량            σ={sigma_unbiased:.3f}   (n-1 로 나눔)")
+print()
+print("→ MLE 는 분산을 약간 과소추정한다 (편향). n 이 크면 차이가 사라진다.")
+print(f"   n={len(data)} 에서 차이: {abs(sigma_unbiased-sigma_hat):.5f}")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 | 이어지는 곳 |
+|------|------|-------------|
+| 밀도 ≠ 확률 | 밀도는 1을 넘을 수 있다 | 연속 우도가 양수인 경우 |
+| 기댓값 선형성 | 독립 불필요 | 어디서나 |
+| 분산 가법성 | **독립 필요** | 앙상블이 통하는 이유 |
+| 베이즈 정리 | 사전 × 우도 ∝ 사후 | 정규화의 확률적 해석 |
+| 켤레사전분포 | 베타-이항 등, 계산이 닫힌다 | 베이지안 추론 |
+| LLN | 표본평균 → 참 평균 | 몬테카를로 |
+| **CLT** | 원 분포 무관, 표본평균은 정규 | 신뢰구간, 가설검정 |
+| CLT 실패 | 무한 분산, 의존성, 극단 치우침 | 부트스트랩을 쓸 때 |
+| 다변량 정규 | $\Sigma$ 의 고유벡터 = 타원 축 | PCA, 마할라노비스 거리 |
+| MLE | 로그우도 최대화 | **손실함수의 출처** |
+
+확률은 "모델이 무엇을 주장하는가"를 다뤘다.
+다음 장은 그 주장을 데이터로 **검증**하는 절차를 세운다.
+
+---
+
+**다음**: [0.3 통계적 추론](03_statistics.qmd) — 추정·검정·부트스트랩
 
 **이전**: [0.1 미적분과 최적화](01_calculus_optimization.qmd)
