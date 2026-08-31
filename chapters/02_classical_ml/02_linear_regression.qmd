@@ -4,89 +4,600 @@ subtitle: "최소제곱·정규방정식·기하학 — 가장 단순한 모델�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+선형회귀는 **닫힌 해가 존재하는 거의 유일한 모델**이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그래서 이 장은 특별하다. 다른 모델에서는 "경사하강으로 어딘가 수렴했다"로 끝나지만,
+여기서는 정답을 직접 계산해 비교할 수 있다.
+학습·최적화·정규화·추론의 개념을 **끝까지 계산해볼 수 있는 유일한 실험실**이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그리고 이 구조는 사라지지 않는다.
+신경망의 마지막 층은 선형이고, [어텐션의 사영](../05_transformer/00_attention_mechanism.qmd) $XW_Q$ 도 선형이다.
+여기서 배우는 기하학이 그대로 재사용된다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 모델과 목적함수
+
+$$\hat{y} = \mathbf{x}^\top\boldsymbol\beta + \beta_0
+\qquad\Longrightarrow\qquad
+\hat{\mathbf{y}} = X\boldsymbol\beta$$
+
+(절편은 $X$ 의 첫 열을 1로 채워 흡수한다.)
+
+[2.0의 ERM](00_learning_problem.qmd)에 MSE를 넣으면 목적함수가 나온다.
+
+$$J(\boldsymbol\beta) = \|\mathbf{y} - X\boldsymbol\beta\|^2$$
+
+미분해서 0으로 놓으면 **정규방정식**이 나온다.
+
+$$\nabla J = -2X^\top(\mathbf{y} - X\boldsymbol\beta) = 0
+\quad\Longrightarrow\quad
+X^\top X\boldsymbol\beta = X^\top\mathbf{y}$$
+
+$$\boxed{\;\hat{\boldsymbol\beta} = (X^\top X)^{-1}X^\top\mathbf{y}\;}$$
+
+---
+
+## G2.2.1 — 최소제곱이 무엇을 최소화하는가
+
+직선을 움직여가며 잔차 제곱합이 어떻게 변하는지 본다.
+
+```{python}
+#| label: fig-least-squares
+#| fig-cap: "기울기를 바꿔가며 잔차와 제곱합 관찰. 정사각형의 넓이 합이 목적함수입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+x, y = datasets.linear(n=18, slope=2.0, intercept=1.0, noise=1.6,
+                       x_range=(0, 6), seed=1)
+
+# 닫힌 해
+X = np.c_[np.ones_like(x), x]
+beta_hat = np.linalg.solve(X.T @ X, X.T @ y)
+b_opt, w_opt = beta_hat
+
+slopes = np.round(np.linspace(w_opt - 1.6, w_opt + 1.6, 17), 3)
+xs_line = np.array([x.min() - 0.3, x.max() + 0.3])
+
+data = {}
+for w in slopes:
+    b = y.mean() - w * x.mean()          # 절편은 항상 최적으로 맞춤
+    pred = w * x + b
+    rss = float(((y - pred) ** 2).sum())
+    seg_x, seg_y = [], []
+    for xi, yi, pi in zip(x, y, pred):   # 잔차 선분
+        seg_x += [xi, xi, None]
+        seg_y += [yi, pi, None]
+    data[w] = (w * xs_line + b, seg_x, seg_y, rss)
+
+rss_all = np.array([data[w][3] for w in slopes])
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("데이터와 적합선 (세로선 = 잔차)",
+                                    "기울기에 따른 잔차 제곱합"))
+
+w0 = slopes[len(slopes) // 2]
+line0, sx0, sy0, rss0 = data[w0]
+fig.add_trace(go.Scatter(x=sx0, y=sy0, mode="lines", showlegend=False,
+                         line=dict(color=viz.WARM, width=1.5), hoverinfo="skip"),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=x, y=y, mode="markers", name="데이터",
+                         marker=dict(size=9, color=viz.YELLOW,
+                                     line=dict(width=1, color="rgba(0,0,0,0.6)"))),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=xs_line, y=line0, mode="lines", name="적합선",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=slopes, y=rss_all, mode="lines", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[w0], y=[rss0], mode="markers", showlegend=False,
+                         marker=dict(size=12, color=viz.ACCENT)), row=1, col=2)
+fig.add_vline(x=w_opt, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text=f"닫힌 해 {w_opt:.3f}", row=1, col=2)
+
+steps = []
+for w in slopes:
+    line, sx, sy, rss = data[w]
+    steps.append((f"{w:.2f}", {
+        "x": [sx, x, xs_line, slopes, [w]],
+        "y": [sy, y, line, rss_all, [rss]],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="기울기 w = ",
+                                      active=len(slopes)//2, pad_t=55)])
+fig.update_xaxes(title_text="x", row=1, col=1)
+fig.update_yaxes(title_text="y", row=1, col=1)
+fig.update_xaxes(title_text="기울기 w", row=1, col=2)
+fig.update_yaxes(title_text="RSS", row=1, col=2)
+viz.fig_defaults(fig, height=430, title="최소제곱: 잔차 제곱합의 최소점")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+오른쪽 RSS 곡선이 **정확히 포물선**입니다 — 목적함수가 $\beta$ 에 대해 이차이기 때문입니다. 그래서 최소점이 유일하고, 미분해서 0으로 놓으면 닫힌 해가 나옵니다. 노란 점선이 그 해입니다.
 :::
 
-선형회귀는 닫힌 해가 존재하는 거의 유일한 모델이라, 학습·최적화·정규화·추론의 개념을 끝까지 계산해볼 수 있는 유일한 실험실이다.
-
 ---
 
-## 이 장에서 다루는 것
+## 기하학: 열공간으로의 직교사영
 
-- 모델 정의와 최소제곱 목적함수
-- 정규방정식과 닫힌 해 β = (XᵀX)⁻¹Xᵀy
-- 기하학적 해석: 열공간으로의 직교사영, 잔차 ⟂ 열공간
-- 경사하강으로 푸는 같은 문제 — 닫힌 해와의 비교
-- 가우스-마르코프 정리와 BLUE
-- 정규성 가정 하의 추론: 계수의 표준오차, t·F 검정, R²와 조정 R²
-- 다중공선성, VIF, 조건수와 수치 불안정
-- 다항회귀·기저함수 확장으로 비선형 다루기
-- 잔차 진단: 등분산성, 정규성, 영향점(leverage, Cook's distance)
-- 일반화 선형모형(GLM)으로의 확장 개요
+정규방정식을 다시 보자.
 
----
+$$X^\top(\mathbf{y} - X\hat{\boldsymbol\beta}) = 0
+\qquad\Longleftrightarrow\qquad
+X^\top \mathbf{r} = 0$$
 
-## G2.2.1 — 최소제곱 잔차
+**잔차 $\mathbf{r}$ 이 $X$ 의 모든 열과 직교한다.**
 
-직선을 움직이며 잔차 제곱합이 최소가 되는 지점 찾기
+[0.0 선형대수](../00_foundations/00_linear_algebra.qmd)의 언어로 읽으면 이렇다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 직선 기울기·절편 슬라이더
+- $X\boldsymbol\beta$ 가 만들 수 있는 벡터들의 집합 = $X$ 의 **열공간**
+- $\mathbf{y}$ 는 대개 그 공간 밖에 있다
+- 최소제곱은 $\mathbf{y}$ 를 열공간에 **직교사영**한 것
+
+$$\hat{\mathbf{y}} = \underbrace{X(X^\top X)^{-1}X^\top}_{\text{사영행렬 } H}\,\mathbf{y}$$
+
+```{python}
+#| label: fig-projection
+#| fig-cap: "y를 X의 열공간(평면)에 수직으로 내린 발이 최소제곱 해입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# 3차원에서 관측 3개, 특성 2개 → 열공간은 2차원 평면
+rng = np.random.default_rng(3)
+X = np.array([[1.0, 0.2], [0.3, 1.0], [0.4, 0.3]])
+y = np.array([1.0, 0.6, 1.4])
+
+beta = np.linalg.lstsq(X, y, rcond=None)[0]
+y_hat = X @ beta
+r = y - y_hat
+
+# 열공간 평면
+s = np.linspace(-0.4, 1.6, 12)
+t = np.linspace(-0.4, 1.6, 12)
+S, T = np.meshgrid(s, t)
+P = S[..., None] * X[:, 0] + T[..., None] * X[:, 1]
+
+fig = go.Figure()
+fig.add_trace(go.Surface(x=P[..., 0], y=P[..., 1], z=P[..., 2],
+                         colorscale=[[0, viz.hex_rgba(viz.ACCENT, 0.25)],
+                                     [1, viz.hex_rgba(viz.ACCENT, 0.25)]],
+                         showscale=False, opacity=0.45, name="X 의 열공간",
+                         hoverinfo="skip"))
+for i, (vec, name, col) in enumerate([
+        (y, "y (관측)", viz.YELLOW),
+        (y_hat, "ŷ = Hy (사영)", viz.GREEN)]):
+    fig.add_trace(go.Scatter3d(x=[0, vec[0]], y=[0, vec[1]], z=[0, vec[2]],
+                               mode="lines+markers", name=name,
+                               line=dict(color=col, width=6),
+                               marker=dict(size=[0, 6], color=col)))
+fig.add_trace(go.Scatter3d(x=[y_hat[0], y[0]], y=[y_hat[1], y[1]],
+                           z=[y_hat[2], y[2]], mode="lines+markers",
+                           name="잔차 r (평면에 수직)",
+                           line=dict(color=viz.WARM, width=6, dash="dash"),
+                           marker=dict(size=[0, 5], color=viz.WARM)))
+for k in range(2):
+    fig.add_trace(go.Scatter3d(x=[0, X[0, k]], y=[0, X[1, k]], z=[0, X[2, k]],
+                               mode="lines", name=f"X 의 열 {k+1}",
+                               line=dict(color="rgba(255,255,255,0.5)", width=3)))
+
+fig.update_layout(scene=dict(xaxis_title="관측 1", yaxis_title="관측 2",
+                             zaxis_title="관측 3", bgcolor="rgba(0,0,0,0)",
+                             camera=dict(eye=dict(x=1.6, y=1.5, z=1.1))),
+                  legend=dict(x=0.01, y=0.99))
+viz.fig_defaults(fig, height=520, title="최소제곱 = 직교사영")
+fig.update_layout(margin=dict(l=0, r=0, t=60, b=0))
+fig.show()
+```
+
+```{python}
+#| label: orthogonality-check
+#| code-fold: false
+
+import numpy as np
+
+print(f"잔차와 X의 각 열의 내적 (0이어야 함):")
+print(f"  Xᵀr = {np.round(X.T @ r, 12)}")
+print()
+H = X @ np.linalg.inv(X.T @ X) @ X.T
+print(f"사영행렬의 성질:")
+print(f"  H² = H (멱등)     : {np.allclose(H @ H, H)}")
+print(f"  Hᵀ = H (대칭)     : {np.allclose(H.T, H)}")
+print(f"  trace(H) = 특성 수 : {np.trace(H):.6f}  (= {X.shape[1]})")
+```
+
+::: {.interaction-hint}
+그래프를 드래그해 회전시켜 보세요. 주황 점선(잔차)이 파란 평면과 **수직**입니다. 이것이 최소제곱의 전부입니다 — 도달할 수 있는 곳 중 $\mathbf{y}$ 에 가장 가까운 점.
+:::
+
+::: {.key-concept}
+사영행렬 $H$ 를 **hat matrix** 라 부른다($\mathbf{y}$ 에 모자를 씌워 $\hat{\mathbf{y}}$ 로 만들므로).
+
+$\text{trace}(H)$ 가 정확히 특성 개수와 같다는 사실이 중요하다.
+이것이 **모델의 유효 자유도**이고,
+[2.3 Ridge](03_regularization.qmd)에서는 이 값이 정수가 아닌 실수로 줄어든다 —
+"정규화가 복잡도를 줄인다"를 정량화하는 방법이다.
 :::
 
 ---
 
-## G2.2.2 — 직교사영 3D
+## 닫힌 해 vs 경사하강
 
-y가 X의 열공간에 사영되고 잔차가 수직으로 남는 기하
+같은 문제를 두 방법으로 푼다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 3D 회전
+```{python}
+#| label: fig-gd-vs-closed
+#| fig-cap: "손실 등고선 위의 경사하강 궤적. 별이 닫힌 해입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import datasets, viz
+
+x, y = datasets.linear(n=50, slope=2.0, intercept=1.0, noise=1.2,
+                       x_range=(-2, 4), seed=0)
+X = np.c_[np.ones_like(x), x]
+beta_star = np.linalg.solve(X.T @ X, X.T @ y)
+
+# 손실 등고선
+b_g = np.linspace(beta_star[0] - 3, beta_star[0] + 3, 90)
+w_g = np.linspace(beta_star[1] - 2, beta_star[1] + 2, 90)
+B, W = np.meshgrid(b_g, w_g)
+Z = np.zeros_like(B)
+for i in range(B.shape[0]):
+    for j in range(B.shape[1]):
+        pred = B[i, j] + W[i, j] * x
+        Z[i, j] = np.mean((y - pred) ** 2)
+
+def gd_path(lr, steps=40):
+    beta = np.array([beta_star[0] - 2.6, beta_star[1] + 1.7])
+    path = [beta.copy()]
+    for _ in range(steps):
+        grad = -2 / len(x) * X.T @ (y - X @ beta)
+        beta = beta - lr * grad
+        if not np.all(np.isfinite(beta)) or np.abs(beta).max() > 1e3:
+            break
+        path.append(beta.copy())
+    return np.array(path)
+
+lrs = [0.005, 0.02, 0.05, 0.1, 0.15, 0.2, 0.25]
+paths = {lr: gd_path(lr) for lr in lrs}
+
+fig = go.Figure()
+fig.add_trace(go.Contour(x=b_g, y=w_g, z=np.round(Z, 4), colorscale="Blues",
+                         showscale=False, line=dict(width=1), opacity=0.9))
+lr0 = 0.1
+p0 = paths[lr0]
+fig.add_trace(go.Scatter(x=p0[:, 0], y=p0[:, 1], mode="lines+markers",
+                         name="경사하강 궤적",
+                         line=dict(color=viz.WARM, width=2),
+                         marker=dict(size=5, color=viz.WARM)))
+fig.add_trace(go.Scatter(x=[beta_star[0]], y=[beta_star[1]], mode="markers",
+                         name="닫힌 해 (Xᵀ X)⁻¹Xᵀy",
+                         marker=dict(size=15, color=viz.YELLOW, symbol="star")))
+
+steps_sl = []
+for lr in lrs:
+    p = paths[lr]
+    steps_sl.append((f"{lr:g}", {"x": [None, p[:, 0], [beta_star[0]]],
+                                 "y": [None, p[:, 1], [beta_star[1]]]}))
+
+fig.update_layout(sliders=[viz.slider(steps_sl, prefix="학습률 = ",
+                                      active=lrs.index(lr0), pad_t=55)],
+                  xaxis_title="절편 β₀", yaxis_title="기울기 β₁",
+                  legend=dict(x=0.01, y=0.99))
+viz.fig_defaults(fig, height=460, title="같은 문제, 두 가지 풀이")
+fig.show()
+```
+
+```{python}
+#| label: closed-vs-gd
+#| code-fold: false
+
+import numpy as np, time
+
+n_list = [100, 1000, 10000]
+p_list = [10, 100, 1000]
+rng = np.random.default_rng(0)
+
+print(f"{'n':>7} {'p':>6} {'닫힌 해':>12} {'설명'}")
+print("-" * 56)
+for n in n_list:
+    for p in p_list:
+        if p > n: continue
+        Xb = rng.normal(size=(n, p)); yb = rng.normal(size=n)
+        t0 = time.perf_counter()
+        np.linalg.solve(Xb.T @ Xb, Xb.T @ yb)
+        dt = time.perf_counter() - t0
+        note = "O(np² + p³) — p가 커지면 급격히 비싸짐" if p >= 1000 else ""
+        print(f"{n:>7} {p:>6} {dt*1000:>10.1f}ms  {note}")
+```
+
+::: {.key-concept}
+**닫힌 해가 있는데 왜 경사하강을 쓰는가**
+
+| | 닫힌 해 | 경사하강 |
+|---|---|---|
+| 정확도 | 정확 | 근사 (수렴까지) |
+| 복잡도 | $O(np^2 + p^3)$ | 반복당 $O(np)$ |
+| 메모리 | $X^\top X$ 전체 필요 | 미니배치로 가능 |
+| 특성이 많을 때 | $p^3$ 이 감당 안 됨 | 여전히 동작 |
+| 다른 손실 | **불가능** | 가능 |
+| 온라인 학습 | 불가능 | 가능 |
+
+특성이 수만 개거나, 손실이 MSE가 아니거나, 데이터가 메모리에 안 들어가면
+닫힌 해는 쓸 수 없다. 그래서 실무에서는 대개 반복법을 쓴다.
 :::
 
 ---
 
-## G2.2.3 — 경사하강 vs 닫힌 해
+## 계수 해석과 그 조건
 
-손실 등고선 위 경사하강 궤적이 닫힌 해로 수렴하는 과정
+$\beta_j$ 의 해석은 **"다른 변수를 고정한 채 $x_j$ 를 1 늘리면 $y$ 가 $\beta_j$ 만큼 변한다"** 이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 학습률·스텝 슬라이더
+"다른 변수를 고정한 채"가 결정적이다. 이 조건 때문에 두 가지가 따라온다.
+
+1. **단순회귀 계수와 다중회귀 계수는 다르다.** 다른 변수를 통제했느냐가 다르기 때문.
+2. **계수는 인과가 아니다.** 통제하지 않은 교란변수가 있으면 편향된다
+   ([1.6 인과추론](../01_data_science/06_causal_inference.qmd)).
+
+```{python}
+#| label: coef-interpretation
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(1)
+n = 2000
+# 교란: 경험(z)이 교육(x)과 임금(y) 모두에 영향
+z = rng.normal(0, 1, n)
+x = 0.8 * z + rng.normal(0, 0.6, n)
+y = 1.0 * x + 2.0 * z + rng.normal(0, 0.5, n)      # x 의 참 효과는 1.0
+
+def ols(X, y):
+    X = np.c_[np.ones(len(y)), X]
+    return np.linalg.solve(X.T @ X, X.T @ y)
+
+print(f"x 의 참 효과: 1.000")
+print(f"  단순회귀 (z 무시)     : {ols(x, y)[1]:.3f}   ← 편향")
+print(f"  다중회귀 (z 통제)     : {ols(np.c_[x, z], y)[1]:.3f}   ← 참값 회복")
+print()
+print("→ 같은 데이터, 같은 변수인데 계수가 다르다.")
+print("  '무엇을 통제했는가'를 밝히지 않은 계수는 해석할 수 없다.")
+```
+
+---
+
+## 다중공선성: 계수가 요동칠 때
+
+특성 두 개가 거의 같으면 $X^\top X$ 가 거의 특이해진다.
+[0.0의 조건수](../00_foundations/00_linear_algebra.qmd)가 폭발하고, 계수 추정이 불안정해진다.
+
+```{python}
+#| label: fig-multicollinearity
+#| fig-cap: "두 특성의 상관이 1에 가까워질 때 계수 추정의 흔들림"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+n, n_rep = 120, 200
+rhos = [0.0, 0.5, 0.8, 0.9, 0.95, 0.99, 0.999]
+
+spread, conds, vifs = [], [], []
+coef_samples = {}
+for rho in rhos:
+    b1 = []
+    for _ in range(n_rep):
+        z = rng.normal(size=n)
+        x1 = z * np.sqrt(rho) + rng.normal(size=n) * np.sqrt(1 - rho)
+        x2 = z * np.sqrt(rho) + rng.normal(size=n) * np.sqrt(1 - rho)
+        y = 1.0 * x1 + 1.0 * x2 + rng.normal(0, 0.5, n)
+        X = np.c_[np.ones(n), x1, x2]
+        b1.append(np.linalg.solve(X.T @ X, X.T @ y)[1])
+    coef_samples[rho] = np.array(b1)
+    spread.append(np.std(b1))
+    Xc = np.c_[x1, x2]
+    conds.append(np.linalg.cond(Xc))
+    r2 = np.corrcoef(x1, x2)[0, 1] ** 2
+    vifs.append(1 / max(1 - r2, 1e-9))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("β₁ 추정값의 분포 (참값 1.0)",
+                                    "상관에 따른 추정 표준편차"))
+
+r0 = 0.9
+fig.add_trace(go.Histogram(x=np.round(coef_samples[r0], 4), nbinsx=40,
+                           marker_color=viz.hex_rgba(viz.ACCENT, 0.8),
+                           showlegend=False), row=1, col=1)
+fig.add_vline(x=1.0, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="참값", row=1, col=1)
+fig.add_trace(go.Scatter(x=rhos, y=spread, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+
+steps = [(f"{r:g}", {"x": [np.round(coef_samples[r], 4), rhos],
+                     "y": [None, spread]}) for r in rhos]
+fig.update_layout(sliders=[viz.slider(steps, prefix="두 특성의 상관 ρ = ",
+                                      active=rhos.index(r0), pad_t=55)])
+fig.update_xaxes(title_text="β₁ 추정값", range=[-3, 5], row=1, col=1)
+fig.update_xaxes(title_text="상관 ρ", row=1, col=2)
+fig.update_yaxes(title_text="std(β̂₁)", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="다중공선성이 만드는 추정 불안정")
+fig.show()
+```
+
+```{python}
+#| label: vif-table
+#| code-fold: false
+
+print(f"{'상관 ρ':>10} {'VIF':>12} {'조건수':>12} {'β̂₁ 표준편차':>14}")
+print("-" * 52)
+for rho, v, c, s in zip(rhos, vifs, conds, spread):
+    print(f"{rho:>10.3f} {v:>12.1f} {c:>12.1f} {s:>14.3f}")
+print()
+print("VIF > 10 이면 다중공선성을 의심하는 것이 관례다.")
+print("예측 성능 자체는 멀쩡할 수 있다 — 무너지는 것은 '계수 해석'이다.")
+```
+
+::: {.key-concept}
+**다중공선성은 예측을 망치지 않는다. 해석을 망친다.**
+
+$x_1$ 과 $x_2$ 가 거의 같으면 $(\beta_1, \beta_2) = (2, 0)$ 이든 $(0, 2)$ 이든 $(1, 1)$ 이든
+예측값이 거의 같다. 그래서 예측 성능은 유지된다.
+
+문제는 데이터가 조금만 바뀌어도 계수가 이 사이를 널뛴다는 것이다.
+"$x_1$ 의 효과가 2다"라고 말할 수 없게 된다.
+
+처방은 셋이다: 하나를 제거하거나, 합치거나(PCA), 아니면 **Ridge로 안정화**한다 —
+다음 장의 주제다.
 :::
 
 ---
 
-## G2.2.4 — 다중공선성의 효과
+## 잔차 진단
 
-두 특성의 상관이 1에 가까워질 때 계수 추정이 요동치는 모습
+선형회귀는 가정이 명시적이라 **가정 위반을 눈으로 확인할 수 있다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 상관 슬라이더
+```{python}
+#| label: fig-residual-diagnostics
+#| fig-cap: "잔차 플롯으로 진단하기. 좋은 잔차는 패턴이 없어야 합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(2)
+n = 150
+x = np.linspace(0, 10, n)
+
+cases = {
+    "정상 (패턴 없음)":      1.0 + 0.8*x + rng.normal(0, 1.0, n),
+    "비선형성 놓침":         1.0 + 0.8*x + 0.25*(x-5)**2 + rng.normal(0, 1.0, n),
+    "이분산 (분산 증가)":     1.0 + 0.8*x + rng.normal(0, 0.15*x + 0.2, n),
+    "이상치 존재":           1.0 + 0.8*x + rng.normal(0, 1.0, n),
+}
+cases["이상치 존재"][[30, 90, 130]] += [14, -12, 16]
+
+resid_data = {}
+for name, y in cases.items():
+    X = np.c_[np.ones(n), x]
+    beta = np.linalg.solve(X.T @ X, X.T @ y)
+    pred = X @ beta
+    resid_data[name] = (pred, y - pred)
+
+names = list(cases)
+fig = make_subplots(rows=1, cols=4, subplot_titles=names, shared_yaxes=True,
+                    horizontal_spacing=0.025)
+for c, name in enumerate(names, start=1):
+    pred, r = resid_data[name]
+    fig.add_trace(go.Scatter(x=pred, y=r, mode="markers", showlegend=False,
+                             marker=dict(size=5, color=viz.ACCENT, opacity=0.75)),
+                  row=1, col=c)
+    fig.add_hline(y=0, line=dict(color=viz.YELLOW, dash="dash"), row=1, col=c)
+    fig.update_xaxes(title_text="예측값 ŷ", row=1, col=c)
+fig.update_yaxes(title_text="잔차", row=1, col=1)
+viz.fig_defaults(fig, height=330, title="잔차 vs 예측값 플롯")
+fig.update_layout(margin=dict(l=50, r=25, t=70, b=50))
+fig.show()
+```
+
+::: {.interaction-hint}
+첫 번째만 무작위 구름입니다. 두 번째는 **U자 곡선** — 비선형 항이 빠졌다는 신호. 세 번째는 **깔때기 모양** — 이분산이라 표준오차가 틀립니다. 네 번째는 몇 점이 멀리 튀어 있습니다.
+:::
+
+| 진단 도구 | 무엇을 보나 |
+|-----------|-------------|
+| 잔차 vs 예측값 | 비선형성, 이분산 |
+| Q-Q 플롯 | 잔차의 정규성 |
+| 레버리지 $h_{ii}$ | $X$ 공간에서 극단적인 점 |
+| Cook's distance | 제거하면 계수가 크게 변하는 영향점 |
+
+---
+
+## 확장: 선형모델은 생각보다 넓다
+
+"선형"은 **파라미터에 대해 선형**이라는 뜻이지 $x$ 에 대해서가 아니다.
+기저함수를 넣으면 곡선도 맞출 수 있다.
+
+$$\hat{y} = \beta_0 + \beta_1\phi_1(x) + \dots + \beta_m\phi_m(x)$$
+
+$\phi$ 가 무엇이든 — 다항식, 스플라인, 삼각함수, RBF —
+**정규방정식은 그대로 쓸 수 있다.**
+
+```{python}
+#| label: basis-expansion
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import datasets
+
+x, y, f_true = datasets.polynomial(n=60, noise=0.2, seed=0)
+
+def fit_basis(x, y, phi):
+    Phi = phi(x)
+    return np.linalg.lstsq(Phi, y, rcond=None)[0], Phi
+
+bases = {
+    "다항식 5차": lambda t: np.vander(t, 6),
+    "RBF 8개":    lambda t: np.exp(-((t[:, None] - np.linspace(0, 1, 8)) ** 2) / 0.02),
+    "푸리에 4쌍":  lambda t: np.c_[np.ones_like(t),
+                                  *[f(2*np.pi*k*t) for k in range(1, 5)
+                                    for f in (np.sin, np.cos)]],
+}
+print(f"{'기저':<14} {'특성 수':>8} {'훈련 MSE':>12}   같은 정규방정식으로 풀린다")
+print("-" * 66)
+for name, phi in bases.items():
+    beta, Phi = fit_basis(x, y, phi)
+    mse = np.mean((Phi @ beta - y) ** 2)
+    print(f"{name:<14} {Phi.shape[1]:>8} {mse:>12.5f}")
+```
+
+::: {.callout-note}
+## 여기서 커널 방법으로 가는 길
+
+기저함수를 아주 많이(무한히) 쓰고 싶다면?
+$\phi(x)$ 를 명시적으로 계산하지 않고 내적 $\phi(x)^\top\phi(x')$ 만 다루면 된다 —
+[2.5 커널 트릭](05_svm_kernels.qmd)의 아이디어다.
+
+반대로 $\phi$ 자체를 **학습**하고 싶다면 그것이 신경망이다
+([3.0](../03_deep_learning/00_perceptron_mlp.qmd)).
 :::
 
 ---
 
-## 핵심 용어
+## 요약
 
-| 용어 | 비고 |
-|------|------|
-| 최소제곱 (OLS) |  |
-| 정규방정식 |  |
-| 직교사영 |  |
-| 다중공선성 (multicollinearity) |  |
-| R² |  |
+| 개념 | 식 | 핵심 |
+|------|-----|------|
+| 목적함수 | $\|\mathbf{y}-X\boldsymbol\beta\|^2$ | $\beta$ 에 대해 이차 → 최소점 유일 |
+| 정규방정식 | $\hat{\boldsymbol\beta}=(X^\top X)^{-1}X^\top\mathbf{y}$ | 닫힌 해 |
+| 기하 | $X^\top\mathbf{r}=0$ | **잔차 ⟂ 열공간**, 직교사영 |
+| Hat 행렬 | $H = X(X^\top X)^{-1}X^\top$ | 멱등·대칭, $\text{tr}(H)=$ 자유도 |
+| 닫힌 해 vs GD | $O(p^3)$ vs 반복 $O(np)$ | $p$ 크면 GD |
+| 계수 해석 | "다른 변수 고정 시" | 통제 변수가 바뀌면 값도 바뀜 |
+| 다중공선성 | VIF, 조건수 | **예측은 멀쩡, 해석이 무너짐** |
+| 잔차 진단 | 패턴이 없어야 정상 | U자=비선형, 깔때기=이분산 |
+| 기저 확장 | $\phi(x)$ | 파라미터에 선형이면 그대로 적용 |
+
+다중공선성의 처방으로 언급한 Ridge, 그리고 특성을 자동으로 골라주는 Lasso가
+다음 장의 주제다.
 
 ---
 
-**다음**: [2.3 정규화](03_regularization.qmd) — Ridge·Lasso·ElasticNet — 복잡도에 값을 매기기
+**다음**: [2.3 정규화](03_regularization.qmd) — Ridge·Lasso·ElasticNet
 
 **이전**: [2.1 편향-분산과 일반화](01_bias_variance.qmd)
