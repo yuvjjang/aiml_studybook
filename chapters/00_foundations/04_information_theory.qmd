@@ -4,78 +4,451 @@ subtitle: "엔트로피·KL 발산·교차엔트로피 — 손실함수의 출�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+분류 모델을 만들 때 손실함수로 교차엔트로피를 쓴다. 왜 하필 그것인가?
 
-분류 손실이 왜 하필 교차엔트로피인가? VAE의 ELBO에 왜 KL 항이 붙는가? 답은 전부 정보이론에 있다.
+VAE의 목적함수에는 KL 항이 붙는다. 왜 거기 있는가?
 
----
+언어모델 성능을 퍼플렉서티로 잰다. 그 숫자는 무엇을 세는 것인가?
 
-## 이 장에서 다루는 것
-
-- 정보량(surprisal)과 엔트로피 H(X) — '평균 놀라움'
-- 결합·조건부 엔트로피, 상호정보 I(X;Y)
-- 교차엔트로피 H(p,q)와 분류 손실의 유도
-- KL 발산 D_KL(p‖q) — 비대칭성과 그 의미(mode-seeking vs mode-covering)
-- 젠슨-섀넌 발산, f-발산, 바서슈타인 거리와의 비교
-- 최대우도 = KL 최소화 (동치 증명)
-- 부호화 관점: 섀넌 소스 코딩 정리, 비트 길이로서의 −log p
-- 퍼플렉서티 = exp(교차엔트로피) — 언어모델 지표의 정체
-- 정보 병목(information bottleneck)과 표현학습
+세 질문의 답이 전부 이 장에 있다.
+정보이론은 "놀라움을 어떻게 측정하는가"라는 한 가지 질문에서 출발해,
+머신러닝이 쓰는 손실함수 거의 전부를 유도해낸다.
 
 ---
 
-## G0.4.1 — 엔트로피 곡선
+## 정보량: 놀라움을 숫자로
 
-이진 엔트로피 H(p) — p=0.5 에서 최대인 이유
+먼저 한 사건의 정보량을 정의한다. 좋은 정의라면 세 가지를 만족해야 한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: p 슬라이더
+1. 확률이 낮은 사건일수록 정보량이 크다 (놀랍다)
+2. 확률 1인 사건의 정보량은 0이다 (뻔하다)
+3. 독립 사건 두 개를 함께 관측하면 정보량이 **더해진다**
+
+세 번째 조건이 형태를 결정한다.
+확률은 곱해지는데($p_1p_2$) 정보량은 더해져야 하니, 로그밖에 없다.
+
+$$I(x) = -\log p(x)$$
+
+밑을 2로 잡으면 단위가 **비트**다.
+"동전 던지기 결과 하나 = 1비트"가 여기서 나온다 ($-\log_2 0.5 = 1$).
+
+---
+
+## 엔트로피: 평균 놀라움
+
+정보량의 기댓값이 **엔트로피**다.
+
+$$H(X) = \mathbb{E}_{x\sim p}[-\log p(x)] = -\sum_x p(x)\log p(x)$$
+
+분포가 얼마나 예측 불가능한지를 재는 값이다.
+
+| 분포 | 엔트로피 | 뜻 |
+|------|----------|-----|
+| 한 값에 확률 1 집중 | 0 | 완전히 예측 가능 |
+| 균등분포 ($K$ 개) | $\log K$ | **최대** — 가장 예측 불가능 |
+| 그 사이 | 0 ~ $\log K$ | 치우칠수록 낮음 |
+
+---
+
+## G0.4.1 — 엔트로피가 최대가 되는 곳
+
+```{python}
+#| label: fig-entropy
+#| fig-cap: "왼쪽: 이진 엔트로피. 오른쪽: 3개 결과의 분포가 치우칠수록 낮아지는 엔트로피."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def entropy(p, base=2):
+    p = np.asarray(p, dtype=float)
+    p = p[p > 0]
+    return float(-np.sum(p * np.log(p) / np.log(base)))
+
+ps = np.linspace(1e-6, 1 - 1e-6, 400)
+H_bin = -(ps * np.log2(ps) + (1 - ps) * np.log2(1 - ps))
+
+# 3개 결과: 균등에서 한쪽으로 치우치는 정도를 t 로 조절
+ts = np.round(np.linspace(0, 0.98, 15), 3)
+dists = {t: np.array([1/3 + 2*t/3, 1/3 - t/3, 1/3 - t/3]) for t in ts}
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("이진 엔트로피 H(p)", "3개 결과의 분포"))
+
+fig.add_trace(go.Scatter(x=ps, y=H_bin, mode="lines", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=3),
+                         fill="tozeroy", fillcolor=viz.hex_rgba(viz.ACCENT, 0.12)),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=[0.5], y=[1.0], mode="markers+text", showlegend=False,
+                         marker=dict(size=11, color=viz.YELLOW),
+                         text=["최대 1비트"], textposition="top center"), row=1, col=1)
+
+t0 = ts[0]
+fig.add_trace(go.Bar(x=["A", "B", "C"], y=dists[t0], showlegend=False,
+                     marker_color=viz.GREEN), row=1, col=2)
+
+steps = []
+for t in ts:
+    d = dists[t]
+    h = entropy(d)
+    steps.append((f"{t:.2f}", {
+        "x": [ps, [0.5], ["A", "B", "C"]],
+        "y": [H_bin, [1.0], d],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="치우침 = ", active=0, pad_t=55)])
+fig.update_xaxes(title_text="p (앞면 확률)", row=1, col=1)
+fig.update_yaxes(title_text="H(p) [비트]", range=[0, 1.12], row=1, col=1)
+fig.update_yaxes(title_text="확률", range=[0, 1.05], row=1, col=2)
+
+viz.fig_defaults(fig, height=420,
+                 title="균등분포에서 엔트로피가 최대 (3개 결과 최대 = log₂3 ≈ 1.585비트)")
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=95))
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽 곡선은 $p=0.5$ 에서 꼭짓점입니다 — 앞뒤가 반반일 때 가장 예측이 어렵습니다. $p=0.99$ 면 거의 항상 앞면이라 놀라울 일이 없어 엔트로피가 0에 가깝습니다. 오른쪽에서 치우침을 키우면 같은 일이 일어납니다.
+:::
+
+::: {.callout-note}
+## 엔트로피 = 최적 부호의 평균 길이
+
+섀넌의 소스 코딩 정리는 이렇게 말한다.
+확률 $p$ 인 심볼에 $-\log_2 p$ 비트를 할당하는 것이 최적이고,
+그때 메시지당 평균 길이가 정확히 $H(X)$ 비트다.
+
+자주 나오는 것에 짧은 부호, 드문 것에 긴 부호 — 모스 부호와 허프만 코딩의 원리다.
+**엔트로피는 압축의 이론적 하한**이다.
+
+이 관점이 나중에 "언어모델링 = 압축"이라는 주장으로 이어진다
+([7.2 언어모델의 기초](../07_language/02_language_models.qmd)).
 :::
 
 ---
 
-## G0.4.2 — KL 발산의 비대칭성
+## 교차엔트로피: 틀린 분포로 부호화하면
 
-D(p‖q) 와 D(q‖p) 가 다른 값을 주는 상황 시각화
+실제 분포는 $p$ 인데 우리 모델은 $q$ 라고 믿는다.
+$q$ 에 최적화된 부호를 쓰면 평균 몇 비트가 필요한가?
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 분포 파라미터 슬라이더
+$$H(p, q) = \mathbb{E}_{x\sim p}[-\log q(x)] = -\sum_x p(x)\log q(x)$$
+
+이것이 **교차엔트로피**다. 그리고 이 식이 바로 분류 손실이다.
+
+분류 문제에서 정답이 클래스 $c$ 라면 참 분포는 원-핫이다.
+$p(c)=1$, 나머지는 0. 그러면 합에서 한 항만 살아남는다.
+
+$$H(p, q) = -\log q(c)$$
+
+::: {.key-concept}
+**교차엔트로피 손실 = 정답 클래스에 모델이 부여한 확률의 음의 로그.**
+
+```python
+loss = -log(model_prob[correct_class])
+```
+
+정답에 0.9를 줬으면 손실 0.105, 0.1을 줬으면 2.303, 0.001을 줬으면 6.9.
+**확신에 찬 오답을 가혹하게 벌한다** — 이것이 이 손실의 성격이다.
 :::
 
 ---
 
-## G0.4.3 — 교차엔트로피 손실 지형
+## KL 발산: 얼마나 손해 봤는가
 
-정답 확률이 0에 가까워질 때 손실이 폭발하는 모습
+교차엔트로피에서 어쩔 수 없는 부분(엔트로피)을 빼면 순수한 손해가 남는다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 예측 확률 슬라이더
-:::
+$$D_{KL}(p\|q) = H(p,q) - H(p) = \sum_x p(x)\log\frac{p(x)}{q(x)}$$
 
----
+$q$ 를 믿어서 **추가로 낭비한 비트 수**다.
 
-## G0.4.4 — 퍼플렉서티 직관
-
-퍼플렉서티를 '유효 선택지 개수'로 읽는 법
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 어휘 크기·분포 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 성질 | 내용 |
 |------|------|
-| 엔트로피 (entropy) |  |
-| KL 발산 (KL divergence) |  |
-| 교차엔트로피 (cross-entropy) |  |
-| 상호정보 (mutual information) |  |
-| 퍼플렉서티 (perplexity) |  |
+| 항상 $\ge 0$ | 젠슨 부등식. 참 분포보다 나은 부호는 없다 |
+| $=0$ ⟺ $p=q$ | 완전히 맞혔을 때만 손해가 없다 |
+| **비대칭** | $D(p\|q) \ne D(q\|p)$ — 거리가 아니다 |
+| 삼각부등식 X | 그래서 "발산(divergence)"이라 부른다 |
+
+### 최대우도 = KL 최소화
+
+여기서 중요한 등식이 나온다. $H(p)$ 는 모델과 무관한 상수이므로
+
+$$\arg\min_\theta H(p, q_\theta) = \arg\min_\theta D_{KL}(p \| q_\theta)$$
+
+그리고 교차엔트로피 최소화는 곧 음의 로그우도 최소화다.
+
+$$\min_\theta \; -\frac{1}{N}\sum_i \log q_\theta(x_i)
+\;\;\Longleftrightarrow\;\;
+\max_\theta \; \prod_i q_\theta(x_i)$$
+
+::: {.key-concept}
+**최대우도 추정 = 교차엔트로피 최소화 = KL 발산 최소화.**
+
+셋은 이름만 다른 같은 일이다. 이 등식이 있어서
+[0.2 확률](02_probability.qmd)의 MLE와 딥러닝의 손실함수가 하나로 연결된다.
+
+회귀에서 MSE를 쓰는 것도 같은 논리다.
+잡음이 가우스라고 가정하면 음의 로그우도가 정확히 제곱오차가 된다.
+**손실함수를 고르는 것은 잡음 분포를 가정하는 것**이다.
+:::
 
 ---
 
-**다음**: [0.5 수치 컴퓨팅](05_numerical_computing.qmd) — 부동소수점·벡터화·수치 안정성 — 수식과 코드 사이의 간극
+## G0.4.2 — KL 발산은 왜 비대칭인가
+
+$D(p\|q)$ 와 $D(q\|p)$ 중 무엇을 최소화하느냐가 결과를 완전히 바꾼다.
+이 선택이 VAE와 GAN, 변분추론의 성격을 가른다.
+
+```{python}
+#| label: fig-kl-asymmetry
+#| fig-cap: "봉우리 두 개짜리 p를 가우스 q 하나로 근사하기. 방향에 따라 답이 달라집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+x = np.linspace(-8, 8, 600)
+dx = x[1] - x[0]
+
+def gauss(x, mu, s):
+    return np.exp(-0.5 * ((x - mu) / s) ** 2) / (s * np.sqrt(2 * np.pi))
+
+# 참 분포 p: 봉우리 두 개
+p = 0.5 * gauss(x, -2.5, 0.8) + 0.5 * gauss(x, 2.5, 0.8)
+p = p / (p.sum() * dx)
+
+def kl(a, b):
+    a_, b_ = np.maximum(a, 1e-12), np.maximum(b, 1e-12)
+    return float(np.sum(a_ * np.log(a_ / b_)) * dx)
+
+# 후보 q 들: 평균 0 고정, 폭만 바꿈 + 한쪽 봉우리에 붙는 경우
+cands = []
+for s in [0.6, 0.9, 1.4, 2.0, 2.8, 3.6]:
+    cands.append((f"넓은 q (μ=0, σ={s})", gauss(x, 0.0, s)))
+for s in [0.7, 1.0]:
+    cands.append((f"한쪽 봉우리 (μ=2.5, σ={s})", gauss(x, 2.5, s)))
+
+rows = [(name, q, kl(p, q), kl(q, p)) for name, q in cands]
+best_fwd = min(rows, key=lambda r: r[2])
+best_rev = min(rows, key=lambda r: r[3])
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("p (참 분포) 와 후보 q", "두 방향의 KL 값"))
+
+i0 = 3
+fig.add_trace(go.Scatter(x=x, y=p, mode="lines", name="p (참)",
+                         line=dict(color=viz.YELLOW, width=3),
+                         fill="tozeroy", fillcolor=viz.hex_rgba(viz.YELLOW, 0.10)),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=x, y=rows[i0][1], mode="lines", name="q (근사)",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+
+names = [r[0] for r in rows]
+fig.add_trace(go.Bar(x=names, y=[r[2] for r in rows], name="D(p‖q) — 커버",
+                     marker_color=viz.GREEN), row=1, col=2)
+fig.add_trace(go.Bar(x=names, y=[r[3] for r in rows], name="D(q‖p) — 모드 선택",
+                     marker_color=viz.WARM), row=1, col=2)
+
+steps = []
+for i, (name, q, f_, r_) in enumerate(rows):
+    steps.append((name.split(" (")[0] + f" {i}", {
+        "x": [x, x, names, names],
+        "y": [p, q, [r[2] for r in rows], [r[3] for r in rows]],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="q = ", active=i0, pad_t=60)],
+                  barmode="group")
+fig.update_xaxes(title_text="x", row=1, col=1)
+fig.update_yaxes(title_text="밀도", row=1, col=1)
+fig.update_xaxes(tickangle=-35, tickfont=dict(size=9), row=1, col=2)
+fig.update_yaxes(title_text="KL [nats]", row=1, col=2)
+
+viz.fig_defaults(fig, height=470,
+                 title=f"D(p‖q) 최소: {best_fwd[0]}  ·  D(q‖p) 최소: {best_rev[0]}")
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=135), legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+초록 막대(D(p‖q))는 **넓은 q**를 선호합니다. $p>0$ 인데 $q\approx0$ 이면 $\log(p/q)$ 가 폭발하므로, $p$ 가 있는 곳은 전부 덮어야 합니다.
+주황 막대(D(q‖p))는 **한쪽 봉우리에 붙은 q**를 선호합니다. $q=0$ 인 영역은 벌점이 없으니 한 봉우리만 정확히 맞추면 됩니다.
+:::
+
+| 방향 | 별명 | 성질 | 쓰이는 곳 |
+|------|------|------|-----------|
+| $D_{KL}(p\|q_\theta)$ | mode-covering, 전방 | $p$ 가 있는 곳을 다 덮으려 함 → 퍼짐 | 최대우도, 지식 증류 |
+| $D_{KL}(q_\theta\|p)$ | mode-seeking, 역방향 | 한 모드에 집중 → 좁아짐 | 변분추론, [VAE](../06_generative/02_vae.qmd)의 ELBO |
+
+::: {.callout-note}
+## 이것이 설명하는 현상들
+
+- **VAE 샘플이 흐릿한 이유** — 디코더 우도가 전방 KL에 해당해 모든 데이터를 덮으려다 평균으로 뭉갠다.
+- **GAN이 선명하지만 모드 붕괴하는 이유** — 목적함수가 역방향에 가까워 일부 모드만 잘 만든다.
+- **겹치지 않는 분포에서 KL이 무한대** — WGAN이 바서슈타인 거리로 갈아탄 이유
+  ([6.3 GAN](../06_generative/03_gan.qmd)).
+- **RLHF의 KL 페널티** — 참조 모델에서 멀어지는 것을 벌해 보상 해킹을 막는다
+  ([7.7 정렬](../07_language/07_alignment.qmd)).
+:::
+
+---
+
+## G0.4.3 — 교차엔트로피 손실의 모양
+
+분류 손실이 어떤 벌점 구조를 갖는지 직접 본다.
+
+```{python}
+#| label: fig-ce-loss
+#| fig-cap: "정답 클래스 확률에 따른 손실과 그래디언트"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+q = np.linspace(0.002, 1.0, 500)
+ce = -np.log(q)
+
+# 비교: 다른 손실들
+brier = (1 - q) ** 2
+hinge = np.maximum(0, 1 - (2 * q - 1))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("손실 곡선 비교", "softmax + CE 의 그래디언트"))
+
+fig.add_trace(go.Scatter(x=q, y=ce, mode="lines", name="교차엔트로피 −log q",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+fig.add_trace(go.Scatter(x=q, y=brier, mode="lines", name="Brier (1−q)²",
+                         line=dict(color=viz.WARM, width=2, dash="dash")), row=1, col=1)
+fig.add_trace(go.Scatter(x=q, y=hinge, mode="lines", name="힌지",
+                         line=dict(color=viz.GREEN, width=2, dash="dot")), row=1, col=1)
+
+# softmax + CE 의 로짓 그래디언트는 (예측 - 정답)
+logit_gap = np.linspace(-6, 6, 400)
+p_correct = 1 / (1 + np.exp(-logit_gap))
+grad_correct = p_correct - 1.0          # 정답 클래스 그래디언트
+fig.add_trace(go.Scatter(x=logit_gap, y=grad_correct, mode="lines",
+                         name="∂L/∂z(정답) = q − 1",
+                         line=dict(color=viz.PINK, width=3)), row=1, col=2)
+fig.add_trace(go.Scatter(x=logit_gap, y=1 - p_correct, mode="lines",
+                         name="∂L/∂z(오답) = q",
+                         line=dict(color=viz.YELLOW, width=2, dash="dash")), row=1, col=2)
+fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.3)"), row=1, col=2)
+
+fig.update_xaxes(title_text="정답 클래스에 준 확률 q", row=1, col=1)
+fig.update_yaxes(title_text="손실", range=[0, 6.5], row=1, col=1)
+fig.update_xaxes(title_text="로짓 차 (정답 − 오답)", row=1, col=2)
+fig.update_yaxes(title_text="그래디언트", row=1, col=2)
+
+viz.fig_defaults(fig, height=410, title="확신에 찬 오답을 가혹하게 벌한다")
+fig.update_layout(legend=dict(x=0.30, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽에서 $q \to 0$ 일 때 교차엔트로피만 **무한대로 발산**합니다. Brier 손실은 최대 1에서 멈추죠. 오른쪽은 이 손실이 왜 학습이 잘 되는지 보여줍니다 — 그래디언트가 정확히 `예측 − 정답` 이라 틀릴수록 크고, 맞으면 0으로 사라집니다.
+:::
+
+::: {.callout-note}
+## softmax + 교차엔트로피의 그래디언트가 예쁜 이유
+
+로짓 $z$ 에 대한 그래디언트를 계산하면 놀랍도록 단순해진다.
+
+$$\frac{\partial L}{\partial z_i} = q_i - y_i \qquad (\text{예측} - \text{정답})$$
+
+softmax의 복잡한 야코비안과 로그의 미분이 정확히 상쇄된 결과다.
+그래서 프레임워크들이 `softmax` 와 `cross_entropy` 를 **하나로 합친 함수**를 제공한다
+(`nn.CrossEntropyLoss`, `softmax_cross_entropy_with_logits`).
+따로 계산하면 느릴 뿐 아니라 수치적으로도 불안정하다
+([0.5 수치 컴퓨팅](05_numerical_computing.qmd)).
+:::
+
+---
+
+## 퍼플렉서티: 유효 선택지 개수
+
+언어모델 평가에 쓰는 퍼플렉서티는 교차엔트로피의 지수다.
+
+$$\text{PPL} = \exp(H(p,q)) = \exp\!\left(-\frac{1}{N}\sum_i \log q(x_i)\right)$$
+
+지수를 씌우는 이유는 **해석 가능한 단위로 되돌리기** 위해서다.
+
+```{python}
+#| label: ppl-table
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'상황':<34} {'교차엔트로피':>14} {'퍼플렉서티':>12}")
+print("-" * 64)
+cases = [
+    ("어휘 5만에서 완전 무작위", np.log(50000)),
+    ("초기 언어모델 (n-gram)",    np.log(200)),
+    ("작은 신경망 LM",            np.log(60)),
+    ("현대 LLM",                  np.log(8)),
+    ("완벽한 예측",               0.0),
+]
+for name, h in cases:
+    print(f"{name:<34} {h:>12.3f} {np.exp(h):>12,.1f}")
+```
+
+::: {.key-concept}
+**퍼플렉서티는 "모델이 다음 토큰을 고를 때 실질적으로 몇 개 중에서 헤매는가"다.**
+
+PPL이 8이면 어휘가 5만 개여도 실질적으로는 8개 정도로 좁혀놓았다는 뜻이다.
+PPL 1은 완벽한 예측, 어휘 크기와 같으면 아무것도 못 배운 것이다.
+
+주의: **토크나이저가 다르면 퍼플렉서티를 비교할 수 없다.**
+같은 문장을 더 적은 토큰으로 자르는 토크나이저는 토큰당 부담이 커져 PPL이 높게 나온다.
+:::
+
+---
+
+## 상호정보: 두 변수가 공유하는 정보
+
+$X$ 를 알면 $Y$ 에 대한 불확실성이 얼마나 줄어드는가.
+
+$$I(X;Y) = H(Y) - H(Y|X) = D_{KL}\big(p(x,y) \,\|\, p(x)p(y)\big)$$
+
+오른쪽 형태가 뜻을 잘 보여준다. **결합분포가 독립 가정에서 얼마나 벗어났는가.**
+독립이면 정확히 0이다.
+
+상관계수와 달리 **비선형 관계도 잡아낸다** — $Y = X^2$ 는 상관이 0이지만 상호정보는 크다.
+
+| 쓰이는 곳 | 어떻게 |
+|-----------|--------|
+| 특성 선택 | 타깃과 상호정보가 큰 특성 고르기 |
+| [결정트리](../02_classical_ml/06_trees.qmd) | 정보이득 = 분할 전후 엔트로피 감소 = 상호정보 |
+| [대조 학습](../03_deep_learning/03_losses.qmd) | InfoNCE는 상호정보의 하한을 최대화한다 |
+| 정보 병목 | 입력 정보는 줄이고 레이블 정보는 유지하는 표현 |
+
+---
+
+## 요약
+
+| 개념 | 수식 | 핵심 | 이어지는 곳 |
+|------|------|------|-------------|
+| 정보량 | $-\log p$ | 놀라움. 로그인 이유는 가법성 | 모든 것의 출발 |
+| 엔트로피 | $\mathbb{E}[-\log p]$ | 평균 놀라움 = 압축 하한 | 정보이득, 퍼플렉서티 |
+| 교차엔트로피 | $-\sum p\log q$ | 틀린 분포로 부호화한 비용 | **분류 손실** |
+| KL 발산 | $H(p,q)-H(p)$ | 추가 낭비. 비대칭 | VAE, RLHF, 증류 |
+| MLE ≡ KL 최소화 | — | 셋은 같은 일 | 확률과 딥러닝의 연결 |
+| 전방 KL | $D(p\|q)$ | mode-covering, 퍼짐 | 최대우도, VAE 흐릿함 |
+| 역방향 KL | $D(q\|p)$ | mode-seeking, 집중 | 변분추론, 모드 붕괴 |
+| softmax+CE 그래디언트 | $q - y$ | 예측 − 정답 | 역전파 구현 |
+| 퍼플렉서티 | $\exp(H)$ | 유효 선택지 개수 | LM 평가 |
+| 상호정보 | $H(Y)-H(Y\|X)$ | 비선형 의존도 | 정보이득, InfoNCE |
+
+이제 손실함수가 어디서 왔는지 알았다.
+다음 장은 그 손실을 코드로 옮길 때 생기는 문제를 다룬다 —
+수학적으로 옳은 식이 왜 `NaN` 을 뱉는가.
+
+---
+
+**다음**: [0.5 수치 컴퓨팅](05_numerical_computing.qmd) — 부동소수점·log-sum-exp·수치 안정성
 
 **이전**: [0.3 통계적 추론](03_statistics.qmd)
