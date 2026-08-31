@@ -4,91 +4,569 @@ subtitle: "배깅·랜덤포레스트·부스팅·GBDT — 약한 모델을 모�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+정형 데이터 대회에서 여전히 1등을 하는 것은 신경망이 아니라 **그래디언트 부스팅**이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+[2.6](06_trees.qmd)에서 트리 하나가 얼마나 불안정한지 봤다.
+이 장은 그 약점을 **자산으로 바꾸는** 두 가지 전략을 다룬다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+| 전략 | 아이디어 | 줄이는 것 |
+|------|----------|-----------|
+| **배깅** | 서로 다른 데이터로 여러 개 학습해 평균 | 분산 |
+| **부스팅** | 앞 모델의 실패에 집중하며 순차적으로 쌓기 | 편향 |
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-캐글과 실무 정형 데이터에서 여전히 1등을 하는 것은 GBDT다. 신경망 이전에 이 계열을 이해하지 못하면 실무 감각이 비게 된다.
+둘 다 트리를 기본 단위로 쓰지만, 작동 원리는 정반대다.
 
 ---
 
-## 이 장에서 다루는 것
+## 왜 평균이 통하는가
 
-- 앙상블이 통하는 이유: 오차의 비상관화, 분산 감소의 수학
-- 배깅과 부트스트랩, OOB 추정
-- 랜덤 포레스트: 특성 무작위성이 추가로 하는 일
-- 부스팅의 아이디어: 이전 모델의 실패에 집중
-- AdaBoost와 지수 손실, 가중치 갱신 유도
-- 그래디언트 부스팅 = 함수공간의 경사하강
-- GBDT 하이퍼파라미터: 학습률, 트리 수, 깊이, subsample
-- XGBoost: 2차 근사, 정규화 목적함수, 근사 분할 탐색
-- LightGBM: 히스토그램, leaf-wise 성장, GOSS/EFB
-- CatBoost: 순서형 target 통계, 순열 부스팅
-- 스태킹과 블렌딩, 메타 학습기 설계
-- 앙상블 vs 신경망: 정형 데이터에서의 실증 비교
+[0.2 확률](../00_foundations/02_probability.qmd)의 분산 공식이 전부 설명한다.
 
----
+같은 분산 $\sigma^2$ 을 갖는 추정기 $M$ 개를 평균 내면
 
-## G2.7.1 — 배깅의 분산 감소
+$$\mathrm{Var}\left(\frac{1}{M}\sum_i \hat{f}_i\right)
+= \frac{\sigma^2}{M} + \frac{M-1}{M}\rho\sigma^2$$
 
-개별 트리의 흔들리는 경계가 평균으로 매끄러워지는 과정
+$\rho$ 는 모델 간 상관이다. 두 항이 각각 말해주는 것이 있다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 수 슬라이더
+::: {.key-concept}
+- **$\rho = 0$ (완전 무상관)**: 분산이 $\sigma^2/M$ 로 줄어든다 — 모델을 늘린 만큼 이득.
+- **$\rho = 1$ (완전 상관)**: 분산이 $\sigma^2$ 그대로 — **아무 이득 없음.**
+
+즉 앙상블의 성패는 **모델들이 서로 얼마나 다른가**에 달려 있다.
+
+그래서 두 가지가 따라온다.
+
+1. 불안정한 모델(깊은 트리)이 앙상블 재료로 좋다. 안정적인 모델은 평균 내도 소용없다.
+2. 모델을 **일부러 다르게** 만들어야 한다 — 이것이 랜덤 포레스트의 핵심 아이디어다.
 :::
 
 ---
 
-## G2.7.2 — 부스팅 잔차 추적
+## 배깅: 부트스트랩 + 평균
 
-라운드마다 남은 잔차를 새 트리가 깎아내는 모습
+[0.3의 부트스트랩](../00_foundations/03_statistics.qmd)을 학습에 쓴다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 라운드 슬라이더
+1. 원 데이터에서 **복원추출**로 같은 크기의 표본을 만든다
+2. 그 표본으로 트리를 하나 학습한다
+3. $M$ 번 반복해 평균(회귀) 또는 투표(분류)
+
+복원추출이라 각 부트스트랩 표본은 원 데이터의 약 63%만 포함한다.
+
+```{python}
+#| label: oob-math
+#| code-fold: false
+
+import numpy as np
+
+n = 1000
+p_excluded = (1 - 1/n) ** n
+print(f"한 샘플이 부트스트랩 표본에 안 뽑힐 확률: (1−1/n)^n = {p_excluded:.4f}")
+print(f"                             극한값 1/e = {1/np.e:.4f}")
+print()
+print(f"→ 각 트리는 데이터의 약 {(1-p_excluded)*100:.0f}% 만 본다.")
+print(f"  나머지 {p_excluded*100:.0f}% 가 그 트리의 OOB(out-of-bag) 샘플이고,")
+print("  이것으로 별도 검증셋 없이 일반화 성능을 추정할 수 있다.")
+```
+
+---
+
+## G2.7.1 — 분산이 줄어드는 과정
+
+트리를 하나씩 더해가며 결정경계가 어떻게 매끄러워지는지 본다.
+
+```{python}
+#| label: fig-bagging-variance
+#| fig-cap: "트리를 늘릴수록 들쭉날쭉한 경계가 평균으로 매끄러워집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, trees, ensembles, viz
+
+X, y = datasets.two_moons(n=300, noise=0.3, seed=3)
+rng = np.random.default_rng(0)
+perm = rng.permutation(len(X))
+tr, te = perm[:200], perm[200:]
+
+bag = ensembles.BaggingTrees(n_estimators=60, random_state=0).fit(X[tr], y[tr])
+
+gx = np.linspace(X[:,0].min()-0.4, X[:,0].max()+0.4, 70)
+gy = np.linspace(X[:,1].min()-0.4, X[:,1].max()+0.4, 70)
+GX, GY = np.meshgrid(gx, gy)
+G = np.c_[GX.ravel(), GY.ravel()]
+
+ks = [1, 2, 3, 5, 10, 20, 40, 60]
+surf, acc = {}, {}
+for k in ks:
+    surf[k] = np.round(bag.predict_proba(G, n_use=k)[:, 1].reshape(GX.shape), 3)
+    acc[k] = float((bag.predict(X[te], n_use=k) == y[te]).mean())
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("앙상블 예측 확률", "트리 수에 따른 시험 정확도"))
+k0 = 10
+fig.add_trace(go.Heatmap(x=gx, y=gy, z=surf[k0], colorscale="RdBu", zmid=0.5,
+                         showscale=False, opacity=0.8), row=1, col=1)
+for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
+    m = y[tr] == c
+    fig.add_trace(go.Scatter(x=X[tr][m,0], y=X[tr][m,1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=5, color=col,
+                                         line=dict(width=1, color="black"))),
+                  row=1, col=1)
+accs = [acc[k] for k in ks]
+fig.add_trace(go.Scatter(x=ks, y=accs, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[k0], y=[acc[k0]], mode="markers", showlegend=False,
+                         marker=dict(size=12, color=viz.YELLOW)), row=1, col=2)
+
+steps = [(str(k), {"z": [surf[k], None, None, None, None],
+                   "x": [gx, None, None, ks, [k]],
+                   "y": [gy, None, None, accs, [acc[k]]]}) for k in ks]
+fig.update_layout(sliders=[viz.slider(steps, prefix="트리 수 = ",
+                                      active=ks.index(k0), pad_t=55)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="트리 수", type="log", row=1, col=2)
+fig.update_yaxes(title_text="시험 정확도", row=1, col=2)
+viz.fig_defaults(fig, height=440, title="배깅: 분산 감소")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+```{python}
+#| label: bagging-compare
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import trees, ensembles
+
+single = trees.DecisionTree(random_state=0).fit(X[tr], y[tr])
+rf = ensembles.BaggingTrees(n_estimators=60, max_features=1,
+                            random_state=0).fit(X[tr], y[tr])
+
+print(f"{'모델':<26} {'훈련':>8} {'시험':>8}")
+print("-" * 46)
+for nm, m in [("단일 트리 (완전 성장)", single), ("배깅 60개", bag),
+              ("랜덤 포레스트 60개", rf)]:
+    print(f"{nm:<26} {(m.predict(X[tr])==y[tr]).mean():>8.3f} "
+          f"{(m.predict(X[te])==y[te]).mean():>8.3f}")
+print()
+print(f"배깅 OOB 추정 정확도: {bag.oob_score(X[tr], y[tr]):.3f}")
+print("→ 별도 검증셋 없이도 시험 정확도에 가까운 값을 준다.")
+```
+
+::: {.interaction-hint}
+트리 1개일 때 경계가 각지고 섬이 많습니다. 20개를 넘으면 **부드러운 곡선**에 가까워지고, 그 이상에서는 거의 변하지 않습니다. 배깅은 트리를 더 늘려도 **과적합하지 않습니다** — 분산만 줄일 뿐입니다.
 :::
 
 ---
 
-## G2.7.3 — 학습률 vs 트리 수
+## 랜덤 포레스트: 일부러 더 다르게
 
-작은 학습률 + 많은 트리 조합의 검증오차 지형
+배깅만으로는 부족하다. 강한 특성이 하나 있으면 **모든 트리가 그것으로 먼저 분할**해서
+트리들이 서로 비슷해진다 — 위 공식의 $\rho$ 가 커진다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 두 축 슬라이더
+랜덤 포레스트의 처방: **분할마다 특성의 무작위 부분집합만 후보로 쓴다.**
+
+```{python}
+#| label: fig-rf-correlation
+#| fig-cap: "max_features를 줄이면 트리 간 상관이 낮아집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import ensembles, viz
+
+rng = np.random.default_rng(1)
+n, p = 400, 8
+Xm = rng.normal(size=(n, p))
+# 강한 특성 하나 + 약한 특성 여럿
+ym = ((2.5*Xm[:,0] + 0.6*Xm[:,1] + 0.5*Xm[:,2] + 0.4*Xm[:,3]
+       + rng.normal(0, 1, n)) > 0).astype(int)
+prm = rng.permutation(n); trm, tem = prm[:280], prm[280:]
+
+mfs = [1, 2, 3, 5, 8]
+corrs, accs2 = [], []
+for mf in mfs:
+    m = ensembles.BaggingTrees(n_estimators=30, max_depth=6, max_features=mf,
+                               random_state=0).fit(Xm[trm], ym[trm])
+    P = np.array([t.predict_proba(Xm[tem])[:, 1] for t in m.trees_])
+    C = np.corrcoef(P)
+    corrs.append(float(C[np.triu_indices(len(P), 1)].mean()))
+    accs2.append(float((m.predict(Xm[tem]) == ym[tem]).mean()))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("트리 예측 간 평균 상관 ρ", "시험 정확도"))
+fig.add_trace(go.Scatter(x=mfs, y=corrs, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=mfs, y=accs2, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.update_xaxes(title_text="분할당 후보 특성 수 (max_features)")
+fig.update_yaxes(title_text="평균 상관", row=1, col=1)
+fig.update_yaxes(title_text="정확도", row=1, col=2)
+viz.fig_defaults(fig, height=380,
+                 title=f"특성 {p}개 중 강한 것 하나가 있는 상황")
+fig.show()
+```
+
+::: {.interaction-hint}
+`max_features` 가 8(전부)이면 트리들이 매우 비슷해집니다(상관 높음). 1~3으로 줄이면 상관이 떨어지고, 그 덕에 앙상블 효과가 커집니다. 다만 너무 줄이면 개별 트리가 약해져 절충점이 있습니다.
+:::
+
+| 관례적 기본값 | |
+|---|---|
+| 분류 | $\sqrt{p}$ |
+| 회귀 | $p/3$ |
+
+---
+
+## 부스팅: 순차적으로 실패를 고치기
+
+배깅은 **병렬**이고 서로 독립이다. 부스팅은 **순차**다 —
+각 모델이 이전 모델들이 못 맞힌 부분에 집중한다.
+
+### AdaBoost: 가중치를 옮기기
+
+1. 모든 샘플에 같은 가중치로 시작
+2. 약한 학습기(깊이 1 그루터기)를 학습
+3. **틀린 샘플의 가중치를 올린다**
+4. 학습기의 발언권 $\alpha$ 는 정확도에 비례
+5. 반복
+
+```{python}
+#| label: fig-adaboost
+#| fig-cap: "라운드가 진행되며 샘플 가중치가 어려운 점으로 이동합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, ensembles, viz
+
+Xa, ya0 = datasets.two_moons(n=140, noise=0.32, seed=7)
+ya = np.where(ya0 == 0, -1, 1)
+ada = ensembles.AdaBoostStumps(n_estimators=40, random_state=0).fit(Xa, ya)
+
+gxa = np.linspace(Xa[:,0].min()-0.4, Xa[:,0].max()+0.4, 70)
+gya = np.linspace(Xa[:,1].min()-0.4, Xa[:,1].max()+0.4, 70)
+GXa, GYa = np.meshgrid(gxa, gya)
+Ga = np.c_[GXa.ravel(), GYa.ravel()]
+
+rounds = [1, 2, 3, 5, 10, 20, 40]
+surf_a, acc_a, wts = {}, {}, {}
+for k in rounds:
+    surf_a[k] = np.round(ada.decision_function(Ga, n_use=k).reshape(GXa.shape), 3)
+    acc_a[k] = float((ada.predict(Xa, n_use=k) == ya).mean())
+    w = ada.weights_hist_[min(k, len(ada.weights_hist_)-1)]
+    wts[k] = 4 + 260 * w / w.max()          # 마커 크기로 표현
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("누적 결정함수 (점 크기 = 샘플 가중치)",
+                                    "라운드에 따른 훈련 정확도"))
+k0 = 5
+fig.add_trace(go.Heatmap(x=gxa, y=gya, z=surf_a[k0], colorscale="RdBu", zmid=0,
+                         showscale=False, opacity=0.75), row=1, col=1)
+for c, col in [(-1, viz.ACCENT), (1, viz.WARM)]:
+    m = ya == c
+    fig.add_trace(go.Scatter(x=Xa[m,0], y=Xa[m,1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=wts[k0][m], color=col,
+                                         line=dict(width=1, color="black"))),
+                  row=1, col=1)
+accs_a = [acc_a[k] for k in rounds]
+fig.add_trace(go.Scatter(x=rounds, y=accs_a, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+
+steps = []
+for k in rounds:
+    steps.append((str(k), {
+        "z": [surf_a[k], None, None, None],
+        "marker.size": [None, wts[k][ya==-1], wts[k][ya==1], None],
+    }))
+fig.update_layout(sliders=[viz.slider(steps, prefix="라운드 = ",
+                                      active=rounds.index(k0), pad_t=55)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="라운드", row=1, col=2)
+fig.update_yaxes(title_text="훈련 정확도", row=1, col=2)
+viz.fig_defaults(fig, height=440, title="AdaBoost: 어려운 샘플에 집중")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+라운드를 넘기면 **경계 근처의 점들이 커집니다** — 계속 틀리는 샘플에 가중치가 몰린 것입니다. 왼쪽 결정함수도 그루터기(직선) 하나에서 점점 복잡한 모양으로 쌓입니다.
 :::
 
 ---
 
-## G2.7.4 — 특성 중요도 비교
+## 그래디언트 부스팅: 함수공간의 경사하강
 
-불순도 기반과 순열 기반 중요도가 서로 다른 순위를 주는 사례
+AdaBoost를 일반화하면 훨씬 강력해진다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 방법 전환
+핵심 관점 전환: **손실을 파라미터가 아니라 함수 자체에 대해 미분한다.**
+
+$$F_{m}(x) = F_{m-1}(x) + \eta\, h_m(x),
+\qquad h_m \approx -\frac{\partial L}{\partial F}\Big|_{F=F_{m-1}}$$
+
+제곱손실이면 음의 그래디언트가 **정확히 잔차**다.
+
+$$-\frac{\partial}{\partial F}\tfrac{1}{2}(y-F)^2 = y - F$$
+
+그래서 각 라운드는 **"지금까지 남은 잔차를 맞추는 트리"** 를 학습한다.
+
+```{python}
+#| label: fig-gbm-residual
+#| fig-cap: "라운드마다 남은 잔차를 새 트리가 깎아냅니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, ensembles, viz
+
+xg, yg, _ = datasets.polynomial(n=110, noise=0.18, seed=4)
+grid = np.linspace(0, 1, 300)[:, None]
+gbm = ensembles.GradientBoosting(n_estimators=120, learning_rate=0.1,
+                                 max_depth=3, random_state=0).fit(xg[:, None], yg)
+
+stages = [1, 2, 5, 10, 25, 60, 120]
+fit_curve, resid_pts, mse_hist = {}, {}, []
+all_stage = list(gbm.staged_predict(xg[:, None]))
+for k in stages:
+    fit_curve[k] = gbm.predict(grid, n_use=k)
+    resid_pts[k] = yg - gbm.predict(xg[:, None], n_use=k)
+mse_hist = [float(np.mean((p - yg)**2)) for p in all_stage]
+
+fig = make_subplots(rows=2, cols=1, row_heights=[0.58, 0.42], shared_xaxes=True,
+                    vertical_spacing=0.09,
+                    subplot_titles=("누적 예측", "남은 잔차"))
+k0 = 10
+fig.add_trace(go.Scatter(x=xg, y=yg, mode="markers", name="데이터",
+                         marker=dict(size=6, color=viz.YELLOW, opacity=0.8,
+                                     line=dict(width=1, color="rgba(0,0,0,0.5)"))),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=grid.ravel(), y=fit_curve[k0], mode="lines", name="앙상블 예측",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+fig.add_trace(go.Scatter(x=xg, y=resid_pts[k0], mode="markers", showlegend=False,
+                         marker=dict(size=5, color=viz.WARM)), row=2, col=1)
+fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.4)", dash="dash"), row=2, col=1)
+
+steps = [(f"{k}", {"y": [yg, fit_curve[k], resid_pts[k]]}) for k in stages]
+fig.update_layout(sliders=[viz.slider(steps, prefix="라운드 = ",
+                                      active=stages.index(k0), pad_t=55)])
+fig.update_xaxes(title_text="x", row=2, col=1)
+fig.update_yaxes(title_text="y", row=1, col=1)
+fig.update_yaxes(title_text="잔차", range=[-1.2, 1.2], row=2, col=1)
+viz.fig_defaults(fig, height=520,
+                 title=f"그래디언트 부스팅 (lr=0.1, 깊이 3) · 훈련 MSE "
+                       f"{mse_hist[0]:.3f} → {mse_hist[-1]:.4f}")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+라운드 1에서는 예측이 거의 평평하고 잔차가 원래 신호 모양 그대로입니다. 라운드가 쌓이면 예측이 곡선을 따라가고 **잔차가 0 주변으로 납작해집니다**. 120라운드에서는 잡음까지 맞추기 시작합니다 — 과적합입니다.
 :::
 
 ---
 
-## 핵심 용어
+## G2.7.2 — 학습률과 트리 수의 교환
 
-| 용어 | 비고 |
+부스팅의 가장 중요한 하이퍼파라미터 쌍이다.
+
+```{python}
+#| label: fig-lr-trees
+#| fig-cap: "작은 학습률 + 많은 트리가 대체로 더 좋은 일반화를 줍니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import datasets, ensembles, viz
+
+xg2, yg2, _ = datasets.polynomial(n=90, noise=0.25, seed=8)
+xte2, yte2, _ = datasets.polynomial(n=600, noise=0.25, seed=99)
+
+fig = go.Figure()
+for i, lr in enumerate([0.03, 0.1, 0.3, 1.0]):
+    g = ensembles.GradientBoosting(n_estimators=150, learning_rate=lr,
+                                   max_depth=3, random_state=0).fit(xg2[:, None], yg2)
+    te_curve = []
+    F = np.full(len(xte2), g.init_)
+    for t in g.trees_:
+        F = F + lr * t.predict(xte2[:, None])
+        te_curve.append(float(np.mean((F - yte2)**2)))
+    fig.add_trace(go.Scatter(x=np.arange(1, 151), y=te_curve, mode="lines",
+                             name=f"lr = {lr}",
+                             line=dict(color=viz.color(i), width=2.5)))
+    k = int(np.argmin(te_curve))
+    fig.add_trace(go.Scatter(x=[k+1], y=[te_curve[k]], mode="markers",
+                             showlegend=False,
+                             marker=dict(size=11, color=viz.color(i), symbol="star")))
+
+fig.update_layout(xaxis_title="트리 수", yaxis_title="시험 MSE",
+                  yaxis=dict(range=[0.05, 0.35]), legend=dict(x=0.7, y=0.98))
+viz.fig_defaults(fig, height=420, title="별 = 각 학습률의 최적 트리 수")
+fig.show()
+```
+
+::: {.interaction-hint}
+`lr=1.0`(빨강)은 빠르게 내려가지만 곧 **다시 올라갑니다** — 과적합. `lr=0.03`(파랑)은 천천히 내려가 더 낮은 최저점에 도달합니다. 다만 트리가 훨씬 많이 필요합니다. **학습률과 트리 수는 서로 교환 관계**입니다.
+:::
+
+::: {.key-concept}
+**배깅과 부스팅의 결정적 차이**
+
+| | 배깅 / 랜덤 포레스트 | 부스팅 |
+|---|---|---|
+| 학습 | 병렬 (독립) | **순차 (의존)** |
+| 기본 학습기 | 깊고 강한 트리 | **얕고 약한 트리** |
+| 줄이는 것 | 분산 | **편향** |
+| 모델을 늘리면 | 과적합 안 함 | **과적합함** |
+| 조기 종료 | 불필요 | **필수** |
+| 튜닝 난이도 | 쉬움 | 어려움 |
+
+"모델을 늘리면 과적합하는가"가 실무에서 가장 중요한 차이다.
+랜덤 포레스트는 트리 수를 그냥 크게 잡으면 되지만,
+부스팅은 **검증셋으로 언제 멈출지 정해야 한다.**
+:::
+
+---
+
+## 현대 GBDT: XGBoost·LightGBM·CatBoost
+
+기본 아이디어는 같고, 각자 다른 곳을 최적화했다.
+
+```{python}
+#| label: gbdt-comparison
+#| code-fold: false
+
+rows = [
+    ("XGBoost",  "2014",
+     "2차 테일러 근사 + 목적함수에 정규화 명시",
+     "근사 분할 탐색, 결측치 자동 처리"),
+    ("LightGBM", "2017",
+     "히스토그램 기반 분할, leaf-wise 성장",
+     "GOSS(샘플 축소), EFB(특성 묶기) — 대용량에서 가장 빠름"),
+    ("CatBoost", "2018",
+     "순서형 target 통계, 순열 부스팅",
+     "범주형 자동 처리, target leakage 방지"),
+]
+print(f"{'라이브러리':<11} {'연도':<6} {'핵심 기여'}")
+print("-" * 78)
+for name, yr, k1, k2 in rows:
+    print(f"{name:<11} {yr:<6} {k1}")
+    print(f"{'':<18} {k2}")
+```
+
+::: {.callout-note}
+## leaf-wise vs level-wise
+
+**level-wise**(XGBoost 기본): 같은 깊이의 노드를 모두 확장한다. 균형 잡힌 트리.
+
+**leaf-wise**(LightGBM): 손실을 가장 많이 줄이는 잎 하나만 확장한다.
+같은 잎 개수에서 더 낮은 손실을 얻지만, 트리가 깊고 비대칭해져 **과적합 위험이 크다.**
+그래서 LightGBM은 `num_leaves` 를 반드시 제한해야 한다.
+:::
+
+### 주요 하이퍼파라미터
+
+| 파라미터 | 역할 | 방향 |
+|----------|------|------|
+| `learning_rate` | 각 트리의 기여도 | 작을수록 좋지만 트리 수 증가 |
+| `n_estimators` | 트리 수 | 조기 종료로 결정 |
+| `max_depth` / `num_leaves` | 트리 복잡도 | 상호작용 차수를 결정 |
+| `subsample` | 행 샘플링 | 확률적 부스팅, 분산 감소 |
+| `colsample_bytree` | 열 샘플링 | 트리 간 상관 낮춤 |
+| `min_child_weight` | 잎 최소 크기 | 과적합 억제 |
+| `reg_lambda` / `reg_alpha` | L2 / L1 | [2.3의 정규화](03_regularization.qmd) |
+
+::: {.key-concept}
+**튜닝 순서 (실무 감각)**
+
+1. `learning_rate` 를 0.05~0.1로 고정하고 조기 종료로 `n_estimators` 결정
+2. 트리 복잡도(`max_depth` 또는 `num_leaves`) 탐색
+3. 샘플링(`subsample`, `colsample_bytree`) 조정
+4. 정규화(`reg_lambda`) 미세 조정
+5. 마지막에 `learning_rate` 를 낮추고 트리 수를 비례해 늘림
+:::
+
+---
+
+## 스태킹
+
+앙상블의 앙상블이다. 여러 모델의 **예측을 특성으로 삼아** 메타 모델을 학습한다.
+
+```{python}
+#| label: stacking-warning
+#| code-fold: false
+
+print("스태킹의 필수 규칙: 메타 특성은 반드시 OOF(out-of-fold) 예측이어야 한다.")
+print()
+print("잘못된 방식:")
+print("  1. 전체 훈련 데이터로 기본 모델 학습")
+print("  2. 같은 데이터에 예측 → 메타 특성")
+print("  3. 메타 모델 학습")
+print("  → 기본 모델이 이미 외운 데이터라 메타 모델이 그 예측을 과신한다.")
+print()
+print("올바른 방식:")
+print("  1. K-겹으로 나눠, 각 폴드의 예측은 그 폴드를 제외하고 학습한 모델로 생성")
+print("  2. 이렇게 모은 OOF 예측을 메타 특성으로")
+print("  3. 최종 기본 모델은 전체 데이터로 다시 학습해 시험셋 예측에 사용")
+```
+
+실무에서는 얻는 이득(보통 소수점 이하)에 비해 복잡도와 지연이 크게 늘어,
+대회 밖에서는 잘 쓰지 않는다.
+
+---
+
+## 정형 데이터에서 GBDT vs 신경망
+
+::: {.key-concept}
+여러 벤치마크 연구가 일관되게 보고하는 결과가 있다 —
+**중소 규모 정형 데이터에서는 GBDT가 신경망을 앞선다.**
+
+이유로 제시되는 것들:
+
+1. **불규칙한 함수** — 정형 데이터의 목표 함수는 매끄럽지 않은 경우가 많고,
+   신경망은 매끄러운 함수 쪽으로 편향되어 있다.
+2. **정보 없는 특성에 강건** — 트리는 쓸모없는 특성을 그냥 안 고른다.
+   신경망은 모든 입력을 어떻게든 섞는다.
+3. **회전 불변성이 오히려 해가 됨** — 정형 데이터의 각 열은 의미가 있는데,
+   신경망은 [2.6에서 본 회전](06_trees.qmd)에 둔감한 표현을 배운다.
+4. **튜닝 부담** — GBDT는 기본값으로도 잘 나온다.
+
+반대로 이미지·텍스트·오디오처럼 **동질적이고 구조가 있는** 데이터에서는
+신경망이 압도적이다. [2.0의 귀납 편향](00_learning_problem.qmd) 이야기가 여기서도 성립한다.
+:::
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 배깅 (bagging) |  |
-| 랜덤 포레스트 |  |
-| 그래디언트 부스팅 |  |
-| XGBoost/LightGBM |  |
-| 스태킹 |  |
+| 앙상블의 수학 | $\frac{\sigma^2}{M}+\frac{M-1}{M}\rho\sigma^2$ — **$\rho$ 가 전부** |
+| 배깅 | 부트스트랩 + 평균, 분산 감소 |
+| OOB | 각 트리가 못 본 37%로 검증셋 없이 추정 |
+| 랜덤 포레스트 | 분할마다 특성 부분집합 → $\rho$ 낮춤 |
+| AdaBoost | 틀린 샘플 가중치↑, 지수 손실 |
+| **그래디언트 부스팅** | 함수공간 경사하강, 제곱손실이면 잔차 학습 |
+| 학습률 ↔ 트리 수 | 교환 관계, 작은 lr + 많은 트리 |
+| 배깅 vs 부스팅 | 분산 vs 편향, 과적합 안 함 vs 함 |
+| leaf-wise | 강력하지만 잎 수 제한 필수 |
+| 스태킹 | **OOF 예측 필수**, 아니면 누수 |
+| 정형 데이터 | GBDT가 여전히 강함 |
+
+지도학습의 주요 알고리즘을 훑었다.
+다음 장은 가장 단순한 기준선 모델들 — 그리고 고차원에서 "가깝다"가 무너지는 현상을 다룬다.
 
 ---
 
-**다음**: [2.8 kNN·나이브 베이즈·기타](08_knn_naive_bayes.qmd) — 게으른 학습과 단순한 가정 — 기준선이 되는 모델들
+**다음**: [2.8 kNN·나이브 베이즈·기타](08_knn_naive_bayes.qmd) — 게으른 학습과 단순한 가정
 
 **이전**: [2.6 결정트리](06_trees.qmd)
