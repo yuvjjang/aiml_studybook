@@ -1,0 +1,83 @@
+---
+title: "9.7 추적과 시간적 연관"
+subtitle: "MOT·재식별·SAM2 — 프레임을 가로질러 같은 것을 같다고 하기"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+검출은 프레임 단위지만 세상은 연속이다. 추적은 그 간극을 메우는 문제이고, 실시간 시스템에서 가장 자주 쓰인다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 단일 객체 추적(SOT)과 다중 객체 추적(MOT)
+- tracking-by-detection 패러다임
+- 모션 모델: 칼만 필터와 상태 추정
+- 데이터 연관: 헝가리안 알고리즘, IoU 매칭
+- SORT, DeepSORT, ByteTrack의 계보
+- 외형 특성과 재식별(Re-ID) 임베딩
+- 가림(occlusion), ID 전환, 궤적 단절
+- 종단간 추적: TransTrack, MOTR 계열
+- 비디오 객체 분할과 SAM2의 메모리 구조
+- 평가 지표: MOTA, IDF1, HOTA
+
+---
+
+## G9.7.1 — 칼만 필터 예측-보정
+
+예측 분포가 관측으로 갱신되며 궤적이 매끄러워지는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 스텝 재생
+:::
+
+---
+
+## G9.7.2 — 데이터 연관 행렬
+
+검출-트랙 간 비용 행렬과 최적 매칭 선택
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 임계값 슬라이더
+:::
+
+---
+
+## G9.7.3 — 가림과 ID 전환
+
+객체가 가려졌다 나타날 때 ID가 바뀌는 실패 모드
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 가림 길이 슬라이더
+:::
+
+---
+
+## G9.7.4 — 추적 지표 비교
+
+같은 결과에 대해 MOTA와 HOTA가 다른 평가를 주는 사례
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 시나리오 선택
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| MOT |  |
+| 칼만 필터 |  |
+| 헝가리안 매칭 |  |
+| Re-ID |  |
+| HOTA |  |
+| SAM2 |  |
+
+---
+
+**다음**: [9.8 비디오 생성](08_video_generation.qmd) — video diffusion·DiT·시간 일관성 — 움직이는 것을 만들기
+
+**이전**: [9.6 비디오 이해 모델](06_video_models.qmd)

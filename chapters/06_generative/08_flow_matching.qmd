@@ -1,0 +1,82 @@
+---
+title: "6.8 흐름 매칭과 최신 생성 기법"
+subtitle: "rectified flow·consistency·일관된 속도장 — 확산 이후"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+최근 대형 이미지·비디오 모델은 DDPM이 아니라 flow matching으로 학습된다. 더 단순한 목적함수로 더 곧은 경로를 얻는다는 것이 요점이다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 연속 정규화 흐름과 속도장(vector field) 학습
+- 흐름 매칭(Flow Matching) 목적함수 유도
+- 조건부 흐름 매칭(CFM)과 학습 가능한 형태로의 변환
+- Rectified Flow: 직선 경로와 reflow 절차
+- 확산과 흐름 매칭의 통일된 관점
+- 일관성 모델(Consistency Models)과 1~2 스텝 생성
+- 적대적 증류(ADD), 분포 매칭 증류(DMD)
+- 정류 흐름이 대형 모델(SD3, Flux 등)에서 표준이 된 이유
+- 이산 데이터로의 확장: 이산 확산, 마스크 확산 언어모델
+- 생성 모델 계열의 수렴 — 무엇이 남는가
+
+---
+
+## G6.8.1 — 확산 경로 vs 직선 경로
+
+구불구불한 확산 궤적과 rectified flow의 직선 궤적 비교
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 경로 전환
+:::
+
+---
+
+## G6.8.2 — 속도장 학습
+
+시간에 따라 변하는 속도장이 잡음을 데이터로 옮기는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 시간 t 슬라이더
+:::
+
+---
+
+## G6.8.3 — 스텝 수 대비 품질
+
+확산·rectified flow·일관성 모델의 소수 스텝 성능
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 스텝 슬라이더
+:::
+
+---
+
+## G6.8.4 — reflow 반복
+
+경로가 반복마다 더 곧아지는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 반복 횟수 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 흐름 매칭 (flow matching) |  |
+| rectified flow |  |
+| 일관성 모델 |  |
+| 속도장 |  |
+| 증류 생성 |  |
+
+---
+
+**다음**: [7.0 텍스트를 다루기](../07_language/00_text_representation.qmd) — 유니코드·정규화·전처리 — 언어 데이터의 현실
+
+**이전**: [6.7 잠재 확산과 텍스트-이미지](07_latent_diffusion.qmd)

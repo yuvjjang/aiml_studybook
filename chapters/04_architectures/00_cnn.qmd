@@ -1,0 +1,82 @@
+---
+title: "4.0 합성곱 신경망"
+subtitle: "지역성·가중치 공유·수용영역 — 이미지에 맞춘 귀납 편향"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+CNN은 '구조를 아키텍처에 새겨 넣는다'는 발상의 원형이며, 그 발상은 이후 어텐션이 그것을 버리는 방식과 대비해서 볼 때 가장 잘 이해된다.
+
+---
+
+## 이 장에서 다루는 것
+
+- MLP를 이미지에 쓸 때의 문제: 파라미터 폭발, 평행이동 불변성 없음
+- 합성곱 연산의 정의와 상호상관(cross-correlation)과의 차이
+- 커널·스트라이드·패딩·팽창(dilation)과 출력 크기 공식
+- 가중치 공유와 평행이동 등변성(equivariance)
+- 풀링과 불변성, 최근의 stride 대체 경향
+- 수용영역(receptive field) 계산과 깊이의 역할
+- 채널과 1×1 합성곱, 병목 구조
+- 깊이별 분리 합성곱(depthwise separable)과 효율
+- 전치 합성곱과 업샘플링
+- CNN의 파라미터·FLOPs 계산
+
+---
+
+## G4.0.1 — 합성곱 슬라이딩
+
+커널이 이미지를 훑으며 특성맵을 만드는 과정 단계별 표시
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 커널 위치 애니메이션
+:::
+
+---
+
+## G4.0.2 — 커널이 보는 것
+
+에지·블러·샤픈 커널이 같은 이미지에서 추출하는 서로 다른 특성
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 커널 종류 선택
+:::
+
+---
+
+## G4.0.3 — 수용영역 성장
+
+층을 쌓을수록 한 뉴런이 보는 원본 영역이 넓어지는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 층 깊이 슬라이더
+:::
+
+---
+
+## G4.0.4 — 출력 크기 계산기
+
+하이퍼파라미터에 따른 출력 해상도와 파라미터 수
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: stride·padding 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 합성곱 (convolution) |  |
+| 가중치 공유 |  |
+| 수용영역 |  |
+| 등변성 (equivariance) |  |
+| depthwise separable |  |
+
+---
+
+**다음**: [4.1 현대 CNN 아키텍처](01_cnn_modern.qmd) — ResNet·Inception·EfficientNet·ConvNeXt — 깊이를 다루는 설계들
+
+**이전**: [3.9 학습 실전과 디버깅](../03_deep_learning/09_training_practice.qmd)

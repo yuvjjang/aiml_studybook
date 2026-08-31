@@ -1,0 +1,82 @@
+---
+title: "5.4 트랜스포머 블록"
+subtitle: "FFN·잔차·정규화 배치 — 블록 하나의 완전한 해부"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+LLM은 결국 이 블록을 N번 쌓은 것이다. 블록 내부의 각 부품이 왜 거기 있는지 알면 모델 카드의 하이퍼파라미터가 전부 읽힌다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 블록 구성: MHA → 잔차+정규화 → FFN → 잔차+정규화
+- FFN(position-wise MLP)의 역할: 채널 혼합과 비선형 처리
+- 확장 비율 4d의 관례와 그 근거
+- FFN을 키-값 메모리로 보는 해석
+- SwiGLU FFN과 파라미터 수 보정(8/3 d)
+- pre-LN vs post-LN: 학습 안정성과 warmup 필요성
+- 잔차 스트림(residual stream) 관점 — 해석가능성의 기본 그림
+- 파라미터 수 계산: 어텐션 4d², FFN 8d², 층당 12d²
+- 블록 변형: Parallel block(GPT-J), sandwich norm, QK-norm
+- 층 수·너비·헤드 수 설계 관례
+
+---
+
+## G5.4.1 — 블록 데이터 흐름
+
+입력 텐서가 블록 내부를 통과하며 shape가 어떻게 변하는지 추적
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 단계 재생
+:::
+
+---
+
+## G5.4.2 — 잔차 스트림
+
+각 층이 잔차 스트림에 무엇을 더하는지 누적 기여도 시각화
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 층 슬라이더
+:::
+
+---
+
+## G5.4.3 — pre-LN vs post-LN 학습
+
+동일 조건에서 두 배치의 학습 곡선·발산 여부
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 구조 전환
+:::
+
+---
+
+## G5.4.4 — 파라미터 예산 분해
+
+어텐션/FFN/임베딩이 전체 파라미터에서 차지하는 비율
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: d_model·층 수 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| FFN |  |
+| 잔차 스트림 |  |
+| pre-LN |  |
+| SwiGLU FFN |  |
+| 파라미터 수 계산 |  |
+
+---
+
+**다음**: [5.5 인코더-디코더와 세 가지 계열](05_encoder_decoder.qmd) — 원 논문 구조에서 encoder-only·decoder-only로의 분기
+
+**이전**: [5.3 위치 인코딩](03_positional_encoding.qmd)

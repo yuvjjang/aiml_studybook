@@ -1,0 +1,83 @@
+---
+title: "5.8 전문가 혼합(MoE)"
+subtitle: "희소 활성화로 파라미터와 연산을 분리하기"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+현대 프런티어 모델 상당수가 MoE다. 파라미터 수와 토큰당 연산량이 더 이상 같은 숫자가 아니라는 점이 모든 것을 바꾼다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 밀집(dense) 모델의 한계: 파라미터를 늘리면 연산도 그대로 늘어난다
+- 조건부 연산(conditional computation)의 아이디어
+- MoE 층 구조: 라우터 + N개의 전문가 FFN
+- top-k 라우팅과 희소 게이팅
+- 부하 불균형 문제와 보조 손실(load balancing loss)
+- 전문가 용량(capacity factor)과 토큰 드롭
+- Switch Transformer(top-1), GShard, Mixtral, DeepSeek-MoE
+- 공유 전문가·세분화 전문가 설계
+- 분산 학습에서의 전문가 병렬화와 통신 비용
+- MoE의 추론 특성: 메모리는 크고 연산은 작다
+- 활성 파라미터 vs 총 파라미터로 모델 비교하기
+
+---
+
+## G5.8.1 — 라우팅 시각화
+
+각 토큰이 어떤 전문가로 보내지는지 흐름도
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 토큰 선택
+:::
+
+---
+
+## G5.8.2 — 부하 분포
+
+균형 손실 유무에 따른 전문가별 토큰 수 분포
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 보조 손실 가중치 슬라이더
+:::
+
+---
+
+## G5.8.3 — dense vs MoE 비용
+
+총 파라미터는 늘지만 토큰당 FLOPs는 유지되는 관계
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 전문가 수 슬라이더
+:::
+
+---
+
+## G5.8.4 — 전문가 전문화
+
+특정 도메인·언어 토큰이 특정 전문가에 몰리는 패턴
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 층 선택
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| MoE |  |
+| top-k 라우팅 |  |
+| 부하 균형 손실 |  |
+| 활성 파라미터 |  |
+| Switch Transformer |  |
+
+---
+
+**다음**: [5.9 스케일링 법칙](09_scaling_laws.qmd) — Kaplan·Chinchilla·연산 최적 — 얼마나 키우고 얼마나 먹일 것인가
+
+**이전**: [5.7 효율적 어텐션과 긴 문맥](07_efficient_attention.qmd)

@@ -1,0 +1,81 @@
+---
+title: "5.5 인코더-디코더와 세 가지 계열"
+subtitle: "원 논문 구조에서 encoder-only·decoder-only로의 분기"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+BERT·T5·GPT는 같은 부품으로 만든 세 가지 조립품이다. 계열을 구분하면 어떤 과제에 무엇을 쓸지가 자명해진다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 'Attention Is All You Need' 원 구조 전체 도해
+- 인코더 스택: 양방향 셀프 어텐션
+- 디코더 스택: 마스크드 셀프 어텐션 + 크로스 어텐션
+- encoder-only(BERT 계열): 이해 과제, 사전학습 목표
+- decoder-only(GPT 계열): 생성, 왜 이 계열이 지배하게 되었는가
+- encoder-decoder(T5/BART): 조건부 생성, 번역·요약
+- UL2·prefix LM 같은 통합 목표
+- 각 계열의 추론 비용과 KV 캐시 구조 차이
+- 계열 선택 가이드와 최근의 수렴 경향
+
+---
+
+## G5.5.1 — 세 계열 구조 비교
+
+encoder-only / decoder-only / encoder-decoder 블록 배치 도식
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 계열 전환
+:::
+
+---
+
+## G5.5.2 — 마스크 패턴으로 본 계열
+
+어텐션 마스크 행렬만으로 세 계열이 구분되는 것을 시각화
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 계열 전환
+:::
+
+---
+
+## G5.5.3 — 크로스 어텐션 흐름
+
+디코더 토큰이 인코더 출력의 어느 부분을 참조하는지
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 디코더 스텝 재생
+:::
+
+---
+
+## G5.5.4 — 추론 비용 비교
+
+계열별 생성 시 연산·메모리 증가 양상
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 출력 길이 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 인코더-디코더 |  |
+| encoder-only (BERT) |  |
+| decoder-only (GPT) |  |
+| prefix LM |  |
+| 크로스 어텐션 |  |
+
+---
+
+**다음**: [5.6 GPT를 처음부터 만들기](06_build_gpt.qmd) — 토크나이저부터 생성까지 — 200줄로 동작하는 언어모델
+
+**이전**: [5.4 트랜스포머 블록](04_transformer_block.qmd)

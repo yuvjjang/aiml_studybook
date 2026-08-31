@@ -1,0 +1,83 @@
+---
+title: "7.8 프롬프팅과 문맥 내 학습"
+subtitle: "few-shot·CoT·구조화 프롬프트 — 가중치를 건드리지 않는 프로그래밍"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+문맥 내 학습은 사전학습에서 창발한 능력이며, 실무에서 가장 빠르고 저렴한 성능 개선 수단이다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 문맥 내 학습(ICL)의 발견과 few-shot 프롬프팅
+- ICL이 왜 작동하는가에 대한 가설들(암묵적 경사하강, 과제 인식, induction head)
+- 예시 선택·순서·형식의 민감성
+- 사고 연쇄(Chain-of-Thought)와 추론 유도
+- zero-shot CoT, self-consistency, least-to-most
+- ReAct: 추론과 도구 사용의 교차
+- 역할·구조·구획화 프롬프트 설계 원칙
+- 출력 형식 강제: JSON 스키마, 제약 디코딩, 문법 기반 샘플링
+- 프롬프트 자동 최적화(APE, DSPy 류)
+- 프롬프트 주입과 신뢰 경계 (안전 장에서 심화)
+- 프롬프팅 실험을 제대로 평가하는 법
+
+---
+
+## G7.8.1 — few-shot 예시 수
+
+예시를 늘릴 때 성능이 오르다 포화되는 곡선
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 예시 개수 슬라이더
+:::
+
+---
+
+## G7.8.2 — 예시 순서 민감도
+
+같은 예시 집합이라도 순서에 따라 정확도가 흔들리는 분산
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 순서 셔플 버튼
+:::
+
+---
+
+## G7.8.3 — CoT 유무 비교
+
+추론 과제에서 CoT가 만드는 성능 격차와 토큰 비용
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 과제 선택
+:::
+
+---
+
+## G7.8.4 — self-consistency
+
+여러 추론 경로의 다수결이 정확도를 올리는 정도
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 샘플 수 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 문맥 내 학습 (ICL) |  |
+| few-shot |  |
+| Chain-of-Thought |  |
+| self-consistency |  |
+| 제약 디코딩 |  |
+
+---
+
+**다음**: [7.9 디코딩 전략](09_decoding.qmd) — greedy·beam·top-p·온도 — 확률 분포에서 문장을 꺼내는 법
+
+**이전**: [7.7 지시 조정과 정렬](07_alignment.qmd)

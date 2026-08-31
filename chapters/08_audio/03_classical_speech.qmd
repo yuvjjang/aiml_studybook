@@ -1,0 +1,83 @@
+---
+title: "8.3 고전 음성 인식"
+subtitle: "HMM-GMM·음소·발음사전 — 딥러닝 이전의 30년"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+현대 ASR의 용어(정렬, 언어모델 결합, 빔 서치 디코딩)는 전부 이 시대에서 왔다. 계보를 알면 CTC·RNN-T가 무엇을 대체했는지 정확히 보인다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 음성 인식 문제의 정의와 잡음 채널 모델
+- 음소(phoneme)와 음성학 기초, 발음 사전
+- 은닉 마르코프 모델(HMM): 상태·전이·방출
+- 세 가지 기본 문제와 forward-backward, Viterbi, Baum-Welch
+- GMM 방출 모델과 특성 벡터
+- 문맥 의존 음소(triphone)와 상태 묶기
+- 언어모델 결합과 WFST 디코딩
+- 강제 정렬(forced alignment)의 개념과 활용
+- DNN-HMM 하이브리드로의 전환
+- 평가 지표: WER, CER, 정렬 기반 오류 분해
+
+---
+
+## G8.3.1 — HMM 상태 전이
+
+상태가 시간에 따라 전이하며 관측을 방출하는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 관측 시퀀스 재생
+:::
+
+---
+
+## G8.3.2 — Viterbi 경로
+
+격자(trellis) 위에서 최적 경로가 선택되는 동적계획법
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 격자 탐색 재생
+:::
+
+---
+
+## G8.3.3 — 강제 정렬
+
+음성 파형 위에 음소 경계가 그어지는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 발화 선택
+:::
+
+---
+
+## G8.3.4 — WER 계산
+
+삽입·삭제·치환 오류가 편집거리로 집계되는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 가설 문장 입력
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| HMM |  |
+| Viterbi 알고리즘 |  |
+| GMM |  |
+| 강제 정렬 |  |
+| WER |  |
+| WFST |  |
+
+---
+
+**다음**: [8.4 CTC와 RNN-T](04_ctc_rnnt.qmd) — 정렬 없이 학습하기 — 종단간 음성 인식의 문
+
+**이전**: [8.2 멜 스케일과 MFCC](02_mel_mfcc.qmd)

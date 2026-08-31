@@ -1,0 +1,84 @@
+---
+title: "4.1 현대 CNN 아키텍처"
+subtitle: "ResNet·Inception·EfficientNet·ConvNeXt — 깊이를 다루는 설계들"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+ResNet의 잔차 연결은 CNN을 넘어 Transformer의 필수 부품이 되었다. 아키텍처 설계의 역사는 그대로 현재 모델의 설계 근거다.
+
+---
+
+## 이 장에서 다루는 것
+
+- LeNet → AlexNet → VGG: 깊이 경쟁의 시작
+- 성능 저하(degradation) 문제와 ResNet의 잔차 블록
+- 항등 매핑과 그래디언트 고속도로, pre-activation ResNet
+- Inception: 다중 스케일 병렬 경로와 1×1 병목
+- DenseNet: 특성 재사용
+- SENet·CBAM: 채널·공간 어텐션의 도입
+- MobileNet/ShuffleNet: 모바일 효율 설계
+- EfficientNet: 복합 스케일링(깊이·너비·해상도)
+- NAS(신경망 구조 탐색)의 성과와 한계
+- ConvNeXt: ViT의 설계 선택을 CNN에 역수입
+- 아키텍처 비교 시 공정한 실험 조건의 중요성
+
+---
+
+## G4.1.1 — 잔차 블록 구조
+
+plain / residual / pre-activation 블록의 신호 경로 도식
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 블록 종류 전환
+:::
+
+---
+
+## G4.1.2 — 깊이별 성능
+
+plain 망은 깊어지면 나빠지고 ResNet은 좋아지는 대비
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 층 수 슬라이더
+:::
+
+---
+
+## G4.1.3 — 복합 스케일링
+
+세 축을 균형 있게 키울 때 효율이 최대가 되는 지형
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 깊이·너비·해상도 슬라이더
+:::
+
+---
+
+## G4.1.4 — 아키텍처 비용-성능
+
+파라미터·FLOPs 대 정확도 산점도 위의 파레토 곡선
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 모델 선택
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| ResNet |  |
+| 잔차 블록 |  |
+| Inception |  |
+| EfficientNet |  |
+| ConvNeXt |  |
+| NAS |  |
+
+---
+
+**다음**: [4.2 순환 신경망](02_rnn.qmd) — 은닉 상태·BPTT·장기 의존성 — 시퀀스를 다룬 첫 방식
+
+**이전**: [4.0 합성곱 신경망](00_cnn.qmd)

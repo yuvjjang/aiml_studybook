@@ -1,0 +1,81 @@
+---
+title: "3.5 정규화 층"
+subtitle: "BatchNorm·LayerNorm·RMSNorm — 학습을 안정시키는 장치"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+Transformer의 성능은 정규화 위치 하나(pre-LN vs post-LN)에 크게 좌우된다. 정규화는 부가 기능이 아니라 구조의 일부다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 내부 공변량 이동 가설과 그 이후의 반박(손실 지형 평활화)
+- BatchNorm: 학습/추론 시 동작 차이, running statistics
+- BatchNorm의 문제: 작은 배치, 순환망, 분산 학습
+- LayerNorm: 배치 독립성, 시퀀스 모델에 적합한 이유
+- RMSNorm: LayerNorm에서 평균 제거를 뺀 단순화
+- GroupNorm, InstanceNorm, 그리고 비전에서의 선택
+- pre-LN vs post-LN — 잔차 경로와 그래디언트 흐름
+- 정규화 없는 학습: Fixup, ReZero, DeepNorm, σReparam
+- 정규화와 학습률·배치 크기의 상호작용
+
+---
+
+## G3.5.1 — 정규화 축 비교
+
+(배치, 채널, 공간) 텐서에서 각 정규화가 평균 내는 축을 색으로 표시
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 정규화 방식 전환
+:::
+
+---
+
+## G3.5.2 — BatchNorm 전후 분포
+
+깊은 층에서 활성화 분포가 무너지고 정규화가 되돌리는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 층 깊이 슬라이더
+:::
+
+---
+
+## G3.5.3 — pre-LN vs post-LN 그래디언트
+
+깊은 Transformer에서 두 배치의 그래디언트 노름 차이
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 깊이 슬라이더
+:::
+
+---
+
+## G3.5.4 — 배치 크기와 BN 불안정
+
+배치가 작아질 때 통계 추정 잡음이 커지는 현상
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 배치 크기 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| BatchNorm |  |
+| LayerNorm |  |
+| RMSNorm |  |
+| pre-LN |  |
+| 내부 공변량 이동 |  |
+
+---
+
+**다음**: [3.6 딥러닝의 정규화](06_regularization_dl.qmd) — 드롭아웃·증강·조기종료 — 과적합을 막는 도구상자
+
+**이전**: [3.4 최적화 알고리즘](04_optimizers.qmd)

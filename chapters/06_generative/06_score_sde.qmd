@@ -1,0 +1,82 @@
+---
+title: "6.6 스코어 기반 관점과 SDE"
+subtitle: "스코어 매칭·확률미분방정식·DDIM — 확산을 연속으로 보기"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+스코어 관점은 확산의 여러 변형(DDIM, 샘플러, 가이던스)을 하나의 언어로 통일하고, 샘플링을 수십 배 빠르게 만든 근거를 준다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 스코어 함수 ∇ₓ log p(x) 의 정의와 의미
+- 스코어 매칭과 잡음제거 스코어 매칭(DSM)
+- 랑주뱅 동역학 샘플링
+- 잡음 조건부 스코어 네트워크(NCSN)
+- SDE 관점: VP-SDE(=DDPM), VE-SDE(=SMLD)
+- 역방향 SDE와 확률 흐름 ODE(probability flow ODE)
+- DDIM: 결정론적 샘플링과 적은 스텝
+- 고급 샘플러: DPM-Solver, Heun, ancestral vs ODE
+- 정확한 우도 계산(ODE 경로)
+- 인버전(inversion)과 실제 이미지 편집
+
+---
+
+## G6.6.1 — 스코어 벡터장
+
+확률 밀도의 그래디언트 방향장과 데이터 매니폴드
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 잡음 수준 슬라이더
+:::
+
+---
+
+## G6.6.2 — 랑주뱅 샘플링 궤적
+
+잡음 섞인 경사 상승으로 샘플이 고밀도 영역으로 이동
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 스텝 재생
+:::
+
+---
+
+## G6.6.3 — SDE vs ODE 경로
+
+확률적 경로와 결정론적 경로의 궤적 차이
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 경로 전환
+:::
+
+---
+
+## G6.6.4 — 스텝 수와 품질
+
+DDPM 1000스텝과 DDIM 20스텝의 결과 비교
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 샘플링 스텝 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 스코어 함수 |  |
+| 잡음제거 스코어 매칭 |  |
+| 랑주뱅 동역학 |  |
+| SDE/ODE |  |
+| DDIM |  |
+
+---
+
+**다음**: [6.7 잠재 확산과 텍스트-이미지](07_latent_diffusion.qmd) — Stable Diffusion·DiT·조건 주입 — 실전 생성 시스템의 구조
+
+**이전**: [6.5 확산 모델](05_diffusion.qmd)

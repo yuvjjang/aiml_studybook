@@ -1,0 +1,83 @@
+---
+title: "7.9 디코딩 전략"
+subtitle: "greedy·beam·top-p·온도 — 확률 분포에서 문장을 꺼내는 법"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+같은 모델이 디코딩 설정 하나로 지루해지거나 헛소리를 한다. 생성 품질 문제의 상당수는 모델이 아니라 샘플러의 문제다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 탐색 문제로서의 디코딩: argmax 시퀀스는 계산 불가능
+- greedy 디코딩과 그 반복 함정
+- 빔 서치: 빔 크기, 길이 정규화, 왜 개방형 생성에는 부적합한가
+- 온도(temperature)와 분포 날카로움
+- top-k 샘플링과 top-p(뉴클리어스) 샘플링
+- min-p, typical sampling, epsilon/eta sampling
+- 반복 페널티, presence/frequency penalty, no-repeat n-gram
+- 대조 검색(contrastive search)과 대조 디코딩
+- 제약 디코딩: 문법·정규식·JSON 스키마
+- 추측 디코딩(speculative decoding)의 원리와 무손실성
+- 설정별 권장값과 과제 유형에 따른 선택
+
+---
+
+## G7.9.1 — 온도와 확률 분포
+
+같은 로짓이 온도에 따라 뾰족해지고 평평해지는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 온도 슬라이더
+:::
+
+---
+
+## G7.9.2 — top-k vs top-p
+
+잘려나가는 후보 집합이 문맥마다 달라지는 방식 비교
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 임계값 슬라이더
+:::
+
+---
+
+## G7.9.3 — 빔 서치 탐색 트리
+
+빔이 유지·확장·가지치기되는 탐색 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 빔 크기 슬라이더
+:::
+
+---
+
+## G7.9.4 — 추측 디코딩
+
+초안 모델이 제안하고 대형 모델이 검증·수용하는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 초안 길이 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 온도 (temperature) |  |
+| top-p 샘플링 |  |
+| 빔 서치 |  |
+| 반복 페널티 |  |
+| 추측 디코딩 |  |
+
+---
+
+**다음**: [7.10 검색 증강 생성(RAG)](10_rag.qmd) — 임베딩 검색·청킹·리랭킹 — 모델에 없는 지식을 주입하기
+
+**이전**: [7.8 프롬프팅과 문맥 내 학습](08_prompting_icl.qmd)

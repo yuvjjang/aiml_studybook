@@ -1,0 +1,78 @@
+/*-- scss:defaults --*/
+$font-family-sans-serif: "Pretendard", "Noto Sans KR", system-ui, sans-serif;
+$font-family-monospace: "JetBrains Mono", "Fira Code", monospace;
+$headings-font-weight: 600;
+$link-color: #7ea8f7;
+
+/*-- scss:rules --*/
+
+/* 수식 강조 블록 */
+.math-box {
+  background: rgba(126, 168, 247, 0.08);
+  border-left: 3px solid #7ea8f7;
+  border-radius: 4px;
+  padding: 1rem 1.2rem;
+  margin: 1.2rem 0;
+}
+
+/* 콜아웃 제목 */
+.callout-note .callout-title {
+  font-weight: 600;
+}
+
+/* Plotly 그래프 컨테이너 */
+.plotly-graph-div {
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  margin: 1.5rem 0;
+}
+
+/* 코드 블록 */
+pre.sourceCode {
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+
+/* 챕터 헤더 */
+h1.title {
+  border-bottom: 2px solid #7ea8f7;
+  padding-bottom: 0.5rem;
+}
+
+/* 섹션 구분선 */
+hr {
+  border-color: rgba(126, 168, 247, 0.2);
+  margin: 2rem 0;
+}
+
+/* 인터랙션 힌트 */
+.interaction-hint {
+  font-size: 0.82em;
+  color: #8899aa;
+  text-align: center;
+  margin-top: -0.8rem;
+  margin-bottom: 1rem;
+  font-style: italic;
+}
+
+/* 핵심 개념 박스 */
+.key-concept {
+  background: rgba(255, 200, 100, 0.08);
+  border: 1px solid rgba(255, 200, 100, 0.3);
+  border-radius: 6px;
+  padding: 1rem 1.2rem;
+  margin: 1.2rem 0;
+}
+
+/* 실행되지 않는 참고 코드(PyTorch 등) 표시 */
+.ref-code {
+  border-left: 3px solid rgba(255, 200, 100, 0.5);
+  padding-left: 0.8rem;
+}
+
+/* 사이드바 */
+.sidebar-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+}

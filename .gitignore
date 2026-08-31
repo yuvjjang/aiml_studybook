@@ -1,0 +1,11 @@
+venv/
+_site/
+__pycache__/
+.env
+.quarto/
+_freeze/
+.claude/settings.local.json
+
+/.quarto/
+
+**/*.quarto_ipynb

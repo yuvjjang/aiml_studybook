@@ -1,0 +1,84 @@
+---
+title: "8.4 CTC와 RNN-T"
+subtitle: "정렬 없이 학습하기 — 종단간 음성 인식의 문"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+'입력 1000프레임 → 출력 20글자'의 대응을 사람이 달아줄 수 없다는 문제를 CTC가 우아하게 푼다. 이 아이디어는 필기·립리딩까지 그대로 쓰인다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 정렬 문제: 입력·출력 길이가 다르고 대응을 모른다
+- CTC의 blank 토큰과 확장 경로 개념
+- 가능한 모든 정렬에 대한 주변화, forward-backward 계산
+- CTC 손실의 미분과 학습
+- CTC 디코딩: greedy(best path), prefix beam search
+- CTC의 조건부 독립 가정과 그 한계
+- 언어모델 융합(shallow fusion, 얕은/깊은 융합)
+- RNN-T: 예측 네트워크로 출력 의존성 복원
+- RNN-T 격자와 스트리밍 인식 적합성
+- 어텐션 기반 seq2seq ASR(LAS)과의 비교
+- 현재의 조합: Conformer 인코더 + CTC/RNN-T/어텐션 다중 목표
+
+---
+
+## G8.4.1 — CTC 정렬 격자
+
+blank를 끼워 넣어 만들 수 있는 모든 정렬 경로 시각화
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 출력 시퀀스 입력
+:::
+
+---
+
+## G8.4.2 — CTC 출력 스파이크
+
+프레임별 문자 확률이 특정 시점에 뾰족하게 몰리는 패턴
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 발화 선택
+:::
+
+---
+
+## G8.4.3 — prefix beam search
+
+동일 문자열로 합쳐지는 경로들이 확률을 합산하는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 빔 크기 슬라이더
+:::
+
+---
+
+## G8.4.4 — CTC vs RNN-T 격자
+
+두 모델의 격자 구조와 출력 의존성 차이
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 모델 전환
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| CTC |  |
+| blank 토큰 |  |
+| forward-backward |  |
+| RNN-T |  |
+| 스트리밍 ASR |  |
+| Conformer |  |
+
+---
+
+**다음**: [8.5 음성 자기지도 학습](05_ssl_speech.qmd) — wav2vec 2.0·HuBERT·WavLM — 레이블 없이 음성 표현 배우기
+
+**이전**: [8.3 고전 음성 인식](03_classical_speech.qmd)

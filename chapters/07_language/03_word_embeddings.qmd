@@ -1,0 +1,84 @@
+---
+title: "7.3 단어 임베딩"
+subtitle: "Word2Vec·GloVe·fastText — 의미를 벡터로 만든 첫 성공"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+'king − man + woman ≈ queen'은 마케팅 문구가 아니라 목적함수에서 유도되는 성질이다. 그 유도를 보면 현대 임베딩 모델도 같은 원리 위에 있다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 분포 가설(distributional hypothesis)
+- 동시출현 행렬과 PMI, SVD 기반 임베딩
+- Word2Vec: CBOW와 Skip-gram 목적함수
+- 네거티브 샘플링과 계층적 softmax
+- Skip-gram with negative sampling = 이동된 PMI 행렬 분해 (Levy & Goldberg)
+- GloVe: 전역 동시출현 비율의 로그 이중선형 모델
+- fastText: 부분 문자열로 미등록 단어 다루기
+- 유추(analogy) 과제와 선형 구조
+- 정적 임베딩의 한계: 다의어, 문맥 부재
+- 임베딩의 사회적 편향과 그 측정·완화
+- 현대 문장 임베딩으로의 계보 (SBERT, E5, BGE)
+
+---
+
+## G7.3.1 — Skip-gram 학습
+
+중심 단어와 주변 단어 쌍이 만들어지는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 윈도 크기 슬라이더
+:::
+
+---
+
+## G7.3.2 — 임베딩 공간 유추
+
+유추 관계가 평행 벡터로 나타나는 2D 사영
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 단어 쌍 선택
+:::
+
+---
+
+## G7.3.3 — 네거티브 샘플링
+
+양성 쌍은 끌어당기고 음성 쌍은 밀어내는 힘의 시각화
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 샘플 수 슬라이더
+:::
+
+---
+
+## G7.3.4 — 편향 축 측정
+
+성별 등 편향 방향에 단어들이 투영되는 정도
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 축 선택
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 분포 가설 |  |
+| Word2Vec |  |
+| 네거티브 샘플링 |  |
+| GloVe |  |
+| fastText |  |
+| 임베딩 편향 |  |
+
+---
+
+**다음**: [7.4 사전학습 패러다임](04_pretraining_paradigms.qmd) — ELMo·BERT·GPT·T5 — 자기지도 목표의 설계
+
+**이전**: [7.2 언어모델의 기초](02_language_models.qmd)

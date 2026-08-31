@@ -1,0 +1,37 @@
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+
+:root {
+  --accent: #7ea8f7;
+  --accent-dim: rgba(126, 168, 247, 0.15);
+}
+
+/* 전체 페이지 최대 너비 */
+.quarto-container {
+  max-width: 1100px;
+}
+
+/* 인라인 수식 크기 */
+.math.inline { font-size: 1.05em; }
+.math.display { font-size: 1.1em; overflow-x: auto; }
+
+/* 그래픽 캡션 */
+figcaption {
+  font-size: 0.82em;
+  color: #8899aa;
+  text-align: center;
+  margin-top: 0.4rem;
+}
+
+/* 넓은 표는 가로 스크롤 */
+.cell-output-display table,
+.table-responsive {
+  display: block;
+  overflow-x: auto;
+}
+
+/* 페이지 내비게이션 버튼 */
+.page-navigation {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(126, 168, 247, 0.2);
+}

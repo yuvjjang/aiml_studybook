@@ -1,0 +1,82 @@
+---
+title: "3.3 손실함수"
+subtitle: "MSE·교차엔트로피·대조손실 — 무엇을 최적화한다고 말하는가"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+손실함수는 모델에게 주는 유일한 목표 진술이다. 목표를 잘못 적으면 아무리 좋은 아키텍처도 잘못된 것을 잘 배운다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 손실 = 음의 로그우도 (확률적 관점의 통일)
+- 회귀: MSE(가우스), MAE(라플라스), Huber, quantile 손실
+- 분류: 이진/다중 교차엔트로피, focal loss, label smoothing
+- 다중 레이블과 시그모이드 BCE
+- 랭킹 손실: pairwise hinge, BPR, listwise
+- 대조 손실: contrastive, triplet, InfoNCE (CLIP·SimCLR의 심장)
+- 거리 학습과 임베딩 손실
+- 정규화 항을 손실에 포함시키기
+- 다중 목표 손실의 가중치 균형과 불확실성 기반 가중
+- 손실 지형(loss landscape)과 평평한 최소점 가설
+
+---
+
+## G3.3.1 — 회귀 손실 비교
+
+이상치 하나가 MSE·MAE·Huber 최적해를 서로 다르게 끄는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 이상치 위치 슬라이더
+:::
+
+---
+
+## G3.3.2 — focal loss 감마
+
+쉬운 샘플의 손실이 눌리며 어려운 샘플에 집중되는 효과
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: γ 슬라이더
+:::
+
+---
+
+## G3.3.3 — InfoNCE 온도
+
+양성/음성 쌍의 유사도 분포와 온도가 만드는 날카로움
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 온도 슬라이더
+:::
+
+---
+
+## G3.3.4 — 손실 지형 3D
+
+평평한 최소점과 뾰족한 최소점의 일반화 차이 직관
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 3D 회전
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 교차엔트로피 |  |
+| focal loss |  |
+| label smoothing |  |
+| InfoNCE |  |
+| 손실 지형 |  |
+
+---
+
+**다음**: [3.4 최적화 알고리즘](04_optimizers.qmd) — SGD·모멘텀·Adam·AdamW·스케줄러 — 어떻게 내려갈 것인가
+
+**이전**: [3.2 활성화 함수](02_activations.qmd)

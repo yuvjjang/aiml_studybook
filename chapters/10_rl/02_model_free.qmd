@@ -1,0 +1,83 @@
+---
+title: "10.2 모델프리 학습"
+subtitle: "몬테카를로·TD·Q-learning — 경험에서 직접 배우기"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+TD 학습의 부트스트랩은 이후 모든 가치 기반 알고리즘의 뼈대이고, Q-learning의 off-policy 성질은 DQN과 오프라인 RL의 근거가 된다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 몬테카를로 예측: 에피소드 반환값 평균
+- 시간차(TD) 학습: 부트스트랩과 TD 오차
+- MC vs TD: 편향-분산, 온라인성, 수렴 특성
+- n-스텝 TD와 TD(λ), 적격 흔적(eligibility trace)
+- SARSA (on-policy) 유도
+- Q-learning (off-policy) 유도와 수렴 조건
+- on-policy와 off-policy의 정확한 의미
+- 함수 근사와 치명적 삼중고(deadly triad)
+- 탐색 전략: ε-greedy, 볼츠만, 낙관적 초기화
+- 중요도 샘플링과 off-policy 보정
+
+---
+
+## G10.2.1 — TD 오차 전파
+
+한 번의 전이가 가치 추정을 갱신하며 정보가 뒤로 전파되는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 스텝 재생
+:::
+
+---
+
+## G10.2.2 — MC vs TD 분산
+
+두 추정기의 수렴 속도와 흔들림 비교
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 에피소드 수 슬라이더
+:::
+
+---
+
+## G10.2.3 — SARSA vs Q-learning
+
+절벽 걷기에서 두 알고리즘이 서로 다른 경로를 학습하는 고전 예제
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 환경 선택
+:::
+
+---
+
+## G10.2.4 — 적격 흔적
+
+λ에 따라 과거 상태로 신용이 얼마나 거슬러 배분되는지
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: λ 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 몬테카를로 예측 |  |
+| TD 학습 |  |
+| Q-learning |  |
+| SARSA |  |
+| off-policy |  |
+| 치명적 삼중고 |  |
+
+---
+
+**다음**: [10.3 심층 강화학습](03_deep_rl.qmd) — DQN과 그 확장 — 신경망을 가치 함수로
+
+**이전**: [10.1 동적계획법](01_dynamic_programming.qmd)

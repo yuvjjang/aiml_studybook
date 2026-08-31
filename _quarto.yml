@@ -1,0 +1,193 @@
+project:
+  type: book
+  output-dir: _site
+
+book:
+  title: "AI · 머신러닝: 기초부터 최신까지"
+  subtitle: "데이터 사이언스 · 머신러닝 · 트랜스포머 · 언어 · 오디오 · 비디오"
+  author: "AI/ML Study Project"
+  date: "2026"
+  language: ko
+  search: true
+  sidebar:
+    style: docked
+    background: dark
+  chapters:
+    - index.qmd
+    - part: "Part 0: 수학·컴퓨팅 기초"
+      chapters:
+        - chapters/00_foundations/00_linear_algebra.qmd
+        - chapters/00_foundations/01_calculus_optimization.qmd
+        - chapters/00_foundations/02_probability.qmd
+        - chapters/00_foundations/03_statistics.qmd
+        - chapters/00_foundations/04_information_theory.qmd
+        - chapters/00_foundations/05_numerical_computing.qmd
+    - part: "Part 1: 데이터 사이언스"
+      chapters:
+        - chapters/01_data_science/00_data_and_types.qmd
+        - chapters/01_data_science/01_eda.qmd
+        - chapters/01_data_science/02_visualization.qmd
+        - chapters/01_data_science/03_preprocessing.qmd
+        - chapters/01_data_science/04_feature_engineering.qmd
+        - chapters/01_data_science/05_experiment_design.qmd
+        - chapters/01_data_science/06_causal_inference.qmd
+        - chapters/01_data_science/07_time_series.qmd
+    - part: "Part 2: 고전 머신러닝"
+      chapters:
+        - chapters/02_classical_ml/00_learning_problem.qmd
+        - chapters/02_classical_ml/01_bias_variance.qmd
+        - chapters/02_classical_ml/02_linear_regression.qmd
+        - chapters/02_classical_ml/03_regularization.qmd
+        - chapters/02_classical_ml/04_logistic_regression.qmd
+        - chapters/02_classical_ml/05_svm_kernels.qmd
+        - chapters/02_classical_ml/06_trees.qmd
+        - chapters/02_classical_ml/07_ensembles.qmd
+        - chapters/02_classical_ml/08_knn_naive_bayes.qmd
+        - chapters/02_classical_ml/09_clustering.qmd
+        - chapters/02_classical_ml/10_dimensionality_reduction.qmd
+        - chapters/02_classical_ml/11_model_evaluation.qmd
+        - chapters/02_classical_ml/12_practical_issues.qmd
+    - part: "Part 3: 딥러닝 기초"
+      chapters:
+        - chapters/03_deep_learning/00_perceptron_mlp.qmd
+        - chapters/03_deep_learning/01_backpropagation.qmd
+        - chapters/03_deep_learning/02_activations.qmd
+        - chapters/03_deep_learning/03_losses.qmd
+        - chapters/03_deep_learning/04_optimizers.qmd
+        - chapters/03_deep_learning/05_normalization.qmd
+        - chapters/03_deep_learning/06_regularization_dl.qmd
+        - chapters/03_deep_learning/07_initialization.qmd
+        - chapters/03_deep_learning/08_autograd_from_scratch.qmd
+        - chapters/03_deep_learning/09_training_practice.qmd
+    - part: "Part 4: 신경망 아키텍처"
+      chapters:
+        - chapters/04_architectures/00_cnn.qmd
+        - chapters/04_architectures/01_cnn_modern.qmd
+        - chapters/04_architectures/02_rnn.qmd
+        - chapters/04_architectures/03_lstm_gru.qmd
+        - chapters/04_architectures/04_seq2seq_attention.qmd
+        - chapters/04_architectures/05_embeddings.qmd
+        - chapters/04_architectures/06_gnn.qmd
+    - part: "Part 5: 트랜스포머"
+      chapters:
+        - chapters/05_transformer/00_attention_mechanism.qmd
+        - chapters/05_transformer/01_self_attention.qmd
+        - chapters/05_transformer/02_multi_head.qmd
+        - chapters/05_transformer/03_positional_encoding.qmd
+        - chapters/05_transformer/04_transformer_block.qmd
+        - chapters/05_transformer/05_encoder_decoder.qmd
+        - chapters/05_transformer/06_build_gpt.qmd
+        - chapters/05_transformer/07_efficient_attention.qmd
+        - chapters/05_transformer/08_mixture_of_experts.qmd
+        - chapters/05_transformer/09_scaling_laws.qmd
+        - chapters/05_transformer/10_alternatives_ssm.qmd
+    - part: "Part 6: 생성 모델"
+      chapters:
+        - chapters/06_generative/00_generative_overview.qmd
+        - chapters/06_generative/01_autoencoder.qmd
+        - chapters/06_generative/02_vae.qmd
+        - chapters/06_generative/03_gan.qmd
+        - chapters/06_generative/04_normalizing_flows.qmd
+        - chapters/06_generative/05_diffusion.qmd
+        - chapters/06_generative/06_score_sde.qmd
+        - chapters/06_generative/07_latent_diffusion.qmd
+        - chapters/06_generative/08_flow_matching.qmd
+    - part: "Part 7: 언어 (NLP · LLM)"
+      chapters:
+        - chapters/07_language/00_text_representation.qmd
+        - chapters/07_language/01_tokenization.qmd
+        - chapters/07_language/02_language_models.qmd
+        - chapters/07_language/03_word_embeddings.qmd
+        - chapters/07_language/04_pretraining_paradigms.qmd
+        - chapters/07_language/05_pretraining_data.qmd
+        - chapters/07_language/06_finetuning_peft.qmd
+        - chapters/07_language/07_alignment.qmd
+        - chapters/07_language/08_prompting_icl.qmd
+        - chapters/07_language/09_decoding.qmd
+        - chapters/07_language/10_rag.qmd
+        - chapters/07_language/11_agents.qmd
+        - chapters/07_language/12_reasoning_models.qmd
+        - chapters/07_language/13_evaluation.qmd
+        - chapters/07_language/14_inference_optimization.qmd
+        - chapters/07_language/15_safety.qmd
+    - part: "Part 8: 오디오 · 음성"
+      chapters:
+        - chapters/08_audio/00_sound_and_sampling.qmd
+        - chapters/08_audio/01_fourier_stft.qmd
+        - chapters/08_audio/02_mel_mfcc.qmd
+        - chapters/08_audio/03_classical_speech.qmd
+        - chapters/08_audio/04_ctc_rnnt.qmd
+        - chapters/08_audio/05_ssl_speech.qmd
+        - chapters/08_audio/06_asr_modern.qmd
+        - chapters/08_audio/07_tts.qmd
+        - chapters/08_audio/08_vocoders_codecs.qmd
+        - chapters/08_audio/09_audio_generation.qmd
+        - chapters/08_audio/10_audio_tasks.qmd
+    - part: "Part 9: 비전 · 비디오"
+      chapters:
+        - chapters/09_vision_video/00_image_basics.qmd
+        - chapters/09_vision_video/01_vision_tasks.qmd
+        - chapters/09_vision_video/02_vit.qmd
+        - chapters/09_vision_video/03_ssl_vision.qmd
+        - chapters/09_vision_video/04_clip_multimodal.qmd
+        - chapters/09_vision_video/05_video_representation.qmd
+        - chapters/09_vision_video/06_video_models.qmd
+        - chapters/09_vision_video/07_tracking.qmd
+        - chapters/09_vision_video/08_video_generation.qmd
+        - chapters/09_vision_video/09_vlm.qmd
+    - part: "Part 10: 강화학습"
+      chapters:
+        - chapters/10_rl/00_mdp.qmd
+        - chapters/10_rl/01_dynamic_programming.qmd
+        - chapters/10_rl/02_model_free.qmd
+        - chapters/10_rl/03_deep_rl.qmd
+        - chapters/10_rl/04_policy_gradient.qmd
+        - chapters/10_rl/05_rl_for_llm.qmd
+    - part: "Part 11: 시스템과 MLOps"
+      chapters:
+        - chapters/11_systems/00_reproducibility.qmd
+        - chapters/11_systems/01_data_pipeline.qmd
+        - chapters/11_systems/02_distributed_training.qmd
+        - chapters/11_systems/03_hardware.qmd
+        - chapters/11_systems/04_efficiency.qmd
+        - chapters/11_systems/05_serving.qmd
+        - chapters/11_systems/06_monitoring.qmd
+    - part: "Part 12: 해석가능성과 신뢰"
+      chapters:
+        - chapters/12_trust/00_interpretability.qmd
+        - chapters/12_trust/01_mechanistic.qmd
+        - chapters/12_trust/02_uncertainty.qmd
+        - chapters/12_trust/03_robustness.qmd
+        - chapters/12_trust/04_fairness_privacy.qmd
+    - part: "부록"
+      chapters:
+        - chapters/13_appendix/00_paper_map.qmd
+        - chapters/13_appendix/01_glossary.qmd
+        - chapters/13_appendix/02_math_cheatsheet.qmd
+        - chapters/13_appendix/03_resources.qmd
+
+format:
+  html:
+    theme:
+      dark: [slate, custom.scss]
+      light: [flatly, custom.scss]
+    css: styles.css
+    toc: true
+    toc-depth: 3
+    toc-title: "이 페이지"
+    number-sections: true
+    code-fold: true
+    code-summary: "코드 보기"
+    code-tools: true
+    highlight-style: dracula
+    fig-align: center
+    html-math-method: mathjax
+    smooth-scroll: true
+    anchor-sections: true
+
+jupyter: ai-ml-study
+
+execute:
+  echo: true
+  warning: false
+  freeze: auto

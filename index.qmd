@@ -1,0 +1,66 @@
+---
+title: "AI · 머신러닝: 기초부터 최신까지"
+subtitle: "데이터 사이언스 · 머신러닝 · 트랜스포머 · 언어 · 오디오 · 비디오를 한 권으로"
+author: ""
+date: ""
+---
+
+## 이 책에 대하여
+
+AI 분야의 자료는 넘치지만 대부분 조각나 있다.
+선형대수 강의 따로, 캐글 튜토리얼 따로, 트랜스포머 해설 블로그 따로 —
+그래서 "행렬 곱셈에서 시작해 어떻게 GPT까지 이어지는가"를 한 줄기로 보여주는 자료는 드물다.
+
+이 책은 그 한 줄기를 만드는 시도다.
+**벡터와 확률에서 출발해, 고전 머신러닝과 딥러닝을 지나, 트랜스포머·LLM·생성 모델·
+음성·비디오·멀티모달까지** 끊기지 않고 이어진다.
+
+그리고 모든 핵심 개념마다 **인터랙티브 시각화**가 붙는다.
+슬라이더를 움직여 학습률이 발산을 만드는 지점을 직접 보고,
+$\sqrt{d_k}$ 로 나누지 않으면 어텐션이 어떻게 포화되는지 눈으로 확인할 수 있다.
+
+## 구성
+
+| Part | 주제 | 핵심 질문 |
+|------|------|-----------|
+| **0** | [수학·컴퓨팅 기초](chapters/00_foundations/00_linear_algebra.qmd) | 논문의 수식을 어떻게 코드로 옮기는가 |
+| **1** | [데이터 사이언스](chapters/01_data_science/00_data_and_types.qmd) | 데이터에서 방어 가능한 결론을 어떻게 끌어내는가 |
+| **2** | [고전 머신러닝](chapters/02_classical_ml/00_learning_problem.qmd) | 학습이란 무엇이고 왜 일반화되는가 |
+| **3** | [딥러닝 기초](chapters/03_deep_learning/00_perceptron_mlp.qmd) | 역전파와 최적화는 실제로 어떻게 도는가 |
+| **4** | [신경망 아키텍처](chapters/04_architectures/00_cnn.qmd) | CNN·RNN은 어떤 구조를 가정하는가 |
+| **5** | [트랜스포머](chapters/05_transformer/00_attention_mechanism.qmd) | 현대 AI의 중심에 있는 그 한 줄의 식 |
+| **6** | [생성 모델](chapters/06_generative/00_generative_overview.qmd) | 분포를 학습한다는 것의 여러 의미 |
+| **7** | [언어 (NLP · LLM)](chapters/07_language/00_text_representation.qmd) | 토크나이저에서 정렬·추론 최적화까지 |
+| **8** | [오디오 · 음성](chapters/08_audio/00_sound_and_sampling.qmd) | 소리를 배열로, 배열을 의미로 |
+| **9** | [비전 · 비디오](chapters/09_vision_video/00_image_basics.qmd) | 픽셀에서 멀티모달 이해까지 |
+| **10** | [강화학습](chapters/10_rl/00_mdp.qmd) | 결과만 주어질 때 어떻게 배우는가 |
+| **11** | [시스템과 MLOps](chapters/11_systems/00_reproducibility.qmd) | 학습·배포·운영의 실제 제약 |
+| **12** | [해석가능성과 신뢰](chapters/12_trust/00_interpretability.qmd) | 왜 그렇게 예측했고, 얼마나 믿을 수 있는가 |
+| **A** | [부록](chapters/13_appendix/00_paper_map.qmd) | 논문 지도 · 용어 사전 · 치트시트 |
+
+전체 챕터별 이론·그래픽 상세 목록은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 참고.
+
+## 읽는 방법
+
+- **순서대로**: Part 0부터 읽으면 필요한 배경이 항상 앞에 나온다.
+- **필요한 곳부터**: 각 챕터 도입부에 *왜 이 장이 필요한가*가 적혀 있어, 건너뛴 배경이 있으면 바로 알 수 있다.
+- **트랜스포머만**: Part 0.0(선형대수) → 0.4(정보이론) → 3.1(역전파) → Part 5 순서를 권한다.
+
+::: {.callout-note}
+## 이 책의 코드 규칙
+
+- **인터랙티브 그래픽**은 전부 NumPy/SciPy 로 직접 계산하고 Plotly 로 그린다.
+  "코드 보기" 버튼을 누르면 그림을 만든 코드가 그대로 나온다.
+- **PyTorch·Hugging Face 코드**는 실행하지 않는 참고 블록으로 제시한다.
+  빌드 재현성을 위해 렌더 타임 의존성을 NumPy·SciPy·Plotly 로 제한했기 때문이다.
+- 반복해서 쓰이는 계산은 `src/` 모듈로 분리되어 있다 ([API 문서](https://github.com/yuvjjang/ai-ml-study/blob/main/docs/api.md)).
+:::
+
+## 전제 지식
+
+고등학교 수준의 미적분과 파이썬 기초 문법이면 충분하다.
+선형대수·확률·정보이론은 Part 0에서 필요한 만큼 다시 세운다.
+
+## 시작하기
+
+[→ Part 0.0: 선형대수](chapters/00_foundations/00_linear_algebra.qmd) 부터 시작하세요.

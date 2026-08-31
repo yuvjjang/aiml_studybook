@@ -1,0 +1,84 @@
+---
+title: "8.8 보코더와 신경 오디오 코덱"
+subtitle: "WaveNet·HiFi-GAN·EnCodec — 스펙트로그램을 다시 소리로"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+신경 코덱이 오디오를 '토큰'으로 바꾸면서, 언어모델이 오디오를 생성할 수 있게 되었다. 이 장은 오디오와 LLM을 잇는 다리다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 보코더의 역할: 멜 스펙트로그램 → 파형 (위상 복원 문제)
+- 고전 보코더: Griffin-Lim, WORLD, STRAIGHT
+- WaveNet: 팽창 인과 합성곱과 자기회귀 파형 생성, 느린 추론
+- 병렬 생성: Parallel WaveNet, WaveGlow(흐름 기반)
+- GAN 보코더: MelGAN, HiFi-GAN의 다중 스케일·다중 주기 판별자
+- 확산 보코더(DiffWave, WaveGrad)
+- 신경 오디오 코덱: SoundStream, EnCodec, DAC
+- 잔차 벡터 양자화(RVQ)와 다단계 코드북
+- 코덱 토큰 = 오디오 언어모델의 어휘
+- 의미 토큰 vs 음향 토큰의 분리
+- 비트레이트·품질·지연 트레이드오프
+
+---
+
+## G8.8.1 — 팽창 합성곱 수용영역
+
+지수적으로 넓어지는 수용영역으로 긴 파형 문맥을 보는 구조
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 팽창률·층 수 슬라이더
+:::
+
+---
+
+## G8.8.2 — 위상 복원 문제
+
+Griffin-Lim 반복에 따른 음질 개선과 한계
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 반복 횟수 슬라이더
+:::
+
+---
+
+## G8.8.3 — RVQ 다단계 양자화
+
+잔차를 단계별로 양자화하며 정밀도가 올라가는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 코드북 단계 슬라이더
+:::
+
+---
+
+## G8.8.4 — 비트레이트와 품질
+
+코덱별 비트레이트 대비 재구성 품질 곡선
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 비트레이트 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 보코더 |  |
+| WaveNet |  |
+| HiFi-GAN |  |
+| EnCodec |  |
+| 잔차 벡터 양자화 (RVQ) |  |
+| 오디오 토큰 |  |
+
+---
+
+**다음**: [8.9 오디오·음악 생성](09_audio_generation.qmd) — AudioLM·MusicGen·오디오 LLM — 소리를 언어처럼 생성하기
+
+**이전**: [8.7 음성 합성(TTS)](07_tts.qmd)

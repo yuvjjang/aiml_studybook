@@ -1,0 +1,84 @@
+---
+title: "7.14 추론 최적화"
+subtitle: "KV 캐시·양자화·배칭·PagedAttention — 서비스 비용의 대부분"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+학습은 한 번이지만 추론은 매 요청마다 일어난다. 실제 지출과 사용자 경험은 거의 전부 이 장에 달려 있다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 추론의 두 단계: prefill(연산 집약) vs decode(메모리 대역폭 집약)
+- KV 캐시의 크기 계산과 메모리 지배성
+- MQA/GQA/MLA로 캐시 줄이기
+- PagedAttention과 vLLM의 메모리 단편화 해결
+- 연속 배칭(continuous batching)과 처리량
+- 양자화: INT8/FP8/INT4, 가중치 전용 vs 활성화 포함
+- 양자화 기법: GPTQ, AWQ, SmoothQuant, GGUF 계열
+- 추측 디코딩과 메두사·EAGLE 계열
+- 프롬프트 캐싱과 접두사 공유
+- 지연·처리량·비용의 삼각 트레이드오프와 SLO 설계
+- 롱컨텍스트 서빙: 캐시 오프로딩, 청크 prefill
+- 하드웨어 선택과 배치 크기·시퀀스 길이의 상호작용
+
+---
+
+## G7.14.1 — KV 캐시 메모리
+
+모델 가중치와 KV 캐시가 GPU 메모리를 나눠 갖는 비율
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 배치·길이 슬라이더
+:::
+
+---
+
+## G7.14.2 — prefill vs decode
+
+두 단계의 연산 특성과 병목이 다른 이유
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 입력·출력 길이 슬라이더
+:::
+
+---
+
+## G7.14.3 — 연속 배칭 처리량
+
+정적 배칭 대비 GPU 활용률 향상
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 요청 도착률 슬라이더
+:::
+
+---
+
+## G7.14.4 — 양자화 품질-크기
+
+비트를 줄일 때 모델 크기와 품질이 변하는 곡선
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 비트 수 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| KV 캐시 |  |
+| PagedAttention |  |
+| 연속 배칭 |  |
+| 양자화 (GPTQ/AWQ) |  |
+| prefill/decode |  |
+
+---
+
+**다음**: [7.15 안전성과 신뢰](15_safety.qmd) — 환각·탈옥·주입·레드팀 — 배포 전에 물어야 할 것들
+
+**이전**: [7.13 LLM 평가](13_evaluation.qmd)

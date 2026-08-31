@@ -1,0 +1,81 @@
+---
+title: "5.2 멀티헤드 어텐션"
+subtitle: "여러 표현 부분공간에서 동시에 — 헤드는 무엇을 배우는가"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+헤드를 나누는 것은 파라미터를 늘리는 게 아니라 쪼개는 것이다. 왜 쪼개는 게 이득인지가 이 장의 핵심이다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 단일 헤드의 한계: 한 번의 softmax는 한 종류의 관계만
+- 헤드 분할: d_model → h × d_k, 파라미터 수가 그대로인 이유
+- 각 헤드의 독립 사영과 병렬 계산, 연결 후 출력 사영 W_O
+- shape 추적: (B, h, n, d_k) 텐서 흐름 전체
+- 헤드가 학습하는 패턴: 위치, 구문, 이전 토큰, induction head
+- 헤드 중복성과 가지치기(head pruning) 연구
+- MQA(Multi-Query)와 GQA(Grouped-Query): KV 캐시를 줄이기
+- MLA(Multi-head Latent Attention) 같은 최근 변형
+- 헤드 수와 헤드 차원의 트레이드오프
+
+---
+
+## G5.2.1 — 헤드 분할 도식
+
+d_model이 h개로 쪼개져 병렬 처리되고 다시 합쳐지는 흐름
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 헤드 수 슬라이더
+:::
+
+---
+
+## G5.2.2 — 헤드별 어텐션 패턴
+
+같은 문장에서 헤드마다 전혀 다른 대각/이전토큰/구문 패턴
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 헤드 선택
+:::
+
+---
+
+## G5.2.3 — MHA vs MQA vs GQA
+
+KV 헤드 수에 따른 캐시 메모리와 품질의 트레이드오프
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 구조 전환
+:::
+
+---
+
+## G5.2.4 — 헤드 제거 실험
+
+일부 헤드를 지워도 성능이 유지되는 중복성 확인
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 제거 헤드 선택
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 멀티헤드 어텐션 |  |
+| 헤드 분할 |  |
+| induction head |  |
+| MQA/GQA |  |
+| W_O |  |
+
+---
+
+**다음**: [5.3 위치 인코딩](03_positional_encoding.qmd) — 사인파·학습형·상대·RoPE·ALiBi — 순서를 다시 넣는 방법들
+
+**이전**: [5.1 셀프 어텐션과 마스킹](01_self_attention.qmd)

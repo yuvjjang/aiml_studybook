@@ -1,0 +1,82 @@
+---
+title: "3.6 딥러닝의 정규화"
+subtitle: "드롭아웃·증강·조기종료 — 과적합을 막는 도구상자"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+파라미터가 데이터보다 많은 모델이 왜 일반화하는가는 아직 완전히 풀리지 않았지만, 실무에서 쓰는 도구들은 명확한 효과와 부작용을 갖는다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 드롭아웃: 앙상블 해석, 학습/추론 스케일링, 현대 모델에서의 위상 변화
+- weight decay 와 L2, AdamW에서의 올바른 적용
+- 데이터 증강: 이미지(crop/flip/color/RandAugment), 텍스트(back-translation, EDA), 오디오(SpecAugment)
+- Mixup, CutMix, Manifold Mixup — 레이블까지 섞기
+- 조기 종료와 암묵적 정규화
+- 레이블 스무딩과 과신 억제
+- 확률적 깊이(stochastic depth), DropPath
+- 앙상블·SWA·EMA — 가중치 평균의 힘
+- 잡음 주입: 그래디언트 잡음, 가중치 잡음
+- 정규화 없이도 일반화하는 과매개변수 모델의 미스터리
+
+---
+
+## G3.6.1 — 드롭아웃 마스크
+
+매 스텝 서로 다른 서브네트워크가 학습되는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 드롭 확률 슬라이더
+:::
+
+---
+
+## G3.6.2 — Mixup 샘플
+
+두 이미지와 레이블이 λ 비율로 섞이는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: λ 슬라이더
+:::
+
+---
+
+## G3.6.3 — 조기 종료 지점
+
+검증 손실이 최저인 지점을 지나 과적합으로 넘어가는 순간
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 에폭 슬라이더
+:::
+
+---
+
+## G3.6.4 — EMA vs raw 가중치
+
+가중치 평균이 손실 지형에서 더 평평한 곳에 앉는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 감쇠율 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 드롭아웃 |  |
+| Mixup |  |
+| SpecAugment |  |
+| 조기 종료 |  |
+| EMA/SWA |  |
+
+---
+
+**다음**: [3.7 초기화와 그래디언트 흐름](07_initialization.qmd) — Xavier·He·잔차 연결 — 깊은 망이 학습되기 위한 조건
+
+**이전**: [3.5 정규화 층](05_normalization.qmd)

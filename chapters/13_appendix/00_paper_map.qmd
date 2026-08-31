@@ -1,0 +1,61 @@
+---
+title: "A.0 논문 지도"
+subtitle: "분야별 필독 논문 계보 — 무엇을 어떤 순서로 읽을 것인가"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+이 책은 지도이고 논문이 실제 영토다. 각 장의 내용이 어느 논문에서 왔는지 알면 원전으로 곧장 갈 수 있다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 기초: 역전파, AlexNet, ResNet, BatchNorm, Adam
+- 시퀀스: LSTM, seq2seq, Bahdanau 어텐션, Transformer
+- 언어: Word2Vec, ELMo, BERT, GPT-2/3, T5, Chinchilla, LLaMA
+- 정렬: InstructGPT, Constitutional AI, DPO
+- 생성: VAE, GAN, DDPM, Score SDE, Latent Diffusion, Flow Matching
+- 비전: ViT, CLIP, MAE, DINO, SAM
+- 오디오: WaveNet, wav2vec 2.0, HuBERT, Whisper, VITS, EnCodec
+- 효율: FlashAttention, LoRA, GPTQ, PagedAttention, ZeRO
+- 해석: induction heads, activation patching, sparse autoencoder
+- 논문 읽는 법: 3단계 읽기와 재현 관점 체크리스트
+- 최신 흐름을 따라가는 실무적 방법
+
+---
+
+## GA.0.1 — 논문 계보 타임라인
+
+연도와 영향 관계로 이어지는 주요 논문 계보도
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 분야 필터
+:::
+
+---
+
+## GA.0.2 — 읽기 경로 추천
+
+관심 주제별로 최소한으로 읽어야 할 논문 경로
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 목표 선택
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 논문 계보 |  |
+| 3단계 읽기 |  |
+| 재현성 체크리스트 |  |
+
+---
+
+**다음**: [A.1 용어 사전](01_glossary.qmd) — 한국어-영어 대역 — 번역어가 흔들리는 용어들
+
+**이전**: [12.4 공정성과 프라이버시](../12_trust/04_fairness_privacy.qmd)

@@ -1,0 +1,94 @@
+---
+title: "2.9 군집화"
+subtitle: "k-means·GMM·DBSCAN·계층 — 정답 없이 구조 찾기"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+레이블이 없는 데이터가 대부분이다. 군집화는 비지도 학습의 입구이자, 자기지도 표현학습의 사고방식을 미리 연습하는 장이다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 군집화 문제의 모호성 — '좋은 군집'의 정의가 여럿인 이유
+- k-means: 목적함수, Lloyd 알고리즘, 수렴성
+- k-means++ 초기화, 국소최소 문제
+- k 선택: 엘보, 실루엣, gap 통계
+- 가우시안 혼합모형(GMM)과 EM 알고리즘 유도
+- k-means = GMM의 극한 (하드 할당)
+- DBSCAN: 밀도 기반, eps·minPts, 잡음점 처리
+- HDBSCAN과 밀도 계층
+- 계층적 군집화: 응집/분할, 연결법(single/complete/average/Ward), 덴드로그램
+- 스펙트럼 군집화와 그래프 라플라시안
+- 평가: 내부 지표(실루엣, DB index), 외부 지표(ARI, NMI)
+
+---
+
+## G2.9.1 — k-means 반복
+
+할당 ↔ 중심 갱신이 번갈아 일어나며 수렴하는 애니메이션
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 스텝 재생
+:::
+
+---
+
+## G2.9.2 — k-means의 실패 사례
+
+초승달·서로 다른 밀도 데이터에서 구형 가정이 깨지는 순간
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 데이터 모양 전환
+:::
+
+---
+
+## G2.9.3 — GMM 소프트 할당
+
+타원형 성분과 점마다의 소속 확률(색 혼합)
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 성분 수 슬라이더
+:::
+
+---
+
+## G2.9.4 — DBSCAN 파라미터
+
+밀도 임계값에 따라 군집이 붙고 갈라지는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: eps·minPts 슬라이더
+:::
+
+---
+
+## G2.9.5 — 덴드로그램 절단
+
+절단 높이에 따라 군집 수가 정해지는 계층 구조
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 높이 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| k-means |  |
+| EM 알고리즘 |  |
+| GMM |  |
+| DBSCAN |  |
+| 실루엣 계수 |  |
+| 덴드로그램 |  |
+
+---
+
+**다음**: [2.10 차원 축소](10_dimensionality_reduction.qmd) — PCA·t-SNE·UMAP·매니폴드 — 고차원을 눈으로 보는 법
+
+**이전**: [2.8 kNN·나이브 베이즈·기타](08_knn_naive_bayes.qmd)

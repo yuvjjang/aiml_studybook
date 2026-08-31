@@ -1,0 +1,81 @@
+---
+title: "1.3 데이터 전처리"
+subtitle: "결측·이상치·스케일링·인코딩 — 모델에 넣을 수 있는 형태로"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+전처리는 지루한 잡일이 아니라 모델 성능에 가장 큰 영향을 주는 단계이며, 데이터 누수가 가장 자주 발생하는 지점이다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 결측치 처리: 삭제, 단순 대치, 회귀 대치, MICE, 결측 지시자
+- 스케일링: 표준화, min-max, robust, 정규화(단위 노름)
+- 왜도 보정: 로그·Box-Cox·Yeo-Johnson, quantile transform
+- 범주형 인코딩: one-hot, ordinal, target/mean encoding, hashing
+- 고카디널리티 범주와 임베딩 기반 인코딩
+- 이상치 처리: 절단(clipping), 윈저화, 변환, 별도 모델링
+- 불균형 데이터: 리샘플링, SMOTE, 클래스 가중치
+- 파이프라인으로 묶기 — fit 은 학습셋에서만 (누수 방지의 핵심)
+- 전처리 순서와 교차검증 안쪽/바깥쪽 배치
+
+---
+
+## G1.3.1 — 스케일링 방법 비교
+
+이상치가 있는 데이터에서 표준화·min-max·robust 결과 비교
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 방법 선택
+:::
+
+---
+
+## G1.3.2 — 결측 대치의 부작용
+
+평균 대치가 분산을 줄이고 상관을 왜곡하는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 대치 방법 선택
+:::
+
+---
+
+## G1.3.3 — target encoding 누수
+
+폴드 밖 통계를 쓰면 검증 점수가 비현실적으로 뛰는 실험
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 누수 유무 토글
+:::
+
+---
+
+## G1.3.4 — 멱변환 효과
+
+치우친 분포가 Box-Cox로 정규에 가까워지는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: λ 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 데이터 누수 (data leakage) |  |
+| 표준화 (standardization) |  |
+| target encoding |  |
+| SMOTE |  |
+| 파이프라인 (pipeline) |  |
+
+---
+
+**다음**: [1.4 특성 공학](04_feature_engineering.qmd) — 도메인 지식을 숫자로 — 딥러닝 시대에도 살아남은 기술
+
+**이전**: [1.2 데이터 시각화](02_visualization.qmd)

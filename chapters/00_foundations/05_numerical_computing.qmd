@@ -1,0 +1,81 @@
+---
+title: "0.5 수치 컴퓨팅"
+subtitle: "부동소수점·벡터화·수치 안정성 — 수식과 코드 사이의 간극"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+수학적으로 맞는 식이 코드에서 NaN 을 뱉는다. softmax·log-sum-exp·혼합정밀도 학습의 함정은 전부 이 장에서 설명된다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 부동소수점 표현(IEEE 754), float32/float16/bfloat16 의 지수·가수 구조
+- 표현 오차, 반올림, 소거(catastrophic cancellation)
+- 오버플로/언더플로와 log-sum-exp 트릭
+- 안정적인 softmax·시그모이드·로그 확률 계산
+- 벡터화와 브로드캐스팅 — 루프 대신 배열 연산
+- 메모리 레이아웃(C/F order), 캐시, 뷰 vs 복사
+- 시간·공간 복잡도로 모델 비용 추정하기 (FLOPs 세기)
+- 난수와 재현성: 시드, PRNG, 병렬 환경에서의 함정
+- 혼합정밀도 학습과 손실 스케일링
+
+---
+
+## G0.5.1 — 부동소수점 간격
+
+수가 커질수록 표현 가능한 값 사이 간격이 벌어지는 모습
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 지수 범위 슬라이더
+:::
+
+---
+
+## G0.5.2 — naive softmax vs 안정 softmax
+
+큰 로짓에서 naive 구현이 inf/NaN 으로 무너지는 지점
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 입력 크기 슬라이더
+:::
+
+---
+
+## G0.5.3 — 벡터화 성능 비교
+
+파이썬 루프 대 NumPy 연산의 실행 시간 스케일링
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 배열 크기 슬라이더
+:::
+
+---
+
+## G0.5.4 — FLOPs 예산
+
+층 수·차원에 따른 연산량과 파라미터 수의 증가
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 모델 크기 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 부동소수점 (floating point) |  |
+| log-sum-exp |  |
+| 벡터화 (vectorization) |  |
+| 혼합정밀도 (mixed precision) |  |
+| FLOPs |  |
+
+---
+
+**다음**: [1.0 데이터의 구조](../01_data_science/00_data_and_types.qmd) — 타입·스키마·tidy data — 분석 이전에 결정되는 것들
+
+**이전**: [0.4 정보이론](04_information_theory.qmd)

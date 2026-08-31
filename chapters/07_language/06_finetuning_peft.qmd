@@ -1,0 +1,84 @@
+---
+title: "7.6 미세조정과 PEFT"
+subtitle: "full FT·LoRA·QLoRA·어댑터 — 큰 모델을 적은 자원으로 바꾸기"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+70B 모델을 GPU 한 장에서 조정할 수 있게 만든 것이 LoRA다. 그 원리는 놀랍도록 단순하고, 그래서 어디에나 응용된다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 전체 미세조정의 비용: 파라미터·옵티마이저 상태·활성화 메모리
+- 치명적 망각(catastrophic forgetting)과 완화
+- 어댑터(Houlsby), prefix tuning, prompt tuning, P-tuning
+- LoRA: 저계수 갱신 ΔW = BA의 동기와 유도
+- LoRA 하이퍼파라미터: rank, alpha, 대상 모듈, dropout
+- QLoRA: 4비트 양자화 + LoRA, NF4·이중 양자화·페이지드 옵티마이저
+- DoRA, LoRA+, ReLoRA 등 변형
+- LoRA 병합·다중 어댑터 서빙
+- 미세조정 vs 프롬프팅 vs RAG — 언제 무엇을
+- 도메인 적응 사전학습(DAPT)과 계속 사전학습
+- 데이터셋 크기와 품질의 영향, 소량 고품질 가설
+
+---
+
+## G7.6.1 — LoRA 저계수 분해
+
+d×d 갱신 행렬이 두 얇은 행렬로 근사되며 파라미터가 줄어드는 계산
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: rank 슬라이더
+:::
+
+---
+
+## G7.6.2 — 메모리 예산 비교
+
+full FT / LoRA / QLoRA의 GPU 메모리 구성 막대
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 모델 크기 슬라이더
+:::
+
+---
+
+## G7.6.3 — rank와 성능
+
+rank를 올릴 때의 성능 수확 체감 곡선
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: rank 슬라이더
+:::
+
+---
+
+## G7.6.4 — 망각 측정
+
+새 과제 성능이 오르며 기존 능력이 떨어지는 곡선
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 학습 스텝 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| LoRA |  |
+| QLoRA |  |
+| 어댑터 |  |
+| prompt tuning |  |
+| 치명적 망각 |  |
+| 계속 사전학습 |  |
+
+---
+
+**다음**: [7.7 지시 조정과 정렬](07_alignment.qmd) — SFT·RLHF·DPO — 유능한 모델을 유용한 모델로
+
+**이전**: [7.5 사전학습 데이터](05_pretraining_data.qmd)

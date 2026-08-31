@@ -1,0 +1,82 @@
+---
+title: "1.7 시계열 분석"
+subtitle: "정상성·ARIMA·예측 검증 — 시간이 붙은 데이터의 규칙"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+시간 데이터는 i.i.d. 가정을 깬다. 무작위 교차검증 한 번으로 미래 정보를 새게 만들면 오프라인 점수는 아무 의미가 없다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 시계열의 구성: 추세·계절성·주기·잔차, 분해 기법
+- 정상성, 단위근, ADF/KPSS 검정, 차분
+- 자기상관(ACF)과 편자기상관(PACF) 읽기
+- AR, MA, ARMA, ARIMA, SARIMA, SARIMAX
+- 지수평활과 ETS, Holt-Winters
+- 다변량: VAR, 공적분, 그레인저 인과
+- 이분산성과 GARCH
+- 시계열 특성 기반 ML 접근(트리·부스팅) 과 딥러닝 접근
+- 예측 검증: 롤링 오리진, 시간 분할, 미래 정보 누수 방지
+- 예측 지표: MAE, RMSE, MAPE, sMAPE, MASE, 피나클(naive) 기준선
+
+---
+
+## G1.7.1 — 시계열 분해
+
+관측 = 추세 + 계절성 + 잔차 로 분해되는 과정
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 성분 토글
+:::
+
+---
+
+## G1.7.2 — 정상성과 차분
+
+비정상 시계열이 차분으로 정상화되는 모습과 ACF 변화
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 차분 차수 슬라이더
+:::
+
+---
+
+## G1.7.3 — ACF/PACF 로 차수 고르기
+
+생성 과정에 따라 ACF·PACF가 잘리는 위치
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: AR/MA 파라미터 슬라이더
+:::
+
+---
+
+## G1.7.4 — 롤링 오리진 검증
+
+학습·검증 창이 시간축을 따라 이동하는 올바른 검증 절차
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 윈도 애니메이션
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| 정상성 (stationarity) |  |
+| ACF/PACF |  |
+| ARIMA |  |
+| 롤링 오리진 검증 |  |
+| MASE |  |
+
+---
+
+**다음**: [2.0 학습이란 무엇인가](../02_classical_ml/00_learning_problem.qmd) — 가설공간·손실·경험적 위험 최소화 — 문제의 형식화
+
+**이전**: [1.6 인과추론](06_causal_inference.qmd)

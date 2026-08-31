@@ -1,0 +1,81 @@
+---
+title: "3.2 활성화 함수"
+subtitle: "sigmoid·ReLU·GELU·SwiGLU — 비선형성의 선택지"
+jupyter: ai-ml-study
+---
+
+<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+
+활성화 하나를 바꾸는 것만으로 학습이 되고 안 되고가 갈린다. 그 이유는 전부 그래디언트 모양에 있다.
+
+---
+
+## 이 장에서 다루는 것
+
+- 활성화의 요건: 비선형, 미분 가능, 그래디언트 보존
+- sigmoid·tanh의 포화(saturation)와 그래디언트 소실
+- ReLU: 단순함의 승리, 죽은 ReLU 문제
+- Leaky ReLU, PReLU, ELU, SELU
+- GELU와 확률적 해석, Swish/SiLU
+- GLU 계열: GLU, GEGLU, SwiGLU — 현대 LLM의 기본값
+- 출력층 활성화: 항등, 시그모이드, softmax의 선택 기준
+- 활성화와 초기화·정규화의 상호작용
+- 학습되는 활성화와 최근 탐색 결과
+
+---
+
+## G3.2.1 — 활성화 함수 갤러리
+
+함수값과 도함수를 나란히 — 어디서 그래디언트가 죽는가
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 함수 선택
+:::
+
+---
+
+## G3.2.2 — 포화 영역 시각화
+
+sigmoid의 |x|가 클 때 도함수가 0에 붙는 구간 강조
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 입력 범위 슬라이더
+:::
+
+---
+
+## G3.2.3 — 죽은 ReLU 실험
+
+음수 영역에 갇혀 영원히 갱신되지 않는 유닛 비율
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 초기화 편향 슬라이더
+:::
+
+---
+
+## G3.2.4 — SwiGLU 구조
+
+게이트가 정보 흐름을 조절하는 방식의 도식
+
+::: {.callout-note appearance="minimal"}
+**계획된 그래픽** · 인터랙션: 게이트 값 슬라이더
+:::
+
+---
+
+## 핵심 용어
+
+| 용어 | 비고 |
+|------|------|
+| ReLU |  |
+| GELU |  |
+| SwiGLU |  |
+| 그래디언트 소실 |  |
+| 죽은 ReLU |  |
+
+---
+
+**다음**: [3.3 손실함수](03_losses.qmd) — MSE·교차엔트로피·대조손실 — 무엇을 최적화한다고 말하는가
+
+**이전**: [3.1 역전파](01_backpropagation.qmd)
