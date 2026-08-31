@@ -4,89 +4,485 @@ subtitle: "추정·검정·부트스트랩 — 데이터에서 결론을 끌어�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+"모델 A가 B보다 정확도 1.2%p 높다."
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 문장은 그 자체로는 아무 의미가 없다. 시드를 바꾸면 뒤집힐 수도 있고,
+데이터를 다시 나누면 사라질 수도 있다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+주장에 붙은 **불확실성을 정량화하지 못하면 실험 결과는 의견에 불과하다.**
+이 장은 그 정량화의 도구를 세운다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-모델 A가 B보다 낫다는 주장에는 항상 불확실성이 따라붙는다. 그 불확실성을 정량화하지 못하면 실험 결과는 의견에 불과하다.
+그리고 여기서 다루는 개념들 — 신뢰구간, p-값, 다중비교 — 는
+[2.11 모델 평가](../02_classical_ml/11_model_evaluation.qmd)와
+[1.5 A/B 테스트](../01_data_science/05_experiment_design.qmd)에서 그대로 재사용된다.
 
 ---
 
-## 이 장에서 다루는 것
+## 표본분포: 추정량도 확률변수다
 
-- 모집단과 표본, 표본분포, 표준오차
-- 점추정과 구간추정, 신뢰구간의 올바른 해석
-- 추정량의 성질: 불편성, 일치성, 효율성
-- 가설검정의 논리, 귀무/대립가설, p-값의 정확한 정의
-- 1종/2종 오류, 검정력(power), 표본 크기 계산
-- t-검정, 카이제곱 검정, ANOVA, 비모수 검정
-- 다중비교 문제와 보정(Bonferroni, Benjamini-Hochberg)
-- 부트스트랩과 순열검정 — 분포 가정 없이 불확실성 재기
-- 베이지안 추론과 신용구간(credible interval)의 차이
-- p-해킹, 사전등록, 재현성 위기
+핵심 관점 전환 하나면 나머지가 따라온다.
 
----
+> **표본에서 계산한 통계량은 고정된 숫자가 아니라 확률변수다.**
 
-## G0.3.1 — 신뢰구간 커버리지
+다른 표본을 뽑았다면 다른 값이 나왔을 것이다.
+그 "나왔을 수 있는 값들의 분포"가 **표본분포(sampling distribution)** 이고,
+그 표준편차가 **표준오차(standard error)** 다.
 
-95% 신뢰구간 100개 중 약 5개가 참값을 놓치는 것을 직접 확인
+[0.2의 CLT](02_probability.qmd)에 의해, 표본평균의 표준오차는
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 반복 실험 애니메이션
+$$\text{SE}(\bar{X}) = \frac{\sigma}{\sqrt{n}}$$
+
+::: {.key-concept}
+$\sqrt{n}$ 이 분모에 있다는 사실이 실무의 많은 것을 결정한다.
+
+정밀도를 **2배** 올리려면 데이터가 **4배** 필요하다.
+10배 올리려면 100배. 그래서 A/B 테스트가 그렇게 오래 걸리고,
+작은 효과를 검출하는 것이 그렇게 비싸다.
 :::
 
 ---
 
-## G0.3.2 — p-값과 검정력
+## G0.3.1 — 신뢰구간이 뜻하는 것
 
-귀무/대립 분포 겹침과 α, β, power 영역 시각화
+95% 신뢰구간은 **"참값이 이 구간에 있을 확률이 95%"가 아니다.**
+참값은 고정된 상수이고, 무작위인 것은 구간 쪽이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 효과크기·n 슬라이더
+정확한 의미: **같은 실험을 반복하면 계산된 구간의 95%가 참값을 덮는다.**
+
+말로는 잘 와닿지 않으니 직접 100번 반복해본다.
+
+```{python}
+#| label: fig-ci-coverage
+#| fig-cap: "95% 신뢰구간 100개. 빨간색이 참값을 놓친 것입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from scipy import stats
+from src import viz
+
+TRUE_MU, TRUE_SIGMA = 10.0, 3.0
+N_EXP = 100
+rng = np.random.default_rng(2)
+
+sizes = [5, 10, 20, 50, 200]
+results = {}
+for n in sizes:
+    lo, hi, mean = [], [], []
+    for _ in range(N_EXP):
+        s = rng.normal(TRUE_MU, TRUE_SIGMA, n)
+        m, se = s.mean(), s.std(ddof=1) / np.sqrt(n)
+        t_crit = stats.t.ppf(0.975, df=n - 1)      # 표준편차를 추정했으므로 t 분포
+        lo.append(m - t_crit * se); hi.append(m + t_crit * se); mean.append(m)
+    lo, hi, mean = np.array(lo), np.array(hi), np.array(mean)
+    miss = (lo > TRUE_MU) | (hi < TRUE_MU)
+    results[n] = (lo, hi, mean, miss)
+
+n0 = 20
+lo, hi, mean, miss = results[n0]
+idx = np.arange(N_EXP)
+
+fig = go.Figure()
+xs, ys, colors = [], [], []
+for i in range(N_EXP):
+    xs += [lo[i], hi[i], None]
+    ys += [i, i, None]
+fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", showlegend=False,
+                         line=dict(color="rgba(255,255,255,0.25)", width=1),
+                         hoverinfo="skip"))
+fig.add_trace(go.Scatter(x=mean[~miss], y=idx[~miss], mode="markers",
+                         name="참값 포함", marker=dict(size=5, color=viz.ACCENT)))
+fig.add_trace(go.Scatter(x=mean[miss], y=idx[miss], mode="markers",
+                         name="참값 놓침", marker=dict(size=7, color=viz.WARM)))
+fig.add_vline(x=TRUE_MU, line=dict(color=viz.YELLOW, dash="dash", width=2),
+              annotation_text=f"참값 μ={TRUE_MU}")
+
+steps = []
+for n in sizes:
+    l, h, m, ms = results[n]
+    xs2, ys2 = [], []
+    for i in range(N_EXP):
+        xs2 += [l[i], h[i], None]; ys2 += [i, i, None]
+    steps.append((f"{n}", {"x": [xs2, m[~ms], m[ms]],
+                           "y": [ys2, idx[~ms], idx[ms]]}))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="표본 크기 n = ",
+                                      active=sizes.index(n0), pad_t=55)],
+                  xaxis_title="추정값과 95% 신뢰구간", yaxis_title="실험 번호",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=470, title=f"동일 실험 {N_EXP}회 반복")
+fig.show()
+```
+
+```{python}
+#| label: coverage-numbers
+#| code-fold: false
+
+print(f"{'표본 크기':>10} {'놓친 횟수':>10} {'실제 커버리지':>14} {'평균 구간 폭':>14}")
+print("-" * 54)
+for n in sizes:
+    lo, hi, mean, miss = results[n]
+    print(f"{n:>10} {miss.sum():>10} {(1-miss.mean())*100:>13.0f}% "
+          f"{(hi-lo).mean():>13.2f}")
+print()
+print("→ 커버리지는 표본 크기와 무관하게 95% 부근을 유지한다.")
+print("  바뀌는 것은 구간의 폭이다 — n 이 4배면 폭은 절반.")
+```
+
+::: {.interaction-hint}
+$n$ 을 키우면 구간이 **좁아지지만** 놓치는 비율은 여전히 5% 근처입니다. 신뢰수준은 "얼마나 자주 맞히는가"이고, 표본 크기는 "얼마나 정밀한가"를 정합니다 — 다른 축입니다.
 :::
 
 ---
 
-## G0.3.3 — 부트스트랩 분포
+## 가설검정과 p-값
 
-원자료 재표본으로 통계량의 표본분포를 직접 만들어보기
+가설검정의 논리는 귀류법이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 재표본 수 슬라이더
+1. **귀무가설** $H_0$ 를 세운다 (보통 "효과가 없다")
+2. $H_0$ 가 참이라고 가정했을 때, **관측된 것만큼 극단적인 결과가 나올 확률**을 계산한다
+3. 그 확률(p-값)이 매우 작으면 $H_0$ 를 기각한다
+
+::: {.callout-warning}
+## p-값이 아닌 것
+
+p-값은 **$H_0$ 가 참일 확률이 아니다.** 이것이 가장 흔한 오해다.
+
+$$p = P(\text{이만큼 극단적인 데이터} \mid H_0) \;\neq\; P(H_0 \mid \text{데이터})$$
+
+조건이 뒤집혀 있다. 두 값은 [베이즈 정리](02_probability.qmd)로 연결되지만
+사전확률을 알아야 계산할 수 있고, 대개 크게 다르다.
+
+또한:
+
+- p > 0.05 는 "효과가 없다"가 **아니다.** "검출하지 못했다"일 뿐이다.
+- p = 0.049 와 p = 0.051 사이에 본질적 차이는 없다. 0.05는 관례일 뿐이다.
+- p-값은 **효과의 크기를 말해주지 않는다.** $n$ 이 크면 무의미하게 작은 효과도 유의해진다.
 :::
 
 ---
 
-## G0.3.4 — 다중비교의 함정
+## G0.3.2 — 오류, 검정력, 효과 크기
 
-아무 효과 없어도 검정을 늘리면 '유의한' 결과가 나오는 현상
+두 분포의 겹침으로 모든 것이 설명된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 검정 개수 슬라이더
+```{python}
+#| label: fig-power
+#| fig-cap: "귀무분포와 대립분포. α, β, 검정력이 어디에 있는지 보세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from scipy import stats
+from src import viz
+
+x = np.linspace(-4, 8, 600)
+ALPHA = 0.05
+crit = stats.norm.ppf(1 - ALPHA)          # 단측 임계값 ≈ 1.645
+
+configs = []
+for effect in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]:
+    h0 = stats.norm.pdf(x, 0, 1)
+    h1 = stats.norm.pdf(x, effect, 1)
+    power = 1 - stats.norm.cdf(crit, effect, 1)
+    configs.append((effect, h0, h1, power))
+
+e0, h0_0, h1_0, pw0 = configs[2]
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=x, y=h0_0, mode="lines", name="H₀ (효과 없음)",
+                         line=dict(color=viz.ACCENT, width=2.5)))
+fig.add_trace(go.Scatter(x=x, y=h1_0, mode="lines", name="H₁ (효과 있음)",
+                         line=dict(color=viz.WARM, width=2.5)))
+# α 영역 (1종 오류)
+mask_a = x >= crit
+fig.add_trace(go.Scatter(x=x[mask_a], y=h0_0[mask_a], fill="tozeroy",
+                         fillcolor=viz.hex_rgba(viz.ACCENT, 0.45),
+                         mode="none", name="α — 1종 오류 (거짓 양성)"))
+# β 영역 (2종 오류)
+mask_b = x < crit
+fig.add_trace(go.Scatter(x=x[mask_b], y=h1_0[mask_b], fill="tozeroy",
+                         fillcolor=viz.hex_rgba(viz.WARM, 0.35),
+                         mode="none", name="β — 2종 오류 (거짓 음성)"))
+fig.add_vline(x=crit, line=dict(color=viz.YELLOW, dash="dash", width=2),
+              annotation_text="임계값")
+
+steps = []
+for effect, h0, h1, power in configs:
+    steps.append((f"{effect:g}", {
+        "y": [h0, h1, h0[mask_a], h1[mask_b]],
+        "x": [x, x, x[mask_a], x[mask_b]],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="효과 크기 = ", active=2, pad_t=55)],
+                  xaxis_title="검정통계량", yaxis_title="밀도",
+                  legend=dict(x=0.62, y=0.98))
+viz.fig_defaults(fig, height=440, title="α=0.05 단측 검정")
+fig.show()
+```
+
+```{python}
+#| label: power-table
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+print(f"{'효과 크기':>10} {'검정력':>10} {'2종 오류 β':>12}   해석")
+print("-" * 62)
+for effect, _, _, power in configs:
+    if power < 0.5:
+        note = "실패할 가능성이 더 큼"
+    elif power < 0.8:
+        note = "부족 (관례 기준 0.8)"
+    else:
+        note = "충분"
+    print(f"{effect:>10.1f} {power*100:>9.1f}% {(1-power)*100:>11.1f}%   {note}")
+```
+
+::: {.interaction-hint}
+효과 크기를 키우면 주황 분포가 오른쪽으로 밀리고 **β(주황 영역)가 줄어듭니다** — 검정력이 올라갑니다. 반면 파란 영역(α)은 임계값이 고정이라 변하지 않습니다. 검정력을 올리는 방법은 셋뿐입니다: 효과가 크거나, $n$ 을 늘리거나, α를 완화하거나.
 :::
 
 ---
 
-## 핵심 용어
+## 다중비교: 찾으면 나온다
 
-| 용어 | 비고 |
-|------|------|
-| 신뢰구간 (confidence interval) |  |
-| p-값 (p-value) |  |
-| 검정력 (power) |  |
-| 부트스트랩 (bootstrap) |  |
-| 다중비교 (multiple comparison) |  |
+검정을 여러 번 하면 우연히 유의한 결과가 나온다.
+효과가 **전혀 없어도** 그렇다.
+
+$$P(\text{적어도 하나 유의}) = 1 - (1-\alpha)^m$$
+
+```{python}
+#| label: fig-multiple-testing
+#| fig-cap: "효과가 전혀 없는데도 검정 수를 늘리면 '발견'이 나옵니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy import stats
+from src import viz
+
+ms = np.arange(1, 101)
+ALPHA = 0.05
+p_any = 1 - (1 - ALPHA) ** ms
+bonf = 1 - (1 - ALPHA / ms) ** ms
+
+# 실제 시뮬레이션: 효과 0인 데이터로 m번 검정
+rng = np.random.default_rng(4)
+N_SIM, M_TESTS = 2000, 20
+false_pos = np.zeros(N_SIM, dtype=int)
+for s in range(N_SIM):
+    pvals = np.array([stats.ttest_ind(rng.normal(0, 1, 30),
+                                      rng.normal(0, 1, 30)).pvalue
+                      for _ in range(M_TESTS)])
+    false_pos[s] = (pvals < ALPHA).sum()
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("적어도 하나가 유의할 확률",
+                                    f"실제 시뮬레이션 ({M_TESTS}회 검정, 효과 0)"))
+
+fig.add_trace(go.Scatter(x=ms, y=p_any * 100, mode="lines", name="보정 없음",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=ms, y=bonf * 100, mode="lines", name="Bonferroni 보정",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_hline(y=5, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="의도한 5%", row=1, col=1)
+
+fig.add_trace(go.Histogram(x=false_pos, nbinsx=int(false_pos.max()) + 1,
+                           marker_color=viz.hex_rgba(viz.PINK, 0.8),
+                           showlegend=False), row=1, col=2)
+
+fig.update_xaxes(title_text="검정 횟수 m", row=1, col=1)
+fig.update_yaxes(title_text="확률 (%)", row=1, col=1)
+fig.update_xaxes(title_text="거짓 양성 개수", row=1, col=2)
+fig.update_yaxes(title_text="빈도", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="다중비교 문제")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+```{python}
+#| label: mt-numbers
+#| code-fold: false
+
+print(f"효과가 전혀 없는 데이터로 {M_TESTS}회 검정 × {N_SIM}회 시뮬레이션")
+print(f"  거짓 양성 평균     : {false_pos.mean():.2f}개  (기댓값 {M_TESTS*ALPHA:.1f})")
+print(f"  하나 이상 나온 비율 : {(false_pos > 0).mean()*100:.1f}%  "
+      f"(이론 {(1-(1-ALPHA)**M_TESTS)*100:.1f}%)")
+print()
+print("→ 20개 지표를 보면 3번 중 2번은 '유의한 발견'이 나온다. 전부 우연이다.")
+```
+
+::: {.key-concept}
+**보정 방법**
+
+| 방법 | 통제 대상 | 성격 |
+|------|-----------|------|
+| Bonferroni | FWER (하나라도 틀릴 확률) | 단순, 매우 보수적 |
+| Holm | FWER | Bonferroni보다 덜 보수적, 항상 우월 |
+| Benjamini-Hochberg | FDR (기각한 것 중 틀린 비율) | 탐색적 분석에 적합 |
+
+실무 감각: 확증적 실험(하나의 핵심 지표)에는 FWER,
+탐색적 분석(수백 개 특성 스크리닝)에는 FDR을 쓴다.
+[1.5 A/B 테스트](../01_data_science/05_experiment_design.qmd)에서 다시 다룬다.
+:::
 
 ---
 
-**다음**: [0.4 정보이론](04_information_theory.qmd) — 엔트로피·KL 발산·교차엔트로피 — 손실함수의 출처
+## 부트스트랩: 분포 가정 없이
+
+지금까지는 정규 근사에 기댔다. 그런데 중앙값, 상관계수, AUC 같은 통계량은
+표본분포의 이론적 형태가 복잡하거나 알려져 있지 않다.
+
+**부트스트랩**은 이 문제를 무식하지만 강력하게 푼다.
+
+> 원 데이터에서 **복원추출로 재표본**을 만들고, 매번 통계량을 계산한다.
+> 그 값들의 분포가 표본분포의 근사다.
+
+```{python}
+#| label: fig-bootstrap
+#| fig-cap: "부트스트랩으로 만든 표본분포. 중앙값처럼 이론식이 어려운 통계량에도 통합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(7)
+# 치우친 실제 데이터 (예: 응답 시간)
+data = rng.lognormal(1.0, 0.7, 120)
+
+B = 3000
+idx = rng.integers(0, len(data), (B, len(data)))
+resamples = data[idx]
+
+stats_boot = {
+    "평균": resamples.mean(axis=1),
+    "중앙값": np.median(resamples, axis=1),
+    "90 백분위수": np.percentile(resamples, 90, axis=1),
+    "표준편차": resamples.std(axis=1, ddof=1),
+}
+
+fig = make_subplots(rows=1, cols=len(stats_boot), subplot_titles=list(stats_boot),
+                    horizontal_spacing=0.05)
+for c, (name, vals) in enumerate(stats_boot.items(), start=1):
+    lo, hi = np.percentile(vals, [2.5, 97.5])
+    fig.add_trace(go.Histogram(x=np.round(vals, 4), nbinsx=45,
+                               marker_color=viz.hex_rgba(viz.ACCENT, 0.75),
+                               showlegend=False), row=1, col=c)
+    for v, col in [(lo, viz.WARM), (hi, viz.WARM)]:
+        fig.add_vline(x=v, line=dict(color=col, dash="dash", width=1.5), row=1, col=c)
+    fig.update_xaxes(title_text=f"[{lo:.2f}, {hi:.2f}]", row=1, col=c)
+
+viz.fig_defaults(fig, height=340,
+                 title=f"부트스트랩 재표본 {B}회 · 주황 점선 = 95% 신뢰구간")
+fig.update_layout(margin=dict(l=45, r=25, t=70, b=55))
+fig.show()
+```
+
+```{python}
+#| label: bootstrap-code
+#| code-fold: false
+
+import numpy as np
+
+def bootstrap_ci(data, stat_fn, B=3000, alpha=0.05, seed=0):
+    """어떤 통계량이든 신뢰구간을 준다. 이게 전부다."""
+    rng = np.random.default_rng(seed)
+    n = len(data)
+    vals = np.array([stat_fn(data[rng.integers(0, n, n)]) for _ in range(B)])
+    lo, hi = np.percentile(vals, [100*alpha/2, 100*(1-alpha/2)])
+    return lo, hi, vals
+
+for name, fn in [("평균", np.mean), ("중앙값", np.median),
+                 ("90 백분위수", lambda d: np.percentile(d, 90))]:
+    lo, hi, _ = bootstrap_ci(data, fn)
+    print(f"{name:<12} 추정 {fn(data):>7.3f}   95% CI [{lo:>6.3f}, {hi:>6.3f}]")
+```
+
+::: {.callout-warning}
+## 부트스트랩이 실패하는 경우
+
+만능이 아니다.
+
+- **극단값 통계량** — 최댓값, 최솟값은 부트스트랩이 잘 작동하지 않는다.
+- **작은 표본** — $n < 20$ 정도면 재표본의 다양성이 부족하다.
+- **의존 데이터** — 시계열은 블록 부트스트랩 같은 변형이 필요하다.
+- **무거운 꼬리** — 분산이 무한한 분포에서는 보장이 깨진다.
+
+그리고 부트스트랩은 **원 표본이 모집단을 대표한다**는 가정 위에 있다.
+표집이 편향되어 있으면 부트스트랩도 그 편향을 그대로 재생산한다.
+:::
+
+---
+
+## 머신러닝에서 특히 조심할 것
+
+::: {.key-concept}
+**교차검증 폴드 간 결과는 독립이 아니다.**
+
+$k$-겹 CV의 $k$개 점수를 그냥 t-검정에 넣으면 안 된다.
+폴드들이 훈련 데이터를 공유하므로 양의 상관이 있고,
+그 결과 **분산이 과소추정되어 거짓 양성이 늘어난다.**
+
+대안:
+- 반복 CV + 교정된 t-검정(Nadeau-Bengio)
+- 여러 시드로 완전히 재학습해 비교
+- 예측 단위 부트스트랩 (테스트 샘플을 재표본)
+
+가장 간단하고 안전한 것은 **시드를 여러 개 돌려 분포를 보고하는 것**이다.
+"정확도 91.2%"보다 "91.2% ± 0.4% (시드 5개)"가 훨씬 많은 것을 말해준다.
+:::
+
+---
+
+## 재현성 위기와 좋은 실천
+
+::: {.callout-warning}
+## p-해킹의 흔한 형태
+
+의도적 부정이 아니라 **선의의 분석 중에** 일어난다.
+
+- 유의해질 때까지 데이터를 더 모은다 (선택적 중단)
+- 여러 지표를 보고 유의한 것만 보고한다
+- 이상치 제거 기준을 결과를 보고 정한다
+- 부분집단을 여러 개 나눠보고 하나가 걸리면 그걸 보고한다
+- 가설을 결과에 맞춰 사후에 수정한다 (HARKing)
+
+각각은 사소해 보이지만 결합하면 거짓 양성률이 60%를 넘길 수 있다.
+:::
+
+방어책은 단순하다.
+
+1. **분석 계획을 데이터 보기 전에 적는다** (사전등록)
+2. **모든 검정을 보고한다** — 유의하지 않은 것 포함
+3. **효과 크기와 신뢰구간을 함께 보고한다** — p-값만으로는 부족
+4. **탐색과 확증을 분리한다** — 탐색에서 나온 가설은 새 데이터로 확인
+
+---
+
+## 요약
+
+| 개념 | 핵심 | 흔한 오해 |
+|------|------|-----------|
+| 표본분포 | 통계량도 확률변수 | — |
+| 표준오차 | $\sigma/\sqrt{n}$ | 정밀도 2배 = 데이터 4배 |
+| 신뢰구간 | 반복 시 95%가 참값을 덮음 | "참값이 있을 확률"이 아님 |
+| p-값 | $P(\text{데이터}\mid H_0)$ | $P(H_0\mid\text{데이터})$ 가 아님 |
+| p > 0.05 | 검출 실패 | "효과 없음"이 아님 |
+| 검정력 | $1-\beta$, 관례 0.8 | 사전에 계산해야 의미 |
+| 다중비교 | 20회 검정 → 64% 확률로 거짓 발견 | — |
+| 부트스트랩 | 재표본으로 표본분포 근사 | 만능은 아님 |
+| CV 폴드 | **독립이 아님** | 그냥 t-검정하면 안 됨 |
+
+확률과 통계로 불확실성을 다루는 법을 세웠다.
+Part 0의 마지막 장은 이 수식들을 **코드로 옮길 때** 생기는 문제를 다룬다.
+
+---
+
+**다음**: [0.4 정보이론](04_information_theory.qmd) — 엔트로피·KL 발산·교차엔트로피
 
 **이전**: [0.2 확률](02_probability.qmd)
