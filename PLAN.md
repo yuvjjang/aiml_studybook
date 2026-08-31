@@ -13,7 +13,7 @@
 - **계산·그래픽**: NumPy / SciPy / Plotly (렌더 타임 의존성은 이 셋으로 제한)
 - **딥러닝 프레임워크 코드**: 실행하지 않는 예시 블록으로 제시 (빌드 재현성 우선)
 
-- **집필 완료** 20 / 123 챕터
+- **집필 완료** 32 / 123 챕터
 
 ## 전체 구성
 
@@ -21,7 +21,7 @@
 |------|------|------|------|------------------|
 | `00_foundations` | Part 0: 수학·컴퓨팅 기초 | 6 | 6 | 머신러닝 논문의 수식을 읽고, 그 수식이 코드에서 어떤 배열 연산으로 바뀌는지 옮길 수 있다. |
 | `01_data_science` | Part 1: 데이터 사이언스 | 8 | 0 | 원시 데이터를 받아 정제·탐색하고, 통계적으로 방어 가능한 결론과 실험 설계를 내놓을 수 있다. |
-| `02_classical_ml` | Part 2: 고전 머신러닝 | 13 | 1 | 정형 데이터 문제에 알고리즘을 고르고, 왜 그 알고리즘이 그렇게 동작하는지 수식과 그림으로 설명할 수 있다. |
+| `02_classical_ml` | Part 2: 고전 머신러닝 | 13 | 13 | 정형 데이터 문제에 알고리즘을 고르고, 왜 그 알고리즘이 그렇게 동작하는지 수식과 그림으로 설명할 수 있다. |
 | `03_deep_learning` | Part 3: 딥러닝 기초 | 10 | 0 | 신경망의 순전파·역전파·최적화를 NumPy로 처음부터 구현하고, 학습이 안 될 때 원인을 진단할 수 있다. |
 | `04_architectures` | Part 4: 신경망 아키텍처 | 7 | 0 | CNN·RNN 계열의 귀납 편향을 설명하고, 어텐션이 왜 등장할 수밖에 없었는지 역사적·수학적으로 서술할 수 있다. |
 | `05_transformer` | Part 5: 트랜스포머 | 11 | 11 | Transformer를 NumPy로 처음부터 구현하고, 최신 LLM이 원 논문에서 무엇을 바꿨는지 항목별로 설명할 수 있다. |
@@ -42,7 +42,19 @@
 - ✅ **0.3 통계적 추론** — `chapters/00_foundations/03_statistics.qmd`
 - ✅ **0.4 정보이론** — `chapters/00_foundations/04_information_theory.qmd`
 - ✅ **0.5 수치 컴퓨팅** — `chapters/00_foundations/05_numerical_computing.qmd`
+- ✅ **2.0 학습이란 무엇인가** — `chapters/02_classical_ml/00_learning_problem.qmd`
 - ✅ **2.1 편향-분산과 일반화** — `chapters/02_classical_ml/01_bias_variance.qmd`
+- ✅ **2.2 선형회귀** — `chapters/02_classical_ml/02_linear_regression.qmd`
+- ✅ **2.3 정규화** — `chapters/02_classical_ml/03_regularization.qmd`
+- ✅ **2.4 로지스틱 회귀와 분류** — `chapters/02_classical_ml/04_logistic_regression.qmd`
+- ✅ **2.5 서포트 벡터 머신과 커널** — `chapters/02_classical_ml/05_svm_kernels.qmd`
+- ✅ **2.6 결정트리** — `chapters/02_classical_ml/06_trees.qmd`
+- ✅ **2.7 앙상블** — `chapters/02_classical_ml/07_ensembles.qmd`
+- ✅ **2.8 kNN·나이브 베이즈·기타** — `chapters/02_classical_ml/08_knn_naive_bayes.qmd`
+- ✅ **2.9 군집화** — `chapters/02_classical_ml/09_clustering.qmd`
+- ✅ **2.10 차원 축소** — `chapters/02_classical_ml/10_dimensionality_reduction.qmd`
+- ✅ **2.11 모델 평가와 선택** — `chapters/02_classical_ml/11_model_evaluation.qmd`
+- ✅ **2.12 실전에서 무너지는 지점** — `chapters/02_classical_ml/12_practical_issues.qmd`
 - ✅ **5.0 어텐션 메커니즘** — `chapters/05_transformer/00_attention_mechanism.qmd`
 - ✅ **5.1 셀프 어텐션과 마스킹** — `chapters/05_transformer/01_self_attention.qmd`
 - ✅ **5.2 멀티헤드 어텐션** — `chapters/05_transformer/02_multi_head.qmd`
@@ -509,7 +521,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.0 학습이란 무엇인가
+### 2.0 학습이란 무엇인가 ✅
 
 `chapters/02_classical_ml/00_learning_problem.qmd` — *가설공간·손실·경험적 위험 최소화 — 문제의 형식화*
 
@@ -569,7 +581,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.2 선형회귀
+### 2.2 선형회귀 ✅
 
 `chapters/02_classical_ml/02_linear_regression.qmd` — *최소제곱·정규방정식·기하학 — 가장 단순한 모델의 완전한 이해*
 
@@ -601,7 +613,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.3 정규화
+### 2.3 정규화 ✅
 
 `chapters/02_classical_ml/03_regularization.qmd` — *Ridge·Lasso·ElasticNet — 복잡도에 값을 매기기*
 
@@ -633,7 +645,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.4 로지스틱 회귀와 분류
+### 2.4 로지스틱 회귀와 분류 ✅
 
 `chapters/02_classical_ml/04_logistic_regression.qmd` — *시그모이드·로그오즈·최대우도 — 확률을 출력하는 선형모델*
 
@@ -664,7 +676,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.5 서포트 벡터 머신과 커널
+### 2.5 서포트 벡터 머신과 커널 ✅
 
 `chapters/02_classical_ml/05_svm_kernels.qmd` — *최대 마진·쌍대문제·커널 트릭 — 고차원으로 올려서 푸는 법*
 
@@ -696,7 +708,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.6 결정트리
+### 2.6 결정트리 ✅
 
 `chapters/02_classical_ml/06_trees.qmd` — *분할 기준·가지치기·해석 — 규칙으로 학습하는 모델*
 
@@ -727,7 +739,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.7 앙상블
+### 2.7 앙상블 ✅
 
 `chapters/02_classical_ml/07_ensembles.qmd` — *배깅·랜덤포레스트·부스팅·GBDT — 약한 모델을 모아 강하게*
 
@@ -761,7 +773,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.8 kNN·나이브 베이즈·기타
+### 2.8 kNN·나이브 베이즈·기타 ✅
 
 `chapters/02_classical_ml/08_knn_naive_bayes.qmd` — *게으른 학습과 단순한 가정 — 기준선이 되는 모델들*
 
@@ -792,7 +804,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.9 군집화
+### 2.9 군집화 ✅
 
 `chapters/02_classical_ml/09_clustering.qmd` — *k-means·GMM·DBSCAN·계층 — 정답 없이 구조 찾기*
 
@@ -826,7 +838,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.10 차원 축소
+### 2.10 차원 축소 ✅
 
 `chapters/02_classical_ml/10_dimensionality_reduction.qmd` — *PCA·t-SNE·UMAP·매니폴드 — 고차원을 눈으로 보는 법*
 
@@ -861,7 +873,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.11 모델 평가와 선택
+### 2.11 모델 평가와 선택 ✅
 
 `chapters/02_classical_ml/11_model_evaluation.qmd` — *교차검증·지표·ROC·캘리브레이션 — 숫자 하나를 믿기까지*
 
@@ -896,7 +908,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 2.12 실전에서 무너지는 지점
+### 2.12 실전에서 무너지는 지점 ✅
 
 `chapters/02_classical_ml/12_practical_issues.qmd` — *누수·불균형·드리프트·잘못된 기준선 — 프로젝트를 망치는 것들*
 
