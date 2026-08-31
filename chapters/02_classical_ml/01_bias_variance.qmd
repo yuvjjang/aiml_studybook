@@ -4,77 +4,484 @@ subtitle: "과적합·학습곡선·이중하강 — 왜 훈련 성능은 믿을
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+머신러닝의 목표는 훈련 데이터를 잘 맞히는 것이 **아니다**.
 
-머신러닝의 유일한 진짜 목표는 보지 못한 데이터에서의 성능이다. 편향-분산 분해는 그 목표를 두 개의 조절 가능한 축으로 쪼갠다.
+훈련 데이터만 맞히는 것은 쉽다. 데이터를 통째로 외우면 훈련 오차가 0이 된다.
+하지만 그런 모델은 새 데이터 앞에서 무력하다.
+우리가 실제로 원하는 것은 **아직 보지 못한 데이터에서의 성능** — 일반화다.
+
+문제는 일반화 오차를 직접 볼 수 없다는 것이다. 우리 손에는 훈련 데이터뿐이다.
+그래서 이 장은 두 가지를 한다.
+
+1. 일반화 오차를 **분해**해서, 무엇이 우리가 조절할 수 있는 손잡이인지 밝힌다.
+2. 그 오차를 **추정**하는 절차를 세운다.
 
 ---
 
-## 이 장에서 다루는 것
+## 오차를 세 조각으로 쪼개기
 
-- 일반화 오차의 분해: 편향² + 분산 + 잡음
-- 모델 복잡도와 U자형 시험오차 곡선
-- 과적합·과소적합의 진단: 학습곡선, 검증곡선
-- VC 차원과 라데마허 복잡도 (직관 수준)
-- 정규화가 분산을 줄이는 메커니즘
-- 교차검증이 일반화 오차를 추정하는 원리
-- 이중하강(double descent) — 고전 이론이 예측하지 못한 현상
-- 과매개변수화(over-parameterization)와 암묵적 정규화
-- 데이터 크기와 성능: 학습곡선 외삽, 스케일링의 예고편
+참 함수 $f(x)$ 에 잡음이 섞여 관측된다고 하자.
+
+$$y = f(x) + \varepsilon, \qquad \mathbb{E}[\varepsilon]=0, \quad \mathrm{Var}(\varepsilon)=\sigma^2$$
+
+훈련 집합 $D$ 를 뽑아 모델 $\hat{f}_D$ 를 학습한다.
+$D$ 가 무작위이므로 $\hat{f}_D$ 도 확률변수다.
+
+한 점 $x_0$ 에서의 기대 제곱오차는 **정확히 세 항으로 분해된다.**
+
+$$
+\mathbb{E}_{D,\varepsilon}\big[(y_0 - \hat{f}_D(x_0))^2\big] =
+\underbrace{\big(\mathbb{E}_D[\hat{f}_D(x_0)] - f(x_0)\big)^2}_{\text{편향}^2} +
+\underbrace{\mathrm{Var}_D\big(\hat{f}_D(x_0)\big)}_{\text{분산}} +
+\underbrace{\sigma^2}_{\text{잡음}}
+$$
+
+| 항 | 뜻 | 원인 | 줄이는 법 |
+|----|-----|------|-----------|
+| **편향²** | 평균적으로 얼마나 빗나가는가 | 모델이 참 함수를 표현할 능력이 없음 | 모델을 더 유연하게 |
+| **분산** | 데이터가 바뀌면 얼마나 흔들리는가 | 모델이 훈련 데이터의 잡음까지 따라감 | 모델을 더 단순하게, 정규화, 데이터 추가 |
+| **잡음** | 데이터 자체의 무작위성 | 측정 오차, 관측되지 않은 변수 | **줄일 수 없음** — 성능의 하한 |
+
+::: {.key-concept}
+세 번째 항이 중요하다. $\sigma^2$ 는 **아무리 좋은 모델도 넘을 수 없는 벽**이다.
+
+"정확도 95%가 한계인 것 같다"는 상황은 대개 모델 문제가 아니라 잡음 하한에 닿은 것이다.
+그럴 때 필요한 것은 더 큰 모델이 아니라 **더 나은 특성이나 더 나은 레이블**이다.
+:::
+
+앞의 두 항은 대개 **서로 반대로 움직인다.** 모델을 유연하게 하면 편향이 줄지만 분산이 는다.
+이것이 편향-분산 트레이드오프다.
 
 ---
 
 ## G2.1.1 — 다항 차수와 과적합
 
-차수를 올릴수록 훈련오차는 0으로, 시험오차는 폭발
+가장 단순한 실험. 참 함수 $\sin(2\pi x)$ 에서 30개 점을 뽑고, 다항식 차수를 올려가며 맞춘다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 차수 슬라이더
+```{python}
+#| label: fig-poly-overfit
+#| fig-cap: "다항 차수를 올릴수록 훈련 오차는 0으로, 시험 오차는 폭발합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+x_tr, y_tr, _ = datasets.polynomial(n=25, noise=0.22, seed=0)
+x_te, y_te, _ = datasets.polynomial(n=200, noise=0.22, seed=99)
+
+xs = np.linspace(0, 1, 400)
+f_true = np.sin(2 * np.pi * xs)
+
+degrees = list(range(0, 16))
+curves, tr_err, te_err = {}, [], []
+
+for d in degrees:
+    # 수치 안정성을 위해 다항 기저를 직접 만들고 최소제곱으로 푼다
+    coef = np.polyfit(x_tr, y_tr, d)
+    curves[d] = np.clip(np.polyval(coef, xs), -3.5, 3.5)
+    tr_err.append(np.mean((np.polyval(coef, x_tr) - y_tr) ** 2))
+    te_err.append(np.mean((np.polyval(coef, x_te) - y_te) ** 2))
+
+tr_err, te_err = np.array(tr_err), np.array(te_err)
+best_d = int(degrees[np.argmin(te_err)])
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("적합 결과", "차수에 따른 오차"))
+
+d0 = 3
+fig.add_trace(go.Scatter(x=xs, y=f_true, mode="lines", name="참 함수 sin(2πx)",
+                         line=dict(color="rgba(255,255,255,0.45)", width=2, dash="dash")),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=x_tr, y=y_tr, mode="markers", name="훈련 데이터",
+                         marker=dict(size=8, color=viz.YELLOW,
+                                     line=dict(width=1, color="rgba(0,0,0,0.5)"))),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=xs, y=curves[d0], mode="lines", name="적합된 다항식",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+
+fig.add_trace(go.Scatter(x=degrees, y=tr_err, mode="lines+markers", name="훈련 오차",
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=degrees, y=te_err, mode="lines+markers", name="시험 오차",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[d0], y=[te_err[d0]], mode="markers", showlegend=False,
+                         marker=dict(size=13, color=viz.ACCENT)), row=1, col=2)
+
+steps = []
+for d in degrees:
+    steps.append((str(d), {
+        "y": [f_true, y_tr, curves[d], tr_err, te_err, [te_err[d]]],
+        "x": [xs, x_tr, xs, degrees, degrees, [d]],
+    }))
+
+fig.update_layout(sliders=[viz.slider(steps, prefix="다항 차수 = ", active=d0, pad_t=60)])
+fig.update_xaxes(title_text="x", row=1, col=1)
+fig.update_yaxes(title_text="y", range=[-2.2, 2.2], row=1, col=1)
+fig.update_xaxes(title_text="다항 차수", row=1, col=2)
+fig.update_yaxes(title_text="평균제곱오차", type="log", row=1, col=2)
+
+viz.fig_defaults(fig, height=470,
+                 title=f"잡음 분산 σ² = 0.22² ≈ {0.22**2:.3f} · 시험 오차 최소 차수 = {best_d}")
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=100), legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+차수 0~2는 **과소적합**(편향 지배) — 곡선이 참 함수를 따라가지 못합니다. 차수 10 이상은 **과적합**(분산 지배) — 훈련 점은 정확히 지나지만 그 사이에서 요동칩니다. 오른쪽 시험 오차 곡선의 U자 바닥이 최적점입니다.
+:::
+
+::: {.callout-note}
+## 훈련 오차는 왜 항상 내려가기만 하는가
+
+훈련 오차는 **모델이 최소화하도록 명시적으로 지시받은 값**이다.
+자유도를 늘리면 최적화가 그 자유도를 써서 훈련 오차를 더 낮춘다 — 정의상 그렇게 된다.
+
+그래서 훈련 오차는 모델 선택의 근거가 될 수 없다.
+차수를 훈련 오차로 고르면 항상 "가장 복잡한 모델"이 선택된다.
 :::
 
 ---
 
-## G2.1.2 — 편향-분산 분해
+## G2.1.2 — 편향과 분산을 직접 보기
 
-반복 표본에서 얻은 예측들의 퍼짐(분산)과 중심 이탈(편향)을 동시에 표시
+앞 그림은 훈련 집합 **하나**로 그린 것이다.
+분해식의 기댓값 $\mathbb{E}_D$ 를 눈으로 보려면, 훈련 집합을 여러 번 다시 뽑아야 한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 복잡도 슬라이더
+서로 다른 훈련 집합 60개로 같은 차수의 모델을 각각 학습시켜 겹쳐 그린다.
+
+```{python}
+#| label: fig-bias-variance
+#| fig-cap: "훈련 집합을 60번 다시 뽑아 학습한 결과. 퍼짐 = 분산, 평균의 이탈 = 편향."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+xs = np.linspace(0.02, 0.98, 200)
+f_true = np.sin(2 * np.pi * xs)
+n_sets, n_pts, noise = 60, 20, 0.25
+degrees = [0, 1, 2, 3, 5, 8, 12]
+
+fits, bias2, variance = {}, [], []
+for d in degrees:
+    preds = np.empty((n_sets, len(xs)))
+    for s in range(n_sets):
+        xi, yi, _ = datasets.polynomial(n=n_pts, noise=noise, seed=1000 + s)
+        preds[s] = np.clip(np.polyval(np.polyfit(xi, yi, d), xs), -3, 3)
+    fits[d] = preds
+    mean_pred = preds.mean(axis=0)
+    bias2.append(np.mean((mean_pred - f_true) ** 2))
+    variance.append(np.mean(preds.var(axis=0)))
+
+bias2, variance = np.array(bias2), np.array(variance)
+total = bias2 + variance + noise ** 2
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("60개 훈련 집합에서 학습한 모델들", "분해된 오차"))
+
+d0 = 3
+show = 25          # 개별 곡선은 일부만 (페이지 용량)
+for s in range(show):
+    fig.add_trace(go.Scatter(x=xs, y=fits[d0][s], mode="lines", showlegend=False,
+                             line=dict(color=viz.hex_rgba(viz.ACCENT, 0.22), width=1),
+                             hoverinfo="skip"), row=1, col=1)
+fig.add_trace(go.Scatter(x=xs, y=fits[d0].mean(axis=0), mode="lines", name="예측의 평균",
+                         line=dict(color=viz.ACCENT, width=3.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=xs, y=f_true, mode="lines", name="참 함수",
+                         line=dict(color=viz.YELLOW, width=2.5, dash="dash")), row=1, col=1)
+
+fig.add_trace(go.Bar(x=[str(d) for d in degrees], y=bias2, name="편향²",
+                     marker_color=viz.WARM), row=1, col=2)
+fig.add_trace(go.Bar(x=[str(d) for d in degrees], y=variance, name="분산",
+                     marker_color=viz.ACCENT), row=1, col=2)
+fig.add_trace(go.Bar(x=[str(d) for d in degrees], y=np.full(len(degrees), noise ** 2),
+                     name="잡음 σ²", marker_color="rgba(255,255,255,0.28)"), row=1, col=2)
+
+steps = []
+for d in degrees:
+    ys = [fits[d][s] for s in range(show)]
+    ys += [fits[d].mean(axis=0), f_true, bias2, variance,
+           np.full(len(degrees), noise ** 2)]
+    steps.append((str(d), {"y": ys}))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="다항 차수 = ",
+                        active=degrees.index(d0), pad_t=60)],
+    barmode="stack",
+)
+fig.update_xaxes(title_text="x", row=1, col=1)
+fig.update_yaxes(title_text="y", range=[-2.0, 2.0], row=1, col=1)
+fig.update_xaxes(title_text="다항 차수", row=1, col=2)
+fig.update_yaxes(title_text="기대 제곱오차 분해", row=1, col=2)
+
+viz.fig_defaults(fig, height=470, title="편향-분산 분해 (훈련 집합 60회 재표집)")
+fig.update_layout(margin=dict(l=55, r=30, t=70, b=100), legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+차수 0~1: 곡선들이 **서로 비슷하지만**(분산 낮음) 참 함수에서 멀리 떨어져 있습니다(편향 높음).
+차수 12: 곡선들이 **제각각으로 요동치지만**(분산 높음) 평균은 참 함수에 가깝습니다(편향 낮음).
+오른쪽 막대에서 주황이 줄고 파랑이 느는 교환을 보세요.
 :::
 
 ---
 
-## G2.1.3 — 학습곡선
+## 학습곡선: 데이터를 더 모으면 해결되는가
 
-고편향 모델과 고분산 모델의 학습곡선 모양 차이
+실무에서 가장 자주 묻는 질문이다. 답은 **어느 쪽이 문제인가에 따라 다르다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 표본 수 슬라이더
+```{python}
+#| label: fig-learning-curve
+#| fig-cap: "고편향 모델과 고분산 모델은 학습곡선 모양이 다릅니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+sizes = [8, 12, 18, 25, 35, 50, 75, 110, 160, 240, 350, 500]
+n_rep, noise = 24, 0.25
+x_te, y_te, _ = datasets.polynomial(n=400, noise=noise, seed=7)
+
+cases = {"고편향 (차수 1)": 1, "적절 (차수 3)": 3, "고분산 (차수 12)": 12}
+curves = {}
+
+for name, d in cases.items():
+    tr_c, te_c = [], []
+    for n in sizes:
+        tr_e, te_e = [], []
+        for r in range(n_rep):
+            xi, yi, _ = datasets.polynomial(n=n, noise=noise, seed=5000 + r * 97 + n)
+            if n <= d:            # 점이 차수보다 적으면 적합 불가
+                continue
+            coef = np.polyfit(xi, yi, d)
+            tr_e.append(np.mean((np.polyval(coef, xi) - yi) ** 2))
+            te_e.append(np.mean((np.clip(np.polyval(coef, x_te), -5, 5) - y_te) ** 2))
+        tr_c.append(np.mean(tr_e) if tr_e else np.nan)
+        te_c.append(np.mean(te_e) if te_e else np.nan)
+    curves[name] = (np.array(tr_c), np.array(te_c))
+
+fig = make_subplots(rows=1, cols=3, subplot_titles=list(cases.keys()),
+                    shared_yaxes=True)
+
+for i, (name, (tr_c, te_c)) in enumerate(curves.items(), start=1):
+    fig.add_trace(go.Scatter(x=sizes, y=tr_c, mode="lines+markers", name="훈련 오차",
+                             line=dict(color=viz.GREEN, width=2.5),
+                             showlegend=(i == 1)), row=1, col=i)
+    fig.add_trace(go.Scatter(x=sizes, y=te_c, mode="lines+markers", name="시험 오차",
+                             line=dict(color=viz.WARM, width=2.5),
+                             showlegend=(i == 1)), row=1, col=i)
+    fig.add_hline(y=noise ** 2, line=dict(color="rgba(255,255,255,0.4)", dash="dot"),
+                  row=1, col=i)
+
+fig.update_xaxes(title_text="훈련 표본 수", type="log")
+fig.update_yaxes(title_text="평균제곱오차", type="log", range=[-2.3, 0.9], row=1, col=1)
+viz.fig_defaults(fig, height=400,
+                 title="점선 = 잡음 하한 σ² (어떤 모델도 그 아래로 못 간다)")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.key-concept}
+**학습곡선으로 진단하기**
+
+| 관찰 | 진단 | 처방 |
+|------|------|------|
+| 훈련·시험 오차가 **둘 다 높고 붙어 있다** | 고편향(과소적합) | 모델 용량↑, 특성 추가, 정규화↓ — **데이터 추가는 소용없다** |
+| 훈련은 낮고 시험은 높다, **간격이 크다** | 고분산(과적합) | 데이터 추가, 정규화↑, 모델 단순화 |
+| 둘 다 낮고 하한에 수렴 | 적절 | 여기가 끝. 더 가려면 잡음 자체를 줄여야 함 |
+
+왼쪽 그림에서 차수 1 모델은 데이터를 500개로 늘려도 오차가 내려가지 않습니다.
+표현할 능력 자체가 없기 때문입니다.
 :::
 
 ---
 
-## G2.1.4 — 이중하강
+## 왜 교차검증이 필요한가
 
-보간 임계점을 지나면 시험오차가 다시 내려가는 현상
+일반화 오차를 추정하려면 학습에 쓰지 않은 데이터가 필요하다.
+하지만 한 번의 홀드아웃 분할은 **운에 좌우된다** — 특히 데이터가 적을 때.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 파라미터/표본 비율 슬라이더
+$k$-겹 교차검증은 데이터를 $k$ 조각으로 나눠, 각 조각을 한 번씩 검증에 쓰고 나머지로 학습한다.
+모든 데이터가 정확히 한 번씩 검증에 쓰인다.
+
+```{python}
+#| label: fig-cv-variance
+#| fig-cap: "홀드아웃 한 번의 추정치는 분할 운에 크게 흔들립니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import datasets, viz
+
+x_all, y_all, _ = datasets.polynomial(n=60, noise=0.25, seed=42)
+degree = 4
+rng = np.random.default_rng(0)
+
+def fit_eval(idx_tr, idx_va):
+    coef = np.polyfit(x_all[idx_tr], y_all[idx_tr], degree)
+    pred = np.clip(np.polyval(coef, x_all[idx_va]), -5, 5)
+    return np.mean((pred - y_all[idx_va]) ** 2)
+
+# (1) 홀드아웃을 200번 다르게 나눠본다
+holdout = []
+for _ in range(200):
+    perm = rng.permutation(len(x_all))
+    cut = int(0.8 * len(x_all))
+    holdout.append(fit_eval(perm[:cut], perm[cut:]))
+
+# (2) 5-겹 CV 를 200번 (셔플만 다르게)
+cv5 = []
+for _ in range(200):
+    perm = rng.permutation(len(x_all))
+    folds = np.array_split(perm, 5)
+    scores = [fit_eval(np.concatenate([f for j, f in enumerate(folds) if j != i]), folds[i])
+              for i in range(5)]
+    cv5.append(np.mean(scores))
+
+holdout, cv5 = np.array(holdout), np.array(cv5)
+
+fig = go.Figure()
+fig.add_trace(go.Histogram(x=holdout, name=f"홀드아웃 80/20 (표준편차 {holdout.std():.3f})",
+                           marker_color=viz.hex_rgba(viz.WARM, 0.65), nbinsx=45))
+fig.add_trace(go.Histogram(x=cv5, name=f"5-겹 CV 평균 (표준편차 {cv5.std():.3f})",
+                           marker_color=viz.hex_rgba(viz.ACCENT, 0.75), nbinsx=45))
+
+fig.update_layout(barmode="overlay", xaxis_title="추정된 검증 오차",
+                  yaxis_title="빈도", legend=dict(x=0.45, y=0.98))
+viz.fig_defaults(fig, height=400,
+                 title=f"같은 데이터·같은 모델, 분할만 200번 다르게 (차수 {degree})")
+fig.show()
+```
+
+::: {.interaction-hint}
+주황(홀드아웃 한 번)이 훨씬 넓게 퍼져 있습니다. 운 나쁜 분할 하나로 모델을 판단하면 잘못된 결론에 이릅니다. 파랑(5겹 평균)은 같은 데이터로 훨씬 안정적인 추정을 줍니다.
+:::
+
+::: {.callout-warning}
+## 교차검증 점수도 낙관적이다
+
+CV 점수를 보고 하이퍼파라미터를 고르면, 그 순간 **CV 점수는 더 이상 일반화 오차의 불편 추정치가 아니다.**
+검증 데이터가 선택에 쓰였기 때문이다 — 검증 집합에 대한 과적합이다.
+
+정직한 추정이 필요하면 **중첩 교차검증**을 쓰거나, 마지막까지 손대지 않은 시험 집합을 따로 남긴다.
+자세한 절차는 [2.11 모델 평가와 선택](11_model_evaluation.qmd)에서 다룬다.
 :::
 
 ---
 
-## 핵심 용어
+## 고전 이론이 틀린 곳: 이중하강
 
-| 용어 | 비고 |
-|------|------|
-| 편향-분산 트레이드오프 |  |
-| 과적합 (overfitting) |  |
-| 교차검증 (cross-validation) |  |
-| 이중하강 (double descent) |  |
+지금까지의 그림은 1990년대에 완성된 이야기다.
+그리고 이 이야기대로라면 **파라미터가 데이터보다 100배 많은 딥러닝 모델은 작동하면 안 된다.**
+
+실제로는 잘 작동한다. 그리고 그 이유를 그림으로 볼 수 있다.
+
+모델 복잡도를 계속 키우면, 시험 오차는 U자를 그린 뒤 **다시 내려간다.**
+
+```{python}
+#| label: fig-double-descent
+#| fig-cap: "보간 임계점(파라미터 수 = 표본 수)을 지나면 시험 오차가 다시 감소합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# 무작위 특성 회귀: 특성 수 p 를 늘리며 최소노름 해를 구한다
+rng = np.random.default_rng(1)
+n_train, n_test, d_in, noise = 40, 400, 20, 0.35
+
+W = rng.normal(size=(d_in, 1)) / np.sqrt(d_in)
+X_tr = rng.normal(size=(n_train, d_in))
+X_te = rng.normal(size=(n_test, d_in))
+y_tr = (X_tr @ W).ravel() + rng.normal(0, noise, n_train)
+y_te = (X_te @ W).ravel() + rng.normal(0, noise, n_test)
+
+ps = [2, 5, 10, 20, 30, 35, 38, 40, 42, 45, 55, 70, 100, 150, 250, 400, 700]
+tr_e, te_e = [], []
+
+for p in ps:
+    F = rng.normal(size=(d_in, p)) / np.sqrt(d_in)   # 무작위 사영 특성
+    Z_tr, Z_te = np.tanh(X_tr @ F), np.tanh(X_te @ F)
+    # 최소노름 최소제곱 해 (p > n 이면 pinv 가 최소노름 보간해를 준다)
+    beta = np.linalg.pinv(Z_tr) @ y_tr
+    tr_e.append(np.mean((Z_tr @ beta - y_tr) ** 2))
+    te_e.append(np.mean((Z_te @ beta - y_te) ** 2))
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ps, y=tr_e, mode="lines+markers", name="훈련 오차",
+                         line=dict(color=viz.GREEN, width=2.5)))
+fig.add_trace(go.Scatter(x=ps, y=te_e, mode="lines+markers", name="시험 오차",
+                         line=dict(color=viz.WARM, width=3)))
+fig.add_vline(x=n_train, line=dict(color=viz.ACCENT, dash="dash", width=2),
+              annotation_text=f"보간 임계점<br>p = n = {n_train}",
+              annotation_position="top")
+
+fig.update_layout(xaxis_title="특성 수 p (모델 복잡도)", xaxis_type="log",
+                  yaxis_title="평균제곱오차", yaxis_type="log",
+                  legend=dict(x=0.65, y=0.98))
+viz.fig_defaults(fig, height=430,
+                 title=f"이중하강 · 훈련 표본 {n_train}개, 잡음 σ = {noise}")
+fig.show()
+```
+
+::: {.interaction-hint}
+$p < n$ 구간은 고전적 U자입니다. $p = n$ 근처에서 시험 오차가 **치솟고**, 그 너머에서 **다시 내려갑니다**. 임계점에서는 해가 유일하게 결정되어 잡음까지 정확히 맞춰야 하지만, $p > n$ 에서는 무수한 보간해 중 **가장 노름이 작은 것**을 고를 수 있기 때문입니다.
+:::
+
+::: {.callout-note}
+## 과매개변수화가 작동하는 이유 (현재까지의 이해)
+
+$p > n$ 이면 훈련 오차를 0으로 만드는 해가 무한히 많다.
+어떤 해를 고르느냐가 일반화를 결정하고, 최적화 알고리즘이 그 선택을 한다.
+
+- 경사하강은 초기값에서 가까운 해로 수렴하는 경향이 있다 — **암묵적 정규화**
+- 결과적으로 "작은 노름", "평평한 최소점" 쪽 해가 선택된다
+- 그래서 명시적 정규화 없이도 일반화가 된다
+
+이것은 편향-분산 분해가 **틀렸다**는 뜻이 아니다. 분해식 자체는 항상 참이다.
+틀린 것은 "파라미터 수 = 복잡도"라는 **대응 관계**다.
+실효 복잡도는 파라미터 수가 아니라 최적화가 실제로 도달하는 해의 성질로 결정된다.
+:::
 
 ---
 
-**다음**: [2.2 선형회귀](02_linear_regression.qmd) — 최소제곱·정규방정식·기하학 — 가장 단순한 모델의 완전한 이해
+## 실무 체크리스트
+
+이 장의 내용을 실제 프로젝트에서 쓰는 순서.
+
+1. **먼저 잡음 하한을 가늠한다.** 같은 입력에 레이블이 엇갈리는가? 사람은 몇 %를 맞히는가?
+2. **작은 데이터에 일부러 과적합시켜 본다.** 훈련 손실이 0으로 안 가면 버그거나 용량 부족이다 ([3.9 학습 실전](../03_deep_learning/09_training_practice.qmd)).
+3. **학습곡선을 그린다.** 위 진단표로 편향 문제인지 분산 문제인지 판정한다.
+4. **진단에 맞는 처방만 적용한다.** 고편향에 데이터를 더 넣는 것은 시간 낭비다.
+5. **선택에 쓴 검증 점수를 최종 성능으로 보고하지 않는다.**
+
+---
+
+## 요약
+
+| 개념 | 수식·정의 | 실무적 함의 |
+|------|-----------|-------------|
+| 오차 분해 | 편향² + 분산 + 잡음 | 손잡이는 둘, 벽은 하나 |
+| 편향 | $\mathbb{E}_D[\hat{f}] - f$ | 모델이 참 함수를 못 담음 → 용량↑ |
+| 분산 | $\mathrm{Var}_D(\hat{f})$ | 데이터 잡음을 따라감 → 정규화·데이터↑ |
+| 잡음 $\sigma^2$ | 데이터 자체의 무작위성 | 줄일 수 없음. 성능 하한 |
+| 과적합 | 훈련↓ 시험↑, 간격 큼 | 분산 지배 |
+| 과소적합 | 훈련·시험 둘 다 높음 | 편향 지배 — 데이터 추가는 무의미 |
+| 교차검증 | $k$-겹 평균 | 홀드아웃보다 훨씬 안정적인 추정 |
+| 이중하강 | $p>n$ 에서 시험 오차 재하강 | 파라미터 수 ≠ 실효 복잡도 |
+
+다음 장부터는 구체적인 알고리즘으로 들어간다.
+가장 단순하면서 닫힌 해가 존재하는 모델 — 선형회귀에서 시작한다.
+
+---
+
+**다음**: [2.2 선형회귀](02_linear_regression.qmd) — 최소제곱·정규방정식·기하학
 
 **이전**: [2.0 학습이란 무엇인가](00_learning_problem.qmd)
