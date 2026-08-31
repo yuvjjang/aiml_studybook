@@ -4,88 +4,307 @@ subtitle: "원 논문 구조에서 encoder-only·decoder-only로의 분기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+BERT, GPT, T5는 서로 다른 모델처럼 보이지만 **같은 부품으로 만든 세 가지 조립품**이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+[5.4](04_transformer_block.qmd)에서 본 블록이 부품이고, 차이는 두 가지뿐이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+1. 블록을 **어떻게 배치**하는가 (한 스택인가, 두 스택인가)
+2. 어떤 **마스크**를 쓰는가
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.
+그리고 두 번째가 사실상 첫 번째를 결정한다.
+[5.1](01_self_attention.qmd)에서 본 마스크 행렬 하나로 계열이 갈린다.
+
+---
+
+## 원 논문의 구조
+
+*Attention Is All You Need* 는 기계번역 논문이었다.
+"영어 문장을 읽고 독일어 문장을 쓴다"는 과제라서, 자연스럽게 두 부분으로 나뉜다.
+
+| 스택 | 하는 일 | 어텐션 종류 |
+|------|---------|-------------|
+| **인코더** ($N$층) | 소스 문장을 읽어 표현을 만든다 | 양방향 셀프 어텐션 |
+| **디코더** ($N$층) | 타깃 문장을 한 토큰씩 쓴다 | 마스크드 셀프 + **크로스** 어텐션 |
+
+디코더 블록은 서브층이 **세 개**다 (인코더는 두 개).
+
+$$
+\begin{aligned}
+x &\leftarrow x + \text{MaskedSelfAttn}(\text{Norm}(x)) &&\text{내가 지금까지 쓴 것 참조}\\
+x &\leftarrow x + \text{CrossAttn}(\text{Norm}(x),\; E) &&\text{소스 문장 참조}\\
+x &\leftarrow x + \text{FFN}(\text{Norm}(x)) &&\text{채널 처리}
+\end{aligned}
+$$
+
+크로스 어텐션에서 $Q$ 는 디코더에서, $K$·$V$ 는 **인코더 출력 $E$** 에서 온다.
+이것이 "번역할 때 소스 문장의 어느 단어를 보는가"를 결정한다.
+
+---
+
+## G5.5.1 — 마스크 하나로 계열이 갈린다
+
+세 계열의 차이를 어텐션 마스크 행렬만으로 표현할 수 있다.
+
+```{python}
+#| label: fig-family-masks
+#| fig-cap: "같은 블록, 다른 마스크. 이것이 BERT·GPT·T5를 가르는 전부입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import attention, viz
+
+n_src, n_tgt = 5, 6
+N = n_src + n_tgt
+labels = [f"S{i+1}" for i in range(n_src)] + [f"T{i+1}" for i in range(n_tgt)]
+
+i_idx = np.arange(N)[:, None]
+j_idx = np.arange(N)[None, :]
+is_src_q = i_idx < n_src
+is_src_k = j_idx < n_src
+
+families = {}
+
+# encoder-only (BERT): 전부 서로 본다
+families["encoder-only (BERT)"] = np.zeros((N, N), dtype=bool)
+
+# decoder-only (GPT): 인과 마스크만
+families["decoder-only (GPT)"] = attention.causal_mask(N)
+
+# encoder-decoder (T5): 소스는 서로 양방향, 타깃은 인과 + 소스 전체 참조,
+#                       소스는 타깃을 보지 않는다
+ed = np.zeros((N, N), dtype=bool)
+ed |= (is_src_q & ~is_src_k)                       # 소스 → 타깃 차단
+ed |= (~is_src_q & ~is_src_k & (j_idx > i_idx))    # 타깃 내부는 인과적
+families["encoder-decoder (T5)"] = ed
+
+# prefix LM: 소스 구간은 양방향, 그 뒤는 인과적 (한 스택에서)
+pl = attention.causal_mask(N).copy()
+pl[:n_src, :n_src] = False
+families["prefix LM (UL2)"] = pl
+
+names = list(families)
+fig = make_subplots(rows=1, cols=4, subplot_titles=names, horizontal_spacing=0.035)
+
+for c, nm in enumerate(names, start=1):
+    m = families[nm].astype(float)
+    fig.add_trace(go.Heatmap(z=1 - m, colorscale=[[0, "#141414"], [1, viz.YELLOW]],
+                             showscale=False,
+                             hovertemplate="쿼리 %{y} → 키 %{x}<extra></extra>"),
+                  row=1, col=c)
+    fig.add_shape(type="line", x0=n_src - 0.5, x1=n_src - 0.5, y0=-0.5, y1=N - 0.5,
+                  line=dict(color=viz.ACCENT, width=1.5, dash="dot"), row=1, col=c)
+    fig.add_shape(type="line", x0=-0.5, x1=N - 0.5, y0=n_src - 0.5, y1=n_src - 0.5,
+                  line=dict(color=viz.ACCENT, width=1.5, dash="dot"), row=1, col=c)
+    fig.update_xaxes(tickmode="array", tickvals=list(range(N)), ticktext=labels,
+                     tickfont=dict(size=8), row=1, col=c)
+    fig.update_yaxes(tickmode="array", tickvals=list(range(N)), ticktext=labels,
+                     tickfont=dict(size=8), autorange="reversed",
+                     showticklabels=(c == 1), row=1, col=c)
+
+viz.fig_defaults(fig, height=320,
+                 title="S = 소스(입력) 토큰, T = 타깃(생성) 토큰 · 노랑 = 참조 가능")
+fig.update_layout(margin=dict(l=45, r=20, t=80, b=45))
+fig.update_annotations(font_size=11)
+fig.show()
+```
+
+::: {.interaction-hint}
+파란 점선이 소스/타깃 경계입니다. **encoder-decoder**를 보세요 — 왼쪽 위(소스끼리)는 꽉 찬 사각형, 오른쪽 아래(타깃끼리)는 삼각형, 왼쪽 아래(타깃→소스)는 꽉 참, 오른쪽 위(소스→타깃)는 차단. **prefix LM**은 같은 패턴을 스택 하나로 구현한 것입니다.
 :::
 
-BERT·T5·GPT는 같은 부품으로 만든 세 가지 조립품이다. 계열을 구분하면 어떤 과제에 무엇을 쓸지가 자명해진다.
+::: {.key-concept}
+prefix LM과 encoder-decoder는 **마스크 패턴이 거의 같다.**
 
----
-
-## 이 장에서 다루는 것
-
-- 'Attention Is All You Need' 원 구조 전체 도해
-- 인코더 스택: 양방향 셀프 어텐션
-- 디코더 스택: 마스크드 셀프 어텐션 + 크로스 어텐션
-- encoder-only(BERT 계열): 이해 과제, 사전학습 목표
-- decoder-only(GPT 계열): 생성, 왜 이 계열이 지배하게 되었는가
-- encoder-decoder(T5/BART): 조건부 생성, 번역·요약
-- UL2·prefix LM 같은 통합 목표
-- 각 계열의 추론 비용과 KV 캐시 구조 차이
-- 계열 선택 가이드와 최근의 수렴 경향
-
----
-
-## G5.5.1 — 세 계열 구조 비교
-
-encoder-only / decoder-only / encoder-decoder 블록 배치 도식
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 계열 전환
+차이는 파라미터를 공유하느냐다. encoder-decoder는 소스용·타깃용 가중치가 따로 있고,
+prefix LM은 하나의 스택이 둘 다 처리한다.
+그래서 "encoder-decoder는 prefix LM에 파라미터를 두 배 쓴 것"이라는 관점이 가능하다.
 :::
 
 ---
 
-## G5.5.2 — 마스크 패턴으로 본 계열
+## 세 계열의 성격
 
-어텐션 마스크 행렬만으로 세 계열이 구분되는 것을 시각화
+### encoder-only (BERT 계열)
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 계열 전환
+모든 토큰이 좌우를 다 본다. 그래서 **이해 과제에 강하다** —
+문장 분류, 개체명 인식, 문장 유사도, 검색용 임베딩.
+
+문제는 생성이다. 양방향이면 "다음 토큰 예측"으로 학습할 수 없다(정답이 보인다).
+그래서 [마스크드 언어모델(MLM)](../07_language/04_pretraining_paradigms.qmd)로 학습하는데,
+이것은 생성 과제와 학습 목표가 어긋난다.
+
+### decoder-only (GPT 계열)
+
+인과 마스크 하나로 모든 위치에서 동시에 학습된다.
+**생성이 자연스럽고, 학습 신호가 조밀하다** — 이 두 번째 이유가 결정적이다.
+
+::: {.callout-note}
+## decoder-only가 이긴 이유
+
+이해 과제에서는 양방향이 유리한데도 decoder-only가 지배하게 됐다. 왜인가?
+
+1. **학습 신호 밀도** — MLM은 토큰의 15%만 예측 대상이다.
+   자기회귀는 **모든 토큰**이 예측 대상이라 같은 데이터에서 훨씬 많이 배운다.
+2. **사전학습-실사용 정합** — 생성으로 학습하고 생성으로 쓴다. MLM은 `[MASK]` 토큰이
+   실사용에는 없어서 불일치가 생긴다.
+3. **과제 통합** — 모든 문제를 "텍스트를 이어 쓰기"로 표현할 수 있다.
+   분류도 "정답은 ___" 형태로 하면 된다. 별도 헤드가 필요 없다.
+4. **문맥 내 학습** — 이 능력이 자기회귀 모델에서 창발했다
+   ([7.8 프롬프팅](../07_language/08_prompting_icl.qmd)).
+5. **KV 캐시** — 생성 시 이전 계산을 재사용할 수 있는 구조다(아래 참고).
+
+즉 "이해 성능"이라는 한 축에서 밀리더라도, 나머지 전부에서 이겼다.
+:::
+
+### encoder-decoder (T5 / BART 계열)
+
+입력과 출력이 명확히 구분되는 과제에 잘 맞는다 — 번역, 요약, 음성 인식.
+
+여전히 살아 있는 곳이 있다. [Whisper](../08_audio/06_asr_modern.qmd)는 encoder-decoder이고,
+[확산 모델의 텍스트 조건 주입](../06_generative/07_latent_diffusion.qmd)도 크로스 어텐션이다.
+**"고정된 입력을 반복 참조하며 출력을 만든다"** 는 구조에서는 여전히 자연스럽다.
+
+---
+
+## G5.5.2 — 추론 비용의 차이
+
+계열마다 생성 시 연산 특성이 다르다. 서빙 비용에 직접 영향을 준다.
+
+```{python}
+#| label: fig-inference-cost
+#| fig-cap: "출력 길이에 따른 누적 연산량 (입력 512 토큰 고정)"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+d, L = 4096, 32
+n_in = 512
+out_lens = np.arange(1, 1025)
+
+def flops_per_token(ctx):
+    """디코딩 한 토큰의 대략적 연산량 (파라미터 2배 + 어텐션)"""
+    return 2 * 12 * d * d * L + 2 * 2 * ctx * d * L
+
+# decoder-only: 문맥이 입력+생성분 전체
+dec_only = np.cumsum([flops_per_token(n_in + t) for t in out_lens])
+
+# encoder-decoder: 셀프어텐션은 생성분만, 크로스어텐션은 고정 입력 참조
+#   (인코더는 한 번만 실행 → 상수 비용)
+enc_cost = 2 * 12 * d * d * L * n_in
+enc_dec = enc_cost + np.cumsum(
+    [2 * 12 * d * d * L + 2 * 2 * t * d * L + 2 * 2 * n_in * d * L for t in out_lens])
+
+# KV 캐시 없이 매번 전체 재계산하면
+no_cache = np.cumsum([flops_per_token(n_in + t) * (n_in + t) / 8 for t in out_lens])
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("계열별 누적 연산량", "KV 캐시의 효과 (decoder-only)"))
+
+fig.add_trace(go.Scatter(x=out_lens, y=dec_only / 1e12, mode="lines",
+                         name="decoder-only", line=dict(color=viz.ACCENT, width=2.5)),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=out_lens, y=enc_dec / 1e12, mode="lines",
+                         name="encoder-decoder", line=dict(color=viz.WARM, width=2.5)),
+              row=1, col=1)
+
+fig.add_trace(go.Scatter(x=out_lens, y=dec_only / 1e12, mode="lines",
+                         name="KV 캐시 사용", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=out_lens, y=no_cache / 1e12, mode="lines",
+                         name="캐시 없음", showlegend=False,
+                         line=dict(color=viz.PINK, width=2.5, dash="dash")), row=1, col=2)
+
+fig.update_xaxes(title_text="생성한 토큰 수")
+fig.update_yaxes(title_text="누적 TFLOPs", row=1, col=1)
+fig.update_yaxes(title_text="누적 TFLOPs", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=400,
+                 title=f"d={d}, {L}층, 입력 {n_in} 토큰 기준 (개략 추정)")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽에서 encoder-decoder는 시작점이 높습니다(인코더를 한 번 돌려야 하니까). 하지만 기울기는 더 완만합니다 — 셀프 어텐션이 짧은 생성분만 보기 때문입니다. 긴 입력·짧은 출력이면 유리한 구조입니다.
+:::
+
+::: {.key-concept}
+**KV 캐시는 decoder-only의 구조적 이점이다.**
+
+인과 마스크 덕분에 **과거 토큰의 $K$·$V$ 는 절대 변하지 않는다.**
+새 토큰을 생성할 때 이전 것을 다시 계산할 필요가 없다 — 캐시해두고 이어붙이면 된다.
+
+오른쪽 그림에서 캐시 유무의 차이가 수십 배입니다.
+이것이 [7.14 추론 최적화](../07_language/14_inference_optimization.qmd) 전체의 출발점이고,
+[5.2에서 본 GQA](02_multi_head.qmd)가 필요한 이유이기도 하다.
 :::
 
 ---
 
-## G5.5.3 — 크로스 어텐션 흐름
+## 어떤 계열을 쓸 것인가
 
-디코더 토큰이 인코더 출력의 어느 부분을 참조하는지
+```{python}
+#| label: family-guide
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 디코더 스텝 재생
+rows = [
+    ("문장 분류·감정 분석",   "encoder-only",     "BERT, DeBERTa",   "작고 빠름"),
+    ("검색용 임베딩",         "encoder-only",     "E5, BGE",         "양방향이 유리"),
+    ("개체명 인식·태깅",      "encoder-only",     "BERT 계열",       "토큰별 출력"),
+    ("번역·요약",             "enc-dec 또는 dec", "T5 / LLM",        "요즘은 LLM도 충분"),
+    ("음성 인식",             "encoder-decoder",  "Whisper",         "고정 입력 반복 참조"),
+    ("대화·코드·범용 생성",    "decoder-only",     "GPT, LLaMA",      "사실상 기본값"),
+    ("이미지 생성 조건 주입",  "크로스 어텐션",     "Stable Diffusion", "다른 양식을 참조"),
+]
+print(f"{'과제':<24} {'계열':<20} {'대표 모델':<20} {'비고'}")
+print("-" * 82)
+for r in rows:
+    print(f"{r[0]:<24} {r[1]:<20} {r[2]:<20} {r[3]}")
+```
+
+::: {.callout-note}
+## 현재의 수렴 경향
+
+2020년대 중반 들어 선택지가 좁아졌다.
+
+- **범용 생성은 decoder-only로 사실상 통일**되었다.
+- **임베딩·분류는 여전히 encoder-only가 효율적**이다. 작은 모델로 충분하고 빠르다.
+  다만 LLM에서 임베딩을 뽑는 방식도 늘고 있다.
+- **encoder-decoder는 특수 목적으로 축소**되었다 — 입력 양식이 다르거나(음성·이미지),
+  입력이 고정된 채 여러 번 참조해야 할 때.
+
+멀티모달에서는 크로스 어텐션이 다시 중요해진다.
+[VLM](../09_vision_video/09_vlm.qmd)이 이미지 특성을 언어모델에 주입하는 방식 중 하나가
+정확히 크로스 어텐션이다(Flamingo 계열).
 :::
 
 ---
 
-## G5.5.4 — 추론 비용 비교
+## 요약
 
-계열별 생성 시 연산·메모리 증가 양상
+| 계열 | 마스크 | 학습 목표 | 강점 | 대표 |
+|------|--------|-----------|------|------|
+| encoder-only | 없음 (양방향) | MLM | 이해, 임베딩 | BERT |
+| decoder-only | 인과 | 다음 토큰 예측 | 생성, ICL, KV 캐시 | GPT, LLaMA |
+| encoder-decoder | 혼합 (2스택) | span corruption 등 | 조건부 생성 | T5, Whisper |
+| prefix LM | 혼합 (1스택) | 통합 목표 | 둘의 절충 | UL2 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 출력 길이 슬라이더
-:::
+| 핵심 사실 | 내용 |
+|-----------|------|
+| 계열의 차이 | 블록이 아니라 **마스크와 배치** |
+| 크로스 어텐션 | $Q$=디코더, $K,V$=인코더 출력 |
+| decoder-only 승리 요인 | 학습 신호 밀도, 목표 정합, 과제 통합, ICL, KV 캐시 |
+| KV 캐시 | 인과 마스크가 만든 구조적 이점 |
+
+여기까지 Transformer의 모든 부품을 봤다.
+읽어서 아는 것과 만들어서 아는 것은 다르니, 다음 장에서 **직접 만든다.**
 
 ---
 
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 인코더-디코더 |  |
-| encoder-only (BERT) |  |
-| decoder-only (GPT) |  |
-| prefix LM |  |
-| 크로스 어텐션 |  |
-
----
-
-**다음**: [5.6 GPT를 처음부터 만들기](06_build_gpt.qmd) — 토크나이저부터 생성까지 — 200줄로 동작하는 언어모델
+**다음**: [5.6 GPT를 처음부터 만들기](06_build_gpt.qmd) — 200줄로 동작하는 언어모델
 
 **이전**: [5.4 트랜스포머 블록](04_transformer_block.qmd)
