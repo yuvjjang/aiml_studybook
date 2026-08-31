@@ -4,88 +4,578 @@ subtitle: "게으른 학습과 단순한 가정 — 기준선이 되는 모델�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+새 문제를 받았을 때 가장 먼저 해야 할 일은 **기준선을 세우는 것**이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+정교한 모델을 먼저 만들면, 나중에 나온 성능이 좋은 건지 나쁜 건지 판단할 수가 없다.
+이 장의 모델들은 5분이면 세울 수 있고, 놀랄 만큼 자주 충분하다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그리고 이 중 kNN은 [어텐션](../05_transformer/00_attention_mechanism.qmd)과
+[벡터 검색](../07_language/10_rag.qmd)으로 직접 이어진다 —
+"가까운 것을 가져온다"는 발상은 사라지지 않았다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## kNN: 학습하지 않는 학습기
+
+알고리즘 전체가 두 줄이다.
+
+1. 새 점과 모든 훈련 점의 거리를 잰다
+2. 가장 가까운 $k$ 개의 레이블을 투표(분류) 또는 평균(회귀)
+
+**학습 단계가 없다.** 데이터를 그냥 저장한다 — 그래서 *게으른 학습(lazy learning)* 이다.
+
+```{python}
+#| label: knn-impl
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+def knn_predict(X_train, y_train, X_query, k=5, task="classify", weights="uniform"):
+    """kNN 전체 구현. 학습 단계가 없다."""
+    d2 = ((X_query[:, None, :] - X_train[None, :, :]) ** 2).sum(-1)
+    idx = np.argsort(d2, axis=1)[:, :k]
+    nn_y = y_train[idx]
+
+    if weights == "distance":
+        w = 1.0 / (np.sqrt(np.take_along_axis(d2, idx, 1)) + 1e-9)
+    else:
+        w = np.ones_like(idx, dtype=float)
+
+    if task == "classify":
+        K = int(y_train.max()) + 1
+        out = np.zeros((len(X_query), K))
+        for c in range(K):
+            out[:, c] = (w * (nn_y == c)).sum(1)
+        return out / out.sum(1, keepdims=True)
+    return (w * nn_y).sum(1) / w.sum(1)
+
+print("학습 시간: 0초 (데이터를 저장만 한다)")
+print("예측 시간: O(n × p) — 훈련 데이터가 클수록 느려진다")
+```
+
+---
+
+## G2.8.1 — k가 결정경계를 바꾼다
+
+```{python}
+#| label: fig-knn-k
+#| fig-cap: "k가 작으면 들쭉날쭉, 크면 매끄러워집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, viz
+
+X, y = datasets.two_moons(n=200, noise=0.3, seed=1)
+rng = np.random.default_rng(0)
+perm = rng.permutation(len(X)); tr, te = perm[:140], perm[140:]
+
+gx = np.linspace(X[:,0].min()-0.5, X[:,0].max()+0.5, 70)
+gy = np.linspace(X[:,1].min()-0.5, X[:,1].max()+0.5, 70)
+GX, GY = np.meshgrid(gx, gy)
+G = np.c_[GX.ravel(), GY.ravel()]
+
+ks = [1, 3, 5, 10, 20, 40, 80, 140]
+surf, tr_acc, te_acc = {}, [], []
+for k in ks:
+    surf[k] = np.round(knn_predict(X[tr], y[tr], G, k=k)[:, 1].reshape(GX.shape), 3)
+    tr_acc.append(float((knn_predict(X[tr], y[tr], X[tr], k=k).argmax(1) == y[tr]).mean()))
+    te_acc.append(float((knn_predict(X[tr], y[tr], X[te], k=k).argmax(1) == y[te]).mean()))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("결정 영역", "k에 따른 정확도"))
+k0 = 5
+fig.add_trace(go.Heatmap(x=gx, y=gy, z=surf[k0], colorscale="RdBu", zmid=0.5,
+                         showscale=False, opacity=0.8), row=1, col=1)
+for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
+    m = y[tr] == c
+    fig.add_trace(go.Scatter(x=X[tr][m,0], y=X[tr][m,1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=6, color=col,
+                                         line=dict(width=1, color="black"))),
+                  row=1, col=1)
+fig.add_trace(go.Scatter(x=ks, y=tr_acc, mode="lines+markers", name="훈련",
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=ks, y=te_acc, mode="lines+markers", name="시험",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+
+steps = [(str(k), {"z": [surf[k], None, None, None, None]}) for k in ks]
+fig.update_layout(sliders=[viz.slider(steps, prefix="k = ",
+                                      active=ks.index(k0), pad_t=55)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="k", type="log", row=1, col=2)
+fig.update_yaxes(title_text="정확도", row=1, col=2)
+viz.fig_defaults(fig, height=440, title="kNN 의 유일한 하이퍼파라미터")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+$k=1$ 은 **훈련 정확도가 항상 100%** 입니다 — 자기 자신이 가장 가까운 이웃이니까요. 하지만 시험 정확도는 낮습니다. $k$ 가 커지면 경계가 매끄러워지고, 너무 커지면 다수 클래스로 뭉개집니다. $k$ 는 [2.1의 편향-분산](01_bias_variance.qmd) 손잡이입니다: 작으면 고분산, 크면 고편향.
 :::
 
-새 문제에서 가장 먼저 해야 할 일은 단순한 기준선을 세우는 것이다. 이 모델들은 5분 만에 세울 수 있고, 놀랄 만큼 자주 충분하다.
-
 ---
 
-## 이 장에서 다루는 것
+## 차원의 저주
 
-- kNN: 게으른 학습, 거리 척도, k 선택, 가중 투표
-- 차원의 저주 — 고차원에서 '가장 가까운 이웃'이 무의미해지는 이유
-- 근사 최근접 이웃(ANN): KD-tree, ball tree, HNSW, IVF-PQ (벡터 검색 예고)
-- 나이브 베이즈: 조건부 독립 가정과 그 위력
-- 가우시안/다항/베르누이 NB, 라플라스 스무딩
-- 텍스트 분류에서 NB가 강한 이유
-- 선형 판별분석(LDA)과 QDA
-- 가우시안 프로세스 회귀 개요 — 불확실성을 함께 주는 모델
-- 기준선 설정 전략: 더미 분류기, 규칙 기반, 단일 특성 모델
+kNN은 "가까운 점은 비슷하다"는 가정에 전적으로 의존한다.
+그런데 **고차원에서는 '가깝다'가 의미를 잃는다.**
 
----
+```{python}
+#| label: fig-curse
+#| fig-cap: "차원이 늘수록 최근접과 최원접의 거리 차이가 사라집니다."
 
-## G2.8.1 — k에 따른 결정경계
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
 
-k=1의 들쭉날쭉한 경계가 k가 커지며 매끄러워지는 과정
+rng = np.random.default_rng(0)
+dims = [1, 2, 3, 5, 10, 20, 50, 100, 500, 1000]
+n_pts, n_query = 500, 60
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: k 슬라이더
+ratio, rel_contrast = [], []
+for d in dims:
+    Xd = rng.uniform(0, 1, (n_pts, d))
+    Q = rng.uniform(0, 1, (n_query, d))
+    dist = np.sqrt(((Q[:, None, :] - Xd[None, :, :]) ** 2).sum(-1))
+    dmin, dmax = dist.min(1), dist.max(1)
+    ratio.append(float(np.mean(dmin / dmax)))
+    rel_contrast.append(float(np.mean((dmax - dmin) / dmin)))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("최근접 / 최원접 거리 비", "상대 대비 (dmax−dmin)/dmin"))
+fig.add_trace(go.Scatter(x=dims, y=ratio, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="1 = 모든 점이 같은 거리", row=1, col=1)
+fig.add_trace(go.Scatter(x=dims, y=rel_contrast, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+fig.update_xaxes(title_text="차원 d", type="log")
+fig.update_yaxes(title_text="dmin/dmax", range=[0, 1.05], row=1, col=1)
+fig.update_yaxes(title_text="상대 대비", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=390, title=f"단위 초입방체 안 무작위 점 {n_pts}개")
+fig.show()
+```
+
+```{python}
+#| label: curse-table
+#| code-fold: false
+
+print(f"{'차원':>7} {'dmin/dmax':>12} {'상대 대비':>12}   해석")
+print("-" * 58)
+for d, r, c in zip(dims, ratio, rel_contrast):
+    note = "이웃이 의미 있음" if r < 0.5 else ("경계" if r < 0.8 else "모두 같은 거리")
+    print(f"{d:>7} {r:>12.3f} {c:>12.3f}   {note}")
+```
+
+::: {.key-concept}
+**고차원에서는 모든 점이 서로 비슷하게 멀다.**
+
+$d=1000$ 이면 최근접 이웃과 최원접 점의 거리 차이가 몇 %에 불과하다.
+"가장 가까운 이웃"이라는 개념 자체가 무의미해진다.
+
+이것이 kNN이 고차원에서 실패하는 이유이고,
+동시에 **차원 축소가 필요한 이유**다([2.10](10_dimensionality_reduction.qmd)).
+
+다만 실제 고차원 데이터(이미지, 임베딩)는 대개 **저차원 매니폴드 위에 놓여 있어**
+겉보기 차원만큼 나쁘지는 않다. 그래서 [벡터 검색](../07_language/10_rag.qmd)이 작동한다.
 :::
 
 ---
 
-## G2.8.2 — 차원의 저주
+## 근사 최근접 이웃(ANN)
 
-차원이 늘수록 최근접·최원접 거리 비가 1로 수렴하는 실험
+정확한 kNN은 모든 점과 거리를 재야 해서 $O(n)$ 이다.
+수억 개 벡터에서는 불가능하다. 그래서 **근사**한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 차원 수 슬라이더
+```{python}
+#| label: ann-methods
+#| code-fold: false
+
+rows = [
+    ("KD-tree / Ball tree", "공간 분할", "d < 20 에서만 유효 (차원의 저주)"),
+    ("LSH",                 "해시 충돌 활용", "이론 보장 있음, 실무 성능은 중간"),
+    ("IVF (역색인)",         "군집으로 나눠 일부만 탐색", "FAISS 기본, 메모리 효율"),
+    ("PQ (곱 양자화)",       "벡터를 코드로 압축", "메모리 대폭 절감, 정확도 손실"),
+    ("HNSW",                "계층적 근접 그래프", "**현재 표준**, 빠르고 정확"),
+]
+print(f"{'방법':<22} {'아이디어':<24} {'특징'}")
+print("-" * 76)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<24} {r[2]}")
+print()
+print("이 기법들이 곧 벡터 데이터베이스의 내부다 — 7.10 RAG 에서 다시 다룬다.")
+```
+
+---
+
+## 나이브 베이즈: 틀린 가정의 위력
+
+[0.2의 베이즈 정리](../00_foundations/02_probability.qmd)로 분류를 뒤집는다.
+
+$$p(y|\mathbf{x}) \propto p(y)\,p(\mathbf{x}|y)$$
+
+문제는 $p(\mathbf{x}|y)$ 다. 특성이 $p$ 개면 결합분포를 추정하기가 불가능하다.
+
+**나이브 가정**: 클래스가 주어지면 특성들이 서로 독립이다.
+
+$$p(\mathbf{x}|y) = \prod_{j=1}^{p} p(x_j|y)$$
+
+이 가정은 거의 항상 **틀렸다.** 그런데도 잘 작동한다.
+
+::: {.key-concept}
+**왜 틀린 가정이 통하는가**
+
+분류에서 필요한 것은 정확한 확률이 아니라 **어느 클래스가 가장 큰가**다.
+
+나이브 가정은 확률 추정을 심하게 왜곡한다(대개 0이나 1에 가깝게 몰림).
+하지만 **순서는 자주 보존된다.** argmax만 맞으면 분류는 정확하다.
+
+그래서 나이브 베이즈는 "분류는 잘하는데 확률은 못 믿는" 모델이다.
+확률이 필요하면 [캘리브레이션](11_model_evaluation.qmd)이 필수다.
+:::
+
+```{python}
+#| label: fig-nb-calibration
+#| fig-cap: "나이브 베이즈는 분류는 하지만 확률이 극단으로 몰립니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(1)
+n, p_dim = 800, 12
+# 특성들이 서로 강하게 상관됨 → 나이브 가정 위반
+z = rng.normal(size=(n, 3))
+A = rng.normal(size=(3, p_dim))
+Xn = z @ A + rng.normal(0, 0.7, (n, p_dim))
+yn = (z[:, 0] + 0.5*z[:, 1] + rng.normal(0, 0.6, n) > 0).astype(int)
+tr_i, te_i = np.arange(600), np.arange(600, n)
+
+def gaussian_nb_fit(X, y):
+    K = int(y.max()) + 1
+    prior = np.array([(y == c).mean() for c in range(K)])
+    mu = np.array([X[y == c].mean(0) for c in range(K)])
+    var = np.array([X[y == c].var(0) + 1e-9 for c in range(K)])
+    return prior, mu, var
+
+def gaussian_nb_proba(X, prior, mu, var):
+    # 로그 공간에서 계산 (0.5 수치 컴퓨팅)
+    ll = -0.5 * (((X[:, None, :] - mu[None]) ** 2) / var[None]
+                 + np.log(2*np.pi*var[None])).sum(-1)
+    ll = ll + np.log(prior)[None]
+    ll = ll - ll.max(1, keepdims=True)
+    e = np.exp(ll)
+    return e / e.sum(1, keepdims=True)
+
+prior, mu, var = gaussian_nb_fit(Xn[tr_i], yn[tr_i])
+p_nb = gaussian_nb_proba(Xn[te_i], prior, mu, var)[:, 1]
+
+# 비교용 로지스틱 회귀
+Xb = np.c_[np.ones(len(tr_i)), Xn[tr_i]]
+b = np.zeros(Xb.shape[1])
+for _ in range(4000):
+    pr = 1/(1+np.exp(-np.clip(Xb @ b, -30, 30)))
+    b -= 0.05 * Xb.T @ (pr - yn[tr_i]) / len(tr_i)
+p_lr = 1/(1+np.exp(-np.clip(np.c_[np.ones(len(te_i)), Xn[te_i]] @ b, -30, 30)))
+
+def calib(p, y, bins=10):
+    edges = np.linspace(0, 1, bins+1)
+    xs, ys = [], []
+    for i in range(bins):
+        m = (p >= edges[i]) & (p < edges[i+1] + (1e-9 if i == bins-1 else 0))
+        if m.sum() > 3:
+            xs.append(p[m].mean()); ys.append(y[m].mean())
+    return np.array(xs), np.array(ys)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("예측 확률의 분포", "신뢰도 다이어그램"))
+for nm, pp, col in [("나이브 베이즈", p_nb, viz.WARM),
+                    ("로지스틱 회귀", p_lr, viz.ACCENT)]:
+    fig.add_trace(go.Histogram(x=np.round(pp, 3), nbinsx=30, name=nm,
+                               marker_color=viz.hex_rgba(col, 0.7)), row=1, col=1)
+    cx, cy = calib(pp, yn[te_i])
+    fig.add_trace(go.Scatter(x=cx, y=cy, mode="lines+markers", name=nm,
+                             showlegend=False,
+                             line=dict(color=col, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines", showlegend=False,
+                         line=dict(color=viz.YELLOW, dash="dash")), row=1, col=2)
+
+fig.update_layout(barmode="overlay")
+fig.update_xaxes(title_text="P(y=1) 예측", row=1, col=1)
+fig.update_yaxes(title_text="빈도", row=1, col=2 if False else 1)
+fig.update_xaxes(title_text="평균 예측 확률", row=1, col=2)
+fig.update_yaxes(title_text="실제 양성 비율", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="상관된 특성 12개 (나이브 가정 위반)")
+fig.update_layout(legend=dict(x=0.3, y=0.98))
+fig.show()
+```
+
+```{python}
+#| label: nb-accuracy
+#| code-fold: false
+
+import numpy as np
+
+acc_nb = ((p_nb > 0.5).astype(int) == yn[te_i]).mean()
+acc_lr = ((p_lr > 0.5).astype(int) == yn[te_i]).mean()
+extreme_nb = np.mean((p_nb < 0.01) | (p_nb > 0.99))
+extreme_lr = np.mean((p_lr < 0.01) | (p_lr > 0.99))
+
+print(f"{'':<16} {'정확도':>10} {'확률이 0.01 미만 또는 0.99 초과인 비율':>16}")
+print("-" * 62)
+print(f"{'나이브 베이즈':<16} {acc_nb:>10.3f} {extreme_nb:>32.1%}")
+print(f"{'로지스틱 회귀':<16} {acc_lr:>10.3f} {extreme_lr:>32.1%}")
+print()
+print("→ 정확도는 비슷한데 나이브 베이즈의 확률은 극단으로 몰려 있다.")
+print("  독립 가정 때문에 증거를 중복 계산하기 때문이다.")
+```
+
+::: {.interaction-hint}
+왼쪽에서 주황(나이브 베이즈)이 **0과 1 양끝에 쌓여 있습니다**. 오른쪽 신뢰도 다이어그램에서도 대각선에서 크게 벗어납니다 — 과신입니다. 상관된 특성 12개가 사실상 같은 증거를 12번 세기 때문입니다.
+:::
+
+### 변형과 스무딩
+
+| 변형 | $p(x_j|y)$ 가정 | 용도 |
+|------|------------------|------|
+| 가우시안 NB | 정규분포 | 연속 특성 |
+| 다항 NB | 다항분포 | **텍스트 (단어 빈도)** |
+| 베르누이 NB | 베르누이 | 이진 특성 (단어 존재 여부) |
+
+텍스트 분류에서 훈련에 없던 단어가 나오면 $p(x_j|y)=0$ 이 되어
+전체 곱이 0이 된다. **라플라스 스무딩**으로 막는다.
+
+$$p(x_j|y) = \frac{n_{jy} + \alpha}{n_y + \alpha V}$$
+
+$\alpha=1$ 이 관례이고, 이것은 [0.2의 베타 사전분포](../00_foundations/02_probability.qmd)를
+쓴 MAP 추정과 정확히 같다.
+
+::: {.callout-note}
+## 나이브 베이즈가 텍스트에서 강한 이유
+
+1. **고차원 희소 데이터에 강건** — 특성이 수만 개여도 각각 독립 추정이라 문제없음
+2. **학습이 한 번의 카운팅** — 매우 빠름
+3. **적은 데이터로도 동작** — 파라미터가 적음
+4. 단어들이 실제로 어느 정도 독립적으로 행동함
+
+지금도 스팸 필터, 빠른 기준선으로 쓰인다.
+[7.0 텍스트 표현](../07_language/00_text_representation.qmd)의 BoW와 짝을 이룬다.
 :::
 
 ---
 
-## G2.8.3 — 나이브 베이즈 결정면
+## 판별 분석: LDA와 QDA
 
-독립 가정이 만드는 축 정렬 확률 지형
+나이브 베이즈처럼 생성적이지만, 특성 간 **상관을 인정**한다.
+클래스별로 다변량 정규분포를 가정한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 클래스 분산 슬라이더
+$$p(\mathbf{x}|y=c) = \mathcal{N}(\boldsymbol\mu_c, \Sigma_c)$$
+
+| | 공분산 가정 | 결정경계 |
+|---|---|---|
+| **LDA** | 모든 클래스가 $\Sigma$ 공유 | **선형** |
+| **QDA** | 클래스마다 $\Sigma_c$ | **이차곡선** |
+
+```{python}
+#| label: fig-lda-qda
+#| fig-cap: "공분산 가정에 따라 경계가 선형 또는 곡선이 됩니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(2)
+n_c = 150
+# 클래스마다 공분산이 다른 데이터
+S0 = np.array([[1.2, 0.8], [0.8, 1.0]])
+S1 = np.array([[1.0, -0.75], [-0.75, 1.4]])
+X0 = rng.multivariate_normal([-1.0, 0.0], S0, n_c)
+X1 = rng.multivariate_normal([1.4, 0.4], S1, n_c)
+Xd = np.vstack([X0, X1]); yd = np.r_[np.zeros(n_c, int), np.ones(n_c, int)]
+
+def fit_da(X, y, shared):
+    K = 2
+    prior = np.array([(y == c).mean() for c in range(K)])
+    mu = np.array([X[y == c].mean(0) for c in range(K)])
+    if shared:
+        S = sum((X[y == c] - mu[c]).T @ (X[y == c] - mu[c]) for c in range(K)) / (len(X)-K)
+        Ss = [S, S]
+    else:
+        Ss = [np.cov(X[y == c].T) for c in range(K)]
+    return prior, mu, Ss
+
+def da_score(G, prior, mu, Ss):
+    out = []
+    for c in range(2):
+        Si = np.linalg.inv(Ss[c]); d = G - mu[c]
+        out.append(-0.5*np.einsum("ni,ij,nj->n", d, Si, d)
+                   - 0.5*np.log(np.linalg.det(Ss[c])) + np.log(prior[c]))
+    return out[1] - out[0]
+
+gxd = np.linspace(Xd[:,0].min()-1, Xd[:,0].max()+1, 90)
+gyd = np.linspace(Xd[:,1].min()-1, Xd[:,1].max()+1, 90)
+GXd, GYd = np.meshgrid(gxd, gyd)
+Gd = np.c_[GXd.ravel(), GYd.ravel()]
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("LDA (공분산 공유 → 선형)",
+                                                    "QDA (클래스별 공분산 → 곡선)"))
+for col, shared in [(1, True), (2, False)]:
+    pr, mu_, Ss = fit_da(Xd, yd, shared)
+    Z = np.round(da_score(Gd, pr, mu_, Ss).reshape(GXd.shape), 3)
+    fig.add_trace(go.Heatmap(x=gxd, y=gyd, z=Z, colorscale="RdBu", zmid=0,
+                             showscale=False, opacity=0.75), row=1, col=col)
+    fig.add_trace(go.Contour(x=gxd, y=gyd, z=Z, showscale=False,
+                             contours=dict(start=0, end=0, size=1, coloring="lines"),
+                             line=dict(color=viz.GREEN, width=3)), row=1, col=col)
+    for c, cc in [(0, viz.ACCENT), (1, viz.WARM)]:
+        m = yd == c
+        fig.add_trace(go.Scatter(x=Xd[m,0], y=Xd[m,1], mode="markers",
+                                 showlegend=False,
+                                 marker=dict(size=4, color=cc,
+                                             line=dict(width=0.5, color="black"))),
+                      row=1, col=col)
+    acc = ((da_score(Xd, pr, mu_, Ss) > 0).astype(int) == yd).mean()
+    fig.layout.annotations[col-1].text += f"<br><sub>정확도 {acc:.3f}</sub>"
+
+fig.update_xaxes(title_text="x₁")
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+viz.fig_defaults(fig, height=420, title="공분산이 실제로 다른 데이터")
+fig.update_layout(margin=dict(l=55, r=30, t=90, b=50))
+fig.show()
+```
+
+::: {.interaction-hint}
+이 데이터는 클래스별 공분산이 실제로 다릅니다. LDA는 그 사실을 무시해 직선으로 나누고, QDA는 **곡선 경계**를 만들어 더 잘 맞춥니다. 대신 QDA는 클래스마다 공분산 행렬을 추정해야 해 **파라미터가 훨씬 많고 데이터를 더 요구**합니다.
 :::
 
 ---
 
-## G2.8.4 — 가우시안 프로세스 사후
+## 가우시안 프로세스: 불확실성을 함께 주는 모델
 
-관측이 늘수록 좁아지는 예측 불확실성 밴드
+지금까지의 모델은 점 예측만 준다. GP는 **예측 분포**를 준다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 관측점 추가
+핵심 아이디어: 함수 자체에 사전분포를 놓는다.
+두 입력이 가까우면 출력도 비슷하다는 것을 **커널**로 표현한다
+([2.5의 커널](05_svm_kernels.qmd)이 여기서 공분산 함수로 재등장).
+
+```{python}
+#| label: fig-gp
+#| fig-cap: "관측이 늘수록 불확실성 밴드가 좁아집니다. 데이터가 없는 곳은 여전히 넓습니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+def rbf_kernel(A, B, ls=1.0, var=1.0):
+    d2 = (A[:, None] - B[None, :]) ** 2
+    return var * np.exp(-0.5 * d2 / ls**2)
+
+def gp_posterior(x_tr, y_tr, x_te, ls=1.0, noise=0.1):
+    K = rbf_kernel(x_tr, x_tr, ls) + noise**2 * np.eye(len(x_tr))
+    Ks = rbf_kernel(x_tr, x_te, ls)
+    Kss = rbf_kernel(x_te, x_te, ls)
+    L = np.linalg.cholesky(K)
+    alpha = np.linalg.solve(L.T, np.linalg.solve(L, y_tr))
+    mu = Ks.T @ alpha
+    v = np.linalg.solve(L, Ks)
+    cov = Kss - v.T @ v
+    return mu, np.sqrt(np.maximum(np.diag(cov), 0))
+
+rng = np.random.default_rng(0)
+x_all = np.sort(rng.uniform(-4, 4, 14))
+y_all = np.sin(x_all) + 0.15 * rng.normal(size=len(x_all))
+xt = np.linspace(-6, 6, 300)
+
+counts = [0, 1, 2, 3, 5, 8, 14]
+gp = {}
+for k in counts:
+    if k == 0:
+        gp[k] = (np.zeros_like(xt), np.ones_like(xt))
+    else:
+        gp[k] = gp_posterior(x_all[:k], y_all[:k], xt, ls=1.0, noise=0.15)
+
+fig = go.Figure()
+k0 = 5
+mu0, sd0 = gp[k0]
+fig.add_trace(go.Scatter(x=np.r_[xt, xt[::-1]],
+                         y=np.r_[mu0+2*sd0, (mu0-2*sd0)[::-1]],
+                         fill="toself", fillcolor=viz.hex_rgba(viz.ACCENT, 0.18),
+                         line=dict(width=0), name="95% 신뢰 밴드", hoverinfo="skip"))
+fig.add_trace(go.Scatter(x=xt, y=mu0, mode="lines", name="사후 평균",
+                         line=dict(color=viz.ACCENT, width=3)))
+fig.add_trace(go.Scatter(x=xt, y=np.sin(xt), mode="lines", name="참 함수",
+                         line=dict(color="rgba(255,255,255,0.4)", width=2, dash="dash")))
+fig.add_trace(go.Scatter(x=x_all[:k0], y=y_all[:k0], mode="markers", name="관측",
+                         marker=dict(size=10, color=viz.YELLOW,
+                                     line=dict(width=1.5, color="black"))))
+
+steps = []
+for k in counts:
+    mu, sd = gp[k]
+    steps.append((str(k), {
+        "x": [np.r_[xt, xt[::-1]], xt, xt, x_all[:k]],
+        "y": [np.r_[mu+2*sd, (mu-2*sd)[::-1]], mu, np.sin(xt), y_all[:k]]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="관측 개수 = ",
+                                      active=counts.index(k0), pad_t=55)],
+                  xaxis_title="x", yaxis_title="y",
+                  yaxis=dict(range=[-3, 3]), legend=dict(x=0.02, y=0.02))
+viz.fig_defaults(fig, height=430, title="가우시안 프로세스 회귀")
+fig.show()
+```
+
+::: {.interaction-hint}
+관측점 근처에서는 밴드가 **좁아지고**, 데이터가 없는 양 끝($|x|>4$)에서는 여전히 넓습니다. 모델이 "여기는 모른다"고 말하는 것입니다 — 대부분의 모델이 못 하는 일입니다. 이 성질이 [베이지안 최적화](11_model_evaluation.qmd)와 [12.2 불확실성](../12_trust/02_uncertainty.qmd)의 기반입니다.
 :::
 
 ---
 
-## 핵심 용어
+## 기준선을 세우는 법
 
-| 용어 | 비고 |
-|------|------|
-| kNN |  |
-| 차원의 저주 (curse of dimensionality) |  |
-| 나이브 베이즈 |  |
-| HNSW |  |
-| 가우시안 프로세스 |  |
+::: {.key-concept}
+새 문제에서 가장 먼저 만들어야 할 것들.
+
+| 순서 | 기준선 | 알려주는 것 |
+|------|--------|-------------|
+| 1 | **더미** (최빈 클래스 / 평균) | 절대 하한. 불균형 데이터의 함정 노출 |
+| 2 | **단일 특성** 규칙 | 문제가 사실 쉬운가? |
+| 3 | 로지스틱 / 선형 회귀 | 선형으로 얼마나 되는가 |
+| 4 | 랜덤 포레스트 (기본값) | 비선형·상호작용이 도움이 되는가 |
+| 5 | 사람 성능 (가능하면) | [2.1의 잡음 하한](01_bias_variance.qmd) 가늠 |
+
+정확도 95%가 좋은 값인지는 더미 기준선이 94%인지 50%인지에 따라 완전히 다르다.
+:::
 
 ---
 
-**다음**: [2.9 군집화](09_clustering.qmd) — k-means·GMM·DBSCAN·계층 — 정답 없이 구조 찾기
+## 요약
+
+| 모델 | 가정 | 강점 | 약점 |
+|------|------|------|------|
+| **kNN** | 가까운 점은 비슷 | 학습 불필요, 유연 | 고차원 취약, 예측 느림 |
+| 차원의 저주 | — | — | $d$ 크면 거리가 무의미 |
+| ANN (HNSW 등) | — | 대규모 검색 가능 | 근사 오차 |
+| **나이브 베이즈** | 조건부 독립 | 빠름, 텍스트에 강함 | **확률 신뢰 불가** |
+| 라플라스 스무딩 | 베타 사전 | 미관측 항 처리 | $\alpha$ 선택 |
+| LDA | 공분산 공유 | 선형 경계, 안정 | 가정 위반 시 편향 |
+| QDA | 클래스별 공분산 | 곡선 경계 | 파라미터 많음 |
+| **가우시안 프로세스** | 함수에 GP 사전 | **불확실성 제공** | $O(n^3)$, 대규모 불가 |
+
+지도학습을 마쳤다.
+다음 두 장은 레이블 없이 구조를 찾는 문제 — 군집화와 차원 축소로 넘어간다.
+
+---
+
+**다음**: [2.9 군집화](09_clustering.qmd) — k-means·GMM·DBSCAN·계층
 
 **이전**: [2.7 앙상블](07_ensembles.qmd)
