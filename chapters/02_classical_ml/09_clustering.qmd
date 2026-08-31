@@ -4,101 +4,714 @@ subtitle: "k-means·GMM·DBSCAN·계층 — 정답 없이 구조 찾기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+지금까지는 정답 $y$ 가 있었다. 이제 없다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+레이블이 없는 데이터가 세상의 대부분이고, 군집화는 그 데이터에서
+**구조를 찾아내는** 첫 도구다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그런데 정답이 없다는 것은 생각보다 심각한 문제다.
+"좋은 군집"이 무엇인지부터 정의해야 하고, **그 정의가 여러 개**다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 문제가 애초에 모호하다
+
+같은 데이터를 두고도 무엇을 군집으로 볼지는 목적에 따라 다르다.
+
+```{python}
+#| label: fig-ambiguity
+#| fig-cap: "같은 데이터, 다른 '올바른' 군집화. 알고리즘이 가정을 정합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import clustering as cl, viz
+
+rng = np.random.default_rng(0)
+# 밀도가 다른 두 덩어리 + 길쭉한 하나
+X = np.vstack([
+    rng.normal([-3.0, 0.0], 0.35, (80, 2)),
+    rng.normal([-1.2, 0.0], 0.35, (80, 2)),
+    np.c_[rng.uniform(1.0, 5.0, 90), rng.normal(1.6, 0.28, 90)],
+])
+
+views = {}
+km2, _, _ = cl.kmeans(X, 2, seed=0)
+km3, _, _ = cl.kmeans(X, 3, seed=0)
+db_tight, _ = cl.dbscan(X, eps=0.45, min_pts=5)
+db_loose, _ = cl.dbscan(X, eps=0.9, min_pts=5)
+views["k-means, k=2"] = km2
+views["k-means, k=3"] = km3
+views["DBSCAN eps=0.45"] = db_tight
+views["DBSCAN eps=0.9"] = db_loose
+
+names = list(views)
+fig = make_subplots(rows=1, cols=4, subplot_titles=names,
+                    horizontal_spacing=0.025, shared_yaxes=True)
+for c, nm in enumerate(names, start=1):
+    lab = views[nm]
+    for k in sorted(set(lab)):
+        m = lab == k
+        col = "rgba(150,150,150,0.5)" if k == -1 else viz.color(k)
+        fig.add_trace(go.Scatter(x=X[m,0], y=X[m,1], mode="markers",
+                                 showlegend=False,
+                                 marker=dict(size=4, color=col)), row=1, col=c)
+    nk = len(set(lab[lab >= 0]))
+    fig.layout.annotations[c-1].text = f"{nm}<br><sub>군집 {nk}개</sub>"
+    fig.update_xaxes(showticklabels=False, row=1, col=c)
+    fig.update_yaxes(showticklabels=False, row=1, col=c)
+
+viz.fig_defaults(fig, height=300, title="어느 것이 '정답'인가?")
+fig.update_layout(margin=dict(l=30, r=25, t=85, b=30))
+fig.update_annotations(font_size=11)
+fig.show()
+```
+
+::: {.key-concept}
+**군집화 알고리즘을 고르는 것은 "군집이란 무엇인가"를 정의하는 것이다.**
+
+| 알고리즘 | 군집의 정의 |
+|----------|-------------|
+| k-means | 중심 주변의 **구형** 덩어리, 크기 비슷 |
+| GMM | **타원형** 확률 성분 |
+| DBSCAN | **밀도가 높은** 연결 영역 |
+| 계층 | 병합 기준에 따른 중첩 구조 |
+
+[2.0의 귀납 편향](00_learning_problem.qmd)이 비지도학습에서도 똑같이 작동한다.
+정답이 없으니 오히려 **가정이 더 중요하다.**
 :::
 
-레이블이 없는 데이터가 대부분이다. 군집화는 비지도 학습의 입구이자, 자기지도 표현학습의 사고방식을 미리 연습하는 장이다.
+---
+
+## k-means: 가장 단순한 정의
+
+목적함수는 명확하다. **군집 내 제곱합(inertia)** 을 최소화한다.
+
+$$J = \sum_{j=1}^{k}\sum_{\mathbf{x}\in C_j}\|\mathbf{x}-\boldsymbol\mu_j\|^2$$
+
+이 문제는 NP-난해다. 그래서 **Lloyd 알고리즘**으로 국소 최적을 찾는다.
+
+1. 각 점을 가장 가까운 중심에 할당
+2. 각 중심을 소속 점들의 평균으로 갱신
+3. 반복
+
+두 단계 모두 $J$ 를 **감소시키기만 하므로** 수렴이 보장된다(전역 최적은 아니다).
 
 ---
 
-## 이 장에서 다루는 것
+## G2.9.1 — 할당과 갱신의 반복
 
-- 군집화 문제의 모호성 — '좋은 군집'의 정의가 여럿인 이유
-- k-means: 목적함수, Lloyd 알고리즘, 수렴성
-- k-means++ 초기화, 국소최소 문제
-- k 선택: 엘보, 실루엣, gap 통계
-- 가우시안 혼합모형(GMM)과 EM 알고리즘 유도
-- k-means = GMM의 극한 (하드 할당)
-- DBSCAN: 밀도 기반, eps·minPts, 잡음점 처리
-- HDBSCAN과 밀도 계층
-- 계층적 군집화: 응집/분할, 연결법(single/complete/average/Ward), 덴드로그램
-- 스펙트럼 군집화와 그래프 라플라시안
-- 평가: 내부 지표(실루엣, DB index), 외부 지표(ARI, NMI)
+```{python}
+#| label: fig-kmeans-iter
+#| fig-cap: "할당 ↔ 중심 갱신이 번갈아 일어나며 수렴합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import clustering as cl, datasets, viz
+
+Xk, ytrue = datasets.blobs(n=300, centers=((-3,-2.5),(3,2.5),(-2.5,3)),
+                           spread=1.0, seed=0)
+labels, C, hist = cl.kmeans(Xk, 3, init="random", seed=7)
+iners = [h[2] for h in hist]
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("할당과 중심", "목적함수 (inertia)"))
+i0 = min(1, len(hist)-1)
+Ci, li, _ = hist[i0]
+for k in range(3):
+    m = li == k
+    fig.add_trace(go.Scatter(x=Xk[m,0], y=Xk[m,1], mode="markers",
+                             name=f"군집 {k}",
+                             marker=dict(size=5, color=viz.color(k))), row=1, col=1)
+fig.add_trace(go.Scatter(x=Ci[:,0], y=Ci[:,1], mode="markers", name="중심",
+                         marker=dict(size=18, color=viz.YELLOW, symbol="x",
+                                     line=dict(width=3))), row=1, col=1)
+fig.add_trace(go.Scatter(x=np.arange(len(iners)), y=iners, mode="lines+markers",
+                         showlegend=False, line=dict(color=viz.GREEN, width=2.5)),
+              row=1, col=2)
+fig.add_trace(go.Scatter(x=[i0], y=[iners[i0]], mode="markers", showlegend=False,
+                         marker=dict(size=12, color=viz.YELLOW)), row=1, col=2)
+
+steps = []
+for i, (Ci_, li_, in_) in enumerate(hist):
+    steps.append((str(i), {
+        "x": [Xk[li_==0,0], Xk[li_==1,0], Xk[li_==2,0], Ci_[:,0],
+              np.arange(len(iners)), [i]],
+        "y": [Xk[li_==0,1], Xk[li_==1,1], Xk[li_==2,1], Ci_[:,1],
+              iners, [in_]]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="반복 = ", active=i0, pad_t=55)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="반복", row=1, col=2)
+fig.update_yaxes(title_text="inertia", row=1, col=2)
+viz.fig_defaults(fig, height=440,
+                 title=f"Lloyd 알고리즘 · inertia {iners[0]:.0f} → {iners[-1]:.0f}")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+::: {.interaction-hint}
+inertia가 **단조 감소**합니다 — 두 단계 모두 목적함수를 늘리지 않기 때문입니다. 대개 5~10회면 수렴합니다.
+:::
+
+### 초기화가 중요하다
+
+무작위 초기화는 나쁜 국소 최적에 빠질 수 있다.
+**k-means++** 는 기존 중심에서 먼 점을 확률적으로 골라 이를 완화한다.
+
+```{python}
+#| label: init-comparison
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import clustering as cl
+
+from src import datasets
+
+for label, n_cl, spread in [("잘 분리된 군집 3개", 3, 1.0),
+                            ("가까운 군집 8개", 8, 1.0)]:
+    ang = np.linspace(0, 2*np.pi, n_cl, endpoint=False)
+    centers = tuple(zip(5*np.cos(ang), 5*np.sin(ang)))
+    Xi, _ = datasets.blobs(n=60*n_cl, centers=centers, spread=spread, seed=0)
+
+    res = {"random": [], "k-means++": []}
+    for seed in range(60):
+        for init in res:
+            lab, C, _ = cl.kmeans(Xi, n_cl, init=init, seed=seed)
+            res[init].append(cl.inertia(Xi, lab, C))
+
+    best = min(min(v) for v in res.values())
+    print(f"{label} (k={n_cl}) — 시드 60개")
+    print(f"  {'초기화':<12} {'평균 inertia':>13} {'최악':>10} "
+          f"{'최적 근처 도달':>14}")
+    for init, vals in res.items():
+        v = np.array(vals)
+        print(f"  {init:<12} {v.mean():>13.1f} {v.max():>10.1f} "
+              f"{(v < best*1.02).mean():>13.0%}")
+    print()
+
+print("→ k-means++ 가 나쁜 국소 최적에 덜 빠진다.")
+print("  다만 완전히 막지는 못한다 — 그래서 실무에서는 여러 번 재시작(n_init)해")
+print("  가장 낮은 inertia 를 고른다. scikit-learn 의 n_init 기본값이 그 이유다.")
+```
 
 ---
 
-## G2.9.1 — k-means 반복
+## k는 어떻게 정하는가
 
-할당 ↔ 중심 갱신이 번갈아 일어나며 수렴하는 애니메이션
+정답이 없으므로 **k도 데이터에서 추정해야** 한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 스텝 재생
+```{python}
+#| label: fig-choose-k
+#| fig-cap: "엘보와 실루엣. 실루엣이 대체로 더 명확한 신호를 줍니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import clustering as cl, datasets, viz
+
+Xc, ytrue_c = datasets.blobs(n=400, centers=((-4,-4),(4,4),(-4,4),(4,-4)),
+                             spread=1.1, seed=2)
+def kmeans_best(X, k, n_init=10):
+    """n_init 번 재시작해 inertia 가 가장 낮은 해를 고른다 (실무 표준)."""
+    best = None
+    for s in range(n_init):
+        lab, C, _ = cl.kmeans(X, k, seed=s)
+        j = cl.inertia(X, lab, C)
+        if best is None or j < best[0]:
+            best = (j, lab, C)
+    return best
+
+ks = list(range(1, 9))
+iner_k, sil_k, ari_k = [], [], []
+for k in ks:
+    j, lab, C = kmeans_best(Xc, k)
+    iner_k.append(j)
+    sil_k.append(cl.silhouette(Xc, lab) if k > 1 else 0.0)
+    ari_k.append(cl.adjusted_rand_index(ytrue_c, lab) if k > 1 else 0.0)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("엘보: inertia", "실루엣 계수 (높을수록 좋음)"))
+fig.add_trace(go.Scatter(x=ks, y=iner_k, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=ks, y=sil_k, mode="lines+markers", name="실루엣",
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=ks, y=ari_k, mode="lines+markers", name="ARI (참값 대비)",
+                         line=dict(color=viz.WARM, width=2, dash="dash")), row=1, col=2)
+fig.add_vline(x=4, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text="참 군집 수 4")
+fig.update_xaxes(title_text="k")
+fig.update_yaxes(title_text="inertia", row=1, col=1)
+fig.update_yaxes(title_text="점수", row=1, col=2)
+viz.fig_defaults(fig, height=390, title="군집 수 선택")
+fig.update_layout(legend=dict(x=0.55, y=0.98))
+fig.show()
+```
+
+```{python}
+#| label: k-selection-table
+#| code-fold: false
+
+print(f"{'k':>4} {'inertia':>11} {'감소량':>10} {'실루엣':>9} {'ARI':>8}")
+print("-" * 48)
+for i, k in enumerate(ks):
+    drop = iner_k[i-1] - iner_k[i] if i > 0 else float("nan")
+    mark = "  ← 최대" if k > 1 and sil_k[i] == max(sil_k) else ""
+    print(f"{k:>4} {iner_k[i]:>11.1f} {drop:>10.1f} {sil_k[i]:>9.3f} "
+          f"{ari_k[i]:>8.3f}{mark}")
+```
+
+::: {.callout-warning}
+## 엘보는 주관적이다
+
+inertia는 $k$ 가 늘면 **항상 감소**한다($k=n$ 이면 0). 그래서 최솟값으로는 못 고른다.
+"꺾이는 지점"을 찾아야 하는데, 그 지점이 애매한 경우가 대부분이다.
+
+실루엣 계수는 $[-1, 1]$ 범위의 명확한 최댓값을 주므로 더 낫다.
+
+$$s(i) = \frac{b(i)-a(i)}{\max(a(i), b(i))}$$
+
+$a$ = 같은 군집 내 평균 거리, $b$ = 가장 가까운 다른 군집까지의 평균 거리.
+
+그래도 **어떤 지표도 절대적이지 않다.** 도메인 지식과 군집의 실제 유용성이 최종 판단 기준이다.
 :::
 
 ---
 
-## G2.9.2 — k-means의 실패 사례
+## k-means가 실패하는 곳
 
-초승달·서로 다른 밀도 데이터에서 구형 가정이 깨지는 순간
+k-means의 가정 — 구형, 비슷한 크기, 비슷한 밀도 — 이 깨지면 무너진다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 데이터 모양 전환
+```{python}
+#| label: fig-kmeans-fail
+#| fig-cap: "k-means의 구형 가정이 깨지는 세 가지 상황"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import clustering as cl, datasets, viz
+
+rng = np.random.default_rng(0)
+cases = {}
+Xm, ym = datasets.two_moons(n=250, noise=0.07, seed=0)
+cases["초승달 (비볼록)"] = (Xm, ym, 2)
+
+# 길쭉한 군집
+t = rng.normal(size=(200, 2)) @ np.array([[3.0, 0], [0, 0.35]])
+Xa = np.vstack([t + [0, 2], t + [0, -2]])
+ya = np.r_[np.zeros(200, int), np.ones(200, int)]
+cases["길쭉한 군집"] = (Xa, ya, 2)
+
+# 크기·밀도가 다른 군집
+Xs = np.vstack([rng.normal([-4, 0], 0.4, (40, 2)),
+                rng.normal([2, 0], 1.8, (300, 2))])
+ys = np.r_[np.zeros(40, int), np.ones(300, int)]
+cases["크기·밀도 불균형"] = (Xs, ys, 2)
+
+names = list(cases)
+fig = make_subplots(rows=2, cols=3, subplot_titles=[f"{n} — k-means" for n in names]
+                    + [f"{n} — 참값/DBSCAN" for n in names],
+                    vertical_spacing=0.13, horizontal_spacing=0.04)
+for c, nm in enumerate(names, start=1):
+    Xd, yd, k = cases[nm]
+    lab, _, _ = cl.kmeans(Xd, k, seed=0)
+    for j in range(k):
+        m = lab == j
+        fig.add_trace(go.Scatter(x=Xd[m,0], y=Xd[m,1], mode="markers",
+                                 showlegend=False,
+                                 marker=dict(size=3.5, color=viz.color(j))),
+                      row=1, col=c)
+    for j in sorted(set(yd)):
+        m = yd == j
+        fig.add_trace(go.Scatter(x=Xd[m,0], y=Xd[m,1], mode="markers",
+                                 showlegend=False,
+                                 marker=dict(size=3.5, color=viz.color(j))),
+                      row=2, col=c)
+    ari = cl.adjusted_rand_index(yd, lab)
+    fig.layout.annotations[c-1].text = f"{nm}<br><sub>k-means ARI {ari:.2f}</sub>"
+    fig.layout.annotations[c+2].text = "참 구조"
+    for r in (1, 2):
+        fig.update_xaxes(showticklabels=False, row=r, col=c)
+        fig.update_yaxes(showticklabels=False, row=r, col=c)
+
+viz.fig_defaults(fig, height=520, title="k-means 가 실패하는 상황")
+fig.update_layout(margin=dict(l=30, r=25, t=85, b=30))
+fig.update_annotations(font_size=10)
+fig.show()
+```
+
+::: {.interaction-hint}
+세 경우 모두 **k-means가 직선으로 잘라버립니다**. 원인은 같습니다 — 유클리드 거리로 중심에 할당하면 경계가 항상 직선(보로노이 셀)이 되기 때문입니다.
 :::
 
 ---
 
-## G2.9.3 — GMM 소프트 할당
+## GMM: 소프트 할당과 타원
 
-타원형 성분과 점마다의 소속 확률(색 혼합)
+k-means의 두 제약을 푼다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 성분 수 슬라이더
+1. **하드 할당 → 소프트 할당** (각 점이 성분별 소속 확률을 가짐)
+2. **구형 → 타원형** (공분산 행렬을 학습)
+
+$$p(\mathbf{x}) = \sum_{j=1}^{k}\pi_j\,\mathcal{N}(\mathbf{x}\mid\boldsymbol\mu_j, \Sigma_j)$$
+
+**EM 알고리즘**으로 적합한다.
+
+- **E단계**: 현재 파라미터로 각 점의 소속 확률(책임도) $r_{ij}$ 계산
+- **M단계**: 책임도로 가중해 $\pi, \mu, \Sigma$ 갱신
+
+EM은 **로그우도를 단조 증가시킨다** — k-means의 inertia 단조 감소와 같은 구조다.
+
+```{python}
+#| label: fig-gmm
+#| fig-cap: "GMM은 타원형 성분과 소프트 할당을 학습합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import clustering as cl, viz
+
+rng = np.random.default_rng(3)
+S1 = np.array([[3.0, 1.6], [1.6, 1.0]])
+S2 = np.array([[1.0, -0.9], [-0.9, 1.6]])
+Xg = np.vstack([rng.multivariate_normal([-2, -1], S1, 200),
+                rng.multivariate_normal([2.5, 1.5], S2, 200)])
+yg = np.r_[np.zeros(200, int), np.ones(200, int)]
+
+lab_g, Cg, Sg, pig, R, hist_g, ll = cl.gmm_em(Xg, 2, n_iter=40, seed=1)
+lab_k, Ck, _ = cl.kmeans(Xg, 2, seed=1)
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("GMM 성분과 소속 확률", "EM 로그우도"))
+it0 = 5
+Ci, Si, pii, Ri = hist_g[it0]
+fig.add_trace(go.Scatter(x=Xg[:,0], y=Xg[:,1], mode="markers", showlegend=False,
+                         marker=dict(size=4.5, color=Ri[:,1], colorscale="RdBu",
+                                     cmin=0, cmax=1,
+                                     colorbar=dict(title="P(성분2)", thickness=10,
+                                                   outlinewidth=0, x=0.53))),
+              row=1, col=1)
+for j in range(2):
+    E = cl.ellipse_points(Ci[j], Si[j], 2.0)
+    fig.add_trace(go.Scatter(x=E[:,0], y=E[:,1], mode="lines", showlegend=False,
+                             line=dict(color=viz.GREEN, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=np.arange(len(ll)), y=ll, mode="lines", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[it0], y=[ll[it0]], mode="markers", showlegend=False,
+                         marker=dict(size=12, color=viz.YELLOW)), row=1, col=2)
+
+steps = []
+for i, (Ci_, Si_, pi_, Ri_) in enumerate(hist_g):
+    e0 = cl.ellipse_points(Ci_[0], Si_[0], 2.0)
+    e1 = cl.ellipse_points(Ci_[1], Si_[1], 2.0)
+    steps.append((str(i), {
+        "x": [Xg[:,0], e0[:,0], e1[:,0], np.arange(len(ll)), [i]],
+        "y": [Xg[:,1], e0[:,1], e1[:,1], ll, [ll[i]]],
+        "marker.color": [Ri_[:,1], None, None, None, None]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="EM 반복 = ", active=it0, pad_t=55)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="반복", row=1, col=2)
+fig.update_yaxes(title_text="로그우도", row=1, col=2)
+viz.fig_defaults(fig, height=440, title="가우시안 혼합모형 (EM)")
+fig.show()
+```
+
+```{python}
+#| label: gmm-vs-kmeans
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+from src import clustering as cl
+
+print(f"공분산이 다른 타원형 군집 2개에서:")
+print(f"  k-means ARI : {cl.adjusted_rand_index(yg, lab_k):.3f}")
+print(f"  GMM     ARI : {cl.adjusted_rand_index(yg, lab_g):.3f}")
+print()
+print(f"로그우도: {ll[0]:.1f} → {ll[-1]:.1f}  (EM 은 단조 증가를 보장)")
+print(f"혼합 비율 π: {pig.round(3)}")
+```
+
+::: {.key-concept}
+**k-means는 GMM의 특수한 경우다.**
+
+GMM에서 다음을 가정하면 k-means가 된다.
+
+- 모든 공분산이 $\sigma^2 I$ (구형, 동일)
+- $\sigma^2 \to 0$ (책임도가 0/1로 수렴 → 하드 할당)
+
+즉 k-means는 **제약이 강한 GMM**이다.
+파라미터가 적어 빠르고 안정적이지만, 표현할 수 있는 군집 모양이 제한된다.
 :::
 
 ---
 
-## G2.9.4 — DBSCAN 파라미터
+## DBSCAN: 밀도로 정의하기
 
-밀도 임계값에 따라 군집이 붙고 갈라지는 과정
+중심이라는 개념 자체를 버린다. **밀도가 높은 영역이 곧 군집**이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: eps·minPts 슬라이더
-:::
-
----
-
-## G2.9.5 — 덴드로그램 절단
-
-절단 높이에 따라 군집 수가 정해지는 계층 구조
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 높이 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 정의 |
 |------|------|
-| k-means |  |
-| EM 알고리즘 |  |
-| GMM |  |
-| DBSCAN |  |
-| 실루엣 계수 |  |
-| 덴드로그램 |  |
+| 핵심점(core) | 반경 `eps` 안에 `min_pts` 개 이상의 점이 있음 |
+| 경계점(border) | 핵심점의 이웃이지만 자신은 핵심점이 아님 |
+| 잡음(noise) | 둘 다 아님 → **어느 군집에도 속하지 않음** |
+
+장점이 명확하다.
+
+- 군집 수를 **미리 정할 필요가 없다**
+- **임의의 모양**을 찾을 수 있다
+- **잡음을 명시적으로 처리**한다
+
+```{python}
+#| label: fig-dbscan
+#| fig-cap: "eps에 따라 군집이 붙고 갈라집니다. 회색은 잡음입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import clustering as cl, datasets, viz
+
+Xd, yd = datasets.two_moons(n=260, noise=0.09, seed=1)
+rng = np.random.default_rng(0)
+Xd = np.vstack([Xd, rng.uniform(-1.5, 2.5, (25, 2))])       # 잡음 점 추가
+yd = np.r_[yd, np.full(25, -1)]
+
+epss = [0.08, 0.12, 0.16, 0.20, 0.25, 0.35, 0.5, 0.8]
+res = {}
+for e in epss:
+    lab, core = cl.dbscan(Xd, eps=e, min_pts=5)
+    nk = len(set(lab[lab >= 0]))
+    res[e] = (lab, nk, int((lab == -1).sum()),
+              cl.adjusted_rand_index(yd[yd >= 0], lab[yd >= 0]))
+
+n_clusters = [res[e][1] for e in epss]
+n_noise = [res[e][2] for e in epss]
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("군집 결과", "eps 에 따른 군집 수와 잡음 수"))
+e0 = 0.20
+lab0 = res[e0][0]
+for k in sorted(set(lab0)):
+    m = lab0 == k
+    col = "rgba(150,150,150,0.45)" if k == -1 else viz.color(k)
+    nm = "잡음" if k == -1 else f"군집 {k}"
+    fig.add_trace(go.Scatter(x=Xd[m,0], y=Xd[m,1], mode="markers", name=nm,
+                             marker=dict(size=5, color=col)), row=1, col=1)
+fig.add_trace(go.Scatter(x=epss, y=n_clusters, mode="lines+markers", name="군집 수",
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=epss, y=np.array(n_noise)/10, mode="lines+markers",
+                         name="잡음 수 ÷10",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+
+steps = []
+for e in epss:
+    lab = res[e][0]
+    xs = [Xd[lab == k, 0] for k in [-1, 0, 1, 2]]
+    ys = [Xd[lab == k, 1] for k in [-1, 0, 1, 2]]
+    steps.append((f"{e:g}", {"x": xs[:len(set(lab))] if False else
+                             [Xd[lab==-1,0], Xd[lab==0,0], Xd[lab==1,0]],
+                             "y": [Xd[lab==-1,1], Xd[lab==0,1], Xd[lab==1,1]]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="eps = ",
+                                      active=epss.index(e0), pad_t=55)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="eps", row=1, col=2)
+fig.update_yaxes(title_text="개수", row=1, col=2)
+viz.fig_defaults(fig, height=430, title="DBSCAN 파라미터 민감도")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+```{python}
+#| label: dbscan-table
+#| code-fold: false
+
+print(f"{'eps':>7} {'군집 수':>9} {'잡음 수':>9} {'ARI':>8}")
+print("-" * 38)
+for e in epss:
+    _, nk, nn, ari = res[e]
+    print(f"{e:>7.2f} {nk:>9} {nn:>9} {ari:>8.3f}")
+print()
+print("→ eps 가 작으면 잘게 쪼개지고 잡음이 많아진다.")
+print("  크면 전부 하나로 합쳐진다. 적정 구간이 좁을 수 있다.")
+```
+
+::: {.callout-warning}
+## DBSCAN의 약점
+
+1. **파라미터 민감** — `eps` 를 조금만 바꿔도 결과가 크게 달라진다.
+2. **밀도가 다른 군집** — 하나의 `eps` 로는 밀도가 다른 군집들을 동시에 잡을 수 없다.
+   **HDBSCAN** 이 이를 계층적으로 해결한다.
+3. **고차원 취약** — [2.8의 차원의 저주](08_knn_naive_bayes.qmd)로 밀도 개념이 무너진다.
+
+`min_pts` 는 대개 $2d$ 정도로 잡고, `eps` 는 k-거리 그래프의 꺾이는 지점으로 정한다.
+:::
 
 ---
 
-**다음**: [2.10 차원 축소](10_dimensionality_reduction.qmd) — PCA·t-SNE·UMAP·매니폴드 — 고차원을 눈으로 보는 법
+## 계층적 군집화: 하나의 k를 고르지 않기
+
+모든 $k$ 에 대한 답을 한 번에 준다. 트리(덴드로그램)를 만들고 원하는 높이에서 자른다.
+
+```{python}
+#| label: fig-hierarchical
+#| fig-cap: "덴드로그램. 자르는 높이가 군집 수를 정합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import clustering as cl, datasets, viz
+
+Xh, yh = datasets.blobs(n=40, centers=((-3,-3),(3,3),(-3,3)), spread=0.7, seed=1)
+merges, clusters = cl.hierarchical(Xh, linkage="ward")
+
+# 덴드로그램 좌표 계산
+n = len(Xh)
+pos, height = {}, {}
+order = []
+
+def leaf_order(node):
+    if node < n:
+        order.append(node); return
+    a, b = child[node]
+    leaf_order(a); leaf_order(b)
+
+child = {}
+nid = n
+for a, b, d, _ in merges:
+    child[nid] = (a, b); height[nid] = d; nid += 1
+leaf_order(nid - 1)
+for i, leaf in enumerate(order):
+    pos[leaf] = i
+
+def xpos(node):
+    if node < n:
+        return pos[node]
+    a, b = child[node]
+    return (xpos(a) + xpos(b)) / 2
+
+ks = [2, 3, 4, 5, 6]
+cuts = {k: cl.cut_tree(merges, n, k) for k in ks}
+cut_h = {}
+for k in ks:
+    hs = sorted([height[i] for i in height])
+    cut_h[k] = hs[len(hs) - k + 1] if len(hs) - k + 1 < len(hs) else hs[-1]
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("덴드로그램 (ward)", "절단 결과"))
+seg_x, seg_y = [], []
+for node in sorted(height):
+    a, b = child[node]
+    ha = height.get(a, 0.0); hb = height.get(b, 0.0); h = height[node]
+    xa, xb = xpos(a), xpos(b)
+    seg_x += [xa, xa, xb, xb, None]
+    seg_y += [ha, h, h, hb, None]
+fig.add_trace(go.Scatter(x=seg_x, y=seg_y, mode="lines", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=1.5)), row=1, col=1)
+k0 = 3
+fig.add_hline(y=cut_h[k0], line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text=f"k={k0} 절단", row=1, col=1)
+lab_h = cuts[k0]
+for j in sorted(set(lab_h)):
+    m = lab_h == j
+    fig.add_trace(go.Scatter(x=Xh[m,0], y=Xh[m,1], mode="markers", showlegend=False,
+                             marker=dict(size=8, color=viz.color(j),
+                                         line=dict(width=1, color="black"))),
+                  row=1, col=2)
+
+steps = []
+for k in ks:
+    lab = cuts[k]
+    xs = [seg_x] + [Xh[lab == j, 0] for j in range(6)]
+    ys = [seg_y] + [Xh[lab == j, 1] for j in range(6)]
+    steps.append((str(k), {"x": xs[:1+len(set(lab))], "y": ys[:1+len(set(lab))]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="군집 수 k = ",
+                                      active=ks.index(k0), pad_t=55)])
+fig.update_xaxes(title_text="표본 (순서 재배열)", showticklabels=False, row=1, col=1)
+fig.update_yaxes(title_text="병합 거리", row=1, col=1)
+fig.update_xaxes(title_text="x₁", row=1, col=2)
+fig.update_yaxes(title_text="x₂", row=1, col=2)
+viz.fig_defaults(fig, height=430, title="계층적 군집화")
+fig.show()
+```
+
+| 연결법 | 두 군집 사이 거리 | 성향 |
+|--------|-------------------|------|
+| single | 가장 가까운 쌍 | 사슬 효과, 길쭉한 군집 |
+| complete | 가장 먼 쌍 | 조밀하고 둥근 군집 |
+| average | 모든 쌍의 평균 | 절충 |
+| **ward** | 병합 시 분산 증가량 | 크기 비슷한 구형, 기본값 |
+
+---
+
+## 평가: 정답이 없을 때와 있을 때
+
+```{python}
+#| label: eval-metrics
+#| code-fold: false
+
+rows = [
+    ("실루엣 계수", "내부", "[-1,1]", "군집 내 응집 vs 군집 간 분리"),
+    ("Davies-Bouldin", "내부", "0~", "낮을수록 좋음"),
+    ("Calinski-Harabasz", "내부", "0~", "높을수록 좋음"),
+    ("ARI", "외부", "[-1,1]", "우연 보정. 무작위=0, 완벽=1"),
+    ("NMI", "외부", "[0,1]", "상호정보 정규화"),
+    ("V-measure", "외부", "[0,1]", "동질성·완전성의 조화평균"),
+]
+print(f"{'지표':<20} {'종류':<6} {'범위':<9} {'의미'}")
+print("-" * 72)
+for r in rows:
+    print(f"{r[0]:<20} {r[1]:<6} {r[2]:<9} {r[3]}")
+print()
+print("내부 지표: 정답 없이 계산. 단, 지표가 가정하는 군집 모양에 편향됨")
+print("          (실루엣은 구형 군집을 선호 → DBSCAN 결과에 불리)")
+print("외부 지표: 정답이 있을 때만. 벤치마크·알고리즘 비교용")
+```
+
+::: {.callout-warning}
+## 내부 지표의 함정
+
+실루엣 계수는 **구형 군집을 전제**한다.
+그래서 초승달 데이터에서 DBSCAN이 완벽히 맞혀도 실루엣 점수는 낮게 나올 수 있다.
+
+내부 지표로 알고리즘을 비교하면 그 지표의 가정과 맞는 알고리즘이 유리해진다.
+**군집화 평가는 결국 목적과 도메인에 달려 있다.**
+:::
+
+---
+
+## 요약
+
+| 알고리즘 | 군집의 정의 | 장점 | 약점 |
+|----------|-------------|------|------|
+| **k-means** | 구형, 중심 기준 | 빠름, 단순 | 구형 가정, k 필요 |
+| k-means++ | — | 나쁜 국소 최적 회피 | — |
+| **GMM (EM)** | 타원형 확률 성분 | 소프트 할당, 유연 | 파라미터 많음, k 필요 |
+| **DBSCAN** | 밀도 연결 영역 | 임의 모양, k 불필요, 잡음 처리 | eps 민감, 밀도 차이 |
+| **계층** | 병합 트리 | 모든 k를 한 번에, 덴드로그램 | $O(n^2)$ 이상 |
+
+| 핵심 사실 | |
+|---|---|
+| k-means 수렴 | inertia 단조 감소 (전역 최적은 아님) |
+| EM 수렴 | 로그우도 단조 증가 |
+| k-means ⊂ GMM | 구형 + 하드 할당의 특수 경우 |
+| 엘보 | 주관적. 실루엣이 더 명확 |
+| 내부 지표 | 자체 가정이 있음 |
+
+군집화는 데이터를 **행 방향**으로 묶었다.
+다음 장은 **열 방향** — 차원 자체를 줄인다.
+
+---
+
+**다음**: [2.10 차원 축소](10_dimensionality_reduction.qmd) — PCA·t-SNE·UMAP·매니폴드
 
 **이전**: [2.8 kNN·나이브 베이즈·기타](08_knn_naive_bayes.qmd)
