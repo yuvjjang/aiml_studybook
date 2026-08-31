@@ -4,89 +4,568 @@ subtitle: "Ridge·Lasso·ElasticNet — 복잡도에 값을 매기기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[2.1](01_bias_variance.qmd)에서 과적합의 정체가 **분산**임을 봤다.
+그리고 [2.2](02_linear_regression.qmd)에서 다중공선성이 계수를 널뛰게 만드는 것도 봤다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+정규화는 두 문제를 한 번에 다룬다. 방법은 놀랍도록 단순하다.
+**손실함수에 "복잡하면 벌점" 항을 더한다.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+$$J(\boldsymbol\beta) = \underbrace{\|\mathbf{y}-X\boldsymbol\beta\|^2}_{\text{데이터에 맞추기}} + \lambda\underbrace{\Omega(\boldsymbol\beta)}_{\text{단순함 선호}}$$
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 한 줄이 [2.0에서 말한 귀납 편향](00_learning_problem.qmd)을
+손실함수에 **직접 적어 넣은 것**이다. 그리고 딥러닝의 weight decay까지 그대로 이어진다.
+
+---
+
+## Ridge: L2 벌점
+
+$$J = \|\mathbf{y}-X\boldsymbol\beta\|^2 + \lambda\|\boldsymbol\beta\|_2^2$$
+
+미분해서 0으로 놓으면 닫힌 해가 나온다 — 여기서도 계산이 끝까지 된다.
+
+$$\hat{\boldsymbol\beta}_{\text{ridge}} = (X^\top X + \lambda I)^{-1}X^\top\mathbf{y}$$
+
+$\lambda I$ 가 대각을 부풀린다는 점이 핵심이다.
+[2.2에서 본 다중공선성](02_linear_regression.qmd)으로 $X^\top X$ 가 특이에 가까워져도,
+$\lambda I$ 를 더하면 **항상 역행렬이 존재한다.**
+
+::: {.key-concept}
+**SVD로 보면 Ridge가 무엇을 하는지 정확히 보인다.**
+
+$X = U\Sigma V^\top$ 로 두면 ([0.0 SVD](../00_foundations/00_linear_algebra.qmd)),
+
+$$\hat{\mathbf{y}}_{\text{OLS}} = \sum_j \mathbf{u}_j\mathbf{u}_j^\top\mathbf{y},
+\qquad
+\hat{\mathbf{y}}_{\text{ridge}} = \sum_j \frac{\sigma_j^2}{\sigma_j^2+\lambda}\,\mathbf{u}_j\mathbf{u}_j^\top\mathbf{y}$$
+
+각 주성분 방향의 기여에 **축소 계수** $\frac{\sigma_j^2}{\sigma_j^2+\lambda}$ 가 붙는다.
+
+- 특이값이 큰 방향($\sigma_j^2 \gg \lambda$) → 계수 ≈ 1, 거의 안 건드림
+- 특이값이 작은 방향($\sigma_j^2 \ll \lambda$) → 계수 ≈ 0, 강하게 억제
+
+즉 Ridge는 **데이터의 분산이 작아 불안정한 방향을 골라서 죽인다.**
+모든 계수를 균일하게 줄이는 게 아니다.
 :::
 
-정규화는 '단순한 모델을 선호한다'는 귀납 편향을 손실함수에 직접 적어 넣는 방법이며, 딥러닝의 weight decay까지 그대로 이어진다.
+---
+
+## G2.3.1 — Ridge의 축소 효과
+
+```{python}
+#| label: fig-ridge-shrinkage
+#| fig-cap: "특이값 방향별 축소 계수. 작은 특이값 방향이 먼저 죽습니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+# 특이값이 넓게 퍼진 설계행렬
+rng = np.random.default_rng(0)
+n, p = 200, 12
+sv = np.logspace(1.2, -1.2, p)                 # 특이값 스펙트럼
+U, _ = np.linalg.qr(rng.normal(size=(n, p)))
+V, _ = np.linalg.qr(rng.normal(size=(p, p)))
+X = U @ np.diag(sv) @ V.T
+beta_true = rng.normal(size=p)
+y = X @ beta_true + rng.normal(0, 0.4, n)
+
+lams = np.logspace(-4, 2, 25)
+shrink = {l: sv**2 / (sv**2 + l) for l in lams}
+coefs = np.array([np.linalg.solve(X.T @ X + l*np.eye(p), X.T @ y) for l in lams])
+dof = np.array([np.sum(sv**2 / (sv**2 + l)) for l in lams])
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.48, 0.52],
+                    subplot_titles=("주성분 방향별 축소 계수",
+                                    "유효 자유도 tr(H_ridge)"))
+
+l0 = lams[12]
+fig.add_trace(go.Bar(x=[f"σ{i+1}" for i in range(p)], y=shrink[l0],
+                     marker_color=viz.ACCENT, showlegend=False), row=1, col=1)
+fig.add_trace(go.Scatter(x=lams, y=dof, mode="lines", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[l0], y=[dof[12]], mode="markers", showlegend=False,
+                         marker=dict(size=12, color=viz.ACCENT)), row=1, col=2)
+fig.add_hline(y=p, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text=f"OLS 자유도 = {p}", row=1, col=2)
+
+steps = []
+for i, l in enumerate(lams):
+    steps.append((f"{l:.1e}", {"y": [shrink[l], dof, [dof[i]]],
+                               "x": [None, lams, [l]]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ", active=12, pad_t=55)])
+fig.update_yaxes(title_text="축소 계수 σ²/(σ²+λ)", range=[0, 1.05], row=1, col=1)
+fig.update_xaxes(title_text="λ", type="log", row=1, col=2)
+fig.update_yaxes(title_text="유효 자유도", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="Ridge 는 불안정한 방향을 골라 억제한다")
+fig.show()
+```
+
+::: {.interaction-hint}
+$\lambda$ 를 키우면 **오른쪽 막대(작은 특이값)부터** 0으로 내려갑니다. 왼쪽 막대는 한참 버팁니다. 오른쪽 그림의 유효 자유도가 12에서 연속적으로 줄어드는 것도 보세요 — [2.2의 $\text{tr}(H)$](02_linear_regression.qmd)가 실수가 되었습니다.
+:::
 
 ---
 
-## 이 장에서 다루는 것
+## Lasso: L1 벌점과 희소성
 
-- Ridge(L2): 닫힌 해, 축소(shrinkage), SVD 관점의 해석
-- Lasso(L1): 희소해가 생기는 기하학적 이유
-- ElasticNet과 상관 특성 그룹 효과
-- 제약 최적화 형태와 페널티 형태의 동치
-- 베이지안 해석: Ridge = 가우스 사전, Lasso = 라플라스 사전
-- 정규화 경로(regularization path)와 λ 선택
-- 표준화가 필수인 이유
-- 좌표하강법과 soft-thresholding
-- 그룹 Lasso, 융합 Lasso 등 구조적 정규화
-- weight decay 와 L2 의 관계 (AdamW 예고)
+$$J = \|\mathbf{y}-X\boldsymbol\beta\|^2 + \lambda\|\boldsymbol\beta\|_1$$
 
----
+절댓값으로 바꾸면 성질이 완전히 달라진다. **계수가 정확히 0이 된다.**
 
-## G2.3.1 — L1 vs L2 제약 영역
+Ridge는 계수를 0에 가깝게 만들 뿐 0으로 만들지는 않는다.
+Lasso는 실제로 0으로 만들어 **특성 선택을 수행한다.**
 
-마름모와 원 제약이 등고선과 만나는 지점 — 왜 L1만 축 위에서 만나는가
+왜인가? [0.0의 노름 단위구](../00_foundations/00_linear_algebra.qmd)에서 봤듯이
+**L1 공의 꼭짓점이 축 위에 있기** 때문이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: λ 슬라이더
+```{python}
+#| label: fig-l1-l2-geometry
+#| fig-cap: "제약 영역과 손실 등고선이 만나는 지점. L1은 축 위 꼭짓점에서 만납니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+# 손실 등고선 (타원)
+g = np.linspace(-2.2, 3.2, 220)
+B1, B2 = np.meshgrid(g, g)
+center = np.array([2.0, 1.0])
+A = np.array([[1.0, 0.72], [0.72, 1.0]])       # 상관된 특성
+d = np.stack([B1 - center[0], B2 - center[1]], -1)
+Z = np.einsum("...i,ij,...j->...", d, A, d)
+
+theta = np.linspace(0, 2*np.pi, 400)
+t = np.linspace(0, 2*np.pi, 400)
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("L2 (Ridge) — 원", "L1 (Lasso) — 마름모"))
+
+for col, p_norm in [(1, 2.0), (2, 1.0)]:
+    r = (np.abs(np.cos(t))**p_norm + np.abs(np.sin(t))**p_norm) ** (-1/p_norm)
+    R = 1.25
+    bx, by = R * r * np.cos(t), R * r * np.sin(t)
+
+    fig.add_trace(go.Contour(x=g, y=g, z=np.round(Z, 3), colorscale="Blues",
+                             showscale=False, opacity=0.55,
+                             contours=dict(start=0, end=14, size=1.0),
+                             line=dict(width=1)), row=1, col=col)
+    fig.add_trace(go.Scatter(x=bx, y=by, mode="lines", showlegend=False,
+                             line=dict(color=viz.WARM, width=3),
+                             fill="toself", fillcolor=viz.hex_rgba(viz.WARM, 0.12)),
+                  row=1, col=col)
+    # 제약 위에서 손실이 최소인 점
+    vals = np.einsum("ni,ij,nj->n", np.c_[bx, by] - center, A, np.c_[bx, by] - center)
+    k = int(np.argmin(vals))
+    fig.add_trace(go.Scatter(x=[bx[k]], y=[by[k]], mode="markers", showlegend=False,
+                             marker=dict(size=14, color=viz.GREEN, symbol="star")),
+                  row=1, col=col)
+    fig.add_trace(go.Scatter(x=[center[0]], y=[center[1]], mode="markers",
+                             showlegend=False,
+                             marker=dict(size=10, color=viz.YELLOW)), row=1, col=col)
+    fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.35)", width=1), row=1, col=col)
+    fig.add_vline(x=0, line=dict(color="rgba(255,255,255,0.35)", width=1), row=1, col=col)
+    fig.update_xaxes(title_text="β₁", range=[-2.2, 3.2], row=1, col=col)
+
+fig.update_yaxes(title_text="β₂", range=[-2.2, 3.2], scaleanchor="x", row=1, col=1)
+fig.update_yaxes(range=[-2.2, 3.2], row=1, col=2)
+viz.fig_defaults(fig, height=430,
+                 title="노란 점 = OLS 해 · 별 = 제약 하의 최적해")
+fig.show()
+```
+
+::: {.interaction-hint}
+오른쪽에서 별이 **거의 축 위에** 있습니다 — $\beta_2 \approx 0$. 마름모의 꼭짓점이 축과 만나기 때문에, 타원이 처음 닿는 곳이 꼭짓점이 되기 쉽습니다. 왼쪽 원에는 튀어나온 모서리가 없어 축 위에서 만날 확률이 사실상 0입니다.
+:::
+
+### soft-thresholding: 왜 정확히 0인가
+
+직교 설계($X^\top X = I$)에서는 Lasso 해가 닫힌 형태로 나온다.
+
+$$\hat{\beta}_j^{\text{lasso}} = \text{sign}(\hat{\beta}_j^{\text{OLS}})\big(|\hat{\beta}_j^{\text{OLS}}| - \lambda/2\big)_+$$
+
+$(\cdot)_+$ 는 음수면 0으로 자르는 연산이다. **임계값보다 작으면 정확히 0이 된다.**
+
+```{python}
+#| label: fig-soft-threshold
+#| fig-cap: "Ridge는 비례 축소, Lasso는 임계값 이하를 0으로 자릅니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+b = np.linspace(-3, 3, 600)
+lams = [0.0, 0.3, 0.6, 1.0, 1.5, 2.0]
+
+fig = go.Figure()
+l0 = 1.0
+fig.add_trace(go.Scatter(x=b, y=b, mode="lines", name="OLS (항등)",
+                         line=dict(color="rgba(255,255,255,0.4)", width=2, dash="dot")))
+fig.add_trace(go.Scatter(x=b, y=b / (1 + l0), mode="lines", name="Ridge (비례 축소)",
+                         line=dict(color=viz.ACCENT, width=3)))
+fig.add_trace(go.Scatter(x=b, y=np.sign(b) * np.maximum(np.abs(b) - l0/2, 0),
+                         mode="lines", name="Lasso (soft-threshold)",
+                         line=dict(color=viz.WARM, width=3)))
+
+steps = [(f"{l:g}", {"y": [b, b/(1+l), np.sign(b)*np.maximum(np.abs(b)-l/2, 0)]})
+         for l in lams]
+fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ", active=3, pad_t=55)],
+                  xaxis_title="OLS 계수", yaxis_title="정규화된 계수",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420, title="두 정규화가 계수를 다루는 방식")
+fig.show()
+```
+
+::: {.interaction-hint}
+Lasso(주황)는 원점 근처에 **평평한 구간**이 있습니다 — 그 구간의 계수는 정확히 0이 됩니다. Ridge(파랑)는 원점을 지나는 직선이라 0이 되는 지점이 원점 하나뿐입니다.
 :::
 
 ---
 
 ## G2.3.2 — 정규화 경로
 
-λ를 키울 때 계수들이 0으로 수축되는 궤적(Lasso는 정확히 0)
+$\lambda$ 를 바꿔가며 계수들이 어떻게 움직이는지가 정규화 경로다.
+Lasso의 특성 선택이 여기서 눈에 보인다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: λ 로그 슬라이더
+```{python}
+#| label: fig-reg-path
+#| fig-cap: "λ에 따른 계수 궤적. Lasso는 계수가 하나씩 0에 도달합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(1)
+n, p = 120, 10
+X = rng.normal(size=(n, p))
+X[:, 5] = X[:, 0] * 0.9 + rng.normal(0, 0.3, n)      # 상관 특성 하나
+beta_true = np.array([3.0, -2.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0])
+y = X @ beta_true + rng.normal(0, 1.0, n)
+X = (X - X.mean(0)) / X.std(0)                        # 표준화 필수
+y = y - y.mean()
+
+def lasso_cd(X, y, lam, iters=400):
+    """좌표하강법 — 한 번에 한 계수씩 soft-threshold"""
+    n, p = X.shape
+    b = np.zeros(p)
+    norms = (X ** 2).sum(0)
+    for _ in range(iters):
+        for j in range(p):
+            r = y - X @ b + X[:, j] * b[j]
+            rho = X[:, j] @ r
+            b[j] = np.sign(rho) * max(abs(rho) - lam * n / 2, 0) / norms[j]
+    return b
+
+lams = np.logspace(-2.5, 0.6, 40)
+ridge_path = np.array([np.linalg.solve(X.T@X + l*n*np.eye(p), X.T@y) for l in lams])
+lasso_path = np.array([lasso_cd(X, y, l) for l in lams])
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("Ridge 경로", "Lasso 경로"),
+                    shared_yaxes=True)
+for j in range(p):
+    show = beta_true[j] != 0
+    nm = f"β{j+1}" + (" (참값≠0)" if show else "")
+    fig.add_trace(go.Scatter(x=lams, y=ridge_path[:, j], mode="lines", name=nm,
+                             legendgroup=nm, showlegend=True,
+                             line=dict(color=viz.color(j),
+                                       width=3 if show else 1.5,
+                                       dash=None if show else "dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=lams, y=lasso_path[:, j], mode="lines", name=nm,
+                             legendgroup=nm, showlegend=False,
+                             line=dict(color=viz.color(j),
+                                       width=3 if show else 1.5,
+                                       dash=None if show else "dot")), row=1, col=2)
+fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.4)", dash="dash"))
+fig.update_xaxes(title_text="λ", type="log")
+fig.update_yaxes(title_text="계수", row=1, col=1)
+viz.fig_defaults(fig, height=440,
+                 title="굵은 선 = 참값이 0이 아닌 계수 (β1, β2, β3, β8)")
+fig.update_layout(legend=dict(font=dict(size=9), x=1.02, y=1))
+fig.show()
+```
+
+```{python}
+#| label: sparsity-count
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'λ':>10} {'Ridge 0개수':>13} {'Lasso 0개수':>13} {'Lasso 가 고른 특성'}")
+print("-" * 66)
+for i in [0, 12, 20, 26, 32, 38]:
+    l = lams[i]
+    nz_r = int((np.abs(ridge_path[i]) < 1e-8).sum())
+    nz_l = int((np.abs(lasso_path[i]) < 1e-8).sum())
+    picked = [f"β{j+1}" for j in range(p) if abs(lasso_path[i, j]) > 1e-8]
+    print(f"{l:>10.4f} {nz_r:>13} {nz_l:>13}   {','.join(picked) if picked else '(없음)'}")
+print()
+print(f"참값이 0이 아닌 특성: β1, β2, β3, β8")
+```
+
+::: {.interaction-hint}
+왼쪽 Ridge는 계수들이 **0에 점근**할 뿐 도달하지 않습니다. 오른쪽 Lasso는 하나씩 **정확히 0에 닿아** 그대로 붙어 있습니다. 중간 λ에서 Lasso가 고른 특성이 참값이 0이 아닌 것들과 대체로 일치합니다.
 :::
 
 ---
 
-## G2.3.3 — 사전분포 관점
+## 왜 표준화가 필수인가
 
-가우스/라플라스 사전이 만드는 사후분포 모양 비교
+정규화 항 $\lambda\|\boldsymbol\beta\|^2$ 는 계수의 **크기**를 벌한다.
+그런데 계수 크기는 특성의 단위에 의존한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 사전 선택
+키를 미터로 재면 계수가 크고, 밀리미터로 재면 1000배 작아진다.
+같은 정보인데 벌점이 100만 배 다르다.
+
+```{python}
+#| label: standardization
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n = 300
+x1 = rng.normal(1.7, 0.1, n)            # 키 (미터)
+x2 = rng.normal(70, 10, n)              # 몸무게 (kg)
+y = 3.0 * x1 + 0.05 * x2 + rng.normal(0, 0.3, n)
+
+def ridge(X, y, lam):
+    Xb = np.c_[np.ones(len(y)), X]
+    I = np.eye(Xb.shape[1]); I[0, 0] = 0          # 절편은 벌하지 않음
+    return np.linalg.solve(Xb.T@Xb + lam*I, Xb.T@y)[1:]
+
+X_raw = np.c_[x1, x2]
+X_mm = np.c_[x1 * 1000, x2]                        # 키를 mm 로만 바꿈
+X_std = (X_raw - X_raw.mean(0)) / X_raw.std(0)
+
+print(f"{'λ':>6} {'원 단위 (m, kg)':>22} {'키만 mm 로':>22} {'표준화 후':>22}")
+print("-" * 76)
+for lam in [0, 1, 100]:
+    a = ridge(X_raw, y, lam); b = ridge(X_mm, y, lam); c = ridge(X_std, y, lam)
+    print(f"{lam:>6} [{a[0]:>8.3f},{a[1]:>7.3f}] "
+          f"    [{b[0]:>8.5f},{b[1]:>7.3f}]     [{c[0]:>7.3f},{c[1]:>7.3f}]")
+print()
+print("→ 같은 데이터인데 단위만 바꾸면 정규화 결과가 완전히 달라진다.")
+print("  표준화하면 모든 특성이 같은 조건에서 벌점을 받는다.")
+```
+
+::: {.callout-warning}
+표준화 파라미터(평균·표준편차)는 **훈련셋에서만** 계산해야 한다.
+전체 데이터로 계산하면 시험셋 정보가 새어든다 —
+[2.12 데이터 누수](12_practical_issues.qmd)의 전형적 형태다.
 :::
 
 ---
 
-## G2.3.4 — λ와 편향-분산
+## 베이즈 관점: 정규화 = 사전분포
 
-검증오차 U자 곡선 위에서 최적 λ 찾기
+[0.2 확률](../00_foundations/02_probability.qmd)에서 예고한 대응이 여기서 완성된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: λ 슬라이더
+MAP 추정은 사후분포를 최대화한다.
+
+$$\hat{\boldsymbol\beta}_{\text{MAP}} = \arg\max_\beta\; p(\mathbf{y}|\boldsymbol\beta)\,p(\boldsymbol\beta)
+= \arg\min_\beta\; \big[-\log p(\mathbf{y}|\boldsymbol\beta) - \log p(\boldsymbol\beta)\big]$$
+
+첫 항이 손실, 둘째 항이 정규화다.
+
+| 사전분포 $p(\beta)$ | $-\log p(\beta)$ | 정규화 |
+|---------------------|------------------|--------|
+| 가우스 $\mathcal{N}(0,\tau^2)$ | $\propto \|\beta\|_2^2$ | **Ridge** |
+| 라플라스 $\text{Lap}(0,b)$ | $\propto \|\beta\|_1$ | **Lasso** |
+| 균등 | 상수 | 정규화 없음 |
+
+```{python}
+#| label: fig-priors
+#| fig-cap: "가우스와 라플라스 사전분포. 라플라스는 0에서 뾰족합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+b = np.linspace(-4, 4, 600)
+gauss = np.exp(-b**2 / 2) / np.sqrt(2*np.pi)
+laplace = np.exp(-np.abs(b) * np.sqrt(2)) * np.sqrt(2) / 2
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("사전분포 p(β)", "벌점 −log p(β)"))
+fig.add_trace(go.Scatter(x=b, y=gauss, mode="lines", name="가우스 → Ridge",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+fig.add_trace(go.Scatter(x=b, y=laplace, mode="lines", name="라플라스 → Lasso",
+                         line=dict(color=viz.WARM, width=3)), row=1, col=1)
+fig.add_trace(go.Scatter(x=b, y=b**2/2, mode="lines", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=2)
+fig.add_trace(go.Scatter(x=b, y=np.abs(b)*np.sqrt(2), mode="lines", showlegend=False,
+                         line=dict(color=viz.WARM, width=3)), row=1, col=2)
+
+fig.update_xaxes(title_text="β")
+fig.update_yaxes(title_text="밀도", row=1, col=1)
+fig.update_yaxes(title_text="벌점", range=[0, 6], row=1, col=2)
+viz.fig_defaults(fig, height=380, title="정규화의 확률적 해석")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.interaction-hint}
+라플라스(주황)는 0에서 **뾰족한 꼭짓점**을 갖습니다 — 미분 불가능한 그 점이 계수를 0에 붙잡아둡니다. 가우스는 0에서 매끄러워 그런 힘이 없습니다. 오른쪽 벌점 그림이 정확히 L1·L2 노름입니다.
 :::
 
 ---
 
-## 핵심 용어
+## ElasticNet: 둘을 섞기
 
-| 용어 | 비고 |
-|------|------|
-| Ridge |  |
-| Lasso |  |
-| 희소성 (sparsity) |  |
-| 정규화 경로 |  |
-| weight decay |  |
+$$J = \|\mathbf{y}-X\boldsymbol\beta\|^2 + \lambda\big(\alpha\|\boldsymbol\beta\|_1 + (1-\alpha)\|\boldsymbol\beta\|_2^2\big)$$
+
+Lasso에는 알려진 약점이 있다.
+
+1. **상관된 특성 그룹에서 임의로 하나만 고른다.** 나머지는 0으로 만든다.
+2. $p > n$ 이면 최대 $n$ 개까지만 선택할 수 있다.
+
+ElasticNet은 L2 항을 섞어 이를 완화한다 — 상관된 특성들이 **함께 살아남는다**(그룹 효과).
+
+```{python}
+#| label: elasticnet-group
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(2)
+n = 150
+z = rng.normal(size=n)
+# 서로 거의 같은 특성 3개 (한 그룹) + 무관한 특성 3개
+X = np.c_[z + rng.normal(0, .02, n), z + rng.normal(0, .02, n),
+          z + rng.normal(0, .02, n), rng.normal(size=(n, 3))]
+X = (X - X.mean(0)) / X.std(0)
+y = 2.0 * z + rng.normal(0, .5, n); y -= y.mean()
+
+def enet_cd(X, y, lam, alpha, iters=800):
+    n_, p_ = X.shape
+    b = np.zeros(p_)
+    denom = (X**2).sum(0) + lam * n_ * (1 - alpha)
+    for _ in range(iters):
+        for j in range(p_):
+            rho = X[:, j] @ (y - X @ b + X[:, j]*b[j])
+            b[j] = np.sign(rho)*max(abs(rho) - lam*n_*alpha/2, 0) / denom[j]
+    return b
+
+print(f"{'방식':<22} {'그룹 특성 (x1,x2,x3) 계수':<26} {'0 개수':>7} {'셋의 표준편차':>13}")
+print("-" * 74)
+for name, a in [("Lasso (α=1)", 1.0), ("ElasticNet (α=0.5)", 0.5),
+                ("Ridge 쪽 (α=0.1)", 0.1)]:
+    b = enet_cd(X, y, 0.3, a)
+    grp = b[:3]
+    print(f"{name:<22} {str(np.round(grp, 3)):<26} "
+          f"{int((np.abs(grp) < 1e-8).sum()):>7} {grp.std():>13.3f}")
+print()
+print("→ 셋은 사실상 같은 정보인데, Lasso 는 하나를 0으로 죽이고")
+print("  나머지도 들쭉날쭉하게 나눠 갖는다 (표준편차가 크다).")
+print("  ElasticNet 은 셋에 거의 균등하게 배분한다 — 이것이 그룹 효과다.")
+```
 
 ---
 
-**다음**: [2.4 로지스틱 회귀와 분류](04_logistic_regression.qmd) — 시그모이드·로그오즈·최대우도 — 확률을 출력하는 선형모델
+## λ는 어떻게 고르는가
+
+정답은 하나다. **검증 데이터로 고른다.**
+
+```{python}
+#| label: fig-lambda-selection
+#| fig-cap: "λ에 따른 훈련·검증 오차. U자의 바닥이 최적입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng = np.random.default_rng(5)
+n, p = 60, 40                                   # p 가 n 에 가까운 어려운 설정
+X = rng.normal(size=(n, p))
+beta_true = np.zeros(p); beta_true[:5] = [3, -2, 2, -1.5, 1]
+y = X @ beta_true + rng.normal(0, 1.0, n)
+Xte = rng.normal(size=(2000, p))
+yte = Xte @ beta_true + rng.normal(0, 1.0, 2000)
+
+lams = np.logspace(-3, 2.5, 40)
+tr, te, cv = [], [], []
+folds = np.array_split(rng.permutation(n), 5)
+for l in lams:
+    b = np.linalg.solve(X.T@X + l*np.eye(p), X.T@y)
+    tr.append(np.mean((X@b - y)**2))
+    te.append(np.mean((Xte@b - yte)**2))
+    errs = []
+    for k in range(5):
+        va = folds[k]; trn = np.concatenate([folds[j] for j in range(5) if j != k])
+        bk = np.linalg.solve(X[trn].T@X[trn] + l*np.eye(p), X[trn].T@y[trn])
+        errs.append(np.mean((X[va]@bk - y[va])**2))
+    cv.append(np.mean(errs))
+
+tr, te, cv = np.array(tr), np.array(te), np.array(cv)
+best_cv, best_te = lams[cv.argmin()], lams[te.argmin()]
+
+fig = go.Figure()
+for name, arr, col in [("훈련 오차", tr, viz.GREEN), ("5겹 CV 오차", cv, viz.ACCENT),
+                       ("시험 오차 (참값)", te, viz.WARM)]:
+    fig.add_trace(go.Scatter(x=lams, y=arr, mode="lines+markers", name=name,
+                             line=dict(color=col, width=2.5)))
+fig.add_vline(x=best_cv, line=dict(color=viz.ACCENT, dash="dash"),
+              annotation_text=f"CV 최적 {best_cv:.2f}")
+fig.add_vline(x=best_te, line=dict(color=viz.WARM, dash="dot"),
+              annotation_text=f"시험 최적 {best_te:.2f}", annotation_position="bottom right")
+
+fig.update_layout(xaxis_title="λ", xaxis_type="log",
+                  yaxis_title="평균제곱오차", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420, title=f"n={n}, p={p} — 정규화가 필수인 설정")
+fig.show()
+```
+
+::: {.interaction-hint}
+훈련 오차(초록)는 $\lambda$ 가 커질수록 **단조 증가**합니다 — 절대 이걸로 고르면 안 됩니다. CV 오차(파랑)와 시험 오차(주황)가 U자를 그리고, 두 최적점이 가깝습니다. CV가 시험 오차의 좋은 대리인 이유입니다.
+:::
+
+---
+
+## weight decay로 이어지는 다리
+
+딥러닝의 weight decay는 L2 정규화와 같은 것이다 — **단, SGD에서만.**
+
+$$\text{L2 를 손실에 추가:}\quad \nabla(J + \tfrac{\lambda}{2}\|\theta\|^2) = \nabla J + \lambda\theta$$
+$$\text{weight decay:}\quad \theta \leftarrow \theta - \eta\nabla J - \eta\lambda\theta$$
+
+SGD에서는 동일하다. 그런데 **Adam에서는 다르다.**
+Adam은 그래디언트를 $\sqrt{v}$ 로 나누는데, L2 항이 그래디언트에 섞여 있으면
+그 항까지 함께 나뉘어 **실효 감쇠율이 파라미터마다 달라진다.**
+
+AdamW는 감쇠를 그래디언트가 아니라 **갱신 단계에 직접** 적용해 이 문제를 고친다
+([3.4 옵티마이저](../03_deep_learning/04_optimizers.qmd), [5.6에서 구현한 그 형태](../05_transformer/06_build_gpt.qmd)).
+
+---
+
+## 요약
+
+| 개념 | 식 | 핵심 |
+|------|-----|------|
+| Ridge | $+\lambda\|\beta\|_2^2$ | 닫힌 해 존재, 작은 특이값 방향을 억제 |
+| SVD 관점 | $\frac{\sigma^2}{\sigma^2+\lambda}$ | 불안정한 방향만 골라 죽인다 |
+| 유효 자유도 | $\sum\frac{\sigma_j^2}{\sigma_j^2+\lambda}$ | 복잡도가 연속적으로 줄어듦 |
+| Lasso | $+\lambda\|\beta\|_1$ | **정확히 0** → 특성 선택 |
+| 기하 | L1 공의 꼭짓점이 축 위 | 희소성의 이유 |
+| soft-threshold | $\text{sign}(\beta)(|\beta|-\lambda/2)_+$ | 임계값 이하를 자름 |
+| **표준화** | 필수 | 단위가 바뀌면 벌점이 바뀜 |
+| 베이즈 해석 | 가우스=Ridge, 라플라스=Lasso | MAP = 손실 + 정규화 |
+| ElasticNet | L1 + L2 | 상관 특성의 그룹 효과 |
+| λ 선택 | **교차검증** | 훈련 오차로는 절대 못 고름 |
+| weight decay | Adam에서는 L2 ≠ decay | AdamW가 나온 이유 |
+
+여기까지 회귀를 다뤘다. 다음 장은 출력이 범주일 때 —
+**확률을 출력하는 선형 모델**로 넘어간다.
+
+---
+
+**다음**: [2.4 로지스틱 회귀와 분류](04_logistic_regression.qmd) — 시그모이드·로그오즈·최대우도
 
 **이전**: [2.2 선형회귀](02_linear_regression.qmd)
