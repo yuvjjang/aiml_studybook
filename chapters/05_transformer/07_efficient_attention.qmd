@@ -4,86 +4,437 @@ subtitle: "FlashAttention·희소·선형 어텐션 — n² 병목 깨기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[5.0](00_attention_mechanism.qmd)에서 어텐션의 대가를 봤다. $(n, n)$ 행렬 때문에
+시퀀스가 2배 길어지면 연산과 메모리가 4배가 된다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그런데 2020년의 문맥 길이는 2K, 지금은 100만 토큰을 다루는 모델이 있다. **500배**다.
+$n^2$ 이 그대로였다면 25만 배 비싸져야 했는데, 그렇지 않았다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
-
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-문맥 길이가 늘어날수록 어텐션은 이차로 비싸진다. 100만 토큰 문맥이 가능해진 것은 알고리즘과 하드웨어를 함께 다시 설계했기 때문이다.
+무엇이 바뀌었는가. 이 장은 그 답을 네 갈래로 정리한다.
+그리고 첫 번째 답이 가장 의외다 — **알고리즘이 아니라 메모리를 다시 본 것**이다.
 
 ---
 
-## 이 장에서 다루는 것
+## 병목은 연산이 아니라 메모리다
 
-- 병목의 정체: 연산이 아니라 메모리 대역폭(HBM ↔ SRAM)
-- FlashAttention: 타일링과 온라인 softmax, 재계산으로 IO 줄이기
-- FlashAttention-2/3의 개선점
-- 희소 어텐션: 국소·스트라이드·전역 토큰(Longformer, BigBird)
-- 선형 어텐션: 커널 근사(Performer), 결합법칙 재배치
-- 저계수 근사(Linformer)와 다운샘플링
-- 슬라이딩 윈도우 + 어텐션 싱크(StreamingLLM)
-- 메모리·검색 결합 접근, 계층적 어텐션
-- 긴 문맥 평가: needle-in-a-haystack, RULER, 실제 활용도
-- 효율 기법의 품질 대가와 실무 선택 기준
+GPU에서 어텐션이 느린 이유를 보통 "$n^2$ 연산량 때문"이라고 말한다. 절반만 맞다.
 
----
+GPU 메모리는 계층으로 되어 있고, 계층마다 대역폭이 수십 배 차이 난다.
 
-## G5.7.1 — 메모리 계층과 IO
+```{python}
+#| label: memory-hierarchy
+#| code-fold: false
 
-HBM↔SRAM 데이터 이동량이 타일링으로 줄어드는 계산
+import sys; sys.path.append("../..")
+import numpy as np
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 타일 크기 슬라이더
-:::
+# A100 급 GPU의 대략적 수치
+tiers = [
+    ("SRAM (on-chip)",   20,    19_000),   # MB, GB/s
+    ("HBM (GPU 메모리)", 40_000, 1_555),
+    ("CPU DRAM",        500_000,    64),
+]
+print(f"{'계층':<20} {'용량':>12} {'대역폭':>12} {'HBM 대비'}")
+print("-" * 58)
+for name, cap_mb, bw in tiers:
+    rel = bw / 1555
+    print(f"{name:<20} {cap_mb:>10,}MB {bw:>9,}GB/s {rel:>8.2f}x")
+```
 
----
+표준 어텐션 구현은 이렇게 동작한다.
 
-## G5.7.2 — 희소 어텐션 패턴
+1. $S = QK^\top$ 계산 → **HBM에 $(n,n)$ 행렬 쓰기**
+2. $S$ 를 HBM에서 읽어 softmax → **다시 HBM에 쓰기**
+3. $P V$ 계산 위해 다시 읽기
 
-전역·국소·스트라이드 마스크의 연결 구조와 비용 비교
+$(n,n)$ 행렬을 **세 번 왕복**한다. $n = 8192$ 면 행렬 하나가 268MB이고,
+SRAM(20MB)에 들어가지 않으니 매번 HBM을 거쳐야 한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 패턴 전환
-:::
+::: {.key-concept}
+어텐션의 디코딩 단계는 **메모리 제한(memory-bound)** 이다.
+연산 유닛은 놀고 있고, 데이터가 오기를 기다린다.
 
----
-
-## G5.7.3 — 선형 어텐션 재배치
-
-(QKᵀ)V 대 Q(KᵀV)의 연산량이 n과 d에 따라 뒤바뀌는 지점
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 순서 전환
+이 상황에서 연산량을 줄이는 최적화는 효과가 없다.
+줄여야 하는 것은 **메모리 왕복 횟수**다.
+[11.3 하드웨어](../11_systems/03_hardware.qmd)의 루프라인 모델이 이것을 정량화한다.
 :::
 
 ---
 
-## G5.7.4 — 문맥 길이별 비용
+## FlashAttention: 행렬을 아예 만들지 않기
 
-표준·Flash·희소·선형 어텐션의 메모리·시간 스케일링
+핵심 발상은 단순하다. **$(n,n)$ 행렬을 통째로 만들지 말고, 타일 단위로 처리하며 즉시 소비한다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 길이 로그 슬라이더
+문제는 softmax다. softmax는 행 전체의 합이 필요한데, 타일 하나만 보면 그 합을 모른다.
+
+해결책이 **온라인 softmax**다. 지금까지 본 최댓값 $m$ 과 부분합 $\ell$ 을 들고 다니며,
+새 타일을 만날 때마다 **이미 계산한 결과를 보정**한다.
+
+$$
+\begin{aligned}
+m^{\text{new}} &= \max(m^{\text{old}},\; \max S_{\text{block}}) \\
+\ell^{\text{new}} &= e^{m^{\text{old}} - m^{\text{new}}}\ell^{\text{old}} + \textstyle\sum e^{S_{\text{block}} - m^{\text{new}}} \\
+O^{\text{new}} &= e^{m^{\text{old}} - m^{\text{new}}}O^{\text{old}} + e^{S_{\text{block}} - m^{\text{new}}} V_{\text{block}}
+\end{aligned}
+$$
+
+```{python}
+#| label: flash-impl
+#| code-fold: show
+#| code-summary: "타일링 + 온라인 softmax 구현 (펼쳐서 보기)"
+
+import numpy as np
+
+def flash_attention(Q, K, V, block_size=64, causal=False):
+    """(n,n) 점수 행렬을 만들지 않는 어텐션. FlashAttention 의 핵심 아이디어."""
+    n, d = Q.shape
+    scale = 1.0 / np.sqrt(d)
+    O = np.zeros((n, V.shape[1]))
+    peak_tile = 0
+
+    for i0 in range(0, n, block_size):                  # 쿼리 블록
+        i1 = min(i0 + block_size, n)
+        Qi = Q[i0:i1]
+        m = np.full(i1 - i0, -np.inf)                   # 러닝 최댓값
+        l = np.zeros(i1 - i0)                           # 러닝 정규화 상수
+        acc = np.zeros((i1 - i0, V.shape[1]))           # 러닝 출력(미정규화)
+
+        for j0 in range(0, n, block_size):              # 키/값 블록
+            j1 = min(j0 + block_size, n)
+            if causal and j0 > i1 - 1:
+                continue                                # 전부 미래 → 계산 자체를 생략
+
+            S = (Qi @ K[j0:j1].T) * scale               # 이 타일만 SRAM 에 올린다
+            peak_tile = max(peak_tile, S.size)
+            if causal:
+                qp = np.arange(i0, i1)[:, None]
+                kp = np.arange(j0, j1)[None, :]
+                S = np.where(kp > qp, -np.inf, S)
+
+            m_new = np.maximum(m, S.max(axis=1))
+            corr = np.exp(m - m_new)
+            corr[~np.isfinite(m)] = 0.0                 # 첫 블록
+            P = np.exp(S - m_new[:, None])
+            P[~np.isfinite(S)] = 0.0                    # 마스킹된 자리
+
+            acc = acc * corr[:, None] + P @ V[j0:j1]    # 기존 결과를 보정하고 누적
+            l = l * corr + P.sum(axis=1)
+            m = m_new
+
+        O[i0:i1] = acc / np.maximum(l, 1e-30)[:, None]  # 마지막에 한 번만 정규화
+    return O, peak_tile
+```
+
+---
+
+## G5.7.1 — 근사가 아니라 정확히 같다
+
+FlashAttention이 자주 오해받는 지점이다. 이것은 **근사 기법이 아니다.**
+같은 값을 다른 순서로 계산할 뿐이라, 결과가 부동소수점 오차 수준까지 동일하다.
+
+```{python}
+#| label: flash-verify
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+from src import attention
+
+rng = np.random.default_rng(0)
+print(f"{'n':>5} {'d':>4} {'블록':>5} {'인과':>6} {'최대오차':>12} "
+      f"{'점수행렬':>10} {'최대타일':>9} {'절감'}")
+print("-" * 72)
+
+for n, d, bs in [(128, 32, 32), (256, 64, 64), (512, 64, 64), (300, 48, 37)]:
+    Q, K, V = (rng.normal(size=(n, d)) for _ in range(3))
+    for causal in [False, True]:
+        mask = attention.causal_mask(n) if causal else None
+        ref, _ = attention.scaled_dot_product_attention(Q, K, V, mask=mask)
+        out, peak = flash_attention(Q, K, V, bs, causal=causal)
+        err = np.abs(out - ref).max()
+        print(f"{n:>5} {d:>4} {bs:>5} {str(causal):>6} {err:>12.2e} "
+              f"{n*n:>10,} {peak:>9,} {n*n//peak:>5}x")
+```
+
+::: {.key-concept}
+오차가 $10^{-16}$ — **기계 엡실론 수준**이다. 블록 크기가 $n$ 을 나누지 않아도(300/37),
+인과 마스크가 있어도 정확하다.
+
+그래서 FlashAttention은 "품질을 조금 포기하고 속도를 얻는" 기법이 아니다.
+**공짜 이득**이며, 그래서 모든 프레임워크의 기본값이 되었다.
+
+실제 구현은 여기에 **재계산(recomputation)** 을 더한다.
+역전파에 필요한 $(n,n)$ 행렬을 저장하는 대신, 필요할 때 다시 계산한다.
+연산을 늘려서 메모리 왕복을 줄이는 교환이고, 메모리 제한 상황에서는 이게 이득이다.
+:::
+
+```{python}
+#| label: fig-flash-memory
+#| fig-cap: "시퀀스 길이에 따른 어텐션 행렬 메모리와 타일 메모리"
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+lens = np.array([512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072])
+BS = 128
+full_mb = lens ** 2 * 2 / 1024**2          # fp16 (n,n) 행렬
+tile_mb = np.full_like(lens, BS * BS * 2 / 1024**2, dtype=float)
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=lens, y=full_mb, mode="lines+markers",
+                         name="표준: (n,n) 행렬 전체",
+                         line=dict(color=viz.WARM, width=2.5)))
+fig.add_trace(go.Scatter(x=lens, y=tile_mb, mode="lines+markers",
+                         name=f"Flash: {BS}×{BS} 타일 하나",
+                         line=dict(color=viz.ACCENT, width=2.5)))
+fig.add_hline(y=20, line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text="SRAM 용량 ~20MB", annotation_position="right")
+fig.add_hline(y=40_000, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text="HBM 40GB", annotation_position="right")
+
+fig.update_layout(xaxis_title="시퀀스 길이 n", xaxis_type="log",
+                  yaxis_title="메모리 (MB, fp16, 헤드 1개)", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420, title="어텐션 중간 결과의 메모리")
+fig.show()
+```
+
+::: {.interaction-hint}
+주황 선이 초록 점선(SRAM)을 넘는 지점부터 표준 구현은 HBM 왕복이 강제됩니다. 파란 선은 시퀀스 길이와 **무관하게 일정** — 타일 크기만큼만 쓰기 때문입니다.
 :::
 
 ---
 
-## 핵심 용어
+## 희소 어텐션: 일부만 계산하기
 
-| 용어 | 비고 |
-|------|------|
-| FlashAttention |  |
-| 희소 어텐션 |  |
-| 선형 어텐션 |  |
-| 슬라이딩 윈도우 |  |
-| 어텐션 싱크 |  |
+FlashAttention은 $n^2$ 연산을 그대로 하되 메모리를 줄인다.
+희소 어텐션은 **아예 일부 칸만 계산한다.** 이것은 진짜 근사다.
+
+```{python}
+#| label: fig-sparse-patterns
+#| fig-cap: "희소 어텐션 패턴. 노란색만 실제로 계산합니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+n = 48
+i_idx, j_idx = np.arange(n)[:, None], np.arange(n)[None, :]
+causal = j_idx > i_idx
+
+patterns = {}
+patterns["전체 (dense)"] = causal
+patterns["슬라이딩 윈도우 (w=8)"] = causal | (i_idx - j_idx >= 8)
+patterns["+ 전역 토큰 4개"] = (causal | (i_idx - j_idx >= 8)) & ~(
+    (j_idx < 4) & ~causal)
+strided = causal | ((i_idx - j_idx >= 8) & ((j_idx % 8) != 0))
+patterns["스트라이드 (Longformer 류)"] = strided
+patterns["윈도우 + 싱크 (StreamingLLM)"] = (causal | (i_idx - j_idx >= 8)) & ~(
+    (j_idx < 2) & ~causal)
+
+names = list(patterns)
+fig = make_subplots(rows=1, cols=len(names), subplot_titles=names,
+                    horizontal_spacing=0.02)
+for c, nm in enumerate(names, start=1):
+    m = patterns[nm]
+    dens = (~m).sum() / (n * (n + 1) / 2) * 100
+    fig.add_trace(go.Heatmap(z=1 - m.astype(float),
+                             colorscale=[[0, "#141414"], [1, viz.YELLOW]],
+                             showscale=False,
+                             hovertemplate="쿼리 %{y} → 키 %{x}<extra></extra>"),
+                  row=1, col=c)
+    fig.update_yaxes(autorange="reversed", showticklabels=(c == 1), row=1, col=c)
+    fig.update_xaxes(showticklabels=False, row=1, col=c)
+    fig.layout.annotations[c - 1].text = f"{nm}<br><sub>인과 영역의 {dens:.0f}%</sub>"
+
+viz.fig_defaults(fig, height=290, title="희소 패턴 — 계산량과 표현력의 교환")
+fig.update_layout(margin=dict(l=40, r=20, t=85, b=30))
+fig.update_annotations(font_size=10)
+fig.show()
+```
+
+::: {.interaction-hint}
+슬라이딩 윈도우만 쓰면 먼 거리 정보가 완전히 끊깁니다. 그래서 **전역 토큰**(모두가 볼 수 있는 소수의 위치)을 섞어 다리를 놓습니다. 층을 쌓으면 윈도우가 겹쳐 실효 수용영역이 넓어지는 것도 CNN과 같은 원리입니다.
+:::
+
+::: {.callout-note}
+## 어텐션 싱크와 StreamingLLM
+
+[5.2](02_multi_head.qmd)에서 본 어텐션 싱크가 여기서 실용적 의미를 갖는다.
+
+긴 대화를 처리할 때 오래된 토큰을 그냥 버리면(순수 슬라이딩 윈도우) **성능이 급락한다.**
+원인은 정보 손실이 아니라 **싱크가 사라진 것**이다 —
+모델이 어텐션을 버릴 곳을 잃어 분포가 망가진다.
+
+StreamingLLM의 처방은 놀랍도록 단순하다. **맨 앞 토큰 4개만 항상 남긴다.**
+그것만으로 무한 길이 스트리밍이 안정적으로 동작한다.
+:::
+
+---
+
+## 선형 어텐션: 곱셈 순서 바꾸기
+
+가장 근본적인 접근이다. softmax를 포기하면 **결합법칙**을 쓸 수 있다.
+
+$$\underbrace{(QK^\top)V}_{O(n^2 d)} \quad\longrightarrow\quad \underbrace{Q(K^\top V)}_{O(nd^2)}$$
+
+같은 결과인데 연산량이 다르다. $K^\top V$ 는 $(d, d)$ 행렬이라 $n$ 과 무관하다.
+
+문제는 softmax가 $\exp(q^\top k)$ 로 $Q$ 와 $K$ 를 얽어놓아서 분리가 안 된다는 것이다.
+그래서 특성 사상 $\phi$ 로 근사한다.
+
+$$\text{sim}(q, k) = \exp(q^\top k) \;\approx\; \phi(q)^\top \phi(k)$$
+
+```{python}
+#| label: fig-linear-attention
+#| fig-cap: "곱셈 순서에 따른 연산량. 교차점은 n = d 입니다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+lens = np.array([64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768])
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("d = 64 일 때", "d = 512 일 때"))
+
+for col, d in enumerate([64, 512], start=1):
+    quad = 2 * lens ** 2 * d          # (QKᵀ)V
+    lin = 2 * lens * d ** 2           # Q(KᵀV)
+    fig.add_trace(go.Scatter(x=lens, y=quad, mode="lines+markers",
+                             name="(QKᵀ)V — O(n²d)", showlegend=(col == 1),
+                             line=dict(color=viz.WARM, width=2.5)), row=1, col=col)
+    fig.add_trace(go.Scatter(x=lens, y=lin, mode="lines+markers",
+                             name="Q(KᵀV) — O(nd²)", showlegend=(col == 1),
+                             line=dict(color=viz.ACCENT, width=2.5)), row=1, col=col)
+    fig.add_vline(x=d, line=dict(color=viz.GREEN, dash="dash"),
+                  annotation_text=f"n = d = {d}", row=1, col=col)
+
+fig.update_xaxes(title_text="시퀀스 길이 n", type="log")
+fig.update_yaxes(title_text="FLOPs", type="log", row=1, col=1)
+viz.fig_defaults(fig, height=400, title="결합법칙 재배치의 손익분기점")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+```{python}
+#| label: linear-crossover
+#| code-fold: false
+
+print("선형 어텐션이 이득인 구간 (n > d):")
+for d in [64, 128, 512, 1024]:
+    print(f"  d_head 또는 d_model = {d:>4}  →  n > {d:>4} 부터 유리")
+print()
+print("현대 LLM 의 헤드 차원은 64~128 이므로,")
+print("헤드 단위로 보면 대부분의 시퀀스 길이에서 이론상 유리하다.")
+print("그럼에도 잘 안 쓰이는 이유는 아래 참고.")
+```
+
+::: {.callout-warning}
+## 선형 어텐션이 표준이 되지 못한 이유
+
+이론적 이점이 명확한데도 프런티어 모델은 여전히 softmax 어텐션을 쓴다.
+
+1. **표현력 손실** — softmax의 날카로운 선택성이 사라진다.
+   "정확히 이 토큰 하나를 보라"를 표현하기 어려워진다.
+2. **정확한 회상(recall) 실패** — 문맥에서 특정 사실을 정확히 찾아오는 과제에서 약하다.
+   $(d,d)$ 상태에 모든 과거를 압축하니 정보 병목이 생긴다.
+3. **실측이 이론에 못 미침** — FlashAttention이 softmax 어텐션을 워낙 빠르게 만들어서,
+   이론적 FLOPs 우위가 실제 속도로 이어지지 않는 구간이 넓다.
+
+같은 이유가 [5.10 상태공간 모델](10_alternatives_ssm.qmd)에도 적용된다.
+그래서 최근 흐름은 **하이브리드** — 대부분의 층은 선형/SSM, 몇 개 층만 완전 어텐션.
+:::
+
+---
+
+## G5.7.2 — 네 접근의 스케일링 비교
+
+```{python}
+#| label: fig-scaling-compare
+#| fig-cap: "문맥 길이에 따른 연산·메모리 스케일링"
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+lens = np.array([1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144])
+d, w, BS = 128, 512, 128
+
+methods = {
+    "표준 어텐션":        (2 * lens**2 * d,            lens**2 * 2 / 1024**2),
+    "FlashAttention":     (2 * lens**2 * d,            np.full_like(lens, BS*BS*2/1024**2, dtype=float)),
+    "슬라이딩 윈도우":     (2 * lens * w * d,           np.full_like(lens, BS*BS*2/1024**2, dtype=float)),
+    "선형 어텐션":         (2 * lens * d**2,            np.full_like(lens, d*d*2/1024**2, dtype=float)),
+}
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("연산량", "중간 결과 메모리"))
+for i, (name, (fl, mem)) in enumerate(methods.items()):
+    fig.add_trace(go.Scatter(x=lens, y=fl, mode="lines+markers", name=name,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=lens, y=mem, mode="lines+markers", name=name,
+                             showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+
+fig.update_xaxes(title_text="문맥 길이", type="log")
+fig.update_yaxes(title_text="FLOPs (헤드 1개)", type="log", row=1, col=1)
+fig.update_yaxes(title_text="MB (fp16)", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=410, title=f"d={d}, 윈도우 {w} 기준")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽에서 FlashAttention은 표준과 **연산량이 같습니다**(선이 겹칩니다) — 줄이는 것은 메모리뿐입니다. 오른쪽에서 그 차이가 드러납니다. 슬라이딩 윈도우와 선형 어텐션만이 연산량 자체를 줄입니다.
+:::
+
+---
+
+## 긴 문맥을 실제로 쓸 수 있는가
+
+"128K 문맥 지원"이라는 표기와 "128K를 실제로 활용한다"는 다른 이야기다.
+
+| 평가 방식 | 무엇을 재나 | 한계 |
+|-----------|-------------|------|
+| 퍼플렉서티 | 긴 문맥에서 다음 토큰 예측 | 최근 토큰만 봐도 낮게 나옴 |
+| needle-in-a-haystack | 긴 문맥 속 한 문장 검색 | 너무 쉬움. 통과해도 활용 증명 안 됨 |
+| RULER | 다중 검색, 추적, 집계 등 난이도별 | 현실적. 대개 표기 길이보다 훨씬 짧은 곳에서 무너짐 |
+| 실제 과제 | 코드베이스 이해, 장문 요약 | 가장 의미 있지만 측정이 어려움 |
+
+::: {.key-concept}
+**"lost in the middle"** — 정답이 문맥 중간에 있으면 앞이나 뒤에 있을 때보다 성능이 떨어진다.
+
+그래서 [7.10 RAG](../07_language/10_rag.qmd)에서 검색 결과를 문맥에 넣을 때
+순서가 성능에 영향을 준다. 긴 문맥이 가능해졌다고 해서
+"전부 넣으면 된다"가 되지는 않는다.
+:::
+
+---
+
+## 요약
+
+| 접근 | 줄이는 것 | 근사인가 | 대가 |
+|------|-----------|----------|------|
+| **FlashAttention** | 메모리 왕복 | **아니다 (정확)** | 없음 — 기본값 |
+| 슬라이딩 윈도우 | 연산 + 메모리 | 그렇다 | 먼 거리 직접 참조 불가 |
+| 전역 토큰 추가 | — | 완화 | 설계 복잡도 |
+| 선형 어텐션 | 연산 ($O(nd^2)$) | 그렇다 | 표현력·정확한 회상 |
+| 어텐션 싱크 유지 | — | — | 스트리밍 안정성 확보 |
+
+| 핵심 사실 | |
+|---|---|
+| 병목 | 연산이 아니라 **메모리 대역폭** |
+| 온라인 softmax | 부분 결과를 보정하며 누적 → 정확히 동일 |
+| 재계산 | 메모리를 아끼려 연산을 늘리는 교환 |
+| 결합법칙 | $(QK^\top)V \to Q(K^\top V)$, 손익분기 $n = d$ |
+| 긴 문맥 표기 | 지원 길이 ≠ 활용 가능 길이 |
+
+연산을 줄이는 또 다른 방향이 있다. 모든 파라미터를 매번 쓰지 않는 것 —
+다음 장의 전문가 혼합(MoE)이다.
 
 ---
 
