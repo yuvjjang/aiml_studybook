@@ -418,11 +418,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import datasets, viz
 
-img = datasets.image_grid(96)
+img = datasets.image_grid(64)
 U, S, Vt = np.linalg.svd(img, full_matrices=False)
 
 energy = np.cumsum(S ** 2) / np.sum(S ** 2)
-ks = [1, 2, 3, 5, 8, 12, 20, 32, 48, 96]
+ks = [1, 2, 3, 5, 8, 12, 20, 32, 64]
 recons = {k: (U[:, :k] * S[:k]) @ Vt[:k] for k in ks}
 
 # 원본 대비 저장 비용: k(m+n+1) vs m*n
@@ -461,7 +461,7 @@ fig.update_xaxes(title_text="특이값 순번 i", type="log", row=1, col=2)
 fig.update_yaxes(title_text="σᵢ", row=1, col=2)
 
 viz.fig_defaults(fig, height=470,
-                 title=f"96×96 행렬 · k=8이면 상위 {energy[7]*100:.1f}% 에너지를 "
+                 title=f"64×64 행렬 · k=8이면 상위 {energy[7]*100:.1f}% 에너지를 "
                        f"원본의 {ratio[8]*100:.0f}% 저장량으로")
 fig.update_layout(margin=dict(l=45, r=30, t=70, b=95), legend=dict(x=0.5, y=0.98))
 fig.show()
