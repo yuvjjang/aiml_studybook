@@ -4,89 +4,604 @@ subtitle: "누수·불균형·드리프트·잘못된 기준선 — 프로젝트
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+실무에서 ML 프로젝트가 실패하는 원인은 **거의 언제나 알고리즘 선택이 아니다.**
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장은 그 목록이다. 앞의 열두 장을 다 알아도
+여기서 하나만 놓치면 프로젝트 전체가 무너진다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그리고 공통점이 있다. **전부 검증 점수는 훌륭하게 나온다.**
+그래서 배포하기 전까지 아무도 눈치채지 못한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 데이터 누수
+
+미래 정보나 정답 정보가 학습에 흘러드는 것이다.
+**가장 흔하고, 가장 알아채기 어렵고, 가장 치명적이다.**
+
+```{python}
+#| label: leakage-types
+#| code-fold: false
+
+rows = [
+    ("전처리 누수", "전체 데이터로 스케일링·대치·특성선택",
+     "훈련 폴드 안에서만 fit"),
+    ("시간 누수",   "미래 데이터로 학습해 과거 예측",
+     "시간 기반 분할"),
+    ("그룹 누수",   "같은 개체의 기록이 훈련·검증에 나뉨",
+     "그룹 K-겹"),
+    ("타깃 누수",   "정답에서 파생된 특성 포함",
+     "특성 생성 시점을 확인"),
+    ("중복 누수",   "동일·유사 레코드가 양쪽에",
+     "중복 제거 후 분할"),
+    ("결과 누수",   "예측 시점에 알 수 없는 정보 사용",
+     "\"배포 시점에 이 값을 아는가?\" 질문"),
+]
+print(f"{'종류':<12} {'어떻게 생기나':<34} {'막는 법'}")
+print("-" * 82)
+for r in rows:
+    print(f"{r[0]:<12} {r[1]:<34} {r[2]}")
+```
+
+---
+
+## G2.12.1 — 전처리 누수 재현
+
+가장 흔한 형태다. 특성 선택을 **분할 전에** 하면 무슨 일이 생기는지 본다.
+
+```{python}
+#| label: fig-preprocessing-leak
+#| fig-cap: "y와 아무 관계 없는 데이터인데도 누수가 있으면 AUC가 치솟습니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+def auc(scores, labels):
+    order = np.argsort(-scores)
+    y = labels[order]
+    tp = np.cumsum(y); fp = np.cumsum(1 - y)
+    P, N = y.sum(), (1 - y).sum()
+    if P == 0 or N == 0:
+        return 0.5
+    return float(np.trapezoid(np.r_[0, tp/P], np.r_[0, fp/N]))
+
+def fit_logistic(X, y, iters=400, lr=0.3):
+    Xb = np.c_[np.ones(len(y)), X]
+    b = np.zeros(Xb.shape[1])
+    for _ in range(iters):
+        p = 1/(1+np.exp(-np.clip(Xb @ b, -30, 30)))
+        b -= lr * Xb.T @ (p - y) / len(y)
+    return b
+
+def score(X, b):
+    return np.c_[np.ones(len(X)), X] @ b
+
+rng = np.random.default_rng(0)
+n, n_feat_total, n_keep = 120, 800, 15
+n_rep = 40
+
+leak_aucs, clean_aucs = [], []
+for _ in range(n_rep):
+    X = rng.normal(size=(n, n_feat_total))
+    y = rng.integers(0, 2, n).astype(float)         # X 와 완전히 무관!
+
+    tr = np.arange(0, 80); te = np.arange(80, n)
+
+    # (A) 누수: 전체 데이터로 y 와 상관 높은 특성 선택
+    corr_all = np.abs([np.corrcoef(X[:, j], y)[0, 1] for j in range(n_feat_total)])
+    sel_leak = np.argsort(-corr_all)[:n_keep]
+    b = fit_logistic(X[tr][:, sel_leak], y[tr])
+    leak_aucs.append(auc(score(X[te][:, sel_leak], b), y[te]))
+
+    # (B) 정상: 훈련 데이터만으로 선택
+    corr_tr = np.abs([np.corrcoef(X[tr][:, j], y[tr])[0, 1] for j in range(n_feat_total)])
+    sel_clean = np.argsort(-corr_tr)[:n_keep]
+    b2 = fit_logistic(X[tr][:, sel_clean], y[tr])
+    clean_aucs.append(auc(score(X[te][:, sel_clean], b2), y[te]))
+
+fig = go.Figure()
+fig.add_trace(go.Histogram(x=np.round(leak_aucs, 3), nbinsx=25,
+                           name=f"누수 있음 (평균 {np.mean(leak_aucs):.3f})",
+                           marker_color=viz.hex_rgba(viz.WARM, 0.75)))
+fig.add_trace(go.Histogram(x=np.round(clean_aucs, 3), nbinsx=25,
+                           name=f"정상 (평균 {np.mean(clean_aucs):.3f})",
+                           marker_color=viz.hex_rgba(viz.ACCENT, 0.75)))
+fig.add_vline(x=0.5, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="참 성능 0.5 (무작위)")
+fig.update_layout(barmode="overlay", xaxis_title="시험셋 AUC", yaxis_title="빈도",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=400,
+                 title=f"X 와 y 가 **완전히 무관**한 데이터 ({n_feat_total}개 특성 중 {n_keep}개 선택)")
+fig.show()
+```
+
+```{python}
+#| label: leak-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"X 와 y 사이에 아무 관계가 없다. 참 AUC 는 0.5 여야 한다.")
+print()
+print(f"  전체 데이터로 특성 선택 (누수) : {np.mean(leak_aucs):.3f} "
+      f"± {np.std(leak_aucs):.3f}")
+print(f"  훈련 데이터로만 특성 선택      : {np.mean(clean_aucs):.3f} "
+      f"± {np.std(clean_aucs):.3f}")
+print()
+print("→ 특성 선택 한 줄을 분할 전에 놓았을 뿐인데 성능이 조작되었다.")
+print("  코드 어디에도 '정답을 베끼는' 부분은 없다. 그래서 잡기 어렵다.")
+```
+
+::: {.key-concept}
+**모든 전처리는 파이프라인 안에 들어가야 한다.**
+
+```python
+# 틀림 — 전체 데이터로 fit
+X_scaled = scaler.fit_transform(X)
+X_sel = selector.fit_transform(X_scaled, y)
+cross_val_score(model, X_sel, y)          # 이미 누수됨
+
+# 맞음 — 파이프라인이 각 폴드 안에서 fit
+pipe = Pipeline([("scale", StandardScaler()),
+                 ("select", SelectKBest(k=15)),
+                 ("clf", LogisticRegression())])
+cross_val_score(pipe, X, y)               # 폴드마다 독립적으로 fit
+```
+
+**규칙: `fit` 은 훈련 데이터에만, `transform` 은 양쪽에.**
+스케일링, 결측 대치, 특성 선택, target encoding, PCA, 오버샘플링 — 전부 해당된다.
 :::
 
-실무에서 프로젝트가 실패하는 원인은 알고리즘 선택이 아니라 거의 언제나 이 목록 안에 있다.
-
 ---
 
-## 이 장에서 다루는 것
+## 누수를 탐지하는 법
 
-- 데이터 누수의 유형: 시간 누수, 그룹 누수, 전처리 누수, 타깃 누수, 중복 누수
-- 누수 탐지: 비현실적 점수, 특성 중요도 이상, 시간 역전 검사
-- 클래스 불균형: 리샘플링·가중치·임계값·손실 수정의 실제 효과 비교
-- 레이블 잡음과 레이블 품질 검증, confident learning
-- 분포 이동: 공변량 이동, 레이블 이동, 개념 드리프트
-- 드리프트 탐지: PSI, KS 검정, 도메인 분류기
-- 선택 편향과 피드백 루프(모델이 만드는 데이터로 학습하기)
-- 기준선 설정 실패 — 개선처럼 보이는 착시
-- 재현성: 시드, 버전, 환경, 데이터 스냅샷
-- 비용·지연·유지보수를 포함한 모델 선택
+::: {.callout-warning}
+## 의심 신호
 
----
+1. **점수가 비현실적으로 높다.** AUC 0.99, 정확도 99.9%.
+   해당 분야의 알려진 최고 성능을 넘으면 거의 확실히 누수다.
+2. **한 특성의 중요도가 압도적이다.** 상위 특성 하나가 80%를 차지하면
+   그 특성이 무엇인지, 예측 시점에 알 수 있는지 확인한다.
+3. **시험 점수가 검증 점수보다 높다.** 통계적으로 이상한 방향이다.
+4. **특성을 제거해도 성능이 유지된다.** 다른 특성에 같은 정보가 새어 있을 수 있다.
 
-## G2.12.1 — 누수 실험
-
-타깃 파생 특성 하나로 검증 AUC가 0.99가 되는 재현 실험
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 누수 주입 토글
+**가장 강력한 점검**: 각 특성에 대해
+*"배포된 모델이 예측하는 그 순간에 이 값을 알 수 있는가?"* 를 묻는다.
 :::
 
 ---
 
-## G2.12.2 — 불균형 대응 비교
+## 클래스 불균형
 
-리샘플링·가중치·임계값 조정이 PR 곡선에 미치는 서로 다른 효과
+양성이 1%인 데이터에서 무엇을 해야 하는가?
+흔히 권장되는 처방들이 실제로 무엇을 바꾸는지 측정해보자.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 방법 전환
+```{python}
+#| label: fig-imbalance
+#| fig-cap: "불균형 대응 기법 비교. 대부분은 임계값 조정과 같은 효과입니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(1)
+n_neg, n_pos = 2000, 100                            # 양성 4.8%
+mu_gap = 1.6
+Xn = rng.normal(0, 1, (n_neg, 2))
+Xp = rng.normal(mu_gap, 1, (n_pos, 2))
+Xi = np.vstack([Xn, Xp]); yi = np.r_[np.zeros(n_neg), np.ones(n_pos)]
+perm = rng.permutation(len(Xi)); tr, te = perm[:1400], perm[1400:]
+
+def fit_weighted(X, y, w=None, iters=1500, lr=0.3, l2=1e-3):
+    Xb = np.c_[np.ones(len(y)), X]
+    if w is None:
+        w = np.ones(len(y))
+    w = w / w.mean()
+    b = np.zeros(Xb.shape[1])
+    for _ in range(iters):
+        p = 1/(1+np.exp(-np.clip(Xb @ b, -30, 30)))
+        g = Xb.T @ (w * (p - y)) / len(y) + l2*b
+        b -= lr * g
+    return b
+
+def prob(X, b):
+    return 1/(1+np.exp(-np.clip(np.c_[np.ones(len(X)), X] @ b, -30, 30)))
+
+def auc(s, y):
+    o = np.argsort(-s); yy = y[o]
+    tp = np.cumsum(yy); fp = np.cumsum(1-yy)
+    return float(np.trapezoid(np.r_[0, tp/yy.sum()], np.r_[0, fp/(1-yy).sum()]))
+
+Xtr, ytr = Xi[tr], yi[tr]
+methods = {}
+methods["원본 (가중치 없음)"] = fit_weighted(Xtr, ytr)
+w_bal = np.where(ytr == 1, (ytr == 0).sum()/(ytr == 1).sum(), 1.0)
+methods["클래스 가중치"] = fit_weighted(Xtr, ytr, w_bal)
+# 오버샘플링 (양성 복제)
+idx_pos = np.where(ytr == 1)[0]
+extra = rng.choice(idx_pos, (ytr == 0).sum() - len(idx_pos), replace=True)
+Xo, yo = np.vstack([Xtr, Xtr[extra]]), np.r_[ytr, ytr[extra]]
+methods["오버샘플링"] = fit_weighted(Xo, yo)
+# 언더샘플링
+idx_neg = rng.choice(np.where(ytr == 0)[0], len(idx_pos), replace=False)
+keep = np.r_[idx_pos, idx_neg]
+methods["언더샘플링"] = fit_weighted(Xtr[keep], ytr[keep])
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("PR 곡선 (시험셋)",
+                                                    "예측 확률 분포"))
+rows_out = []
+for i, (nm, b) in enumerate(methods.items()):
+    p = prob(Xi[te], b)
+    o = np.argsort(-p); yy = yi[te][o]
+    tp = np.cumsum(yy); fp = np.cumsum(1-yy)
+    rec = tp/yy.sum(); prec = tp/np.maximum(tp+fp, 1)
+    fig.add_trace(go.Scatter(x=rec, y=prec, mode="lines", name=nm,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Histogram(x=np.round(p, 3), nbinsx=40, name=nm,
+                               showlegend=False,
+                               marker_color=viz.hex_rgba(viz.color(i), 0.5)),
+                  row=1, col=2)
+    rows_out.append((nm, auc(p, yi[te]), float(np.trapezoid(prec, rec)),
+                     float(p.mean())))
+
+fig.update_layout(barmode="overlay")
+fig.update_xaxes(title_text="재현율", row=1, col=1)
+fig.update_yaxes(title_text="정밀도", row=1, col=1)
+fig.update_xaxes(title_text="예측 확률", row=1, col=2)
+fig.update_yaxes(title_text="빈도", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=400, title=f"양성 {n_pos/(n_pos+n_neg):.1%} 데이터")
+fig.update_layout(legend=dict(x=0.35, y=0.98))
+fig.show()
+```
+
+```{python}
+#| label: imbalance-numbers
+#| code-fold: false
+
+print(f"{'방법':<22} {'ROC-AUC':>10} {'PR-AUC':>10} {'평균 예측확률':>14}")
+print("-" * 60)
+for nm, a, pr, mp in rows_out:
+    print(f"{nm:<22} {a:>10.4f} {pr:>10.4f} {mp:>14.4f}")
+print()
+print(f"실제 양성 비율: {yi.mean():.4f}")
+print()
+print("→ 순위 지표(AUC)는 거의 차이가 없다. 바뀌는 것은 확률의 눈금이다.")
+print("  리샘플링·가중치는 사실상 '임계값을 옮긴 것'과 비슷한 효과를 낸다.")
+print("  대신 확률 캘리브레이션이 깨진다 (평균 예측확률이 실제 비율과 어긋남).")
+```
+
+::: {.key-concept}
+**불균형에 대한 실무 권고**
+
+1. **먼저 지표를 고쳐라.** 정확도 대신 PR-AUC, F1, 또는 비용 기반 지표
+   ([2.11](11_model_evaluation.qmd)).
+2. **임계값을 조정하라.** 대부분의 경우 이것으로 충분하고, 확률도 보존된다.
+3. 리샘플링·가중치는 **순위 성능을 크게 바꾸지 않는다.**
+   대신 캘리브레이션을 망가뜨린다.
+4. **SMOTE 등 합성 오버샘플링은 반드시 훈련 폴드 안에서만.**
+   분할 전에 하면 합성 샘플이 검증셋으로 새어 심각한 누수가 된다.
+5. 진짜 문제가 양성 표본 부족이면, **데이터를 더 모으는 것**이 유일한 근본 해결이다.
 :::
 
 ---
 
-## G2.12.3 — 개념 드리프트
+## 개념 드리프트
 
-시간이 지나며 결정경계가 이동해 모델이 낡아가는 과정
+배포된 모델은 낡는다. 세상이 바뀌기 때문이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시간 슬라이더
+| 종류 | 무엇이 바뀌나 | 예 |
+|------|---------------|-----|
+| 공변량 이동 | $p(x)$ | 사용자 구성이 바뀜 |
+| 레이블 이동 | $p(y)$ | 사기 비율이 올라감 |
+| **개념 드리프트** | $p(y\mid x)$ | 같은 특성이 다른 의미를 갖게 됨 |
+
+```{python}
+#| label: fig-drift
+#| fig-cap: "결정경계가 서서히 회전하면 고정 모델의 성능이 무너집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+n_per = 400
+n_periods = 12
+
+def gen(period):
+    """시간에 따라 참 결정경계가 회전한다."""
+    th = np.radians(period * 7)
+    w = np.array([np.cos(th), np.sin(th)])
+    X = rng.normal(size=(n_per, 2))
+    y = (X @ w + rng.normal(0, 0.35, n_per) > 0).astype(float)
+    return X, y
+
+X0, y0 = gen(0)
+b_fixed = fit_weighted(X0, y0, iters=2000)
+
+acc_fixed, acc_retrain, psi_vals = [], [], []
+b_cur = b_fixed.copy()
+for t in range(n_periods):
+    Xt, yt = gen(t)
+    acc_fixed.append(float(((prob(Xt, b_fixed) > 0.5) == yt).mean()))
+    acc_retrain.append(float(((prob(Xt, b_cur) > 0.5) == yt).mean()))
+    if t % 3 == 2:                                   # 3기간마다 재학습
+        b_cur = fit_weighted(Xt, yt, iters=2000)
+    # 입력 분포는 안 바뀌므로 PSI 는 낮게 유지된다
+    ref = X0[:, 0]; cur = Xt[:, 0]
+    edges = np.percentile(ref, np.linspace(0, 100, 11))
+    edges[0], edges[-1] = -np.inf, np.inf
+    p_ref = np.histogram(ref, edges)[0] / len(ref) + 1e-6
+    p_cur = np.histogram(cur, edges)[0] / len(cur) + 1e-6
+    psi_vals.append(float(np.sum((p_cur - p_ref) * np.log(p_cur / p_ref))))
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("모델 정확도", "입력 분포 PSI"))
+fig.add_trace(go.Scatter(x=np.arange(n_periods), y=acc_fixed, mode="lines+markers",
+                         name="고정 모델", line=dict(color=viz.WARM, width=2.5)),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=np.arange(n_periods), y=acc_retrain, mode="lines+markers",
+                         name="3기간마다 재학습",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=np.arange(n_periods), y=psi_vals, mode="lines+markers",
+                         showlegend=False, line=dict(color=viz.GREEN, width=2.5)),
+              row=1, col=2)
+fig.add_hline(y=0.1, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="PSI 0.1 (경보 기준)", row=1, col=2)
+fig.update_xaxes(title_text="시간 (기간)")
+fig.update_yaxes(title_text="정확도", row=1, col=1)
+fig.update_yaxes(title_text="PSI", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="개념 드리프트")
+fig.update_layout(legend=dict(x=0.02, y=0.15))
+fig.show()
+```
+
+```{python}
+#| label: drift-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'기간':>5} {'고정 모델':>11} {'재학습':>10} {'입력 PSI':>11}")
+print("-" * 42)
+for t in [0, 3, 6, 9, 11]:
+    print(f"{t:>5} {acc_fixed[t]:>11.3f} {acc_retrain[t]:>10.3f} {psi_vals[t]:>11.4f}")
+print()
+print(f"고정 모델: {acc_fixed[0]:.3f} → {acc_fixed[-1]:.3f}")
+print(f"입력 PSI 최대값: {max(psi_vals):.4f}  (경보 기준 0.1 미만)")
+print()
+print("→ 성능이 크게 떨어졌는데 **입력 분포 모니터링은 아무 경보도 울리지 않는다.**")
+print("  p(x) 는 그대로이고 p(y|x) 만 바뀌었기 때문이다.")
+print("  입력 드리프트 감시만으로는 개념 드리프트를 못 잡는다.")
+```
+
+::: {.callout-warning}
+## 입력 모니터링의 사각지대
+
+PSI, KS 검정 같은 입력 분포 감시는 **공변량 이동만** 잡는다.
+개념 드리프트($p(y|x)$ 변화)는 입력이 그대로여도 일어난다.
+
+그래서 실제 성능을 재려면 **레이블이 필요**한데, 레이블은 대개 늦게 온다
+(사기 여부는 몇 달 뒤 확정, 이탈은 계약 만료 후).
+
+실무 대응:
+- 대리 지표(예측 분포 이동, 사용자 행동) 함께 감시
+- 일부 트래픽에 대해 빠른 레이블링 확보
+- 정기 재학습을 기본 정책으로
 :::
 
 ---
 
-## G2.12.4 — 피드백 루프
+## 피드백 루프
 
-모델 결정이 다음 학습 데이터를 오염시키는 폭주
+모델의 결정이 다음 학습 데이터를 만들면 자기강화가 일어난다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 반복 라운드 슬라이더
+```{python}
+#| label: fig-feedback-loop
+#| fig-cap: "모델이 선택한 데이터로만 학습하면 편향이 증폭됩니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng = np.random.default_rng(3)
+
+def simulate(explore_rate, n_rounds=25, n_per_round=400):
+    """대출 승인 모형: 승인한 건의 결과만 관측된다."""
+    # 두 집단, 참 상환율은 동일하지만 초기 데이터가 편향됨
+    true_rate = np.array([0.7, 0.7])
+    obs = [np.array([12.0, 4.0]), np.array([4.0, 12.0])]   # (상환, 미상환) 초기 관측
+    share_hist = []
+    for _ in range(n_rounds):
+        est = np.array([o[0] / o.sum() for o in obs])
+        grp = rng.integers(0, 2, n_per_round)
+        # 추정 상환율이 높은 집단을 주로 승인 + 일부 탐색
+        approve = (est[grp] > 0.5) | (rng.random(n_per_round) < explore_rate)
+        share = np.mean(grp[approve] == 0) if approve.any() else 0.5
+        share_hist.append(float(share))
+        for g in (0, 1):
+            m = approve & (grp == g)
+            if m.sum() == 0:
+                continue
+            repaid = rng.random(m.sum()) < true_rate[g]
+            obs[g] = obs[g] + np.array([repaid.sum(), (~repaid).sum()])
+    return share_hist, [o[0]/o.sum() for o in obs]
+
+fig = go.Figure()
+for i, er in enumerate([0.0, 0.05, 0.2, 0.5]):
+    hist, final = simulate(er)
+    fig.add_trace(go.Scatter(x=np.arange(len(hist)), y=hist, mode="lines",
+                             name=f"탐색 비율 {er:.0%}",
+                             line=dict(color=viz.color(i), width=2.5)))
+fig.add_hline(y=0.5, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="공정한 비율 0.5 (참 상환율이 같으므로)")
+fig.update_layout(xaxis_title="라운드", yaxis_title="승인 중 집단 0의 비율",
+                  yaxis=dict(range=[0, 1.05]), legend=dict(x=0.6, y=0.35))
+viz.fig_defaults(fig, height=400,
+                 title="두 집단의 참 상환율은 동일(0.7). 초기 관측만 편향됨")
+fig.show()
+```
+
+```{python}
+#| label: feedback-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'탐색 비율':>10} {'최종 승인 비율':>15} {'집단0 추정':>12} {'집단1 추정':>12}")
+print("-" * 54)
+for er in [0.0, 0.05, 0.2, 0.5]:
+    hist, final = simulate(er)
+    print(f"{er:>10.0%} {hist[-1]:>15.3f} {final[0]:>12.3f} {final[1]:>12.3f}")
+print()
+print("참 상환율은 두 집단 모두 0.700 이다.")
+print("→ 탐색이 없으면 초기 편향이 고착되고, 집단1은 데이터가 쌓이지 않아")
+print("  추정치가 영원히 갱신되지 않는다 (관측이 곧 정책에 좌우됨).")
+```
+
+::: {.key-concept}
+**"관측한 것만 학습한다"의 위험**
+
+- 대출 승인: 거절한 건의 상환 여부를 영원히 모른다
+- 추천: 노출하지 않은 아이템의 클릭률을 모른다
+- 채용: 불합격자의 성과를 모른다
+
+이것이 **선택 편향**의 자기강화 버전이고, [1.6 인과추론](../01_data_science/06_causal_inference.qmd)의
+문제이기도 하다.
+
+처방: 소량의 **무작위 탐색**을 정책에 섞고, 그 데이터로 편향 없는 추정을 유지한다.
+비용이 들지만 장기적으로 필수다.
 :::
 
 ---
 
-## 핵심 용어
+## 잘못된 기준선
 
-| 용어 | 비고 |
-|------|------|
-| 데이터 누수 |  |
-| 클래스 불균형 |  |
-| 개념 드리프트 |  |
-| PSI |  |
-| 피드백 루프 |  |
+::: {.callout-warning}
+## "개선했다"는 착시
+
+성능 향상처럼 보이는 것들의 흔한 원인:
+
+1. **더미 기준선을 안 봤다.** 정확도 94%가 최빈 클래스 비율일 수 있다.
+2. **비교 조건이 다르다.** 새 모델만 하이퍼파라미터를 튜닝했다.
+3. **시드 하나만 봤다.** 시드 간 변동보다 작은 차이일 수 있다
+   ([2.11](11_model_evaluation.qmd)).
+4. **평가 데이터가 다르다.** 전처리나 필터링이 바뀌었다.
+5. **여러 번 시도해 최선만 보고했다.** 선택 편향
+   ([0.3 다중비교](../00_foundations/03_statistics.qmd)).
+:::
+
+```{python}
+#| label: baseline-check
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+# 시드마다 성능이 흔들리는 상황
+base_scores = 0.860 + rng.normal(0, 0.012, 10)
+new_scores  = 0.868 + rng.normal(0, 0.012, 10)
+
+print(f"기존 모델: {base_scores.mean():.4f} ± {base_scores.std(ddof=1):.4f}  (시드 10개)")
+print(f"새 모델  : {new_scores.mean():.4f} ± {new_scores.std(ddof=1):.4f}")
+print()
+d = new_scores.mean() - base_scores.mean()
+pooled = np.sqrt((base_scores.var(ddof=1) + new_scores.var(ddof=1))/2)
+print(f"차이 {d:+.4f}  ·  시드 간 표준편차 {pooled:.4f}  ·  효과크기 {d/pooled:.2f}")
+print()
+# 부트스트랩 신뢰구간
+diffs = [rng.choice(new_scores, 10).mean() - rng.choice(base_scores, 10).mean()
+         for _ in range(5000)]
+lo, hi = np.percentile(diffs, [2.5, 97.5])
+print(f"차이의 95% 부트스트랩 신뢰구간: [{lo:+.4f}, {hi:+.4f}]")
+print(f"→ 0 을 포함{'한다 → 유의하다고 말할 수 없다' if lo < 0 < hi else '하지 않는다'}")
+print()
+print("만약 시드 하나씩만 비교했다면 '0.8%p 개선'이라고 보고했을 것이다.")
+```
 
 ---
 
-**다음**: [3.0 퍼셉트론에서 MLP까지](../03_deep_learning/00_perceptron_mlp.qmd) — 선형 유닛의 쌓기와 비선형성 — 표현력은 어디서 오는가
+## 배포 전 점검표
+
+```{python}
+#| label: checklist
+#| code-fold: false
+
+items = [
+    ("데이터", [
+        "더미 기준선 대비 얼마나 나은가?",
+        "중복 레코드를 제거했는가?",
+        "분할이 그룹·시간 구조를 반영하는가?",
+        "모든 전처리가 파이프라인 안에서 fit 되는가?",
+    ]),
+    ("특성", [
+        "각 특성을 예측 시점에 알 수 있는가?",
+        "상위 중요도 특성이 타깃에서 파생되지 않았는가?",
+        "특성 생성 시점과 예측 시점의 시차를 확인했는가?",
+    ]),
+    ("평가", [
+        "지표가 실제 비즈니스 목표와 맞는가?",
+        "불균형이면 PR-AUC 나 비용 기반 지표를 봤는가?",
+        "확률이 필요하면 캘리브레이션을 확인했는가?",
+        "시드를 여러 개 돌려 변동폭을 봤는가?",
+        "하이퍼파라미터 선택에 쓴 데이터로 성능을 보고하지 않았는가?",
+    ]),
+    ("운영", [
+        "재학습 주기와 트리거를 정했는가?",
+        "성능 저하를 감지할 모니터링이 있는가?",
+        "모델 결정이 다음 데이터를 오염시키는가?",
+        "롤백 절차가 있는가?",
+    ]),
+]
+for cat, qs in items:
+    print(f"[{cat}]")
+    for q in qs:
+        print(f"  □ {q}")
+    print()
+```
+
+---
+
+## 요약
+
+| 문제 | 증상 | 처방 |
+|------|------|------|
+| **전처리 누수** | 검증 점수 비현실적 | 파이프라인 안에서 fit |
+| 시간·그룹 누수 | 배포 후 급락 | 분할 설계 |
+| 타깃 누수 | 특성 하나가 압도적 | "예측 시점에 아는가?" |
+| 클래스 불균형 | 정확도 착시 | **지표 교체 + 임계값** |
+| 리샘플링 오해 | 캘리브레이션 붕괴 | 순위 성능은 거의 안 바뀜 |
+| 개념 드리프트 | 서서히 성능 저하 | **입력 감시로는 못 잡음** |
+| 피드백 루프 | 편향 자기강화 | 무작위 탐색 섞기 |
+| 잘못된 기준선 | 가짜 개선 | 더미 + 시드 반복 + 신뢰구간 |
+
+---
+
+## Part 2를 마치며
+
+고전 머신러닝 13장을 지났다.
+
+- **[2.0](00_learning_problem.qmd)–[2.1](01_bias_variance.qmd)** 학습의 형식화와 일반화
+- **[2.2](02_linear_regression.qmd)–[2.5](05_svm_kernels.qmd)** 선형 계열: 회귀·정규화·분류·커널
+- **[2.6](06_trees.qmd)–[2.7](07_ensembles.qmd)** 트리와 앙상블 — 정형 데이터 최강
+- **[2.8](08_knn_naive_bayes.qmd)** 기준선 모델과 차원의 저주
+- **[2.9](09_clustering.qmd)–[2.10](10_dimensionality_reduction.qmd)** 비지도: 군집화와 차원 축소
+- **[2.11](11_model_evaluation.qmd)–2.12** 평가와 실전
+
+여기서 배운 것 대부분이 딥러닝에도 그대로 적용된다 —
+[정규화](03_regularization.qmd), [교차검증](11_model_evaluation.qmd),
+[캘리브레이션](11_model_evaluation.qmd), 누수 방지는 모델이 바뀌어도 사라지지 않는다.
+
+다음 파트는 **특성을 직접 설계하는 대신 학습하는** 모델로 넘어간다.
+
+---
+
+**다음**: [3.0 퍼셉트론에서 MLP까지](../03_deep_learning/00_perceptron_mlp.qmd) — 표현력은 어디서 오는가
 
 **이전**: [2.11 모델 평가와 선택](11_model_evaluation.qmd)
