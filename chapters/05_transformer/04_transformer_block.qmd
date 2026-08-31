@@ -4,89 +4,401 @@ subtitle: "FFN·잔차·정규화 배치 — 블록 하나의 완전한 해부"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+LLM은 결국 **같은 블록을 $N$ 번 쌓은 것**이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+LLaMA-3 70B는 80층, GPT-3는 96층이다. 각 층의 구조는 완전히 동일하고,
+파라미터 값만 다르다. 그러니 블록 하나를 완전히 이해하면 모델 전체를 이해한 것이 된다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+블록에는 어텐션 말고도 부품이 셋 더 있다 — FFN, 잔차 연결, 정규화 층.
+각각이 왜 거기 있는지, 그리고 왜 **그 자리에** 있는지가 이 장의 내용이다.
+특히 정규화의 위치 하나가 학습 성패를 가른다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/ai-ml-study/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 블록의 구조
+
+현대 표준(pre-LN) 블록은 이렇게 생겼다.
+
+$$
+\begin{aligned}
+x &\leftarrow x + \text{MHA}\big(\text{Norm}(x)\big) \\
+x &\leftarrow x + \text{FFN}\big(\text{Norm}(x)\big)
+\end{aligned}
+$$
+
+두 줄이 전부다. 각 줄이 **"정규화 → 연산 → 원본에 더하기"** 라는 같은 패턴이다.
+
+```{python}
+#| label: block-forward
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import attention
+
+def layer_norm(x, eps=1e-5):
+    """마지막 축에 대해 평균 0, 분산 1로 (스케일·시프트 파라미터는 생략)"""
+    mu = x.mean(axis=-1, keepdims=True)
+    var = x.var(axis=-1, keepdims=True)
+    return (x - mu) / np.sqrt(var + eps)
+
+def gelu(x):
+    return 0.5 * x * (1 + np.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * x**3)))
+
+def transformer_block(x, W, n_heads):
+    """pre-LN 트랜스포머 블록 한 층"""
+    # 1) 어텐션 서브층
+    h = layer_norm(x)
+    attn_out, _ = attention.multi_head_attention(
+        h, W["q"], W["k"], W["v"], W["o"], n_heads,
+        mask=attention.causal_mask(len(x)))
+    x = x + attn_out                      # 잔차 연결
+
+    # 2) FFN 서브층
+    h = layer_norm(x)
+    ffn_out = gelu(h @ W["fc1"] + W["b1"]) @ W["fc2"] + W["b2"]
+    x = x + ffn_out                       # 잔차 연결
+    return x
+
+n, d, h = 8, 64, 8
+rng = np.random.default_rng(0)
+W = dict(
+    q=rng.normal(size=(d, d)) * 0.02, k=rng.normal(size=(d, d)) * 0.02,
+    v=rng.normal(size=(d, d)) * 0.02, o=rng.normal(size=(d, d)) * 0.02,
+    fc1=rng.normal(size=(d, 4 * d)) * 0.02, b1=np.zeros(4 * d),
+    fc2=rng.normal(size=(4 * d, d)) * 0.02, b2=np.zeros(d),
+)
+
+x = rng.normal(size=(n, d))
+out = transformer_block(x, W, h)
+print(f"입력  {x.shape}  →  출력 {out.shape}   (shape 불변 — 그래서 쌓을 수 있다)")
+print(f"블록 파라미터 수: {sum(v.size for v in W.values()):,}  (= 12d² = {12*d*d:,})")
+```
+
+블록의 입출력 shape가 같다는 점이 핵심이다.
+그래서 그냥 $N$ 번 반복하면 된다.
+
+---
+
+## FFN: 어텐션이 못 하는 일
+
+어텐션은 **토큰 사이**를 섞는다. FFN은 **채널(특성) 사이**를 섞는다.
+
+$$\text{FFN}(x) = W_2 \,\sigma(W_1 x + b_1) + b_2$$
+
+중요한 점: FFN은 **각 토큰에 독립적으로** 적용된다(position-wise).
+토큰 간 정보 이동은 전혀 없다. 그 일은 어텐션이 이미 했다.
+
+| | 어텐션 | FFN |
+|---|---|---|
+| 섞는 축 | 토큰 (시퀀스 방향) | 채널 (특성 방향) |
+| 토큰 간 상호작용 | 있음 | **없음** |
+| 파라미터 | $4d^2$ | $8d^2$ |
+| 비선형성 | softmax만 | 활성화 함수 |
+
+### 왜 4배로 부풀렸다 줄이는가
+
+관례적으로 은닉 차원을 $4d$ 로 잡는다. 왜 확장이 필요한가?
+
+$W_1$ 로 넓히고 비선형을 통과시킨 뒤 $W_2$ 로 줄이는 구조는,
+**고차원에서 정보를 분리한 뒤 다시 압축**하는 것이다.
+확장 없이 $d \to d$ 로 가면 표현할 수 있는 함수가 크게 제한된다
+([3.0 MLP의 보편 근사](../03_deep_learning/00_perceptron_mlp.qmd) 참고).
+
+::: {.key-concept}
+**FFN을 키-값 메모리로 읽는 관점**
+
+$W_1$ 의 각 행을 "키", $W_2$ 의 각 열을 "값"으로 보면 FFN은 이렇게 읽힌다.
+
+$$\text{FFN}(x) = \sum_{i=1}^{4d} \underbrace{\sigma(\langle x, k_i\rangle)}_{\text{이 키에 얼마나 맞는가}} \cdot \underbrace{v_i}_{\text{그럼 이걸 더해라}}$$
+
+즉 **어텐션과 같은 형태**다 — 다만 키·값이 시퀀스가 아니라 학습된 파라미터에서 온다.
+그래서 FFN이 사실적 지식을 저장하는 곳이라는 해석이 나온다.
+실제로 특정 사실을 편집하는 연구들이 FFN 가중치를 건드린다.
 :::
 
-LLM은 결국 이 블록을 N번 쌓은 것이다. 블록 내부의 각 부품이 왜 거기 있는지 알면 모델 카드의 하이퍼파라미터가 전부 읽힌다.
-
 ---
 
-## 이 장에서 다루는 것
+## G5.4.1 — 파라미터는 어디에 있는가
 
-- 블록 구성: MHA → 잔차+정규화 → FFN → 잔차+정규화
-- FFN(position-wise MLP)의 역할: 채널 혼합과 비선형 처리
-- 확장 비율 4d의 관례와 그 근거
-- FFN을 키-값 메모리로 보는 해석
-- SwiGLU FFN과 파라미터 수 보정(8/3 d)
-- pre-LN vs post-LN: 학습 안정성과 warmup 필요성
-- 잔차 스트림(residual stream) 관점 — 해석가능성의 기본 그림
-- 파라미터 수 계산: 어텐션 4d², FFN 8d², 층당 12d²
-- 블록 변형: Parallel block(GPT-J), sandwich norm, QK-norm
-- 층 수·너비·헤드 수 설계 관례
+층당 파라미터를 계산해보면 FFN이 어텐션의 **두 배**를 쓴다.
 
----
+```{python}
+#| label: fig-param-budget
+#| fig-cap: "모델 크기에 따른 파라미터 분포. 임베딩 비중은 커질수록 줄어듭니다."
 
-## G5.4.1 — 블록 데이터 흐름
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
 
-입력 텐서가 블록 내부를 통과하며 shape가 어떻게 변하는지 추적
+# (이름, d_model, 층 수, 어휘 크기)
+models = [
+    ("소형 (124M)",   768,  12, 50257),
+    ("중형 (350M)",  1024,  24, 50257),
+    ("대형 (1.3B)",  2048,  24, 50257),
+    ("6.7B",         4096,  32, 50257),
+    ("70B",          8192,  80, 32000),
+]
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단계 재생
+rows = []
+for name, d, L, V in models:
+    attn = 4 * d * d * L
+    ffn = 8 * d * d * L
+    emb = V * d                       # 입출력 임베딩 묶음(weight tying) 가정
+    rows.append((name, attn, ffn, emb, attn + ffn + emb))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("구성 요소별 파라미터", "전체 대비 비율"))
+
+names = [r[0] for r in rows]
+for i, (label, idx, color) in enumerate([("어텐션 (4d²L)", 1, viz.ACCENT),
+                                          ("FFN (8d²L)", 2, viz.WARM),
+                                          ("임베딩 (Vd)", 3, viz.GREEN)]):
+    fig.add_trace(go.Bar(x=names, y=[r[idx] for r in rows], name=label,
+                         marker_color=color), row=1, col=1)
+    fig.add_trace(go.Scatter(x=names, y=[r[idx] / r[4] * 100 for r in rows],
+                             mode="lines+markers", name=label, showlegend=False,
+                             line=dict(color=color, width=2.5)), row=1, col=2)
+
+fig.update_layout(barmode="stack")
+fig.update_yaxes(title_text="파라미터 수", type="log", row=1, col=1)
+fig.update_yaxes(title_text="비율 (%)", range=[0, 75], row=1, col=2)
+fig.update_xaxes(tickangle=-20)
+viz.fig_defaults(fig, height=420, title="층당 12d² — FFN이 어텐션의 두 배")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+```{python}
+#| label: param-table
+#| code-fold: false
+
+print(f"{'모델':<12} {'d':>6} {'층':>4} {'어텐션':>11} {'FFN':>11} "
+      f"{'임베딩':>11} {'합계':>11}")
+print("-" * 72)
+for (name, d_, L_, V_), (_, a, f, e, t) in zip(models, rows):
+    print(f"{name:<12} {d_:>6} {L_:>4} {a/1e6:>9.1f}M {f/1e6:>9.1f}M "
+          f"{e/1e6:>9.1f}M {t/1e6:>9.1f}M")
+
+print()
+print("주의: 12d²L 은 원 논문 구조 기준 근사다. LLaMA-2 70B 는 SwiGLU(행렬 3개)를")
+print("      쓰므로 실제 파라미터가 이 추정보다 크다 — 위 70B 행이 64.7B 로 나오는 이유.")
+```
+
+::: {.interaction-hint}
+작은 모델에서는 임베딩이 전체의 30% 이상을 차지하지만, 70B에서는 1% 미만입니다. 그래서 큰 모델의 파라미터는 **거의 전부 $12d^2L$** 로 근사됩니다 — 스케일링 법칙에서 쓰는 그 공식입니다.
 :::
 
 ---
 
-## G5.4.2 — 잔차 스트림
+## 잔차 연결과 잔차 스트림
 
-각 층이 잔차 스트림에 무엇을 더하는지 누적 기여도 시각화
+$x \leftarrow x + F(x)$ 형태를 [3.7 초기화](../03_deep_learning/07_initialization.qmd)에서 다루지만,
+Transformer에서는 특별한 해석이 붙는다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 슬라이더
+블록을 펼치면 이렇게 된다.
+
+$$x_{\text{out}} = x_{\text{in}} + \sum_{\ell=1}^{L}\Big(\text{MHA}_\ell(\cdot) + \text{FFN}_\ell(\cdot)\Big)$$
+
+**모든 층의 출력이 하나의 벡터에 누적된다.** 이 누적되는 벡터를 **잔차 스트림**이라 부른다.
+
+::: {.key-concept}
+잔차 스트림은 층들이 **읽고 쓰는 공용 통신 채널**이다.
+
+- 각 층은 스트림을 **읽어서**(정규화 후 입력으로) 계산하고
+- 결과를 스트림에 **더한다**(쓰기)
+- 층들은 서로 직접 연결되지 않고 이 스트림을 통해서만 소통한다
+
+그래서 특정 층·헤드가 무엇을 기여했는지 **분리해서 볼 수 있다**.
+[12.1 기계적 해석가능성](../12_trust/01_mechanistic.qmd)의 로짓 렌즈, 활성화 패칭이
+전부 이 구조 위에서 작동한다.
 :::
 
 ---
 
-## G5.4.3 — pre-LN vs post-LN 학습
+## G5.4.2 — pre-LN vs post-LN
 
-동일 조건에서 두 배치의 학습 곡선·발산 여부
+정규화를 **어디에** 놓느냐가 이 장에서 가장 실용적인 내용이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 구조 전환
+원 논문은 post-LN이었다.
+
+$$x \leftarrow \text{Norm}\big(x + \text{MHA}(x)\big) \qquad \text{(post-LN)}$$
+
+현대 모델은 거의 전부 pre-LN이다.
+
+$$x \leftarrow x + \text{MHA}\big(\text{Norm}(x)\big) \qquad \text{(pre-LN)}$$
+
+차이는 하나뿐이다 — 잔차 경로 **위**에 정규화가 있느냐 **밖**에 있느냐.
+그리고 그 하나가 깊은 모델의 학습 가능성을 결정한다.
+
+```{python}
+#| label: fig-preln-postln
+#| fig-cap: "깊이에 따른 잔차 스트림 크기와 그래디언트 전파"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def layer_norm(x, eps=1e-5):
+    return (x - x.mean(-1, keepdims=True)) / np.sqrt(x.var(-1, keepdims=True) + eps)
+
+rng = np.random.default_rng(1)
+d, n = 128, 16
+depths = np.arange(1, 61)
+
+def simulate(mode, sublayer_gain=0.35):
+    """서브층을 '입력에 비례하는 잡음을 더하는 연산'으로 단순화해 전파를 본다"""
+    x = rng.normal(size=(n, d))
+    norms, grads = [], []
+    g = 1.0                                   # 그래디언트 배율 누적
+    for _ in depths:
+        if mode == "pre":
+            h = layer_norm(x)
+            x = x + sublayer_gain * h @ rng.normal(size=(d, d)) / np.sqrt(d)
+            # 잔차 경로가 정규화를 거치지 않아 그래디언트가 그대로 통과
+            g *= 1.0
+        else:                                  # post
+            h = x + sublayer_gain * x @ rng.normal(size=(d, d)) / np.sqrt(d)
+            x = layer_norm(h)
+            # 매 층 정규화가 스케일을 되돌려 그래디언트가 감쇠
+            g *= 0.93
+        norms.append(np.linalg.norm(x, axis=-1).mean())
+        grads.append(g)
+    return np.array(norms), np.array(grads)
+
+pre_n, pre_g = simulate("pre")
+post_n, post_g = simulate("post")
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("층별 잔차 스트림 크기", "역전파 그래디언트 배율"))
+
+for name, nrm, grd, c in [("pre-LN", pre_n, pre_g, viz.ACCENT),
+                          ("post-LN", post_n, post_g, viz.WARM)]:
+    fig.add_trace(go.Scatter(x=depths, y=nrm, mode="lines", name=name,
+                             line=dict(color=c, width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=depths, y=grd, mode="lines", name=name,
+                             showlegend=False, line=dict(color=c, width=2.5)),
+                  row=1, col=2)
+
+fig.update_xaxes(title_text="층")
+fig.update_yaxes(title_text="‖x‖ 평균", row=1, col=1)
+fig.update_yaxes(title_text="입력층까지 전달되는 배율", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=400,
+                 title="정규화 위치가 신호·그래디언트 전파를 바꾼다 (단순화 모델)")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.callout-warning}
+## 위 시뮬레이션은 단순화 모델입니다
+
+서브층을 "무작위 행렬 곱"으로 대체해 **전파 경향만** 재현한 것이며,
+실제 학습된 Transformer의 측정값이 아닙니다.
+정성적 결론(pre-LN은 잔차 노름이 누적되고 그래디언트가 잘 전달됨, post-LN은 그 반대)은
+문헌과 일치하지만, 구체적 수치는 의미가 없습니다.
+:::
+
+| | post-LN (원 논문) | pre-LN (현대 표준) |
+|---|---|---|
+| 그래디언트 전파 | 층마다 정규화를 통과 → 감쇠 | 잔차 경로로 직통 |
+| **warmup** | **필수** (없으면 발산) | 없어도 학습됨 |
+| 깊이 한계 | 12~24층에서 불안정 | 100층 이상 가능 |
+| 최종 성능 | 잘 학습되면 약간 유리하다는 보고 | 안정성이 압도적 |
+| 부작용 | — | 잔차 노름이 층마다 커짐 |
+
+::: {.key-concept}
+**pre-LN에는 마지막 정규화가 필요하다.**
+
+잔차 스트림이 층마다 누적되어 노름이 계속 커지므로,
+출력 헤드 직전에 `final_norm` 을 한 번 더 넣는다.
+LLaMA·GPT-NeoX 등 모든 pre-LN 구현에 이 층이 있다.
 :::
 
 ---
 
-## G5.4.4 — 파라미터 예산 분해
+## 현대 블록의 변형들
 
-어텐션/FFN/임베딩이 전체 파라미터에서 차지하는 비율
+원 논문 이후 바뀐 것들을 정리하면, LLM 코드를 읽을 때 낯선 것이 거의 없어진다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: d_model·층 수 슬라이더
-:::
+| 부품 | 원 논문 (2017) | 현대 (LLaMA 계열) | 이유 |
+|------|----------------|-------------------|------|
+| 정규화 | post-LN, LayerNorm | **pre-LN, RMSNorm** | 안정성, 속도 |
+| 활성화 | ReLU | **SwiGLU** | 성능 향상 |
+| FFN 크기 | $4d$ | $\tfrac{8}{3}d$ (SwiGLU 보정) | 파라미터 수 맞추기 |
+| 위치 | 사인파 절대 | **RoPE** | 상대 위치, 외삽 |
+| 편향 | 있음 | **대부분 제거** | 성능 차이 없고 더 안정 |
+| 어텐션 | MHA | **GQA** | KV 캐시 절감 |
+
+### SwiGLU와 8/3 규칙
+
+SwiGLU는 게이트를 하나 더 쓴다.
+
+$$\text{FFN}_{\text{SwiGLU}}(x) = \big(\text{Swish}(xW_1) \odot xW_3\big)W_2$$
+
+행렬이 2개에서 **3개**로 늘었다. 그래서 은닉 차원을 그대로 $4d$ 로 두면 파라미터가 1.5배가 된다.
+공정한 비교를 위해 $4d \times \tfrac{2}{3} = \tfrac{8}{3}d$ 로 줄인다.
+
+```{python}
+#| label: swiglu-params
+#| code-fold: false
+
+d = 4096
+relu_ffn = 2 * d * (4 * d)                     # W1, W2
+swiglu_naive = 3 * d * (4 * d)                 # W1, W2, W3
+swiglu_fixed = 3 * d * int(8 / 3 * d)          # 8/3 로 축소
+
+print(f"d_model = {d}")
+print(f"  ReLU FFN (4d)          : {relu_ffn/1e6:8.1f}M")
+print(f"  SwiGLU (4d, 보정 없음)  : {swiglu_naive/1e6:8.1f}M  ← 1.5배로 불공정")
+print(f"  SwiGLU (8/3 d)         : {swiglu_fixed/1e6:8.1f}M  ← 파라미터 맞춤")
+print()
+print(f"LLaMA-2 7B 실제 값: d=4096, FFN 은닉=11008 ≈ {11008/4096:.2f}d")
+```
 
 ---
 
-## 핵심 용어
+## 블록을 쌓으면 무슨 일이 생기나
 
-| 용어 | 비고 |
-|------|------|
-| FFN |  |
-| 잔차 스트림 |  |
-| pre-LN |  |
-| SwiGLU FFN |  |
-| 파라미터 수 계산 |  |
+층마다 하는 일이 다르다는 것이 여러 연구에서 관찰되었다.
+
+| 층 위치 | 주로 하는 일 |
+|---------|--------------|
+| 초반 | 토큰 수준 특성, 표층 패턴, 이전 토큰 참조 |
+| 중반 | 구문·의미 관계, 사실 지식 조회 |
+| 후반 | 다음 토큰 예측을 위한 정제, 출력 어휘로 정렬 |
+
+이 구조가 실용적 기법의 근거가 된다 —
+초기 종료(early exit), 층 건너뛰기, 층별 학습률 조정,
+그리고 [7.6 LoRA](../07_language/06_finetuning_peft.qmd)에서 어떤 층에 어댑터를 붙일지 정하는 문제까지.
 
 ---
 
-**다음**: [5.5 인코더-디코더와 세 가지 계열](05_encoder_decoder.qmd) — 원 논문 구조에서 encoder-only·decoder-only로의 분기
+## 요약
+
+| 부품 | 하는 일 | 파라미터 | 핵심 |
+|------|---------|----------|------|
+| MHA | 토큰 간 정보 이동 | $4d^2$ | 시퀀스 축을 섞음 |
+| FFN | 채널 간 처리 | $8d^2$ | 토큰별 독립, 키-값 메모리 해석 |
+| 잔차 | 스트림에 누적 | 0 | 층 간 공용 통신 채널 |
+| 정규화 | 스케일 안정화 | $2d$ | **위치가 결정적** |
+| 층당 합계 | — | $\approx 12d^2$ | 스케일링 법칙의 기초 |
+
+| 설계 선택 | 현대 표준 | 이유 |
+|-----------|-----------|------|
+| 정규화 위치 | pre-LN | 깊은 모델 안정성, warmup 불필요 |
+| 정규화 종류 | RMSNorm | 평균 제거 생략 → 더 빠름 |
+| 활성화 | SwiGLU ($\tfrac{8}{3}d$) | 성능, 파라미터 보정 |
+| 마지막 층 | final norm 필수 | 잔차 누적 상쇄 |
+
+이제 블록 하나를 완전히 알았다.
+다음 장은 이 블록을 **어떻게 배치하느냐**로 BERT·GPT·T5가 갈라지는 것을 본다.
+
+---
+
+**다음**: [5.5 인코더-디코더와 세 가지 계열](05_encoder_decoder.qmd) — 같은 부품, 다른 조립
 
 **이전**: [5.3 위치 인코딩](03_positional_encoding.qmd)
