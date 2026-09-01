@@ -4,78 +4,535 @@ subtitle: "명시적 밀도·암묵적 생성 — 무엇을 학습한다고 말�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+생성 모델은 종류가 많아 보인다.
+VAE, GAN, 정규화 흐름, 확산, 자기회귀, 에너지 기반 모델…
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그런데 전부 **한 질문에 대한 서로 다른 타협**이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+> **분포 $p(x)$ 를 어떻게 다룰 것인가?**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+정확히 계산할 것인가, 근사할 것인가, 아예 포기하고 샘플만 뽑을 것인가.
+그 선택이 품질·다양성·속도·평가 가능성을 전부 결정한다.
+
+그리고 이 장에서 가장 먼저 확인할 것은 **평가가 어렵다**는 사실이다.
+우도가 높아도 샘플이 쓰레기일 수 있고,
+샘플이 완벽해도 우도가 $-\infty$ 일 수 있다.
+앞의 것은 직접 계산하고, 뒤의 것은 왜 그런지 보인다.
+
+---
+
+## 판별이냐 생성이냐
+
+```{python}
+#| label: discriminative-vs-generative
+#| code-fold: false
+
+rows = [
+    ("판별 (discriminative)", "p(y | x)", "분류·회귀",
+     "결정 경계만 배움", "적은 데이터로 충분"),
+    ("생성 (generative)", "p(x) 또는 p(x, y)", "샘플 생성·밀도 추정",
+     "분포 전체를 배움", "훨씬 많은 데이터 필요"),
+]
+print(f"{'분류':<24} {'학습 대상':<20} {'용도':<18} {'배우는 것':<18} {'비용'}")
+print("-" * 92)
+for r in rows:
+    print(f"{r[0]:<24} {r[1]:<20} {r[2]:<18} {r[3]:<18} {r[4]}")
+print()
+print("**생성 모델이 할 수 있는 일** (판별 모델은 못 하는 것)")
+for s in ["새 샘플 생성",
+          "이상 탐지 — 밀도가 낮은 점을 찾는다",
+          "결측 보완 — 조건부 분포에서 샘플",
+          "불확실성 추정 — 여러 그럴듯한 답을 제시",
+          "표현 학습 — 데이터를 설명하려면 구조를 알아야 한다",
+          "준지도 학습 — 레이블 없는 데이터를 쓸 수 있다"]:
+    print(f"  · {s}")
+print()
+print("**대가**: p(x) 는 p(y|x) 보다 훨씬 어렵다.")
+print("  x 가 784차원 이미지면 p(x) 는 784차원 분포이고,")
+print("  y 가 10개 클래스면 p(y|x) 는 x 마다 10개 숫자다.")
+print()
+print("그래서 분류만 필요하면 판별 모델이 거의 항상 낫다 (Vapnik 의 원칙:")
+print("**'더 일반적인 문제를 중간 단계로 풀지 말라'**).")
+```
+
+---
+
+## 어떻게 $p(x)$ 를 다룰 것인가
+
+```{python}
+#| label: family-map
+#| code-fold: false
+
+fams = [
+    ("자기회귀 (AR)", "명시적·정확",
+     "p(x) = Π p(xᵢ | x<ᵢ)", "최대우도",
+     "d 단계 순차", "PixelCNN, WaveNet, GPT"),
+    ("정규화 흐름", "명시적·정확",
+     "가역 변환 + 야코비안", "최대우도",
+     "1단계", "RealNVP, Glow"),
+    ("VAE", "명시적·근사",
+     "ELBO 하한", "ELBO 최대화",
+     "1단계", "VAE, VQ-VAE, β-VAE"),
+    ("확산", "명시적·근사",
+     "잡음 제거 사슬", "잡음 예측 (ELBO)",
+     "T 단계", "DDPM, Stable Diffusion"),
+    ("GAN", "**암묵적**",
+     "밀도를 정의하지 않음", "적대적 게임",
+     "1단계", "StyleGAN, BigGAN"),
+    ("에너지 기반 (EBM)", "명시적·비정규화",
+     "p ∝ exp(−E(x))", "대조 발산 등",
+     "MCMC", "JEM, 스코어 매칭"),
+]
+print(f"{'계열':<16} {'밀도':<14} {'p(x) 를 어떻게':<24} {'학습 목표':<16} "
+      f"{'샘플링':<12} {'대표'}")
+print("-" * 106)
+for f in fams:
+    print(f"{f[0]:<16} {f[1]:<14} {f[2]:<24} {f[3]:<16} {f[4]:<12} {f[5]}")
+print()
+print("**핵심 구분 두 가지**")
+print()
+print("① **밀도를 계산할 수 있는가**")
+print("   정확: AR, 흐름 — 우도로 학습하고 우도로 평가한다")
+print("   근사: VAE, 확산 — 하한(ELBO)만 안다")
+print("   불가: GAN — p(x) 라는 함수가 아예 없다. 샘플러만 있다")
+print()
+print("② **샘플링에 몇 단계가 필요한가**")
+print("   이것이 실용성을 정한다. 다음 절에서 수치로 본다.")
+print()
+print("자기회귀 분해는 연쇄법칙일 뿐이라 **항상 정확하다**:")
+print("  p(x₁,…,x_d) = p(x₁)·p(x₂|x₁)·p(x₃|x₁,x₂)···")
+print("  근사가 없다. 대신 **순서를 정해야** 하고, 샘플링이 d 단계다.")
+```
+
+---
+
+## G6.0.1 — 우도가 높아도 샘플이 쓰레기일 수 있다
+
+Theis et al.(2016)의 논증을 직접 계산한다.
+
+좋은 모델 $p$ 와 아무 데나 퍼진 잡음 분포를 **섞는다.**
+
+$$q(x) = \varepsilon\, p(x) + (1-\varepsilon)\, \text{noise}(x)$$
+
+데이터 영역에서는 $p \gg \text{noise}$ 이므로 $q \approx \varepsilon p$ 이고,
+
+$$\log q(x) \approx \log p(x) + \log \varepsilon$$
+
+**차원당으로 나누면** $\log\varepsilon / d$ 다. $d$ 가 크면 0으로 간다.
+
+```{python}
+#| label: fig-likelihood-quality
+#| fig-cap: "차원이 커질수록 우도 손실이 사라지지만 샘플의 99%는 여전히 쓰레기입니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+EPS = 0.01
+DIMS = np.array([2, 5, 10, 20, 50, 100, 200, 500, 784, 3072])
+
+# 표준정규를 참 분포로: 평균 로그밀도 = −d/2·log(2π) − d/2
+ll_good = -0.5*DIMS*np.log(2*np.pi) - 0.5*DIMS
+ll_mix = ll_good + np.log(EPS)
+gap_per_dim = (ll_good - ll_mix)/DIMS
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("차원당 로그우도 손실",
+                                    "쓸 만한 샘플의 비율"))
+fig.add_trace(go.Scatter(x=DIMS, y=gap_per_dim, mode="lines+markers",
+                         name="우도 손실 (nats/dim)", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=DIMS, y=np.full(len(DIMS), EPS), mode="lines+markers",
+                         showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+for c, lbl in [(1, None), (2, None)]:
+    fig.update_xaxes(title_text="데이터 차원 d", type="log", row=1, col=c)
+fig.update_yaxes(title_text="nats / dim", type="log", row=1, col=1)
+fig.update_yaxes(title_text="비율", range=[0, 0.1], row=1, col=2)
+for d_, lbl in [(784, "MNIST"), (3072, "CIFAR-10")]:
+    fig.add_vline(x=d_, line=dict(color=viz.YELLOW, dash="dot"),
+                  annotation_text=lbl, row=1, col=1)
+viz.fig_defaults(fig, height=390,
+                 title=f"q = {EPS}·p_good + {1-EPS}·잡음 인 모델")
+fig.show()
+```
+
+```{python}
+#| label: likelihood-quality-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"섞음 비율 ε = {EPS}  →  샘플의 {1-EPS:.0%} 가 순수 잡음이다")
+print()
+print(f"{'차원 d':>8} {'log p_good/d':>15} {'log q/d':>12} {'손실 (nats/dim)':>17} "
+      f"{'예':>12}")
+print("-" * 70)
+names = {784: "MNIST", 3072: "CIFAR-10", 2: "", 50: ""}
+for d_, a_, b_, g_ in zip(DIMS, ll_good/DIMS, ll_mix/DIMS, gap_per_dim):
+    print(f"{d_:>8} {a_:>15.4f} {b_:>12.4f} {g_:>17.4f} {names.get(d_, ''):>12}")
+print()
+print(f"**손실은 정확히 −log(ε)/d = {-np.log(EPS):.3f}/d 다.**")
+print(f"  MNIST(d=784): {-np.log(EPS)/784:.4f} nats/dim")
+print(f"  CIFAR-10(d=3072): {-np.log(EPS)/3072:.4f} nats/dim")
+print()
+print("**논문에서 모델 간 우도 차이가 이 정도인 경우가 흔하다.**")
+print("즉 '우도가 0.01 nats/dim 좋다'는 것이 '샘플이 낫다'를 전혀 보장하지 않는다.")
+print()
+print("반대 방향도 성립한다:")
+print("  훈련 데이터를 그대로 뱉는 모델 → 샘플 품질 완벽, 새 점의 우도 −∞")
+print("  GAN → 샘플은 뛰어나지만 p(x) 자체가 정의되지 않아 우도를 잴 수 없다")
+print()
+print("**결론: 우도와 샘플 품질은 서로를 함의하지 않는다.**")
+print("생성 모델 논문이 FID·IS·인간 평가를 함께 싣는 이유가 이것이다.")
+```
+
+::: {.key-concept}
+**우도가 무의미하다는 뜻은 아니다**
+
+우도는 **밀도 추정**이라는 과제에서는 올바른 지표다.
+이상 탐지, 압축, 결측 보완처럼 $p(x)$ 자체가 답인 문제에서는 우도를 봐야 한다.
+
+문제는 우도를 **샘플 품질의 대리지표로 쓸 때** 생긴다.
+[1.5](../01_data_science/05_experiment_design.qmd)에서 본 대리지표의 위험과 같다 —
+**지표가 목표가 되면 좋은 지표이기를 멈춘다.**
+
+$d$ 차원 데이터에서 우도는 $d$ 개 좌표 전부에 대한 평균이므로,
+**시각적으로 중요한 소수의 구조**가 우도에 기여하는 몫은 아주 작다.
+배경 픽셀 하나를 잘 맞히는 것과 얼굴 구조를 맞히는 것이 같은 무게를 갖는다.
 :::
 
-생성 모델은 종류가 많아 보이지만 '분포 p(x)를 어떻게 다룰 것인가'라는 한 질문에 대한 서로 다른 타협일 뿐이다.
+---
+
+## G6.0.2 — 삼중고: 품질 · 다양성 · 속도
+
+```{python}
+#| label: fig-trilemma
+#| fig-cap: "계열별 샘플링 단계 수와 우도 계산 가능성"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+FAMS = [
+    # 이름, 순차 단계(d=784 기준), 품질(0~1), 다양성(0~1), 우도
+    ("자기회귀 (AR)",      784,  0.85, 0.95, "정확"),
+    ("정규화 흐름",         1,    0.60, 0.90, "정확"),
+    ("VAE",              1,    0.55, 0.90, "하한"),
+    ("GAN",              1,    0.95, 0.55, "불가"),
+    ("확산 DDPM",         1000, 0.95, 0.95, "하한"),
+    ("확산 DDIM(20)",     20,   0.90, 0.92, "하한"),
+    ("일관성 모델",         2,    0.85, 0.88, "불가"),
+]
+
+fig = go.Figure()
+for i, (nm, steps, q, dv, ll) in enumerate(FAMS):
+    fig.add_trace(go.Scatter(x=[steps], y=[q], mode="markers+text",
+                             name=nm, text=[nm], textposition="top center",
+                             marker=dict(size=14 + 26*dv, color=viz.color(i),
+                                         opacity=0.75,
+                                         line=dict(width=1.5,
+                                                   color="rgba(0,0,0,0.4)")),
+                             showlegend=False))
+fig.update_layout(xaxis_title="샘플 1개를 만드는 데 필요한 순차 단계 수 (로그)",
+                  yaxis_title="샘플 품질 (개념적)",
+                  xaxis_type="log", yaxis=dict(range=[0.4, 1.12]))
+viz.fig_defaults(fig, height=440,
+                 title="원 크기 = 다양성(모드 커버리지) · 개념 도식")
+fig.show()
+```
+
+```{python}
+#| label: trilemma-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'계열':<18} {'순차 단계':>10} {'우도':<8} {'강점':<22} {'약점'}")
+print("-" * 88)
+notes = {
+    "자기회귀 (AR)": ("정확한 우도, 이산 데이터에 자연스러움", "샘플링이 d 단계 — 이미지엔 느림"),
+    "정규화 흐름": ("정확한 우도 + 1단계 샘플링", "가역성 제약으로 표현력 손해"),
+    "VAE": ("빠르고 안정적, 잠재공간이 유용", "샘플이 흐릿함"),
+    "GAN": ("샘플 품질 최상, 1단계", "**모드 붕괴**, 학습 불안정, 우도 없음"),
+    "확산 DDPM": ("품질·다양성 모두 최상", "샘플링이 수백~수천 단계"),
+    "확산 DDIM(20)": ("품질 거의 유지하며 50배 빠름", "여전히 1단계는 아님"),
+    "일관성 모델": ("몇 단계로 확산급 품질", "학습이 까다로움, 최신 기법"),
+}
+for nm, steps, q, dv, ll in FAMS:
+    a, b = notes[nm]
+    print(f"{nm:<18} {steps:>10,} {ll:<8} {a:<22} {b}")
+print()
+print("**삼중고(trilemma)**: 품질·다양성·속도 셋을 동시에 얻기 어렵다.")
+print("  · GAN  → 품질·속도는 얻고 **다양성**을 잃는다 (모드 붕괴)")
+print("  · VAE  → 다양성·속도는 얻고 **품질**을 잃는다 (흐릿함)")
+print("  · 확산 → 품질·다양성은 얻고 **속도**를 잃는다")
+print()
+print("최근 연구의 방향은 명확하다 — **확산의 속도를 고치는 것**이다.")
+for s in ["샘플러 개선: DDIM, DPM-Solver (20~50 단계)",
+          "증류: 확산 모델을 1~4 단계 모델로 압축 (일관성 모델, LCM)",
+          "잠재 확산: 픽셀이 아니라 잠재공간에서 확산 (Stable Diffusion)",
+          "흐름 매칭(flow matching): 더 곧은 경로를 학습해 단계를 줄임"]:
+    print(f"  · {s}")
+print()
+print("샘플링 비용의 실제 의미:")
+d_img, T = 3072, 1000
+print(f"  512×512 이미지(잠재 64×64×4 = {64*64*4:,}차원)를")
+print(f"  AR 로 생성하면 {64*64*4:,} 번의 순차 신경망 호출")
+print(f"  확산 1000스텝이면 1,000 번 — **AR 보다 16배 적다**")
+print("  이것이 확산이 이미지에서 AR 을 대체한 이유 중 하나다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G6.0.3 — 평가: 어떤 지표도 단독으로는 속는다
 
-- 판별 모델 p(y|x) vs 생성 모델 p(x) 또는 p(x,y)
-- 명시적 밀도(정확/근사) vs 암묵적 생성
-- 자기회귀 모델: 연쇄법칙 분해, 정확한 우도, 느린 샘플링
-- 잠재변수 모델과 주변화의 어려움
-- 생성 모델 삼중고: 품질·다양성·속도
-- 평가의 어려움: 우도, FID, IS, precision/recall, 인간 평가
-- 모드 붕괴와 모드 커버리지
-- 조건부 생성과 제어(conditioning, guidance)
-- 계열별 지도: AR / VAE / GAN / Flow / Diffusion / EBM
+2차원 8-모드 혼합 분포로 직접 재본다.
+**모드 붕괴를 각 지표가 잡아내는가?**
+
+```{python}
+#| label: fig-evaluation
+#| fig-cap: "다섯 가지 '생성 모델' 과 세 가지 지표"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+K = 8
+ang = np.linspace(0, 2*np.pi, K, endpoint=False)
+CENTERS = np.stack([3*np.cos(ang), 3*np.sin(ang)], 1)
+
+def sample_real(n, seed):
+    r = np.random.default_rng(seed)
+    return CENTERS[r.integers(0, K, n)] + r.normal(0, 0.25, (n, 2))
+
+def frechet(A, B):
+    """2D 가우스 근사 FID — 평균과 공분산만 비교한다 (실제 FID 와 같은 원리)."""
+    mu1, mu2 = A.mean(0), B.mean(0)
+    C1, C2 = np.cov(A.T), np.cov(B.T)
+    s, U = np.linalg.eigh(C1)
+    C1h = U @ np.diag(np.sqrt(np.maximum(s, 0))) @ U.T
+    sm = np.maximum(np.linalg.eigvalsh(C1h @ C2 @ C1h), 0)
+    return float(((mu1-mu2)**2).sum() + np.trace(C1) + np.trace(C2)
+                 - 2*np.sqrt(sm).sum())
+
+def mode_coverage(S, thresh=0.8):
+    d = ((S[:, None, :] - CENTERS[None, :, :])**2).sum(-1)
+    near = d.min(1) < thresh**2
+    return len(np.unique(d.argmin(1)[near]))
+
+def sample_quality(S):
+    """가장 가까운 모드까지의 평균 거리 — 작을수록 '진짜 같다'."""
+    return float(np.sqrt(((S[:, None, :]-CENTERS[None, :, :])**2)
+                         .sum(-1).min(1)).mean())
+
+NS_ = 4000
+real = sample_real(NS_, 1)
+r8 = np.random.default_rng(8)
+MODELS = {
+    "① 완벽 (8모드)":      sample_real(NS_, 2),
+    "② 모드 4개만":        CENTERS[np.random.default_rng(3).integers(0, 4, NS_)]
+                        + np.random.default_rng(4).normal(0, 0.25, (NS_, 2)),
+    "③ 모드 1개 (완전 붕괴)": CENTERS[0]
+                        + np.random.default_rng(5).normal(0, 0.25, (NS_, 2)),
+    "④ 흐릿함 (σ 2.2배)":   sample_real(NS_, 6)
+                        + np.random.default_rng(7).normal(0, 0.5, (NS_, 2)),
+    "⑤ 전부 잡음":         r8.normal(0, 3, (NS_, 2)),
+}
+
+fig = make_subplots(rows=1, cols=len(MODELS)+1,
+                    subplot_titles=("진짜 데이터",) + tuple(MODELS.keys()))
+fig.add_trace(go.Scatter(x=real[::4, 0], y=real[::4, 1], mode="markers",
+                         showlegend=False,
+                         marker=dict(size=3, color=viz.hex_rgba(viz.GREEN, 0.55))),
+              row=1, col=1)
+for i, (nm, S) in enumerate(MODELS.items(), start=2):
+    fig.add_trace(go.Scatter(x=S[::4, 0], y=S[::4, 1], mode="markers",
+                             showlegend=False,
+                             marker=dict(size=3,
+                                         color=viz.hex_rgba(viz.ACCENT, 0.55))),
+                  row=1, col=i)
+for c in range(1, len(MODELS)+2):
+    fig.update_xaxes(range=[-7, 7], showticklabels=False, row=1, col=c)
+    fig.update_yaxes(range=[-7, 7], showticklabels=False,
+                     scaleanchor=f"x{c if c > 1 else ''}", row=1, col=c)
+viz.fig_defaults(fig, height=280, title=f"8-모드 혼합 (각 {NS_:,} 샘플)")
+fig.show()
+```
+
+```{python}
+#| label: evaluation-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'모델':<22} {'커버한 모드':>11} {'FID (낮을수록 좋음)':>20} "
+      f"{'샘플 품질 (낮을수록 좋음)':>24}")
+print("-" * 82)
+SCORES = {}
+for nm, S in MODELS.items():
+    cov, fid, q = mode_coverage(S), frechet(real, S), sample_quality(S)
+    SCORES[nm] = (cov, fid, q)
+    print(f"{nm:<22} {cov:>8}/{K} {fid:>20.4f} {q:>24.4f}")
+print()
+
+names = list(MODELS)
+print("**① '샘플 품질' 지표는 모드 붕괴를 전혀 못 잡는다.**")
+for nm in names[:3]:
+    print(f"   {nm:<22} 커버 {SCORES[nm][0]}/{K},  품질 {SCORES[nm][2]:.4f}")
+print(f"   → 모드를 1개만 내는 모델의 품질 점수가 완벽한 모델과 "
+      f"{abs(SCORES[names[2]][2]-SCORES[names[0]][2]):.4f} 밖에 차이 안 난다.")
+print("   각 샘플이 '진짜 같은지'만 보기 때문이다 — **다양성은 보지 않는다.**")
+print("   Inception Score 나 precision 계열 지표가 이 함정에 빠진다.")
+print()
+
+print("**② FID 는 모드 붕괴를 잡는다.**")
+for nm in names[:3]:
+    print(f"   {nm:<22} FID {SCORES[nm][1]:>8.4f}")
+print("   공분산까지 비교하므로 분포가 좁아지면 벌점을 받는다.")
+print()
+
+print("**③ 그런데 FID 도 속는다.**")
+n_noise, n_collapse = names[4], names[2]
+print(f"   {n_noise:<22} FID {SCORES[n_noise][1]:>8.4f}")
+print(f"   {n_collapse:<22} FID {SCORES[n_collapse][1]:>8.4f}")
+print(f"   **전부 잡음인 모델이 모드 1개짜리보다 FID 가 "
+      f"{SCORES[n_collapse][1]/SCORES[n_noise][1]:.1f}배 좋다.**")
+print()
+print("   FID 가 실제로 보는 것은 평균과 공분산, 그 둘뿐이다:")
+print(f"   {'분포':<22} {'평균':>18} {'trace(공분산)':>14}")
+print("   " + "-"*58)
+for lbl, S in [("진짜 데이터", real), (n_noise, MODELS[n_noise]),
+               (n_collapse, MODELS[n_collapse])]:
+    mu = np.round(S.mean(0), 2)
+    print(f"   {lbl:<22} {str(mu.tolist()):>18} {np.trace(np.cov(S.T)):>14.2f}")
+print()
+print("   잡음 모델은 **평균을 맞히고 퍼짐만 2배 틀렸다.**")
+print("   모드 1개 모델은 **평균이 3.0 만큼 어긋나고 퍼짐이 0.13 로 붕괴했다** —")
+print(f"   평균 차이 항만으로 이미 {((MODELS[n_collapse].mean(0)-real.mean(0))**2).sum():.2f} 를 먹는다.")
+print("   개별 샘플이 전부 엉터리여도 두 모멘트만 맞으면 FID 는 좋게 나온다.")
+print()
+
+print("**④ 커버리지 지표도 속는다.**")
+print(f"   {n_noise:<22} 커버 {SCORES[n_noise][0]}/{K}")
+print("   무작위 잡음이 사방에 흩어지면 모든 모드 근처에 우연히 점이 떨어진다.")
+print("   '커버했다'와 '그 모드를 재현한다'는 다른 이야기다.")
+print()
+
+print("**결론: 세 지표 모두 단독으로는 속는다.**")
+print(f"{'':<22} {'모드 붕괴 탐지':>14} {'잡음 탐지':>12}")
+print("-" * 52)
+for lbl, a, b in [("샘플 품질 (precision)", "✗", "○"),
+                  ("FID", "○", "✗"),
+                  ("커버리지 (recall)", "○", "✗")]:
+    print(f"{lbl:<22} {a:>14} {b:>12}")
+print()
+print("그래서 실무는 **여러 지표를 함께** 본다:")
+for s in ["FID — 전체 분포 거리 (기본값이지만 만능 아님)",
+          "precision / recall (Kynkäänniemi 2019) — 품질과 다양성을 **분리**해 측정",
+          "density / coverage — precision/recall 의 개선판",
+          "**인간 평가** — 여전히 최종 심판. 다만 비싸고 재현이 어렵다",
+          "다운스트림 성능 — 생성 데이터로 분류기를 학습시켜 보기"]:
+    print(f"  · {s}")
+print()
+print("이것은 [1.1](../01_data_science/01_eda.qmd)의 앤스컴 4중주와 같은 교훈이다 —")
+print("**요약 숫자 하나가 분포를 대신할 수 없다.**")
+```
 
 ---
 
-## G6.0.1 — 계열 지도
+## 조건부 생성
 
-각 계열의 학습 목표·샘플링 방식·장단점을 한 화면에 정리한 도식
+```{python}
+#| label: conditioning
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 계열 선택
+rows = [
+    ("조건 입력 연결", "c 를 입력에 이어붙임", "가장 단순", "약한 제어"),
+    ("클래스 임베딩", "레이블을 임베딩해 주입", "이산 조건", "AdaIN, FiLM"),
+    ("교차 어텐션", "조건을 K,V 로 어텐션", "텍스트→이미지", "Stable Diffusion"),
+    ("분류기 가이던스", "외부 분류기의 그래디언트", "사후 제어 가능", "분류기를 따로 학습"),
+    ("분류기 없는 가이던스", "조건부·무조건부를 함께 학습 후 외삽",
+     "**현재 표준**", "품질↑ 다양성↓"),
+    ("ControlNet 계열", "구조 조건(에지·자세)을 별도 분기로", "정밀 제어", "추가 학습 필요"),
+]
+print(f"{'방법':<22} {'어떻게':<34} {'특징':<16} {'비고'}")
+print("-" * 90)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<34} {r[2]:<16} {r[3]}")
+print()
+print("**분류기 없는 가이던스(CFG)의 핵심 식**")
+print()
+print("   ε̃ = ε(x, ∅) + w·[ ε(x, c) − ε(x, ∅) ]")
+print()
+print("조건부 예측과 무조건부 예측의 **차이를 w 배 증폭**한다.")
+print()
+import numpy as np
+print(f"{'가이던스 w':>12} {'의미':<26} {'효과'}")
+print("-" * 62)
+for w, mean, eff in [(0.0, "무조건부 생성", "조건 무시"),
+                     (1.0, "순수 조건부", "조건 반영, 다양성 유지"),
+                     (3.0, "적당한 증폭", "조건 충실도↑"),
+                     (7.5, "SD 기본값", "선명하지만 다양성↓"),
+                     (20.0, "과도한 증폭", "채도 과포화, 아티팩트")]:
+    print(f"{w:>12.1f} {mean:<26} {eff}")
+print()
+print("**w 를 키우면 품질(조건 충실도)이 오르고 다양성이 떨어진다** —")
+print("위에서 본 삼중고가 여기서도 그대로 나타난다.")
+```
+
+---
+
+## 어떤 계열을 고를 것인가
+
+::: {.key-concept}
+**선택 기준**
+
+| 상황 | 권장 | 이유 |
+|------|------|------|
+| 텍스트 · 이산 시퀀스 | **자기회귀** | 이산에 자연스럽고 우도가 정확 |
+| 이미지 · 오디오 생성 | **확산** | 품질·다양성 최상, 조건부 제어 성숙 |
+| 실시간 생성 필요 | **GAN / 증류 확산** | 1~4 단계 |
+| 밀도 추정 · 이상 탐지 | **흐름 / AR** | 정확한 우도가 필요 |
+| 표현 학습 · 압축 | **VAE / VQ-VAE** | 잠재공간이 목적 |
+| 데이터가 적음 | 판별 모델 또는 사전학습 활용 | 생성은 데이터를 많이 먹는다 |
+
+**섞어 쓰는 것이 현재 표준이다.**
+Stable Diffusion = VAE(잠재공간) + 확산(생성) + Transformer(텍스트 조건).
+각 계열의 강점만 취한 조합이다.
 :::
 
 ---
 
-## G6.0.2 — 품질-다양성-속도 삼각형
+## 요약
 
-세 축에서 각 계열이 앉는 위치
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 계열 전환
-:::
-
----
-
-## G6.0.3 — 우도와 지각 품질의 불일치
-
-우도가 높아도 흐릿한 샘플이 나오는 사례
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플 선택
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 생성 모델 |  |
-| 명시적/암묵적 밀도 |  |
-| 모드 붕괴 |  |
-| FID |  |
-| 조건부 생성 |  |
+| 판별 vs 생성 | $p(y|x)$ 는 결정 경계만, $p(x)$ 는 분포 전체 |
+| 명시적·정확 | AR, 흐름 — 우도를 계산할 수 있음 |
+| 명시적·근사 | VAE, 확산 — 하한(ELBO)만 |
+| 암묵적 | GAN — 밀도 함수가 아예 없음 |
+| 우도-품질 불일치 | 99% 잡음을 섞어도 손실이 0.006 nats/dim (d=784) |
+| 반대 방향 | 훈련 데이터 암기 → 샘플 완벽, 우도 $-\infty$ |
+| 삼중고 | 품질·다양성·속도 중 둘만 |
+| 샘플링 단계 | AR $d$ / VAE·GAN 1 / 확산 $T$ |
+| 샘플 품질 지표 | **모드 붕괴를 못 잡음** (1모드 0.3159 vs 8모드 0.3150) |
+| FID | 모드 붕괴는 잡지만 **순수 잡음에 속음** (10.7배 후하게 평가) |
+| 평가 결론 | 단일 지표는 전부 속는다 — 여러 개를 함께 |
+
+이 장은 지도였다. 다음 장부터 각 계열을 직접 구현한다.
+
+시작은 가장 단순한 것 — **압축과 재구성**이다.
 
 ---
 
-**다음**: [6.1 오토인코더](01_autoencoder.qmd) — 압축과 재구성 — 표현 학습의 원형
+**다음**: [6.1 오토인코더](01_autoencoder.qmd) — 압축과 재구성
 
 **이전**: [5.10 트랜스포머의 대안](../05_transformer/10_alternatives_ssm.qmd)
