@@ -4,89 +4,636 @@ subtitle: "무작위화·검정력·순차분석 — 의사결정을 위한 통�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+온라인 서비스에서 모델의 가치는 오프라인 지표가 아니라 **실험으로 증명된다.**
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그리고 그 실험은 대부분 잘못 설계되고 잘못 읽힌다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장의 첫 실험이 가장 흔한 실수를 보여준다.
+**아무 효과도 없는 A/A 테스트**에서, 중간에 20번 들여다보는 것만으로
+"유의미한 차이"를 발견할 확률이 5%에서 **24%**로 오른다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+데이터를 조작한 것이 아니다. 통계 방법도 정확하다.
+**언제 보느냐**만 다르다.
+
+---
+
+## 무작위화가 인과를 주는 이유
+
+[1.0](00_data_and_types.qmd)에서 봤듯, 관찰 데이터에서는 교란이 결론을 뒤집는다.
+무작위 배정은 그 문제를 **설계로** 없앤다.
+
+```{python}
+#| label: randomization-why
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+rng = np.random.default_rng(0)
+N = 20000
+# 관측되지 않는 교란변수 (예: 사용자의 원래 활동성)
+u = rng.normal(0, 1, N)
+# 진짜 처치효과는 0.20 으로 고정
+TRUE_EFFECT = 0.20
+
+# (a) 자기선택: 활동적인 사용자가 신기능을 더 많이 씀
+p_self = 1/(1 + np.exp(-1.5*u))
+t_self = rng.random(N) < p_self
+y_self = 0.8*u + TRUE_EFFECT*t_self + rng.normal(0, 1, N)
+
+# (b) 무작위 배정: 동전 던지기
+t_rand = rng.random(N) < 0.5
+y_rand = 0.8*u + TRUE_EFFECT*t_rand + rng.normal(0, 1, N)
+
+print(f"진짜 처치효과: {TRUE_EFFECT:+.3f}")
+print()
+print(f"{'배정 방식':<16} {'추정 효과':>11} {'편향':>10} "
+      f"{'처치군 u 평균':>14} {'대조군 u 평균':>14}")
+print("-" * 72)
+for name, t_, y_ in [("자기선택", t_self, y_self), ("무작위 배정", t_rand, y_rand)]:
+    est = y_[t_].mean() - y_[~t_].mean()
+    print(f"{name:<16} {est:>+11.4f} {est-TRUE_EFFECT:>+10.4f} "
+          f"{u[t_].mean():>+14.4f} {u[~t_].mean():>+14.4f}")
+print()
+print("**무작위화는 관측되지 않은 교란변수까지 균형을 맞춘다.**")
+print("위 표의 마지막 두 열을 보라 — 무작위 배정에서는 u 의 평균이 두 군에서 같다.")
+print("u 를 측정하지 않았는데도 그렇다. 이것이 무작위화의 유일무이한 힘이다.")
+print()
+print("관찰 데이터로 같은 일을 하려면 [1.6 인과추론](06_causal_inference.qmd)의")
+print("도구들이 필요하고, 그마저도 **관측된** 교란만 다룰 수 있다.")
+```
+
+---
+
+## G1.5.1 — 엿보기: 자주 볼수록 거짓 발견이 늘어난다
+
+$p$-값의 정의는 "귀무가설이 참일 때 이만한 결과가 나올 확률"이다.
+한 번 볼 때 5%다. **여러 번 보면 그 중 한 번이라도 5% 아래로 내려갈 확률은 훨씬 크다.**
+
+```{python}
+#| label: fig-peeking
+#| fig-cap: "효과가 없는 A/A 테스트에서 확인 횟수만 늘린 결과"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy import stats
+from src import viz
+
+N_SIM, N_MAX, ALPHA = 3000, 2000, 0.05
+
+def peek_fpr(n_looks, seed=0):
+    """A/A 테스트를 n_looks 번 확인하며, 유의하면 즉시 멈춘다."""
+    r = np.random.default_rng(seed)
+    checks = np.linspace(N_MAX//n_looks, N_MAX, n_looks).astype(int)
+    fp = 0
+    for _ in range(N_SIM):
+        a, b = r.normal(0, 1, N_MAX), r.normal(0, 1, N_MAX)   # 효과 없음
+        for n in checks:
+            if stats.ttest_ind(a[:n], b[:n]).pvalue < ALPHA:
+                fp += 1
+                break
+    return fp/N_SIM
+
+LOOKS = [1, 2, 5, 10, 20]
+fprs = [peek_fpr(k) for k in LOOKS]
+
+# p 값 궤적 예시 — 효과가 없는데도 중간에 유의해지는 경우
+r_demo = np.random.default_rng(7)
+traj = []
+for s in range(6):
+    a, b = r_demo.normal(0, 1, N_MAX), r_demo.normal(0, 1, N_MAX)
+    ns = np.arange(50, N_MAX+1, 25)
+    traj.append((ns, [stats.ttest_ind(a[:n], b[:n]).pvalue for n in ns]))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.45, 0.55],
+                    subplot_titles=("확인 횟수에 따른 거짓 양성률",
+                                    "p 값 궤적 (효과가 전혀 없는 6번의 실험)"))
+fig.add_trace(go.Scatter(x=LOOKS, y=fprs, mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=11)), row=1, col=1)
+fig.add_hline(y=ALPHA, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="명목 5%", row=1, col=1)
+for i, (ns, ps) in enumerate(traj):
+    fig.add_trace(go.Scatter(x=ns, y=ps, mode="lines", showlegend=False,
+                             line=dict(color=viz.color(i), width=1.6)), row=1, col=2)
+fig.add_hline(y=ALPHA, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="p = 0.05", row=1, col=2)
+fig.update_xaxes(title_text="중간 확인 횟수", row=1, col=1)
+fig.update_yaxes(title_text="거짓 양성률", row=1, col=1)
+fig.update_xaxes(title_text="누적 표본 수", row=1, col=2)
+fig.update_yaxes(title_text="p 값", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=420,
+                 title=f"A/A 테스트 {N_SIM:,}회 시뮬레이션 (진짜 효과 = 0)")
+fig.show()
+```
+
+```{python}
+#| label: peeking-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"명목 유의수준 {ALPHA:.0%}, 진짜 효과 0, 시뮬레이션 {N_SIM:,}회")
+print()
+print(f"{'확인 횟수':>10} {'거짓 양성률':>13} {'명목 대비':>11}")
+print("-" * 38)
+for k, f in zip(LOOKS, fprs):
+    print(f"{k:>10} {f:>13.2%} {f/ALPHA:>10.1f}배")
+print()
+print(f"**한 번만 보면 {fprs[0]:.1%} 로 정확하다.** 설계대로다.")
+print(f"**20번 보면 {fprs[-1]:.1%} 다.** 효과가 전혀 없는데도 4번 중 1번은 '발견'한다.")
+print()
+n_cross = sum(1 for _, ps in traj if min(ps) < ALPHA)
+print(f"오른쪽 그림의 6개 궤적 중 {n_cross}개가 중간에 p=0.05 아래로 내려간다.")
+print("**전부 효과가 0인 실험이다.** 그때 멈추면 거짓 발견이 된다.")
+print()
+print("왜 이런가:")
+print("  p 값은 표본이 쌓이면서 **무작위로 위아래로 움직인다.**")
+print("  충분히 여러 번 보면 언젠가는 우연히 0.05 아래를 지나간다.")
+print("  '유의해지면 멈춘다'는 규칙이 그 순간을 **골라내는** 것이다.")
+print()
+print("해결책 세 가지:")
+for a, b in [
+    ("사전에 표본 크기를 정하고 그때까지 안 본다",
+     "가장 단순. 하지만 조기 중단의 이점을 못 얻는다"),
+    ("순차검정 (SPRT, mSPRT, group sequential)",
+     "확인 횟수를 반영해 경계를 조정. 원할 때 멈출 수 있다"),
+    ("항상 유효한 신뢰구간 (anytime-valid, e-value)",
+     "언제 봐도 커버리지가 보장됨. 대신 구간이 넓다"),
+]:
+    print(f"  · {a}")
+    print(f"    → {b}")
+print()
+print("**모니터링 자체는 해도 된다.** 문제는 '유의하면 멈춘다'는 정지 규칙이다.")
+print("가드레일 지표가 무너지는지 지켜보는 것은 오히려 필수다 —")
+print("다만 그 관찰로 **성공을 선언하면** 안 된다.")
+```
+
+::: {.key-concept}
+**Bonferroni 로는 왜 부족한가**
+
+"20번 볼 거면 $\alpha$ 를 20으로 나누면 되지 않나?"
+
+가능하지만 **지나치게 보수적**이다.
+연속된 확인 시점의 통계량은 서로 **강하게 상관**되어 있기 때문이다
+(n=1000일 때와 n=1025일 때의 결과는 거의 같다).
+
+그래서 실무는 이 상관을 반영하는 방법을 쓴다.
+
+- **O'Brien-Fleming** — 초반엔 매우 엄격, 후반에 느슨. 조기 중단은 큰 효과일 때만
+- **Pocock** — 모든 시점에 동일한 경계
+- **mSPRT** — 확인 횟수에 제한이 없음. Optimizely, VWO 등이 채택
+- **e-value / 신뢰순차** — 임의 정지에 대해 수학적으로 안전
 :::
 
-온라인 서비스에서 모델의 가치는 오프라인 지표가 아니라 실험으로 증명된다. 그 실험은 대부분 잘못 설계되고 잘못 읽힌다.
+---
+
+## G1.5.2 — 표본 크기와 최소검출효과
+
+$$n_{\text{그룹당}} = \frac{2(z_{1-\alpha/2} + z_{\text{power}})^2 \sigma^2}{\text{MDE}^2}$$
+
+핵심은 **MDE의 제곱에 반비례**한다는 것이다.
+절반 크기의 효과를 잡으려면 표본이 **4배** 필요하다.
+
+```{python}
+#| label: fig-sample-size
+#| fig-cap: "MDE·검정력에 따른 필요 표본 수"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy import stats
+from src import viz
+
+def required_n(mde, sd=1.0, alpha=0.05, power=0.8):
+    za, zb = stats.norm.ppf(1-alpha/2), stats.norm.ppf(power)
+    return 2*(za+zb)**2*sd**2/mde**2
+
+MDES = np.logspace(np.log10(0.005), np.log10(0.5), 40)
+POWERS = [0.7, 0.8, 0.9, 0.95]
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("MDE 에 따른 필요 표본 (그룹당)",
+                                    "표본이 정해졌을 때 잡을 수 있는 MDE"))
+for i, pw in enumerate(POWERS):
+    fig.add_trace(go.Scatter(x=MDES, y=[required_n(m, power=pw) for m in MDES],
+                             mode="lines", name=f"검정력 {pw:.0%}",
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+NS = np.logspace(2, 6.5, 40)
+za, zb = stats.norm.ppf(0.975), stats.norm.ppf(0.8)
+fig.add_trace(go.Scatter(x=NS, y=np.sqrt(2*(za+zb)**2/NS), mode="lines",
+                         showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=2)
+fig.update_xaxes(title_text="MDE (표준편차 단위)", type="log", row=1, col=1)
+fig.update_yaxes(title_text="그룹당 표본 수", type="log", row=1, col=1)
+fig.update_xaxes(title_text="그룹당 표본 수", type="log", row=1, col=2)
+fig.update_yaxes(title_text="검출 가능한 MDE", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="α=5%, 양측검정")
+fig.update_layout(legend=dict(x=0.02, y=0.25, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: sample-size-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("α=5%, 검정력 80%, 양측검정")
+print(f"{'MDE (σ 단위)':>14} {'그룹당 표본':>14} {'MDE 절반일 때':>15}")
+print("-" * 48)
+for m in [0.5, 0.2, 0.1, 0.05, 0.02, 0.01]:
+    print(f"{m:>14.3f} {required_n(m):>14,.0f} {required_n(m/2):>15,.0f}")
+print()
+print("**MDE 를 절반으로 줄이면 표본이 4배 필요하다** (제곱 반비례).")
+print()
+# 전환율 지표로 환산
+print("전환율 지표에서의 예 (기준 전환율 5%)")
+p0 = 0.05
+sd0 = np.sqrt(p0*(1-p0))
+print(f"  기준 전환율 {p0:.1%}, 표준편차 σ = √(p(1−p)) = {sd0:.4f}")
+print()
+print(f"{'상대 개선':>10} {'절대 차이':>11} {'σ 단위 MDE':>13} {'그룹당 표본':>14} "
+      f"{'일 트래픽 10만 기준':>18}")
+print("-" * 72)
+for rel in [0.20, 0.10, 0.05, 0.02, 0.01]:
+    abs_d = p0*rel
+    mde_sd = abs_d/sd0
+    n = required_n(mde_sd)
+    days = 2*n/100000
+    print(f"{rel:>10.0%} {abs_d:>11.4f} {mde_sd:>13.4f} {n:>14,.0f} "
+          f"{days:>17.1f}일")
+print()
+print("**1% 개선을 잡으려면 하루 10만 트래픽으로 "
+      f"{2*required_n(p0*0.01/sd0)/100000:.0f}일이 걸린다.**")
+print("이것이 '작은 개선은 측정할 수 없다'는 말의 실체다.")
+print()
+print("표본을 줄이는 방법:")
+for a, b in [("분산 축소 (CUPED 등)", "σ 를 줄인다 — 아래에서 다룸"),
+             ("더 민감한 지표", "이진 전환보다 연속 지표가 분산이 작을 수 있음"),
+             ("층화 무작위화", "사전 정보로 균형을 맞춰 σ 를 줄임"),
+             ("이상치 처리(윈저화)", "꼬리가 σ 를 부풀리는 경우"),
+             ("**MDE 를 현실적으로**", "잡을 수 없는 크기를 목표로 두지 않는다")]:
+    print(f"  · {a:<24} {b}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G1.5.3 — CUPED: 사전 데이터로 분산 줄이기
 
-- 무작위 대조 실험이 인과를 주는 이유
-- 지표 설계: 목표지표(OEC), 보호지표(guardrail), 대리지표의 위험
-- 표본 크기와 최소검출효과(MDE), 검정력 분석
-- 분산 축소: CUPED, 층화, 공변량 조정
-- A/A 테스트와 SRM(표본 비율 불일치) 점검
-- 엿보기 문제(peeking)와 순차검정, 항상 유효한 신뢰구간
-- 다중 지표·다중 실험 보정, FDR
-- 간섭(네트워크 효과)과 클러스터 무작위화
-- 이질적 처치효과(HTE)와 세그먼트 분석의 함정
-- 스위치백, 인터리빙 등 대안 설계
+실험 **전** 기간의 같은 지표를 공변량으로 쓴다.
+
+$$Y^{\text{CUPED}} = Y - \theta(X - \bar{X}),
+\qquad \theta = \frac{\operatorname{Cov}(Y, X)}{\operatorname{Var}(X)}$$
+
+$X$ 는 처치 전에 정해지므로 **처치와 무관**하다.
+따라서 이 조정은 **편향을 만들지 않으면서** 분산만 줄인다.
+
+```{python}
+#| label: fig-cuped
+#| fig-cap: "사전-사후 상관이 높을수록 신뢰구간이 좁아집니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+NC = 4000
+
+def cuped_trial(rho, effect=0.0, seed=0):
+    r = np.random.default_rng(seed)
+    pre = r.normal(0, 1, NC)
+    post = rho*pre + np.sqrt(1-rho**2)*r.normal(0, 1, NC)
+    grp = r.random(NC) < 0.5
+    post = post + effect*grp
+    d_raw = post[grp].mean() - post[~grp].mean()
+    se_raw = np.sqrt(post[grp].var(ddof=1)/grp.sum()
+                     + post[~grp].var(ddof=1)/(~grp).sum())
+    theta = np.cov(post, pre)[0, 1]/pre.var(ddof=1)
+    adj = post - theta*(pre - pre.mean())
+    d_cup = adj[grp].mean() - adj[~grp].mean()
+    se_cup = np.sqrt(adj[grp].var(ddof=1)/grp.sum()
+                     + adj[~grp].var(ddof=1)/(~grp).sum())
+    return se_raw, se_cup, d_raw, d_cup
+
+RHOS = [0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.95]
+red, se_r, se_c = [], [], []
+for rho in RHOS:
+    arr = np.array([cuped_trial(rho, seed=s)[:2] for s in range(30)])
+    a_, b_ = arr[:, 0].mean(), arr[:, 1].mean()
+    se_r.append(a_); se_c.append(b_); red.append(1-(b_/a_)**2)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("표준오차", "분산 감소율"))
+fig.add_trace(go.Scatter(x=RHOS, y=se_r, mode="lines+markers", name="일반 차이",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=RHOS, y=se_c, mode="lines+markers", name="CUPED",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=RHOS, y=red, mode="lines+markers", name="실측",
+                         showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+fig.add_trace(go.Scatter(x=RHOS, y=np.array(RHOS)**2, mode="lines",
+                         name="이론값 ρ²",
+                         line=dict(color=viz.YELLOW, width=2.5, dash="dash")),
+              row=1, col=2)
+fig.update_xaxes(title_text="사전-사후 상관 ρ")
+fig.update_yaxes(title_text="표준오차", row=1, col=1)
+fig.update_yaxes(title_text="분산 감소율", row=1, col=2)
+viz.fig_defaults(fig, height=400,
+                 title=f"CUPED (n={NC:,}, 시드 30개 평균)")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: cuped-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'ρ':>6} {'일반 SE':>10} {'CUPED SE':>10} {'분산 감소':>10} "
+      f"{'이론 ρ²':>9} {'필요 표본 절감':>14}")
+print("-" * 64)
+for rho, a_, b_, r_ in zip(RHOS, se_r, se_c, red):
+    print(f"{rho:>6.2f} {a_:>10.5f} {b_:>10.5f} {r_:>10.3f} {rho**2:>9.3f} "
+          f"{r_:>13.1%}")
+print()
+print("**실측 분산 감소가 이론값 ρ² 와 정확히 일치한다.**")
+err = max(abs(r_ - rho**2) for rho, r_ in zip(RHOS, red))
+print(f"  최대 오차 {err:.4f}")
+print()
+print("의미:")
+print("  분산이 ρ² 만큼 줄면, **같은 검정력에 필요한 표본도 그만큼 줄어든다.**")
+for rho in [0.5, 0.7, 0.9]:
+    print(f"  ρ={rho}: 표본을 {rho**2:.0%} 절감 → "
+          f"실험 기간이 {1-rho**2:.0%} 로 단축")
+print()
+print("**공짜 점심에 가까운 이유**")
+for s in ["사전 데이터는 이미 있다 — 추가 수집 비용이 없다",
+          "X 가 처치 전에 정해지므로 **편향이 생기지 않는다** (핵심)",
+          "θ 를 잘못 추정해도 편향은 없다 — 분산 감소가 덜할 뿐",
+          "ρ=0 이어도 손해가 아니다 (위 표의 첫 행: 감소 0.000)"]:
+    print(f"  · {s}")
+print()
+print("**주의**")
+for s in ["X 는 반드시 **처치 이전** 데이터여야 한다. 실험 중 지표를 쓰면 편향이 생긴다",
+          "신규 사용자는 사전 데이터가 없다 — 별도 처리 필요",
+          "지표가 사전 기간과 상관이 낮으면 이득이 적다 (신규 가입 전환 등)"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G1.5.1 — 표본 크기 계산기
+## G1.5.4 — SRM: 실험이 망가졌다는 가장 강한 신호
 
-효과 크기와 필요한 샘플 수의 관계 곡선
+배정 비율이 설계와 다르면 **그 실험의 결과 전부를 버려야 한다.**
+무작위화가 깨졌다는 뜻이기 때문이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: MDE·검정력 슬라이더
+```{python}
+#| label: fig-srm
+#| fig-cap: "미세한 배정 불균형이 언제 탐지되는가"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from scipy import stats
+from src import viz
+
+def srm_p(true_p, n, seed=0):
+    r = np.random.default_rng(seed)
+    a = r.binomial(n, true_p)
+    obs, exp = np.array([a, n-a]), np.array([n/2, n/2])
+    chi2 = ((obs-exp)**2/exp).sum()
+    return float(1 - stats.chi2.cdf(chi2, 1))
+
+NS_SRM = np.logspace(3, 7, 25).astype(int)
+RATIOS = [0.500, 0.502, 0.505, 0.510, 0.520]
+
+fig = go.Figure()
+for i, p_ in enumerate(RATIOS):
+    ps = [np.median([srm_p(p_, n, seed=s) for s in range(9)]) for n in NS_SRM]
+    fig.add_trace(go.Scatter(x=NS_SRM, y=np.maximum(ps, 1e-16), mode="lines+markers",
+                             name=f"실제 배정률 {p_:.3f}",
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=6)))
+fig.add_hline(y=0.001, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="SRM 경보 기준 (p < 0.001)")
+fig.update_layout(xaxis_title="총 표본 수", yaxis_title="카이제곱 p 값",
+                  xaxis_type="log", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.25))
+viz.fig_defaults(fig, height=400,
+                 title="SRM 탐지력 (설계는 50:50, 시드 9개 중앙값)")
+fig.show()
+```
+
+```{python}
+#| label: srm-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("설계는 50:50 인데 실제 배정률이 미세하게 다를 때")
+print(f"{'실제 배정률':>12} " + " ".join(f"{f'n={n:,}':>14}" for n in
+                                    [10000, 100000, 1000000]))
+print("-" * 62)
+for p_ in RATIOS:
+    row = []
+    for n in [10000, 100000, 1000000]:
+        pv = np.median([srm_p(p_, n, seed=s) for s in range(9)])
+        row.append(f"{pv:.2e}" + ("*" if pv < 0.001 else " "))
+    print(f"{p_:>12.3f} " + " ".join(f"{v:>14}" for v in row))
+print("  (* = SRM 경보)")
+print()
+# 각 배정률이 처음 탐지되는 표본 크기를 직접 찾는다
+print("각 불균형이 **처음 탐지되는** 표본 크기")
+print(f"{'실제 배정률':>12} {'설계와의 차이':>13} {'최소 탐지 표본':>16}")
+print("-" * 46)
+grid = [10**k for k in range(3, 8)]
+for p_ in RATIOS[1:]:
+    found = None
+    for n in grid:
+        if np.median([srm_p(p_, n, seed=s) for s in range(9)]) < 0.001:
+            found = n
+            break
+    print(f"{p_:>12.3f} {p_-0.5:>12.1%}p {f'{found:,}' if found else '>10,000,000':>16}")
+print()
+print("**표본이 커질수록 더 미세한 불균형이 잡힌다** — 당연하지만 함의가 있다.")
+print("  · 대형 서비스에서는 아주 작은 버그도 SRM 으로 드러난다")
+print("  · 반대로 표본이 작으면 실제 불균형이 있어도 통과할 수 있다")
+print("    (위 표에서 n=10,000 일 때 1% 불균형은 p=0.057 로 잡히지 않았다)")
+print()
+print("SRM 이 뜨면 **결과를 해석하지 말고 원인부터 찾아야 한다.**")
+print("흔한 원인:")
+for s in ["봇·크롤러가 한쪽에 몰림 (필터가 처치군에만 적용되는 등)",
+          "리다이렉트 지연 — 처치군만 느려서 이탈이 더 많음",
+          "로깅 누락 — 한쪽 이벤트가 덜 기록됨",
+          "해시 함수 편향 또는 재배정 로직 버그",
+          "실험 시작 시점의 캐시 문제"]:
+    print(f"  · {s}")
+print()
+print("**SRM 은 원인이 아니라 증상이다.** 그리고 그 원인은 거의 항상")
+print("결과에도 영향을 준다 — 이탈한 사용자가 무작위가 아니기 때문이다.")
+print("그래서 'SRM 이 있지만 효과가 커서 괜찮다'는 판단은 성립하지 않는다.")
+```
+
+---
+
+## 지표 설계
+
+```{python}
+#| label: metric-design
+#| code-fold: false
+
+rows = [
+    ("목표지표 (OEC)", "실험의 성공을 정의", "장기 가치와 정렬돼야 함",
+     "1개만. 여러 개면 결정이 안 됨"),
+    ("동인지표 (driver)", "OEC 를 움직이는 중간 지표", "왜 움직였는지 설명",
+     "인과 경로를 가정함"),
+    ("가드레일 (guardrail)", "망가지면 안 되는 것", "지연시간, 오류율, 이탈",
+     "악화되면 롤백"),
+    ("데이터 품질", "실험 자체의 건강", "SRM, 로깅 완결성",
+     "이게 깨지면 나머지 무의미"),
+]
+print(f"{'분류':<20} {'역할':<24} {'예':<24} {'규칙'}")
+print("-" * 92)
+for r in rows:
+    print(f"{r[0]:<20} {r[1]:<24} {r[2]:<24} {r[3]}")
+print()
+print("**대리지표(proxy)의 위험**")
+print("  장기 가치(유지율, LTV)는 측정에 몇 달이 걸린다.")
+print("  그래서 단기 대리지표(클릭, 체류시간)를 쓰는데 —")
+print("  **대리지표를 최적화하면 대리지표만 좋아질 수 있다.**")
+print()
+print("  예: '체류시간'을 OEC 로 두면 UI 를 헷갈리게 만들어도 점수가 오른다.")
+print("      Goodhart 의 법칙 — 지표가 목표가 되면 좋은 지표이기를 멈춘다.")
+print()
+print("**다중 비교 보정**")
+import numpy as np
+print(f"  {'검정 개수':>10} {'보정 없을 때 최소 1개 거짓양성 확률':>34} "
+      f"{'Bonferroni α':>14}")
+print("  " + "-"*62)
+for m in [1, 5, 10, 20, 50]:
+    fw = 1 - 0.95**m
+    print(f"  {m:>10} {fw:>33.1%} {0.05/m:>14.4f}")
+print()
+print("  지표 20개를 보면 전부 효과가 없어도 "
+      f"{1-0.95**20:.0%} 확률로 하나는 '유의'하다.")
+print("  Bonferroni 는 보수적이므로, 지표가 많으면 **FDR 통제**(Benjamini-Hochberg)를 쓴다.")
+```
+
+---
+
+## 간섭과 대안 설계
+
+```{python}
+#| label: interference
+#| code-fold: false
+
+rows = [
+    ("SUTVA 위반 (간섭)",
+     "한 사용자의 처치가 다른 사용자에게 영향",
+     "소셜, 마켓플레이스, 배달 공급",
+     "클러스터 무작위화, 스위치백"),
+    ("클러스터 무작위화",
+     "개인이 아니라 그룹(지역·시간) 단위로 배정",
+     "네트워크 효과가 있을 때",
+     "**유효 표본이 크게 줄어든다**"),
+    ("스위치백",
+     "같은 단위를 시간 구간마다 번갈아 처치",
+     "배달·차량 호출의 공급 효과",
+     "이월 효과(carryover) 주의"),
+    ("인터리빙",
+     "한 사용자에게 두 랭킹을 섞어 제시",
+     "검색·추천 랭킹 비교",
+     "민감도가 매우 높음. 랭킹에만 적용"),
+    ("이중 대조 (A/A)",
+     "동일한 두 그룹을 함께 돌림",
+     "시스템 검증",
+     "실험 인프라 신뢰도 점검용"),
+]
+print(f"{'설계·문제':<22} {'내용':<34} {'상황':<22} {'주의'}")
+print("-" * 100)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<34} {r[2]:<22} {r[3]}")
+print()
+
+# 클러스터 무작위화의 유효 표본 손실을 수치로
+import numpy as np
+print("클러스터 무작위화의 대가 — 설계효과(design effect)")
+print("  DE = 1 + (m − 1)·ICC     (m = 클러스터 크기, ICC = 급내상관)")
+print()
+print(f"  {'클러스터 크기 m':>16} " + " ".join(f"{f'ICC={i}':>12}"
+                                          for i in [0.01, 0.05, 0.2]))
+print("  " + "-"*56)
+for m in [10, 50, 200, 1000]:
+    row = [1 + (m-1)*icc for icc in [0.01, 0.05, 0.2]]
+    print(f"  {m:>16,} " + " ".join(f"{v:>12.1f}" for v in row))
+print()
+print("  DE 가 10 이면 **표본이 10배 필요하다.**")
+print("  ICC 가 0.05 이고 클러스터가 200명이면 DE ≈ 11 — 실험 기간이 11배가 된다.")
+print()
+print("  그래서 간섭이 **실제로 있는지** 먼저 확인해야 한다.")
+print("  없는데 클러스터 무작위화를 하면 검정력만 버리는 것이다.")
+```
+
+---
+
+## 실험 점검 목록
+
+::: {.key-concept}
+**실험을 읽기 전에**
+
+```
+□ SRM 이 없는가                        ← 있으면 여기서 중단
+□ 표본 크기를 사전에 정했는가
+□ 정지 규칙이 사전에 정의됐는가            ← 엿보기 방지
+□ OEC 를 사전에 하나로 정했는가
+□ 가드레일 지표를 함께 보는가
+□ A/A 테스트로 인프라를 검증했는가
+□ 세그먼트 분석은 **사전 등록**한 것만
+□ 다중 지표 보정을 했는가
+□ 신뢰구간을 보는가 (p 값만 보지 않는가)
+□ 효과 크기가 **실무적으로** 의미 있는가
+```
+
+마지막 두 항목이 특히 중요하다.
+[1.1](01_eda.qmd)에서 봤듯 표본이 크면 사소한 차이도 유의해진다.
+**"통계적으로 유의"와 "의사결정을 바꿀 만큼 크다"는 다른 질문이다.**
 :::
 
 ---
 
-## G1.5.2 — 엿보기의 대가
+## 요약
 
-중간에 자주 들여다볼수록 거짓 양성률이 치솟는 시뮬레이션
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 확인 횟수 슬라이더
-:::
-
----
-
-## G1.5.3 — CUPED 분산 축소
-
-사전 데이터와의 상관이 높을수록 좁아지는 신뢰구간
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 사전기간 상관 슬라이더
-:::
-
----
-
-## G1.5.4 — SRM 탐지
-
-미세한 할당 불균형이 카이제곱 검정에 걸리는 지점
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 할당 비율 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| A/B 테스트 |  |
-| 최소검출효과 (MDE) |  |
-| CUPED |  |
-| SRM |  |
-| 순차검정 (sequential testing) |  |
+| 무작위화 | **관측되지 않은** 교란까지 균형을 맞춤 |
+| 엿보기 | 20번 확인하면 거짓 양성률 5% → 24% (실측) |
+| 순차검정 | 확인 횟수를 반영해 경계를 조정 |
+| 표본 크기 | MDE 제곱에 반비례 — 절반 효과에 4배 표본 |
+| CUPED | 분산 감소가 정확히 $\rho^2$ (이론과 실측 일치) |
+| CUPED 조건 | $X$ 가 **처치 이전**이어야 편향이 없음 |
+| SRM | 0.5% 불균형도 n=100만이면 탐지. 뜨면 결과 폐기 |
+| 대리지표 | Goodhart — 지표가 목표가 되면 지표이기를 멈춤 |
+| 다중 비교 | 지표 20개면 64% 확률로 하나는 '유의' |
+| 클러스터 | 설계효과만큼 표본이 더 필요 (ICC 0.05·m 200이면 11배) |
+
+실험은 인과를 주는 가장 확실한 방법이다.
+
+**하지만 언제나 실험할 수 있는 것은 아니다.**
+윤리적으로 불가능하거나, 이미 일어난 일이거나, 무작위화가 불가능한 경우가 있다.
+
+다음 장이 그때의 도구다.
 
 ---
 
-**다음**: [1.6 인과추론](06_causal_inference.qmd) — 교란·DAG·성향점수 — 실험할 수 없을 때 인과를 묻는 법
+**다음**: [1.6 인과추론](06_causal_inference.qmd) — 교란·DAG·성향점수
 
 **이전**: [1.4 특성 공학](04_feature_engineering.qmd)
