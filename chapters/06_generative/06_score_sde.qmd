@@ -4,89 +4,644 @@ subtitle: "스코어 매칭·확률미분방정식·DDIM — 확산을 연속으
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[6.5](05_diffusion.qmd)에서 확산을 $T$단계 마르코프 사슬로 봤다.
+그 관점으로는 설명이 안 되는 것들이 남는다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+- DDIM은 왜 스텝을 건너뛸 수 있는가? 사슬인데?
+- 왜 어떤 샘플러는 20스텝이면 충분한가?
+- 밀도 함수가 없는데 어떻게 우도를 잰다는 말이 나오는가?
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+$T \to \infty$ 로 보내 **연속 시간**으로 다시 쓰면 셋 다 한 번에 풀린다.
+사슬은 확률미분방정식이 되고, 신경망이 배우는 것은 **스코어 함수** 하나가 된다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+이 장에서 확인할 것:
 
-스코어 관점은 확산의 여러 변형(DDIM, 샘플러, 가이던스)을 하나의 언어로 통일하고, 샘플링을 수십 배 빠르게 만든 근거를 준다.
-
----
-
-## 이 장에서 다루는 것
-
-- 스코어 함수 ∇ₓ log p(x) 의 정의와 의미
-- 스코어 매칭과 잡음제거 스코어 매칭(DSM)
-- 랑주뱅 동역학 샘플링
-- 잡음 조건부 스코어 네트워크(NCSN)
-- SDE 관점: VP-SDE(=DDPM), VE-SDE(=SMLD)
-- 역방향 SDE와 확률 흐름 ODE(probability flow ODE)
-- DDIM: 결정론적 샘플링과 적은 스텝
-- 고급 샘플러: DPM-Solver, Heun, ancestral vs ODE
-- 정확한 우도 계산(ODE 경로)
-- 인버전(inversion)과 실제 이미지 편집
+1. 학습된 $\varepsilon$-모델이 정말 스코어인지 (참 스코어와 대조)
+2. 랑주뱅 샘플링이 왜 어닐링을 필요로 하는지 (통제 실험)
+3. **확률 흐름 ODE로 정확한 우도를 계산**하고 참값과 맞춰보기
+4. DDIM 인버전이 어디서 무너지는지
 
 ---
 
-## G6.6.1 — 스코어 벡터장
+## 스코어 함수
 
-확률 밀도의 그래디언트 방향장과 데이터 매니폴드
+$$s(x) = \nabla_x \log p(x)$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 잡음 수준 슬라이더
-:::
+밀도의 로그를 **$x$ 로** 미분한 것이다 (파라미터가 아니다).
+"밀도가 높아지는 방향"을 가리키는 벡터장이다.
+
+**결정적 성질**: 정규화 상수가 사라진다.
+
+$$p(x) = \frac{\tilde p(x)}{Z}\;\Longrightarrow\;
+\nabla_x \log p(x) = \nabla_x \log \tilde p(x) - \underbrace{\nabla_x \log Z}_{=\,0}$$
+
+$Z$ 를 모르고도 스코어는 알 수 있다. 에너지 기반 모델의 골칫거리가 사라진다.
+
+### 잡음제거 스코어 매칭
+
+[6.1](01_autoencoder.qmd)에서 이미 만났다 — **Tweedie 항등식**이다.
+
+$$\mathbb{E}[x_0 \mid x_t] - x_t \;\propto\; \nabla_{x_t} \log p_t(x_t)$$
+
+확산의 표기로 옮기면 $x_t = \sqrt{\bar\alpha_t}x_0 + \sqrt{1-\bar\alpha_t}\varepsilon$ 이므로
+
+$$\boxed{\;\nabla_{x_t}\log p_t(x_t) = -\frac{\varepsilon_\theta(x_t, t)}{\sqrt{1-\bar\alpha_t}}\;}$$
+
+**즉 6.5에서 학습한 $\varepsilon$-예측 신경망은 스코어 추정기였다.**
+잡음을 맞히도록 학습시켰을 뿐인데 스코어가 나온다.
+정말 그런지 확인한다.
+
+```{python}
+#| label: setup-score
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src.generative import Diffusion, ring_modes, mode_stats
+
+CEN = ring_modes(8, 3.0)
+SIG0 = 0.2
+rr = np.random.default_rng(3)
+X_R = CEN[rr.integers(0, 8, 4000)] + rr.normal(0, SIG0, (4000, 2))
+
+
+def true_score(x, ab, centers=CEN, s0=SIG0, weights=None):
+    """가우스 혼합을 √ᾱ 로 줄이고 √(1−ᾱ) 잡음을 더한 분포의 참 스코어."""
+    mu = np.sqrt(ab)*centers
+    var = ab*s0**2 + (1 - ab)
+    d2 = ((x[:, None, :] - mu[None])**2).sum(-1)
+    lw = -d2/(2*var)
+    if weights is not None:
+        lw = lw + np.log(weights)[None]
+    lw = lw - lw.max(1, keepdims=True)
+    w = np.exp(lw); w = w/w.sum(1, keepdims=True)
+    return (w[:, :, None]*(mu[None] - x[:, None, :])).sum(1)/var
+
+
+DM = Diffusion(2, T=200, schedule="cosine", hidden=128, seed=0)
+DM.fit(X_R, steps=8000, lr=2e-3, batch=256, seed=0)
+
+
+def model_score(x, t):
+    return -DM.eps(x, np.full(len(x), t))/np.sqrt(1 - DM.abar[t])
+
+
+print("학습된 ε-모델을 스코어로 읽고 참 스코어와 비교한다")
+print("  (데이터가 가우스 혼합이라 참 스코어를 해석적으로 안다)")
+print()
+r9 = np.random.default_rng(9)
+print(f"{'t/T':>7} {'√(1−ᾱ)':>10} {'코사인 유사도':>14} {'상대 오차':>11} "
+      f"{'참 스코어 크기':>15}")
+print("-" * 62)
+SC = []
+for f in [0.05, 0.2, 0.4, 0.6, 0.8, 0.95]:
+    t = int(f*(DM.T-1))
+    ab = DM.abar[t]
+    x0 = X_R[r9.choice(len(X_R), 800, replace=False)]
+    xt = np.sqrt(ab)*x0 + np.sqrt(1-ab)*r9.normal(size=(800, 2))
+    sm, st = model_score(xt, t), true_score(xt, ab)
+    cos = float(((sm*st).sum(1)/(np.linalg.norm(sm, axis=1)
+                                 * np.linalg.norm(st, axis=1) + 1e-12)).mean())
+    rel = float((np.linalg.norm(sm-st, axis=1)
+                 / (np.linalg.norm(st, axis=1) + 1e-12)).mean())
+    SC.append((f, np.sqrt(1-ab), cos, rel, float(np.linalg.norm(st, axis=1).mean())))
+    print(f"{f:>7.2f} {np.sqrt(1-ab):>10.4f} {cos:>14.4f} {rel:>11.4f} "
+          f"{SC[-1][4]:>15.2f}")
+print()
+print("**큰 t 에서는 방향이 거의 완벽하다** (코사인 유사도 0.99+).")
+print(f"작은 t 에서는 떨어진다 — t/T={SC[0][0]} 에서 코사인 {SC[0][2]:.2f}, "
+      f"상대 오차 {SC[0][3]:.2f}.")
+print()
+print("**이것은 모델이 못 배워서가 아니다.**")
+print(f"  s = −ε̂/√(1−ᾱ) 인데, t/T={SC[0][0]} 에서 √(1−ᾱ)={SC[0][1]:.4f} 다.")
+print(f"  ε̂ 의 오차가 스코어 오차로 **{1/SC[0][1]:.0f}배 증폭**된다.")
+print("  게다가 참 스코어 자체가 커서(크기 {:.1f}) 정밀도 요구가 높다.".format(SC[0][4]))
+print()
+print("6.5 에서 본 ε-예측의 약점이 여기서 반대 방향으로 나타난다 —")
+print("  큰 t: ε 오차 → x₀ 오차 증폭")
+print("  작은 t: ε 오차 → **스코어** 오차 증폭")
+print("v-예측이 양쪽을 절충한다는 말의 의미가 이것이다.")
+```
+
+```{python}
+#| label: fig-score-field
+#| fig-cap: "잡음 수준에 따른 스코어 벡터장 — 흐릿할수록 멀리서도 방향을 알려줍니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+G = 17
+gx = np.linspace(-5.5, 5.5, G)
+GX, GY = np.meshgrid(gx, gx)
+PTS = np.stack([GX.ravel(), GY.ravel()], 1)
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("참 스코어", "모델 스코어"))
+TS_SHOW = [10, 60, 110, 160, 190]
+for si, t in enumerate(TS_SHOW):
+    ab = DM.abar[t]
+    for col, S in enumerate([true_score(PTS, ab), model_score(PTS, t)], start=1):
+        nrm = np.linalg.norm(S, axis=1, keepdims=True)
+        U = S/(nrm + 1e-9)*np.minimum(nrm, 3.0)*0.28
+        xs_, ys_ = [], []
+        for (px, py), (ux, uy) in zip(np.round(PTS, 2), np.round(U, 2)):
+            xs_ += [px, round(px+ux, 2), None]
+            ys_ += [py, round(py+uy, 2), None]
+        fig.add_trace(go.Scatter(x=xs_, y=ys_,
+                                 mode="lines", showlegend=False,
+                                 visible=(si == 0),
+                                 line=dict(color=viz.hex_rgba(
+                                     viz.ACCENT if col == 2 else viz.YELLOW, 0.75),
+                                     width=1.3)), row=1, col=col)
+for col in (1, 2):
+    fig.add_trace(go.Scatter(x=X_R[::8, 0], y=X_R[::8, 1], mode="markers",
+                             showlegend=False,
+                             marker=dict(size=3,
+                                         color=viz.hex_rgba(viz.GREEN, 0.4))),
+                  row=1, col=col)
+steps_f = []
+for si, t in enumerate(TS_SHOW):
+    vis = [False]*(2*len(TS_SHOW)) + [True, True]
+    vis[2*si] = True; vis[2*si+1] = True
+    steps_f.append((f"{t}", {"visible": vis}))
+for c in (1, 2):
+    fig.update_xaxes(range=[-6, 6], row=1, col=c)
+    fig.update_yaxes(range=[-6, 6], scaleanchor=f"x{c if c > 1 else ''}",
+                     row=1, col=c)
+fig.update_layout(sliders=[viz.slider(steps_f, prefix="타임스텝 t = ", pad_t=45)])
+viz.fig_defaults(fig, height=430,
+                 title="화살표 = ∇log p_t 방향 (길이는 3에서 자름)")
+fig.show()
+```
 
 ---
 
-## G6.6.2 — 랑주뱅 샘플링 궤적
+## G6.6.1 — 랑주뱅 동역학: 왜 어닐링이 필요한가
 
-잡음 섞인 경사 상승으로 샘플이 고밀도 영역으로 이동
+스코어만 있으면 샘플링할 수 있다. **랑주뱅 동역학**이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 스텝 재생
-:::
+$$x_{k+1} = x_k + \frac{\delta}{2}\nabla_x \log p(x_k) + \sqrt{\delta}\,z_k,
+\qquad z_k \sim \mathcal{N}(0, I)$$
+
+$\delta \to 0$, $k \to \infty$ 면 $x_k$ 의 분포가 $p$ 로 수렴한다.
+그럼 잡음 수준 하나만 쓰면 되지 않나?
+
+**통제 실험**: 가중치가 다른 두 모드로 확인한다 (Song & Ermon 2019의 논증).
+
+```{python}
+#| label: langevin
+#| code-fold: false
+
+import numpy as np
+from src.generative import Diffusion
+
+MU2 = np.array([[-5., 0.], [5., 0.]])
+W2 = np.array([0.8, 0.2])
+S2 = 0.3
+r0 = np.random.default_rng(0)
+lab = (r0.random(6000) < W2[1]).astype(int)
+X2 = MU2[lab] + r0.normal(0, S2, (6000, 2))
+TARGET_RIGHT = float(lab.mean())
+
+DM2 = Diffusion(2, T=200, schedule="cosine", hidden=128, seed=0)
+DM2.fit(X2, steps=8000, lr=2e-3, batch=256, seed=0)
+
+
+def msc2(x, t):
+    return -DM2.eps(x, np.full(len(x), t))/np.sqrt(1 - DM2.abar[t])
+
+
+def langevin(score_fn, x, steps, delta, seed):
+    g = np.random.default_rng(seed)
+    for _ in range(steps):
+        x = np.clip(x + 0.5*delta*score_fn(x) + np.sqrt(delta)*g.normal(size=x.shape),
+                    -60, 60)
+    return x
+
+
+X_INIT = np.random.default_rng(1).normal(size=(4000, 2))    # 두 모드 사이에서 출발
+
+print(f"데이터: 두 모드 (−5,0)/(5,0), 가중치 0.8/0.2, σ={S2}")
+print(f"오른쪽 모드의 참 비율 = {TARGET_RIGHT:.3f}")
+print("출발점은 두 모드 사이 원점 근처 — **좌우 대칭**이다.")
+print()
+print(f"{'샘플러':<38} {'오른쪽 비율':>12} {'참값과 차이':>13}")
+print("-" * 66)
+LG = []
+for nm, stp, dl in [("단일 스케일 랑주뱅 1000스텝", 1000, 2e-3),
+                    ("단일 스케일 랑주뱅 5000스텝", 5000, 2e-3),
+                    ("단일 스케일 랑주뱅 5000스텝 δ×10", 5000, 2e-2)]:
+    S = langevin(lambda z: msc2(z, 0), X_INIT.copy(), stp, dl, 3)
+    rgt = float((S[:, 0] > 0).mean())
+    LG.append((nm, rgt))
+    print(f"{nm:<38} {rgt:>12.3f} {abs(rgt-TARGET_RIGHT):>13.3f}")
+for L, K in [(25, 50), (50, 40)]:
+    x = X_INIT.copy()
+    for t in np.linspace(DM2.T-1, 0, L).astype(int):
+        x = langevin(lambda z: msc2(z, t), x, K, 0.05*(1-DM2.abar[t]), int(t)+9)
+    rgt = float((x[:, 0] > 0).mean())
+    LG.append((f"어닐링 랑주뱅 {L}레벨×{K}스텝", rgt))
+    print(f"{'어닐링 랑주뱅 '+str(L)+'레벨×'+str(K)+'스텝':<38} {rgt:>12.3f} "
+          f"{abs(rgt-TARGET_RIGHT):>13.3f}")
+S_dd = DM2.sample(4000, seed=5)
+rgt_dd = float((S_dd[:, 0] > 0).mean())
+print(f"{'DDPM 조상 샘플링 200스텝':<38} {rgt_dd:>12.3f} "
+      f"{abs(rgt_dd-TARGET_RIGHT):>13.3f}")
+print("-" * 66)
+print(f"{'참값':<38} {TARGET_RIGHT:>12.3f}")
+print()
+print(f"**단일 스케일 랑주뱅은 {LG[0][1]:.3f} 을 낸다 — 참값 {TARGET_RIGHT:.3f} 의 "
+      f"{LG[0][1]/TARGET_RIGHT:.1f}배다.**")
+print("스텝을 5배 늘려도, 스텝 크기를 10배 키워도 바뀌지 않는다.")
+print("**더 오래 돌린다고 해결되는 문제가 아니다.**")
+print()
+print(f"어닐링은 {LG[3][1]:.3f}, DDPM 은 {rgt_dd:.3f} — 참값에 붙는다.")
+```
+
+왜 그럴까. **스코어가 어디서 틀리는지** 재보면 원인이 보인다.
+
+```{python}
+#| label: score-reliability
+#| code-fold: false
+
+import numpy as np
+
+print("x 축을 따라가며 참 스코어와 모델 스코어의 x 성분을 직접 비교한다")
+print("  (부호가 곧 '어느 모드로 밀리는가'다: 음수 = 왼쪽, 양수 = 오른쪽)")
+print()
+g5 = np.random.default_rng(5)
+
+
+def true_lp2(x, ab):
+    mu = np.sqrt(ab)*MU2
+    var = ab*S2**2 + (1-ab)
+    d2 = ((x[:, None, :] - mu[None])**2).sum(-1)
+    lw = np.log(W2)[None] - d2/(2*var)
+    m = lw.max(1)
+    return m + np.log(np.exp(lw - m[:, None]).sum(1)) - np.log(2*np.pi*var)
+
+
+AB_LOW = DM2.abar[0]
+print(f"{'위치 x':>8} {'참 로그밀도':>12} {'참 스코어 x성분':>16} "
+      f"{'모델 스코어 x성분':>18} {'부호':>8}")
+print("-" * 66)
+FLIP = []
+for xc in [-5.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 5.0]:
+    P = np.stack([np.full(400, xc), g5.normal(0, 0.3, 400)], 1)
+    sx_m = float(msc2(P, 0)[:, 0].mean())
+    sx_t = float(true_score(P, AB_LOW, centers=MU2, s0=S2,
+                            weights=W2)[:, 0].mean())
+    if abs(sx_t) < 1.0:                      # 밀도의 꼭대기 — 부호가 의미 없다
+        same = "(스코어≈0)"
+    else:
+        same = "일치" if np.sign(sx_m) == np.sign(sx_t) else "**반대**"
+    FLIP.append((xc, sx_t, sx_m, same))
+    print(f"{xc:>8.1f} {true_lp2(P, AB_LOW).mean():>12.1f} {sx_t:>16.2f} "
+          f"{sx_m:>18.2f} {same:>8}")
+print()
+bad = [f for f in FLIP if f[3] == "**반대**"]
+print(f"**부호가 뒤집힌 구간: x = "
+      f"{', '.join(f'{f[0]:.0f}' for f in bad)}**")
+print("둘 다 두 모드 **사이**다. 참 로그밀도가 −80 아래로 떨어지는 영역 —")
+print("학습 중 그 근처 샘플을 사실상 본 적이 없는 곳이다.")
+print()
+print("**이것이 단일 스케일 랑주뱅이 실패하는 인과다:**")
+x0_row = [f for f in FLIP if f[0] == 0.0][0]
+print(f"  · 출발점 x≈0 에서 참 스코어의 x 성분은 {x0_row[1]:+.2f} — "
+      f"**왼쪽(무거운 모드)으로** 밀어야 한다")
+print(f"  · 그런데 모델은 {x0_row[2]:+.2f} — **오른쪽으로** 민다")
+print(f"  · 그래서 샘플의 {LG[0][1]:.1%} 가 오른쪽 모드로 간다 "
+      f"(참값 {TARGET_RIGHT:.1%})")
+print("  · 일단 한 모드에 들어가면 사이를 건널 수 없어 그 비율이 고정된다")
+print()
+print("(모드 중심 x=±5 에서는 참 스코어가 거의 0 이라 부호 비교가 의미 없다 —")
+print(" 밀도의 꼭대기이기 때문이다.)")
+print()
+print("**어닐링이 고치는 것**: 큰 t 에서는 잡음이 섞여 분포가 넓게 퍼져 있고,")
+print("두 모드 사이에도 학습 데이터가 있다. 그래서 스코어가 정확하고,")
+print("올바른 비율로 두 모드에 배분된다. 그 상태에서 t 를 낮춰가며 다듬는다.")
+print()
+print("**잡음 수준을 여러 개 쓰는 것이 확산 모델의 본질이다.**")
+print("스코어를 '모든 잡음 수준에서' 배우는 것 — 그것이 조건 t 의 역할이다.")
+```
+
+```{python}
+#| label: fig-langevin
+#| fig-cap: "단일 스케일 랑주뱅은 모드 비율을 못 맞춥니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("샘플 분포 (x 좌표)", "오른쪽 모드 비율"))
+S_single = langevin(lambda z: msc2(z, 0), X_INIT.copy(), 1000, 2e-3, 3)
+x_ann = X_INIT.copy()
+for t in np.linspace(DM2.T-1, 0, 25).astype(int):
+    x_ann = langevin(lambda z: msc2(z, t), x_ann, 50,
+                     0.05*(1-DM2.abar[t]), int(t)+9)
+edges = np.linspace(-8, 8, 81)
+ctr = (edges[:-1] + edges[1:])/2
+for nm, S, c in [("실제 데이터", X2, viz.GREEN),
+                 ("단일 스케일 랑주뱅", S_single, viz.WARM),
+                 ("어닐링 랑주뱅", x_ann, viz.ACCENT)]:
+    h_, _ = np.histogram(S[:, 0], bins=edges, density=True)
+    fig.add_trace(go.Scatter(x=ctr, y=np.round(h_, 4), mode="lines", name=nm,
+                             line=dict(color=c, width=2.5)), row=1, col=1)
+names = ["실제"] + [l[0] for l in LG] + ["DDPM 200스텝"]
+vals = [TARGET_RIGHT] + [l[1] for l in LG] + [rgt_dd]
+fig.add_trace(go.Bar(x=list(range(len(names))), y=np.round(vals, 3),
+                     showlegend=False,
+                     marker_color=[viz.GREEN] + [viz.WARM]*3
+                     + [viz.ACCENT]*2 + [viz.PINK],
+                     text=[f"{v:.3f}" for v in vals], textposition="outside"),
+              row=1, col=2)
+fig.add_hline(y=TARGET_RIGHT, line=dict(color=viz.GREEN, dash="dash"),
+              row=1, col=2)
+fig.update_xaxes(title_text="x", row=1, col=1)
+fig.update_yaxes(title_text="밀도", row=1, col=1)
+fig.update_xaxes(tickmode="array", tickvals=list(range(len(names))),
+                 ticktext=["실제", "단일 1k", "단일 5k", "단일 δ×10",
+                           "어닐 25", "어닐 50", "DDPM"],
+                 tickangle=-40, row=1, col=2)
+fig.update_yaxes(title_text="오른쪽 모드 비율", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="")
+fig.show()
+```
 
 ---
 
-## G6.6.3 — SDE vs ODE 경로
+## SDE 관점
 
-확률적 경로와 결정론적 경로의 궤적 차이
+$T \to \infty$ 로 보내면 전방 과정은 확률미분방정식이 된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 경로 전환
-:::
+$$dx = \underbrace{f(x, t)}_{\text{드리프트}}\,dt + \underbrace{g(t)}_{\text{확산}}\,dw$$
+
+Anderson(1982)의 결과에 의해 **역방향도 SDE**이고, 스코어만 있으면 쓸 수 있다.
+
+$$dx = \big[f(x,t) - g(t)^2 \nabla_x \log p_t(x)\big]dt + g(t)\,d\bar{w}$$
+
+```{python}
+#| label: sde-table
+#| code-fold: false
+
+rows = [
+    ("VP-SDE (분산 보존)", "dx = −½β(t)x dt + √β(t) dw",
+     "**DDPM**", "분산이 1 로 유지"),
+    ("VE-SDE (분산 폭발)", "dx = √(dσ²/dt) dw",
+     "SMLD / NCSN", "σ 가 계속 커짐"),
+    ("sub-VP", "VP 를 변형해 하한을 조임",
+     "우도 최적", "Song et al. 2021"),
+]
+print(f"{'SDE':<22} {'식':<34} {'대응 모델':<14} {'특징'}")
+print("-" * 88)
+for r_ in rows:
+    print(f"{r_[0]:<22} {r_[1]:<34} {r_[2]:<14} {r_[3]}")
+print()
+print("**DDPM 과 NCSN 은 같은 것의 두 이산화였다.**")
+print("2021 년 Song et al. 이 이 통일을 제시하기 전까지 둘은 별개 계열로 여겨졌다.")
+print()
+print("**그리고 SDE 마다 짝이 되는 ODE 가 있다** — 확률 흐름 ODE:")
+print()
+print("   dx/dt = f(x,t) − ½g(t)²·∇log p_t(x)")
+print()
+print("잡음 항이 없다. **결정론적**이다.")
+print("그런데 놀랍게도 **매 시점의 주변분포 p_t 가 SDE 와 똑같다.**")
+print("경로는 다르고 분포는 같다.")
+print()
+print("여기서 세 가지가 따라 나온다:")
+for s in ["**DDIM = 확률 흐름 ODE 의 1차 이산화** — 그래서 스텝을 건너뛸 수 있다",
+          "**ODE 솔버를 그대로 쓸 수 있다** — DPM-Solver, Heun, 적응 스텝",
+          "**연속 정규화 흐름이 된다** — 야코비안 대각합을 적분해 정확한 우도"]:
+    print(f"  · {s}")
+print()
+print("마지막 항목은 6.4 의 CNF 와 정확히 같은 구조다:")
+print("   d log p/dt = −tr(∂v/∂x)")
+print("**확산 모델이 밀도 함수를 가진다는 말의 의미가 이것이다.**")
+print("다음 절에서 직접 계산해 참값과 맞춰본다.")
+```
 
 ---
 
-## G6.6.4 — 스텝 수와 품질
+## G6.6.2 — 확률 흐름 ODE로 정확한 우도 계산하기
 
-DDPM 1000스텝과 DDIM 20스텝의 결과 비교
+DDIM의 결정론적 갱신을 **가역 사상**으로 보고, 스텝마다 야코비안 행렬식을 누적한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플링 스텝 슬라이더
-:::
+$$\log p_0(x_0) = \log p_{t_s}(x_{t_s}) - \sum_{\text{steps}} \log\left|\det \frac{\partial x_{\text{next}}}{\partial x_{\text{cur}}}\right|$$
+
+검증을 위해 **참 밀도를 아는 데이터**를 쓴다 — 단일 2차원 가우스다.
+
+```{python}
+#| label: ode-likelihood
+#| code-fold: false
+
+import numpy as np
+from src.generative import Diffusion
+
+rg = np.random.default_rng(0)
+A_ = np.array([[1.2, 0.6], [0.0, 0.9]])
+COV_ = A_ @ A_.T
+X_G = rg.normal(size=(6000, 2)) @ A_.T
+
+DMG = Diffusion(2, T=200, schedule="cosine", hidden=128, seed=0)
+DMG.fit(X_G, steps=8000, lr=2e-3, batch=256, seed=0)
+
+
+def gauss_lp(x, ab):
+    C = ab*COV_ + (1-ab)*np.eye(2)
+    return (-0.5*((x @ np.linalg.inv(C))*x).sum(1)
+            - 0.5*np.linalg.slogdet(C)[1] - np.log(2*np.pi))
+
+
+def ddim_step(x, t_from, t_to):
+    e = DMG.eps(x, np.full(len(x), t_from))
+    ab = DMG.abar[t_from]
+    x0h = (x - np.sqrt(1-ab)*e)/np.sqrt(ab)
+    return np.sqrt(DMG.abar[t_to])*x0h + np.sqrt(1-DMG.abar[t_to])*e
+
+
+def flow_with_logdet(x, ts, h=1e-3):
+    """스텝마다 2×2 야코비안을 유한차분으로 구해 log|det| 를 누적."""
+    tot = np.zeros(len(x))
+    for a, b in zip(ts[:-1], ts[1:]):
+        J = np.zeros((len(x), 2, 2))
+        for j in range(2):
+            dv = np.zeros(2); dv[j] = h
+            J[:, :, j] = (ddim_step(x + dv, a, b) - ddim_step(x - dv, a, b))/(2*h)
+        tot += np.log(np.abs(np.linalg.det(J)) + 1e-300)
+        x = ddim_step(x, a, b)
+    return x, tot
+
+
+print("데이터: 2차원 가우스 (참 로그밀도를 정확히 계산할 수 있다)")
+print(f"  참 공분산 대각 {np.round(COV_.diagonal(), 3)}")
+print()
+print(f"{'시작 시점':>10} {'√ᾱ':>9} {'스텝':>6} {'모델 log p':>12} "
+      f"{'참 log p':>11} {'평균 절대오차':>14} {'상관계수':>10}")
+print("-" * 78)
+ODE = []
+for t_start, NS in [(190, 100), (180, 100), (160, 100), (160, 200)]:
+    ab_s = DMG.abar[t_start]
+    C_s = ab_s*COV_ + (1-ab_s)*np.eye(2)
+    x_s = np.random.default_rng(21).normal(size=(500, 2)) @ np.linalg.cholesky(C_s).T
+    dn = list(np.linspace(t_start, 0, NS).round().astype(int))
+    x0, ld = flow_with_logdet(x_s, dn)
+    lp_s = (-0.5*((x_s @ np.linalg.inv(C_s))*x_s).sum(1)
+            - 0.5*np.linalg.slogdet(C_s)[1] - np.log(2*np.pi))
+    lp_model = lp_s - ld
+    lp_true = gauss_lp(x0, DMG.abar[0])
+    ODE.append((t_start, NS, float(np.abs(lp_model-lp_true).mean()),
+                float(np.corrcoef(lp_model, lp_true)[0, 1]),
+                float(lp_model.mean()), float(lp_true.mean())))
+    print(f"{t_start:>10} {np.sqrt(ab_s):>9.4f} {NS:>6} {lp_model.mean():>12.4f} "
+          f"{lp_true.mean():>11.4f} {np.abs(lp_model-lp_true).mean():>14.4f} "
+          f"{np.corrcoef(lp_model, lp_true)[0, 1]:>10.4f}")
+print()
+best = ODE[2]
+print(f"**t={best[0]} 에서 출발하면 참 로그밀도와 평균 {best[2]:.3f} nats 차이, "
+      f"상관계수 {best[3]:.3f} 다.**")
+print("확산 모델이 정말 밀도를 가지고 있음을 확인했다 — 하한이 아니라 값이다.")
+print()
+print("**그런데 시작 시점이 T 에 가까울수록 나빠진다:**")
+for t_s, ns, mae, corr, _, _ in ODE[:3]:
+    print(f"  t={t_s:>3} (√ᾱ={np.sqrt(DMG.abar[t_s]):.4f}): "
+          f"오차 {mae:.3f}, 상관 {corr:.3f}")
+print()
+print("이유는 또 그 항이다 — x̂₀ = (x_t − √(1−ᾱ)ε̂)/√ᾱ.")
+print(f"t=199 에서 √ᾱ = {np.sqrt(DMG.abar[-1]):.2e} 라 오차가 "
+      f"{1/np.sqrt(DMG.abar[-1]):.0f}배 증폭되고,")
+print("결정론적 경로에서는 그것이 누적된다 (6.5 의 DDIM 함정과 같은 원인).")
+print()
+print("**실전 대응**: 우도를 잴 때는 t=T 가 아니라 조금 아래에서 시작하고,")
+print("빠진 구간은 해석적으로 보정한다. Song et al.(2021)의 구현도 그렇게 한다.")
+```
 
 ---
 
-## 핵심 용어
+## G6.6.3 — DDIM 인버전은 어디까지 되는가
 
-| 용어 | 비고 |
+실제 이미지를 편집하려면 먼저 그 이미지의 잠재 $x_T$ 를 찾아야 한다.
+DDIM 갱신을 **거꾸로** 돌리면 된다 — 원리적으로는.
+
+```{python}
+#| label: inversion
+#| code-fold: false
+
+import numpy as np
+
+X_test = X_G[np.random.default_rng(7).choice(len(X_G), 400, replace=False)]
+
+
+def ddim_run(x, ts):
+    for a, b in zip(ts[:-1], ts[1:]):
+        x = ddim_step(x, a, b)
+    return x
+
+
+print("x₀ → (인버전) → x_{t_max} → (샘플링) → x₀'  의 왕복 오차")
+print()
+print(f"{'t_max':>7} {'√ᾱ(t_max)':>12} {'왕복 오차 (중앙값)':>20} "
+      f"{'왕복 오차 (최대)':>18}")
+print("-" * 62)
+INV = []
+for tmax in [40, 80, 120, 160, 190, 199]:
+    up = list(np.linspace(0, tmax, 60).round().astype(int))
+    back = ddim_run(ddim_run(X_test, up), up[::-1])
+    err = np.abs(back - X_test)
+    INV.append((tmax, float(np.median(err)), float(err.max())))
+    print(f"{tmax:>7} {np.sqrt(DMG.abar[tmax]):>12.4f} "
+          f"{np.median(err):>20.3e} {err.max():>18.3e}")
+print()
+print(f"**t_max={INV[-2][0]} 까지는 왕복 오차가 {INV[-2][1]:.1e} — 쓸 만하다.**")
+print(f"**그런데 마지막 한 칸, t_max={INV[-1][0]} 에서 {INV[-1][1]:.2e} 로 "
+      f"{INV[-1][1]/INV[-2][1]:.0f}배 뛴다.**")
+print()
+print(f"√ᾱ 가 {np.sqrt(DMG.abar[190]):.3f} 에서 "
+      f"{np.sqrt(DMG.abar[199]):.2e} 로 떨어지는 구간이다.")
+print("절벽이 정확히 거기 있다.")
+print()
+print("**실제 이미지 편집 기법들이 하는 일이 이것으로 설명된다:**")
+for s in ["끝까지 인버전하지 않는다 — t_max 를 0.7~0.9T 정도로 둔다",
+          "SDEdit — 아예 중간 t 까지만 잡음을 넣고 거기서 다시 생성한다",
+          "Null-text inversion — 인버전 오차를 무조건부 임베딩 최적화로 흡수",
+          "정확 인버전 솔버 — 이분법·고정점 반복으로 암묵적 역함수를 푼다",
+          "CFG 를 켜면 훨씬 나빠진다 — 인버전은 보통 w=1 로 한다"]:
+    print(f"  · {s}")
+print()
+print("**논문이 '인버전이 어렵다'고 말할 때의 어려움이 이 표의 마지막 줄이다.**")
+```
+
+---
+
+## 샘플러 계보
+
+```{python}
+#| label: samplers
+#| code-fold: false
+
+rows = [
+    ("DDPM 조상 샘플링", "확률적", "T (1000)", "가장 안정, 느림"),
+    ("DDIM (η=0)", "결정론적", "20~100", "확률 흐름 ODE 1차 이산화"),
+    ("DDIM (η>0)", "혼합", "50~200", "η 로 확률성을 조절"),
+    ("Heun / 2차 솔버", "결정론적", "15~50", "같은 스텝 수에서 더 정확 (EDM)"),
+    ("DPM-Solver / ++", "결정론적", "10~25", "반선형 구조를 이용한 지수 적분기"),
+    ("UniPC", "결정론적", "5~15", "예측-보정자"),
+    ("SDE 샘플러 (Euler-Maruyama)", "확률적", "100~1000", "자기 교정 있음"),
+    ("일관성 모델", "결정론적", "1~4", "증류 필요 (6.8)"),
+]
+print(f"{'샘플러':<28} {'성격':<10} {'스텝':<12} {'특징'}")
+print("-" * 82)
+for r_ in rows:
+    print(f"{r_[0]:<28} {r_[1]:<10} {r_[2]:<12} {r_[3]}")
+print()
+print("**확률적 vs 결정론적의 실질적 차이** (6.5 에서 측정한 것):")
+print("  · 확률적 — 매 스텝 잡음이 오차를 씻어낸다. **자기 교정**이 있어 견고하다.")
+print("  · 결정론적 — 오차가 누적된다. 대신 **가역**이고 스텝을 크게 건너뛸 수 있다.")
+print()
+print("EDM(Karras et al. 2022)이 정리한 실전 결론:")
+for s in ["잡음 수준을 t 가 아니라 σ 로 직접 파라미터화하라",
+          "스텝을 σ 공간에서 비균등하게 배치하라 (작은 σ 쪽에 촘촘히)",
+          "전처리(preconditioning)로 신경망 입출력 스케일을 맞춰라",
+          "약간의 확률성(churn)을 섞으면 결정론적 솔버의 오차 누적이 줄어든다"]:
+    print(f"  · {s}")
+print()
+print("마지막 항목이 흥미롭다 — **결정론과 확률성의 절충점이 최적**이라는 것이다.")
+print("순수 ODE 도, 순수 SDE 도 아니다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 스코어 함수 |  |
-| 잡음제거 스코어 매칭 |  |
-| 랑주뱅 동역학 |  |
-| SDE/ODE |  |
-| DDIM |  |
+| 스코어 함수 | $\nabla_x\log p(x)$ — 정규화 상수가 사라진다 |
+| DSM | $\nabla\log p_t = -\varepsilon_\theta/\sqrt{1-\bar\alpha_t}$ |
+| 검증 | 큰 $t$ 에서 참 스코어와 코사인 유사도 0.99+ |
+| 작은 $t$ 의 한계 | $1/\sqrt{1-\bar\alpha}$ 증폭 — 모델 잘못이 아니다 |
+| 랑주뱅 | $x \leftarrow x + \frac\delta2 s(x) + \sqrt\delta z$ |
+| **단일 스케일의 실패** | 모드 비율 0.897 vs 참값 0.207. 스텝을 5배 늘려도 안 고쳐진다 |
+| 원인 | 모드 사이에서 스코어 **부호가 뒤집힌다** — 반대 모드로 민다 |
+| 어닐링 | 0.297, DDPM 0.283 — 큰 $t$ 에서는 사이에도 데이터가 있다 |
+| VP-SDE | = DDPM (분산 보존) |
+| VE-SDE | = NCSN/SMLD (분산 폭발) |
+| 확률 흐름 ODE | 결정론적인데 **주변분포가 SDE 와 같다** |
+| DDIM | 확률 흐름 ODE 의 1차 이산화 — 그래서 건너뛸 수 있다 |
+| **정확한 우도** | 야코비안 누적으로 참값과 오차 0.148 nats, 상관 0.975 |
+| 우도의 한계 | 시작 $t$ 가 $T$ 에 가까울수록 나빠진다 (0.148 → 0.304) |
+| **인버전 절벽** | $t_{\max}{=}190$ 에서 3.9e-02, $199$ 에서 1.1e+01 — 289배 |
+| 실전 대응 | 끝까지 인버전하지 않는다 |
+
+이제 확산의 이론은 갖춰졌다.
+그런데 512×512 이미지를 픽셀 공간에서 1000번 디노이징하는 것은 여전히 비싸다.
+다음 장은 **그 비용을 수십 배 줄인 설계 하나**를 본다.
 
 ---
 
-**다음**: [6.7 잠재 확산과 텍스트-이미지](07_latent_diffusion.qmd) — Stable Diffusion·DiT·조건 주입 — 실전 생성 시스템의 구조
+**다음**: [6.7 잠재 확산과 텍스트-이미지](07_latent_diffusion.qmd)
 
 **이전**: [6.5 확산 모델](05_diffusion.qmd)
