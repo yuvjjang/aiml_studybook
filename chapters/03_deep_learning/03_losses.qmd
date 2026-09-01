@@ -4,89 +4,782 @@ subtitle: "MSE·교차엔트로피·대조손실 — 무엇을 최적화한다�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+손실함수는 모델에게 주는 **유일한 목표 진술**이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+아키텍처를 아무리 잘 설계하고 최적화를 아무리 잘 해도,
+목표를 잘못 적으면 모델은 **잘못된 것을 아주 잘 배운다.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+[2.0](../02_classical_ml/00_learning_problem.qmd)에서 손실을 고르는 것이
+추정 대상을 정하는 일임을 봤고,
+[0.4](../00_foundations/04_information_theory.qmd)에서 교차엔트로피가 어디서 왔는지 봤다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 장은 그 둘을 딥러닝의 실제 손실들로 확장한다.
+그리고 [CLIP·SimCLR](../09_vision_video/04_clip_multimodal.qmd)의 대조 손실까지 이어진다.
+
+---
+
+## 모든 손실은 음의 로그우도다
+
+[0.2 확률](../00_foundations/02_probability.qmd)의 관점을 다시 가져온다.
+
+$$L(\theta) = -\frac{1}{N}\sum_i \log p_\theta(y_i \mid x_i)$$
+
+$p_\theta$ 를 무엇으로 가정하느냐가 손실의 이름을 정한다.
+
+```{python}
+#| label: loss-from-likelihood
+#| code-fold: false
+
+rows = [
+    ("가우스 (등분산)",     "½σ⁻²(y−ŷ)²",        "MSE",           "조건부 평균"),
+    ("라플라스",           "b⁻¹|y−ŷ|",           "MAE",           "조건부 중앙값"),
+    ("비대칭 라플라스",     "분위수 가중 절댓값",     "Quantile 손실",  "조건부 분위수"),
+    ("베르누이",           "−[y log p + …]",     "이진 교차엔트로피", "조건부 확률"),
+    ("범주형",             "−log p_y",           "교차엔트로피",    "클래스 확률"),
+    ("푸아송",             "λ̂ − y log λ̂",       "푸아송 손실",     "조건부 강도"),
+]
+print(f"{'가정한 분포':<18} {'−log p':<22} {'부르는 이름':<16} {'추정하는 것'}")
+print("-" * 76)
+for r in rows:
+    print(f"{r[0]:<18} {r[1]:<22} {r[2]:<16} {r[3]}")
+print()
+print("손실을 고르는 것은 '잡음이 어떻게 생겼는지' 가정하는 것이다.")
+print("그 가정이 틀리면 모델은 틀린 통계량을 열심히 추정한다.")
+```
+
+---
+
+## G3.3.1 — 손실이 다른 통계량을 추정한다
+
+같은 데이터에 손실만 바꿔 학습시키면 **다른 답**이 나온다.
+
+```{python}
+#| label: fig-loss-targets
+#| fig-cap: "치우친 분포에서 MSE는 평균을, MAE는 중앙값을 따라갑니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng = np.random.default_rng(0)
+n = 4000
+x = rng.uniform(0, 1, n)
+# x 에 따라 로그정규 잡음 — 평균과 중앙값이 크게 다르다
+noise = rng.lognormal(0, 0.9, n)
+y = 1.0 + 2.0*x + noise - np.exp(0.9**2/2)
+
+# 구간별 참 통계량
+bins = np.linspace(0, 1, 11)
+centers, true_mean, true_med, true_q90 = [], [], [], []
+for i in range(10):
+    m = (x >= bins[i]) & (x < bins[i+1])
+    centers.append(x[m].mean())
+    true_mean.append(y[m].mean())
+    true_med.append(np.median(y[m]))
+    true_q90.append(np.percentile(y[m], 90))
+
+def fit_line(x, y, kind, q=0.9, delta=1.0, iters=4000, lr=0.05):
+    w, b = 0.0, 0.0
+    for _ in range(iters):
+        r = y - (w*x + b)
+        if kind == "mse":     g = -2*r
+        elif kind == "mae":   g = -np.sign(r)
+        elif kind == "huber": g = np.where(np.abs(r) <= delta, -r, -delta*np.sign(r))
+        else:                 g = np.where(r > 0, -q, (1-q))     # quantile
+        w -= lr*np.mean(g*x); b -= lr*np.mean(g)
+    return w, b
+
+xs = np.array([0, 1])
+fits = {k: fit_line(x, y, k) for k in ["mse", "mae", "huber", "quantile"]}
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=x[::6], y=y[::6], mode="markers", name="데이터",
+                         marker=dict(size=3, color=viz.hex_rgba(viz.ACCENT, 0.35))))
+fig.add_trace(go.Scatter(x=centers, y=true_mean, mode="markers", name="구간 평균",
+                         marker=dict(size=11, color=viz.WARM, symbol="diamond")))
+fig.add_trace(go.Scatter(x=centers, y=true_med, mode="markers", name="구간 중앙값",
+                         marker=dict(size=11, color=viz.GREEN, symbol="square")))
+fig.add_trace(go.Scatter(x=centers, y=true_q90, mode="markers", name="구간 90분위",
+                         marker=dict(size=11, color=viz.PINK, symbol="triangle-up")))
+for i, (k, lbl, col) in enumerate([("mse", "MSE 적합", viz.WARM),
+                                    ("mae", "MAE 적합", viz.GREEN),
+                                    ("quantile", "Quantile(0.9) 적합", viz.PINK)]):
+    w, b = fits[k]
+    fig.add_trace(go.Scatter(x=xs, y=w*xs + b, mode="lines", name=lbl,
+                             line=dict(color=col, width=3)))
+
+fig.update_layout(xaxis_title="x", yaxis_title="y", yaxis=dict(range=[-2, 12]),
+                  legend=dict(x=0.01, y=0.99, font=dict(size=10)))
+viz.fig_defaults(fig, height=460,
+                 title="로그정규 잡음 — 각 손실이 서로 다른 통계량으로 수렴")
+fig.show()
+```
+
+```{python}
+#| label: loss-target-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'손실':<14} {'기울기':>9} {'절편':>9} {'x=0.5 예측':>12} "
+      f"{'그 지점 참값':>26}")
+print("-" * 76)
+m = (x >= 0.45) & (x < 0.55)
+truths = dict(평균=y[m].mean(), 중앙값=float(np.median(y[m])),
+              q90=float(np.percentile(y[m], 90)))
+for k, lbl, tgt in [("mse", "MSE", "평균"), ("mae", "MAE", "중앙값"),
+                    ("huber", "Huber", "그 사이"), ("quantile", "Quantile(0.9)", "q90")]:
+    w, b = fits[k]
+    pred = w*0.5 + b
+    ref = f"{tgt} = {truths[tgt]:.3f}" if tgt in truths else "평균과 중앙값 사이"
+    print(f"{lbl:<14} {w:>9.3f} {b:>9.3f} {pred:>12.3f}   {ref:>24}")
+print()
+print("→ 같은 데이터인데 손실에 따라 예측이 다르다. 버그가 아니라 명세다.")
+print("  '평균 배송시간'과 '중앙값 배송시간'은 다른 질문이고, 손실이 그것을 정한다.")
+```
+
+::: {.interaction-hint}
+로그정규 잡음이라 **평균이 중앙값보다 훨씬 위**에 있습니다. MSE 선(주황)은 평균 점들을, MAE 선(초록)은 중앙값 점들을, Quantile(0.9) 선(분홍)은 90분위 점들을 따라갑니다.
 :::
 
-손실함수는 모델에게 주는 유일한 목표 진술이다. 목표를 잘못 적으면 아무리 좋은 아키텍처도 잘못된 것을 잘 배운다.
+---
+
+## 분류: 교차엔트로피와 그 그래디언트
+
+[0.4](../00_foundations/04_information_theory.qmd)에서 유도했듯
+
+$$L = -\log p_y, \qquad \frac{\partial L}{\partial z} = p - y_{\text{onehot}}$$
+
+**그래디언트가 (예측 − 정답)** 이라는 것이 이 손실의 핵심 이점이다.
+softmax의 복잡한 야코비안과 로그의 미분이 정확히 상쇄된다.
+
+```{python}
+#| label: ce-gradient-check
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+rng = np.random.default_rng(0)
+logits = rng.normal(size=(5, 4))
+y_idx = np.array([0, 3, 1, 2, 0])
+
+L, g = nn.softmax_ce_loss(logits, y_idx)
+p = nn.softmax(logits)
+manual = p.copy(); manual[np.arange(5), y_idx] -= 1.0; manual /= 5
+
+print(f"손실 {L:.6f}   (균등 예측이면 log 4 = {np.log(4):.6f})")
+print(f"그래디언트가 (p − onehot)/n 과 일치: "
+      f"최대 차이 {np.abs(g - manual).max():.2e}")
+print()
+# 수치 검증
+eps = 1e-6
+num = np.zeros_like(logits)
+for i in range(5):
+    for j in range(4):
+        old = logits[i, j]
+        logits[i, j] = old + eps; lp, _ = nn.softmax_ce_loss(logits, y_idx)
+        logits[i, j] = old - eps; lm, _ = nn.softmax_ce_loss(logits, y_idx)
+        logits[i, j] = old
+        num[i, j] = (lp - lm) / (2*eps)
+print(f"수치 미분과의 최대 차이: {np.abs(g - num).max():.2e}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G3.3.2 — 손실 곡선의 모양이 학습 신호를 정한다
 
-- 손실 = 음의 로그우도 (확률적 관점의 통일)
-- 회귀: MSE(가우스), MAE(라플라스), Huber, quantile 손실
-- 분류: 이진/다중 교차엔트로피, focal loss, label smoothing
-- 다중 레이블과 시그모이드 BCE
-- 랭킹 손실: pairwise hinge, BPR, listwise
-- 대조 손실: contrastive, triplet, InfoNCE (CLIP·SimCLR의 심장)
-- 거리 학습과 임베딩 손실
-- 정규화 항을 손실에 포함시키기
-- 다중 목표 손실의 가중치 균형과 불확실성 기반 가중
-- 손실 지형(loss landscape)과 평평한 최소점 가설
+```{python}
+#| label: fig-classification-losses
+#| fig-cap: "정답 확률에 따른 손실과 그래디언트 크기"
 
----
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
 
-## G3.3.1 — 회귀 손실 비교
+p = np.linspace(0.001, 0.999, 800)
 
-이상치 하나가 MSE·MAE·Huber 최적해를 서로 다르게 끄는 모습
+losses = {
+    "교차엔트로피 −log p":       -np.log(p),
+    "Brier (1−p)²":            (1 - p)**2,
+    "focal γ=2":               -(1 - p)**2 * np.log(p),
+    "focal γ=5":               -(1 - p)**5 * np.log(p),
+    "MAE (1−p)":               (1 - p),
+}
+# d(loss)/dp 의 절댓값
+grads = {
+    "교차엔트로피 −log p":       1/p,
+    "Brier (1−p)²":            2*(1 - p),
+    "focal γ=2":               np.abs(-2*(1-p)*np.log(p)*(-1) + (1-p)**2/p),
+    "focal γ=5":               np.abs(-5*(1-p)**4*np.log(p)*(-1) + (1-p)**5/p),
+    "MAE (1−p)":               np.ones_like(p),
+}
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 이상치 위치 슬라이더
+fig = make_subplots(rows=1, cols=2, subplot_titles=("손실", "|∂L/∂p| (학습 신호 크기)"))
+for i, k in enumerate(losses):
+    fig.add_trace(go.Scatter(x=p, y=losses[k], mode="lines", name=k,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=p, y=grads[k], mode="lines", name=k, showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+fig.update_xaxes(title_text="정답 클래스에 준 확률 p")
+fig.update_yaxes(title_text="손실", range=[0, 5], row=1, col=1)
+fig.update_yaxes(title_text="|∂L/∂p|", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=410, title="분류 손실 비교")
+fig.update_layout(legend=dict(x=0.55, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: focal-effect
+#| code-fold: false
+
+import numpy as np
+
+print("샘플 난이도에 따른 손실 기여도 (전체 합 대비 비율)")
+print()
+# 쉬운 샘플 많고 어려운 샘플 적은 전형적 불균형 상황
+p_easy = np.full(950, 0.95)      # 이미 잘 맞히는 샘플
+p_hard = np.full(50, 0.15)       # 계속 틀리는 샘플
+
+print(f"{'손실':<14} {'쉬운 950개 비중':>16} {'어려운 50개 비중':>18}")
+print("-" * 52)
+for name, gamma in [("교차엔트로피", 0.0), ("focal γ=1", 1.0),
+                    ("focal γ=2", 2.0), ("focal γ=5", 5.0)]:
+    le = float(np.sum((1-p_easy)**gamma * -np.log(p_easy)))
+    lh = float(np.sum((1-p_hard)**gamma * -np.log(p_hard)))
+    tot = le + lh
+    print(f"{name:<14} {le/tot:>15.1%} {lh/tot:>17.1%}")
+print()
+print("→ focal loss 는 이미 잘 맞히는 샘플의 손실을 (1−p)^γ 로 눌러,")
+print("  학습 신호를 어려운 샘플 쪽으로 옮긴다.")
+print("  객체 검출처럼 배경(쉬운 음성)이 압도적인 문제에서 쓰인다.")
+```
+
+::: {.key-concept}
+**교차엔트로피의 그래디언트는 $1/p$ 로 폭발한다**
+
+오른쪽 그림에서 $p\to0$ 일 때 교차엔트로피만 발산한다.
+"확신에 찬 오답"에 강한 학습 신호를 준다는 뜻이고, 대개 바람직하다.
+
+하지만 **레이블에 잡음이 있으면** 문제가 된다.
+잘못 붙은 레이블 하나가 거대한 그래디언트를 만들어 모델을 끌고 간다.
+그때는 레이블 스무딩이나 강건한 손실(Brier, MAE)을 고려한다.
 :::
 
 ---
 
-## G3.3.2 — focal loss 감마
+## 레이블 스무딩
 
-쉬운 샘플의 손실이 눌리며 어려운 샘플에 집중되는 효과
+정답에 확률 1을 전부 주는 대신 $\epsilon$ 만큼 나눠준다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: γ 슬라이더
+$$y_k^{\text{smooth}} = (1-\epsilon)\,y_k + \frac{\epsilon}{K}$$
+
+```{python}
+#| label: fig-label-smoothing
+#| fig-cap: "레이블 스무딩은 최적 로짓 간격을 유한하게 만듭니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+K = 10
+gaps = np.linspace(0, 14, 400)          # 정답 로짓 − 나머지 로짓
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("로짓 간격에 따른 손실", "최적 간격과 최대 확률"))
+eps_list = [0.0, 0.05, 0.1, 0.2, 0.3]
+best_gap, best_conf = [], []
+for i, eps in enumerate(eps_list):
+    target = np.full(K, eps/K); target[0] = 1 - eps + eps/K
+    losses = []
+    for gp in gaps:
+        z = np.zeros(K); z[0] = gp
+        pr = nn.softmax(z[None])[0]
+        losses.append(float(-np.sum(target * np.log(pr + 1e-12))))
+    losses = np.array(losses)
+    fig.add_trace(go.Scatter(x=gaps, y=losses, mode="lines", name=f"ε = {eps}",
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    k = int(np.argmin(losses))
+    best_gap.append(float(gaps[k]))
+    z = np.zeros(K); z[0] = gaps[k]
+    best_conf.append(float(nn.softmax(z[None])[0, 0]))
+
+fig.add_trace(go.Scatter(x=eps_list, y=best_gap, mode="lines+markers",
+                         name="최적 로짓 간격",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=eps_list, y=np.array(best_conf)*14, mode="lines+markers",
+                         name="그때의 최대 확률 (×14)",
+                         line=dict(color=viz.GREEN, width=2.5, dash="dash")),
+              row=1, col=2)
+fig.update_xaxes(title_text="정답 로짓 − 나머지", row=1, col=1)
+fig.update_yaxes(title_text="손실", row=1, col=1)
+fig.update_xaxes(title_text="스무딩 ε", row=1, col=2)
+fig.update_yaxes(title_text="값", row=1, col=2)
+viz.fig_defaults(fig, height=400, title=f"클래스 {K}개, 레이블 스무딩")
+fig.update_layout(legend=dict(x=0.5, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: smoothing-numbers
+#| code-fold: false
+
+print(f"{'ε':>6} {'최적 로짓 간격':>15} {'그때 정답 확률':>16}")
+print("-" * 42)
+for e, g_, c_ in zip(eps_list, best_gap, best_conf):
+    note = "  ← 발산 (∞ 로 밀림)" if e == 0 else ""
+    print(f"{e:>6.2f} {g_:>15.2f} {c_:>16.4f}{note}")
+print()
+print("ε=0 이면 손실을 줄이려 로짓 간격을 무한히 키운다 → 과신.")
+print("ε>0 이면 최적 간격이 유한해져 모델이 적당한 확신에서 멈춘다.")
+```
+
+::: {.key-concept}
+**레이블 스무딩이 하는 일**
+
+- 과신 억제 → [캘리브레이션 개선](../02_classical_ml/11_model_evaluation.qmd)
+- 로짓이 무한대로 발산하지 않음 → 학습 안정
+- 클래스 표현이 등거리로 모임 (군집이 조여짐)
+
+대가도 있다. **증류(distillation)의 교사 모델로는 나쁘다** —
+클래스 간 유사도 정보(암흑 지식)가 지워지기 때문이다.
 :::
 
 ---
 
-## G3.3.3 — InfoNCE 온도
+## 대조 손실: 레이블 없이 배우기
 
-양성/음성 쌍의 유사도 분포와 온도가 만드는 날카로움
+[CLIP](../09_vision_video/04_clip_multimodal.qmd), [SimCLR](../09_vision_video/03_ssl_vision.qmd),
+문장 임베딩이 전부 쓰는 손실이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 온도 슬라이더
+$$L = -\log\frac{\exp(\text{sim}(q, k^+)/\tau)}{\sum_{j}\exp(\text{sim}(q, k_j)/\tau)}$$
+
+**형태가 교차엔트로피와 같다.** 다른 점은 "클래스"가 배치 안의 다른 샘플이라는 것뿐이다.
+
+```{python}
+#| label: fig-infonce
+#| fig-cap: "온도가 양성/음성 쌍의 학습 신호 분배를 바꿉니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+rng = np.random.default_rng(0)
+B, d = 8, 16
+# 양성 쌍은 비슷하고 음성 쌍은 다양한 유사도를 갖는 상황
+q = rng.normal(size=(B, d)); q /= np.linalg.norm(q, axis=1, keepdims=True)
+k = q + rng.normal(0, 0.35, (B, d)); k /= np.linalg.norm(k, axis=1, keepdims=True)
+sim = q @ k.T
+
+temps = [0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+loss_by_t, pos_w, hard_w = [], [], []
+mats = {}
+for T in temps:
+    P = nn.softmax(sim / T)
+    mats[T] = np.round(P, 4)
+    diag = np.diag(P)
+    loss_by_t.append(float(-np.mean(np.log(diag + 1e-12))))
+    pos_w.append(float(diag.mean()))
+    off = P - np.diag(diag)
+    hard_w.append(float(off.max(axis=1).mean()))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("유사도 softmax 행렬 (대각이 양성)",
+                                    "온도에 따른 손실과 가중치"))
+T0 = 0.1
+fig.add_trace(go.Heatmap(z=mats[T0], colorscale="Blues", zmin=0, zmax=1,
+                         showscale=False, text=mats[T0], texttemplate="%{text:.2f}",
+                         textfont=dict(size=8)), row=1, col=1)
+fig.add_trace(go.Scatter(x=temps, y=loss_by_t, mode="lines+markers", name="InfoNCE 손실",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=temps, y=pos_w, mode="lines+markers", name="양성 쌍 평균 확률",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=temps, y=hard_w, mode="lines+markers",
+                         name="가장 어려운 음성 확률",
+                         line=dict(color=viz.GREEN, width=2.5, dash="dash")), row=1, col=2)
+
+steps = [(f"{T:g}", {"z": [mats[T], None, None, None],
+                     "text": [mats[T], None, None, None]}) for T in temps]
+fig.update_layout(sliders=[viz.slider(steps, prefix="온도 τ = ",
+                                      active=temps.index(T0), pad_t=55)])
+fig.update_yaxes(autorange="reversed", row=1, col=1)
+fig.update_xaxes(title_text="온도 τ", type="log", row=1, col=2)
+fig.update_yaxes(title_text="값", row=1, col=2)
+viz.fig_defaults(fig, height=430, title=f"InfoNCE (배치 {B})")
+fig.update_layout(legend=dict(x=0.53, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: infonce-numbers
+#| code-fold: false
+
+print(f"{'온도 τ':>8} {'손실':>9} {'양성 확률':>11} {'최난 음성 확률':>15}")
+print("-" * 48)
+for T, l_, p_, h_ in zip(temps, loss_by_t, pos_w, hard_w):
+    print(f"{T:>8.2f} {l_:>9.4f} {p_:>11.4f} {h_:>15.4f}")
+print()
+print("τ 가 작으면 분포가 뾰족해져 **가장 어려운 음성**에 학습이 집중된다.")
+print("τ 가 크면 모든 음성을 고르게 밀어내지만 신호가 약해진다.")
+print("CLIP 은 τ 를 학습 가능한 파라미터로 두고 0.01 근처에서 하한을 건다.")
+```
+
+::: {.key-concept}
+**대조 손실은 분류 손실이다**
+
+배치 크기 $B$ 인 InfoNCE는 사실상 **$B$-클래스 분류**다.
+그래서 [0.4의 상호정보](../00_foundations/04_information_theory.qmd) 하한과 연결되고,
+$\log B$ 가 그 하한의 상한이 된다.
+
+**배치가 클수록 음성 샘플이 많아져 과제가 어려워지고 표현이 좋아진다** —
+SimCLR이 배치 4096을 쓰고, MoCo가 큐로 음성을 모으고,
+CLIP이 32768 배치를 쓰는 이유다.
 :::
 
 ---
 
-## G3.3.4 — 손실 지형 3D
+## 다중 목표 손실
 
-평평한 최소점과 뾰족한 최소점의 일반화 차이 직관
+실무에서는 손실이 여러 개인 경우가 많다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 3D 회전
+$$L = \lambda_1 L_1 + \lambda_2 L_2 + \dots$$
+
+문제는 $\lambda$ 를 어떻게 정하느냐다. **스케일이 다르면 하나가 지배한다.**
+
+```{python}
+#| label: fig-multitask
+#| fig-cap: "손실 스케일이 다르면 가중치를 맞춰야 합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+# 두 과제: 하나는 손실 스케일이 100배 큼
+rng = np.random.default_rng(0)
+steps_n = 200
+lambdas = [0.001, 0.01, 0.1, 1.0, 10.0]
+
+def simulate(lam):
+    """가중치에 따라 두 손실이 어떻게 줄어드는지 (개념적 시뮬레이션)"""
+    l1 = 100.0; l2 = 1.0
+    h1, h2 = [], []
+    for _ in range(steps_n):
+        total_grad = 1.0 * l1 + lam * l2         # 각 손실의 그래디언트 기여
+        share1 = (1.0 * l1) / total_grad
+        share2 = (lam * l2) / total_grad
+        l1 *= (1 - 0.05 * share1)
+        l2 *= (1 - 0.05 * share2)
+        h1.append(l1); h2.append(l2)
+    return np.array(h1), np.array(h2)
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("과제 1 손실 (초기 100)",
+                                                    "과제 2 손실 (초기 1)"))
+for i, lam in enumerate(lambdas):
+    a, b = simulate(lam)
+    fig.add_trace(go.Scatter(x=np.arange(steps_n), y=a/a[0], mode="lines",
+                             name=f"λ₂ = {lam}",
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=np.arange(steps_n), y=b/b[0], mode="lines",
+                             showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+fig.update_xaxes(title_text="스텝")
+fig.update_yaxes(title_text="초기 대비 손실", type="log")
+viz.fig_defaults(fig, height=390,
+                 title="가중치를 안 맞추면 큰 손실이 학습을 독점한다 (개념 모델)")
+fig.update_layout(legend=dict(x=0.02, y=0.15, font=dict(size=10)))
+fig.show()
+```
+
+::: {.callout-warning}
+위 그림은 **개념적 시뮬레이션**입니다. 실제 신경망 학습이 아니라
+"그래디언트 기여 비율에 따라 각 손실이 줄어든다"는 관계를 단순화한 것입니다.
+
+실무 지침:
+
+1. **각 손실을 초기값으로 나눠 정규화**하고 시작한다
+2. 또는 그래디언트 노름을 맞춘다 (GradNorm)
+3. 또는 불확실성 기반 가중치를 **학습**한다 (Kendall et al.)
+4. 가장 단순하고 자주 통하는 것: **로그 스케일로 몇 개만 시도**
 :::
 
 ---
 
-## 핵심 용어
+## 실측: 손실 선택이 결과를 바꾼다
 
-| 용어 | 비고 |
+```{python}
+#| label: fig-loss-comparison-training
+#| fig-cap: "레이블 잡음이 있을 때 손실별 강건성"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=600, noise=0.15, seed=2)
+split = np.random.default_rng(0).permutation(len(X))
+tr, te = split[:450], split[450:]
+
+noise_rates = [0.0, 0.1, 0.2, 0.3, 0.4]
+
+# 잡음 레이블은 손실 종류와 무관하게 **동일한 패턴**으로 미리 만들어 둔다
+noisy = {}
+for nr in noise_rates:
+    y_tr = y[tr].copy()
+    flip = np.random.default_rng(100).random(len(y_tr)) < nr
+    y_tr[flip] = 1 - y_tr[flip]
+    noisy[nr] = y_tr
+
+def train_with(loss_kind, y_tr, smooth=0.0, steps=800):
+    m = nn.MLP([2, 32, 32, 2], activation="relu", seed=0)
+    params = m.params()
+    opt = nn.Optimizer("adam", lr=0.01)
+    r = np.random.default_rng(7)
+    for _ in range(steps):
+        idx = r.choice(len(y_tr), 64, replace=False)
+        out, cache = m.forward(X[tr][idx], training=True)
+        p = nn.softmax(out)
+        tgt = np.full_like(p, smooth / 2)
+        tgt[np.arange(len(idx)), y_tr[idx]] += 1 - smooth
+        if loss_kind == "ce":
+            dz = (p - tgt) / len(idx)
+        else:                                  # 확률에 대한 MAE — softmax 야코비안 통과
+            gp = np.sign(p - tgt) / len(idx)
+            dz = p * (gp - (gp * p).sum(1, keepdims=True))
+        opt.step(params, m.backward(cache, dz))
+    test = float((m.predict(X[te]).argmax(1) == y[te]).mean())
+    train = float((m.predict(X[tr]).argmax(1) == y_tr).mean())   # 잡음 레이블 기준
+    return test, train
+
+results = {}
+for kind, label, sm in [("ce", "교차엔트로피", 0.0),
+                        ("ce", "CE + 스무딩 0.2", 0.2),
+                        ("mae", "MAE (강건)", 0.0)]:
+    results[label] = [train_with(kind, noisy[nr], sm) for nr in noise_rates]
+
+fig = go.Figure()
+for i, (label, pairs) in enumerate(results.items()):
+    fig.add_trace(go.Scatter(x=noise_rates, y=[t for t, _ in pairs],
+                             mode="lines+markers", name=label,
+                             line=dict(color=viz.color(i), width=2.5)))
+    fig.add_trace(go.Scatter(x=noise_rates, y=[tr_ for _, tr_ in pairs],
+                             mode="lines", name=f"{label} (훈련, 잡음 레이블)",
+                             line=dict(color=viz.color(i), width=1.5, dash="dot"),
+                             showlegend=False, opacity=0.5))
+fig.update_layout(xaxis_title="레이블 잡음 비율", yaxis_title="깨끗한 시험셋 정확도",
+                  legend=dict(x=0.02, y=0.15))
+viz.fig_defaults(fig, height=400, title="레이블 잡음에 대한 손실별 강건성")
+fig.show()
+```
+
+```{python}
+#| label: robust-loss-numbers
+#| code-fold: false
+
+print("깨끗한 시험셋 정확도")
+print(f"{'손실':<18} " + " ".join(f"{r:>7.0%}" for r in noise_rates))
+print("-" * 62)
+for label, pairs in results.items():
+    print(f"{label:<18} " + " ".join(f"{t:>7.3f}" for t, _ in pairs))
+print()
+print("훈련셋 정확도 (뒤집힌 레이블 기준) — 잡음을 얼마나 외웠는가")
+print(f"{'손실':<18} " + " ".join(f"{r:>7.0%}" for r in noise_rates))
+print("-" * 62)
+for label, pairs in results.items():
+    print(f"{label:<18} " + " ".join(f"{a:>7.3f}" for a in [x[1] for x in pairs]))
+print()
+for j, r in enumerate(noise_rates):
+    best = max(results, key=lambda k: results[k][j][0])
+    print(f"잡음 {r:>4.0%} → 최고: {best} ({results[best][j][0]:.3f})")
+print()
+mae_last = results["MAE (강건)"][-1]
+print(f"MAE 는 40% 에서 시험 {mae_last[0]:.3f}, 훈련 {mae_last[1]:.3f} — 둘 다 무너졌다.")
+print("과적합이 아니라 **아예 학습을 못 한 것**이다 (스텝을 3배 늘려도 회복 안 됨).")
+
+```
+
+::: {.callout-warning}
+## 데이터가 말하는 것 (그리고 말하지 않는 것)
+
+**MAE가 잡음 10–20% 구간에서 가장 높았습니다** — 이론(Ghosh et al., 2017:
+MAE는 대칭 레이블 잡음에 대해 위험이 불변)과 방향이 맞습니다. 다만 격차는
+0.987 대 0.960 정도로 작고, 30%에서는 교차엔트로피와 같아집니다.
+**세 손실 모두** 훈련 정확도가 거의 정확히 $1-	ext{잡음률}$ 에 붙었습니다.
+뒤집힌 레이블을 외우지 않고 깨끗한 구조만 학습했다는 뜻입니다.
+
+**그런데 40%에서 MAE만 붕괴합니다.** 훈련 정확도까지 0.602 로 떨어졌습니다.
+잡음에 과적합한 것이 아니라 **최적화 실패**입니다. MAE의 그래디언트는 크기가
+일정해서 신호가 약하고, 잡음이 커지면 서로 상쇄됩니다. 스텝을 3배(2400)로
+늘려도 0.627 에 머물렀습니다. "강건하지만 학습이 어렵다"는 MAE의 잘 알려진
+대가를 그대로 보여줍니다.
+
+**주의**: 이 실험은 작은 MLP · 800스텝 · two-moons 입니다. 세 손실 모두
+30%까지 시험 정확도 0.98 을 유지한 데에는 **짧은 학습 예산 자체가 정규화로
+작용한** 몫이 큽니다. 대형 모델을 오래 학습시키면 교차엔트로피는 잡음 레이블을
+실제로 외워버립니다. 여기서 읽어야 할 것은 절대 수치가 아니라 **경향**입니다.
+:::
+
+---
+
+## 손실 지형과 평평한 최소점
+
+손실함수는 **파라미터 공간 위의 지형**이기도 하다.
+같은 손실값이라도 지형의 모양이 다르면 일반화가 다르다는 관찰이 있다.
+
+```{python}
+#| label: fig-loss-landscape
+#| fig-cap: "학습된 해 주변의 손실 지형 단면 (filter-normalized 1D)"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=500, noise=0.25, seed=3)
+rng = np.random.default_rng(0)
+perm = rng.permutation(len(X)); tr, te = perm[:350], perm[350:]
+
+curves = {}
+for bs, label in [(8, "작은 배치 (8)"), (256, "큰 배치 (256)")]:
+    m = nn.MLP([2, 48, 48, 2], activation="relu", seed=1)
+    nn.train(m, X[tr], y[tr], loss="softmax_ce",
+             opt=nn.Optimizer("sgd", lr=0.08), steps=1200, batch_size=bs)
+    base = {k: v.copy() for k, v in m.params().items()}
+    # 무작위 방향 (층별 노름으로 정규화)
+    d = {}
+    r = np.random.default_rng(7)
+    for k, v in base.items():
+        u = r.normal(size=v.shape)
+        d[k] = u / (np.linalg.norm(u) + 1e-12) * np.linalg.norm(v)
+    alphas = np.linspace(-1.2, 1.2, 41)
+    ls = []
+    P = m.params()
+    for a in alphas:
+        for k in P:
+            P[k][...] = base[k] + a * d[k]
+        L, _ = m.loss_and_grads(X[tr], y[tr], loss="softmax_ce", training=False)
+        ls.append(L)
+    for k in P:
+        P[k][...] = base[k]
+    curves[label] = (alphas, np.array(ls),
+                     float((m.predict(X[te]).argmax(1) == y[te]).mean()))
+
+fig = go.Figure()
+for i, (label, (a, l, acc)) in enumerate(curves.items()):
+    fig.add_trace(go.Scatter(x=a, y=l, mode="lines",
+                             name=f"{label} · 시험 정확도 {acc:.3f}",
+                             line=dict(color=viz.color(i), width=3)))
+fig.add_vline(x=0, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="학습된 해")
+fig.update_layout(xaxis_title="무작위 방향으로의 이동 α", yaxis_title="훈련 손실",
+                  legend=dict(x=0.25, y=0.98))
+viz.fig_defaults(fig, height=400, title="해 주변 손실 단면")
+fig.show()
+```
+
+```{python}
+#| label: sharpness-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'':<18} {'중심 손실':>11} {'|α|=0.5 손실':>14} {'상승폭':>10} {'시험 정확도':>12}")
+print("-" * 70)
+for label, (a, l, acc) in curves.items():
+    c = l[len(l)//2]
+    k = int(np.argmin(np.abs(a - 0.5)))
+    print(f"{label:<18} {c:>11.4f} {l[k]:>14.4f} {l[k]-c:>10.4f} {acc:>12.3f}")
+print()
+rise, accs = {}, {}
+for label, (a, l, acc) in curves.items():
+    k = int(np.argmin(np.abs(a - 0.5)))
+    rise[label] = float(l[k] - l[len(l)//2]); accs[label] = acc
+flat = min(rise, key=rise.get)
+good = max(accs, key=accs.get)
+print(f"더 평평한 쪽: {flat}   /   시험 정확도가 더 높은 쪽: {good}")
+print("→ 이 실행에서 둘은 " + ("일치한다." if flat == good else "**엇갈린다**."))
+print()
+print("단면 하나로 '평평함이 일반화를 만든다'를 증명할 수는 없다 —")
+print("무작위 방향 하나이고, 손실 지형의 평평함은 재파라미터화로 조작 가능하다.")
+print("다만 SAM 같은 최적화 기법이 이 관찰을 목적함수로 삼는다.")
+```
+
+::: {.callout-warning}
+## 평평한 최소점 가설의 한계
+
+"평평한 최소점이 더 잘 일반화한다"는 널리 인용되지만 **논쟁 중인 주장**이다.
+
+- 가중치를 스케일링하면 손실값은 같은데 지형의 평평함이 바뀐다 (재파라미터화 문제)
+- 방향을 어떻게 고르느냐에 따라 그림이 크게 달라진다
+- 시각화는 2차원 단면일 뿐, 수백만 차원의 지형을 대표하지 않는다
+
+**위 실험이 그 예다.** 작은 배치 쪽이 실제로 더 평평했지만(상승폭 0.037 대 0.063),
+시험 정확도는 큰 배치 쪽이 더 높았다(0.933 대 0.927). 평평함과 일반화가
+**엇갈린 것**이다. 물론 이 격차는 두 샘플 차이라 통계적으로 의미 있다고 말할 수도 없다 —
+그래서 더욱, 단면 그림 하나로 결론을 내리면 안 된다.
+
+그럼에도 SAM(Sharpness-Aware Minimization) 같은 기법이 실제로 효과를 보이므로,
+**완전히 틀린 직관은 아니다.** 증명된 정리가 아니라 유용한 휴리스틱으로 다루는 것이 맞다.
+:::
+
+---
+
+## 손실 선택 가이드
+
+```{python}
+#| label: loss-guide
+#| code-fold: false
+
+rows = [
+    ("회귀, 잡음이 가우스",     "MSE",              "기본값"),
+    ("회귀, 이상치 많음",       "MAE / Huber",      "조건부 중앙값"),
+    ("회귀, 분위수 필요",       "Quantile",         "예측 구간"),
+    ("이진 분류",              "BCE (로짓 입력)",   "sigmoid 와 짝"),
+    ("다중 클래스",            "교차엔트로피",      "softmax 와 짝"),
+    ("극단적 불균형",          "focal loss",       "쉬운 샘플 억제"),
+    ("레이블 잡음",            "CE + 스무딩",       "과신 억제"),
+    ("표현 학습 (레이블 없음)",  "InfoNCE",          "배치가 클수록 유리"),
+    ("검색·랭킹",              "triplet / BPR",    "쌍 비교"),
+    ("생성 (자기회귀)",         "교차엔트로피",      "다음 토큰 예측"),
+]
+print(f"{'상황':<26} {'권장 손실':<20} {'비고'}")
+print("-" * 66)
+for r in rows:
+    print(f"{r[0]:<26} {r[1]:<20} {r[2]}")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 교차엔트로피 |  |
-| focal loss |  |
-| label smoothing |  |
-| InfoNCE |  |
-| 손실 지형 |  |
+| 손실 = $-\log p$ | 분포 가정이 손실의 이름을 정함 |
+| MSE / MAE / Quantile | **평균 / 중앙값 / 분위수**를 추정 |
+| 교차엔트로피 | 그래디언트가 $(p-y)$ 로 단순 |
+| $1/p$ 발산 | 확신에 찬 오답에 강한 신호 — 레이블 잡음엔 취약 |
+| focal loss | $(1-p)^\gamma$ 로 쉬운 샘플 억제 |
+| 레이블 스무딩 | 최적 로짓 간격을 **유한하게** 만듦 |
+| InfoNCE | $B$-클래스 분류, 배치가 클수록 유리 |
+| 온도 $\tau$ | 작으면 어려운 음성에 집중 |
+| 다중 목표 | 스케일 정규화가 먼저 |
+| 평평한 최소점 | 유용한 휴리스틱, 증명된 정리는 아님 |
+
+손실이 목표를 정했고, 역전파가 방향을 준다.
+남은 것은 **그 방향으로 얼마나, 어떻게 움직일 것인가** — 옵티마이저다.
 
 ---
 
-**다음**: [3.4 최적화 알고리즘](04_optimizers.qmd) — SGD·모멘텀·Adam·AdamW·스케줄러 — 어떻게 내려갈 것인가
+**다음**: [3.4 최적화 알고리즘](04_optimizers.qmd) — SGD·모멘텀·Adam·AdamW
 
 **이전**: [3.2 활성화 함수](02_activations.qmd)
