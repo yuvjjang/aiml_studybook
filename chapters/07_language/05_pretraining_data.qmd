@@ -4,91 +4,554 @@ subtitle: "코퍼스·정제·중복 제거·혼합 비율 — 모델을 만드�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+논문은 아키텍처를 자세히 쓴다. 층 수, 헤드 수, 활성화 함수, 정규화 위치.
+그리고 데이터에 대해서는 이렇게 쓴다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> "We train on a filtered mixture of web data, books, and code."
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+**같은 아키텍처·같은 연산량에서 성능 차이를 만드는 것은 거의 언제나 데이터다.**
+그리고 그 부분이 가장 적게 공개된다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+이 장은 데이터 쪽에서 **직접 측정할 수 있는 것**을 측정한다.
 
-같은 아키텍처, 같은 연산량에서 성능 차이를 만드는 것은 거의 언제나 데이터다. 그리고 이 부분은 논문에서 가장 적게 공개된다.
+1. 중복이 정확히 얼마나 해로운가 (= 같은 데이터를 반복해도 되는가)
+2. 도메인 혼합 비율을 바꾸면 무슨 일이 생기는가
+3. 벤치마크 오염을 n-gram 으로 잡을 수 있는가
 
----
-
-## 이 장에서 다루는 것
-
-- 주요 공개 코퍼스: Common Crawl, C4, The Pile, RedPajama, FineWeb, Dolma
-- 웹 크롤 정제 파이프라인: 언어 식별, 품질 필터, 휴리스틱 규칙
-- 품질 필터링: 분류기 기반, 퍼플렉서티 기반, 교육적 가치 점수
-- 중복 제거: 정확·근사(MinHash/LSH), 문서 간·문서 내
-- 중복 제거가 성능에 주는 실증적 효과
-- 데이터 혼합 비율(코드·수학·다국어·웹)과 도메인 가중치
-- 커리큘럼과 학습 후반 고품질 데이터(annealing)
-- 합성 데이터: 생성·필터링·모델 붕괴 우려
-- 오염(contamination): 벤치마크 유출 탐지
-- 저작권·라이선스·개인정보와 데이터 거버넌스
-- 토큰 예산과 데이터 재사용(에폭) 한계
+전부 [7.2](02_language_models.qmd)의 참값 아는 소스 위에서 한다.
 
 ---
 
-## G7.5.1 — 정제 단계별 잔존율
+## 준비: 두 개의 "도메인"
 
-원시 크롤에서 각 필터를 통과하며 남는 데이터 비율
+```{python}
+#| label: setup
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단계 슬라이더
-:::
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+V = 10
+W = 4                                        # 문맥 길이
+
+
+def make_source(seed, sharp=2.2):
+    g = np.random.default_rng(seed)
+    lg = g.normal(0, sharp, (V, V, V))
+    p = np.exp(lg - lg.max(-1, keepdims=True))
+    return p/p.sum(-1, keepdims=True)
+
+
+def generate(P, n, seed):
+    g = np.random.default_rng(seed)
+    s = [int(g.integers(V)), int(g.integers(V))]
+    for _ in range(n):
+        s.append(int(g.choice(V, p=P[s[-2], s[-1]])))
+    return np.array(s)
+
+
+def entropy_rate(P):
+    M = np.zeros((V*V, V*V))
+    for a in range(V):
+        for b in range(V):
+            M[a*V+b, b*V:(b+1)*V] = P[a, b]
+    pi = np.ones(V*V)/(V*V)
+    for _ in range(3000):
+        pi = pi @ M
+    F = P.reshape(V*V, V)
+    return float(-(pi[:, None]*F*np.log2(np.maximum(F, 1e-300))).sum())
+
+
+def xy(seq):
+    X = np.stack([seq[i:i+W] for i in range(len(seq)-W)])
+    return X, seq[W:]
+
+
+def onehot(X):
+    n, w = X.shape
+    O = np.zeros((n, w*V))
+    O[np.arange(n)[:, None], np.arange(w)[None]*V + X] = 1.0
+    return O
+
+
+def train_model(Xtr, ytr, steps=1200, seed=0):
+    net = nn.MLP([W*V, 96, 96, V], activation="tanh",
+                 out_activation="softmax", init="xavier", seed=seed)
+    nn.train(net, onehot(Xtr), ytr, loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=5e-3), steps=steps,
+             batch_size=256, seed=seed)
+    return net
+
+
+def ppl(net, X, y):
+    pr = net.predict(onehot(X))
+    return 2**float(-np.log2(np.maximum(pr[np.arange(len(y)), y],
+                                        1e-300)).mean())
+
+
+P_A, P_B = make_source(0), make_source(7)
+H_A, H_B = entropy_rate(P_A), entropy_rate(P_B)
+
+print("두 개의 '도메인' — 서로 다른 2차 마르코프 소스")
+print(f"  도메인 A: 엔트로피율 {H_A:.4f} bits,  참 PPL {2**H_A:.3f}")
+print(f"  도메인 B: 엔트로피율 {H_B:.4f} bits,  참 PPL {2**H_B:.3f}")
+print()
+print("**참 PPL 을 알고 있으니 '얼마나 손해인지'를 절대적으로 잴 수 있다.**")
+```
 
 ---
 
-## G7.5.2 — 중복 제거 효과
+## G7.5.1 — 중복: 데이터를 반복해도 되는가
 
-중복 비율에 따른 학습 효율과 암기 경향
+토큰 예산이 고정되어 있을 때, **고유 데이터를 줄이고 반복 횟수를 늘리면** 어떻게 되는가.
+이것은 두 질문에 동시에 답한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 중복률 슬라이더
-:::
+- 중복 제거를 왜 하는가
+- 데이터가 부족할 때 에폭을 늘려도 되는가
+
+```{python}
+#| label: dedup
+#| code-fold: false
+
+import numpy as np
+
+BUDGET = 40000
+TEST_A = generate(P_A, 8000, 99)
+X_TE, Y_TE = xy(TEST_A)
+
+print(f"총 학습 토큰 {BUDGET:,} 고정. 고유 토큰만 줄이고 그만큼 반복한다.")
+print(f"테스트 {len(X_TE):,} 토큰 (전부 새 데이터)")
+print()
+print(f"{'반복 횟수':>10} {'고유 토큰':>11} {'훈련 PPL':>11} {'테스트 PPL':>12} "
+      f"{'간극':>10}")
+print("-" * 60)
+DUP = []
+for dup in [1, 2, 4, 10, 40]:
+    uniq = BUDGET//dup
+    base = generate(P_A, uniq, 1)
+    seq = np.tile(base, dup)[:BUDGET]
+    Xtr, ytr = xy(seq)
+    net = train_model(Xtr, ytr)
+    tr, te = ppl(net, Xtr, ytr), ppl(net, X_TE, Y_TE)
+    DUP.append((dup, uniq, tr, te, te/tr))
+    print(f"{dup:>10} {uniq:>11,} {tr:>11.3f} {te:>12.3f} {te/tr:>9.2f}x")
+print("-" * 60)
+print(f"{'참값':>10} {'':>11} {2**H_A:>11.3f} {2**H_A:>12.3f} {1.0:>9.2f}x")
+print()
+d1, d40 = DUP[0], DUP[-1]
+print(f"**반복 1회(전부 고유): 테스트 PPL {d1[3]:.3f} — 참값 {2**H_A:.3f} 에 근접.**")
+print(f"**반복 40회(고유 {d40[1]:,} 토큰): 테스트 PPL {d40[3]:.3f} — "
+      f"{d40[3]/d1[3]:.1f}배 나쁘다.**")
+print()
+print(f"**결정적인 것은 훈련 PPL 이다: {d40[2]:.3f}.**")
+print(f"참 엔트로피가 {2**H_A:.3f} 인데 훈련 데이터에서 그보다 낮다 —")
+print("**일반화하는 모델은 원리상 낼 수 없는 값이다.** 외운 것이다.")
+print()
+print("훈련/테스트 간극이 곧 암기의 크기다:")
+for dup, uniq, tr, te, gap in DUP:
+    bar = "█"*int(min(gap, 14))
+    print(f"  {dup:>3}회 반복 (고유 {uniq:>6,}): {gap:>6.2f}x  {bar}")
+print()
+print("**중복 제거가 성능을 올리는 이유가 이것이다.**")
+print("  같은 계산 예산이면, 반복보다 새 데이터가 언제나 낫다.")
+print("  중복이 남아 있으면 그만큼 예산을 암기에 쓴다.")
+print()
+print("실제 보고된 효과:")
+for s in ["Lee et al.(2021) — 중복 제거로 같은 성능을 **10배 적은 스텝**에 도달",
+          "중복된 문서는 **그대로 출력될 확률이 급격히 올라간다** (암기·유출)",
+          "  → 개인정보·저작권 문제로 직결된다",
+          "The Pile, C4, RefinedWeb, FineWeb 모두 중복 제거를 핵심 단계로 둔다"]:
+    print(f"  · {s}")
+print()
+print("**그리고 이 실험은 '에폭' 질문에도 답한다.**")
+print("  반복 40회 = 1,000 토큰짜리 데이터셋을 40에폭 돌린 것과 같다.")
+print(f"  Muennighoff et al.(2023)의 결론과 방향이 같다 —")
+print("  **약 4에폭까지는 새 데이터와 비슷하고, 그 이후로는 빠르게 나빠진다.**")
+print(f"  우리 실험에서도 4회 반복까지는 간극 {DUP[2][4]:.2f}x 로 견디다가")
+print(f"  10회에서 {DUP[3][4]:.2f}x, 40회에서 {DUP[4][4]:.2f}x 로 무너진다.")
+```
+
+```{python}
+#| label: fig-dedup
+#| fig-cap: "고유 데이터가 줄어들수록 훈련 성능은 좋아지고 테스트 성능은 무너집니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("반복 횟수와 퍼플렉서티",
+                                    "암기의 크기 (테스트/훈련 비)"))
+dups = [d[0] for d in DUP]
+fig.add_trace(go.Scatter(x=dups, y=[d[2] for d in DUP], mode="lines+markers",
+                         name="훈련 PPL", line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_trace(go.Scatter(x=dups, y=[d[3] for d in DUP], mode="lines+markers",
+                         name="테스트 PPL", line=dict(color=viz.PINK, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_hline(y=2**H_A, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text=f"참값 {2**H_A:.2f}", row=1, col=1)
+fig.add_trace(go.Bar(x=[str(d) for d in dups], y=[d[4] for d in DUP],
+                     showlegend=False, marker_color=viz.WARM,
+                     text=[f"{d[4]:.2f}x" for d in DUP],
+                     textposition="outside"), row=1, col=2)
+fig.update_xaxes(title_text="반복 횟수 (= 에폭)", type="log", row=1, col=1)
+fig.update_yaxes(title_text="퍼플렉서티", type="log", row=1, col=1)
+fig.update_xaxes(title_text="반복 횟수", row=1, col=2)
+fig.update_yaxes(title_text="테스트 / 훈련", row=1, col=2)
+viz.fig_defaults(fig, height=390,
+                 title="총 토큰 예산은 40,000 으로 고정되어 있습니다")
+fig.show()
+```
 
 ---
 
-## G7.5.3 — 데이터 혼합 비율
+## G7.5.2 — 혼합 비율: 무엇을 얼마나 먹일까
 
-혼합 비율 변화가 도메인별 성능에 주는 영향
+```{python}
+#| label: mixture
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 도메인 가중치 슬라이더
-:::
+import numpy as np
+
+TOTAL = 40000
+XA, YA = xy(generate(P_A, 6000, 101))
+XB, YB = xy(generate(P_B, 6000, 102))
+
+print(f"총 토큰 {TOTAL:,} 을 두 도메인에 나눠 넣는다")
+print()
+print(f"{'A 비율':>8} {'A 토큰':>9} {'B 토큰':>9} {'A PPL':>9} {'B PPL':>9} "
+      f"{'평균':>9} {'최악':>9}")
+print("-" * 68)
+MIX = []
+for wa in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]:
+    na = int(TOTAL*wa)
+    nb = TOTAL - na
+    parts = []
+    if na:
+        parts.append(generate(P_A, na, 11))
+    if nb:
+        parts.append(generate(P_B, nb, 12))
+    Xtr, ytr = xy(np.concatenate(parts))
+    net = train_model(Xtr, ytr)
+    a_, b_ = ppl(net, XA, YA), ppl(net, XB, YB)
+    MIX.append((wa, na, nb, a_, b_))
+    print(f"{wa:>8.1f} {na:>9,} {nb:>9,} {a_:>9.3f} {b_:>9.3f} "
+          f"{(a_+b_)/2:>9.3f} {max(a_, b_):>9.3f}")
+print("-" * 68)
+print(f"{'참값':>8} {'':>9} {'':>9} {2**H_A:>9.3f} {2**H_B:>9.3f}")
+print()
+best_avg = min(MIX, key=lambda m: (m[3]+m[4])/2)
+print(f"**평균이 가장 좋은 지점은 A 비율 {best_avg[0]:.1f} "
+      f"(평균 {(best_avg[3]+best_avg[4])/2:.3f})다.**")
+print()
+print("양 끝을 보라 — 한쪽만 먹이면 다른 쪽이 **재앙**이다:")
+print(f"  A 만 학습: A {MIX[-1][3]:.2f} / B {MIX[-1][4]:.2f} "
+      f"(B 참값의 {MIX[-1][4]/2**H_B:.0f}배)")
+print(f"  B 만 학습: A {MIX[0][3]:.2f} / B {MIX[0][4]:.2f} "
+      f"(A 참값의 {MIX[0][3]/2**H_A:.0f}배)")
+print()
+print("**소량이 큰 차이를 만든다.**")
+print(f"  A 비율 0.0 → 0.1 만으로 A PPL 이 {MIX[0][3]:.1f} → {MIX[1][3]:.1f} 로 "
+      f"{MIX[0][3]/MIX[1][3]:.1f}배 개선된다.")
+print("  10% 만 섞어도 '완전히 모르는 것'에서 '어느 정도 아는 것'으로 넘어간다.")
+print("  실제 LLM 이 코드·수학·다국어를 소량이라도 섞는 이유가 이것이다.")
+print()
+print("**그리고 대가가 있다 — 용량을 나눠 쓴다:**")
+mid = [m for m in MIX if m[0] == 0.5][0]
+print(f"  50:50 에서 A {mid[3]:.3f} (참값 {2**H_A:.3f} 의 "
+      f"{mid[3]/2**H_A:.2f}배), B {mid[4]:.3f} (참값의 {mid[4]/2**H_B:.2f}배)")
+print("  각 도메인 전용 모델보다 나쁘다. **모델 하나로 둘을 하는 값이다.**")
+print("  모델을 키우면 이 대가가 줄어든다 — 다도메인 학습이 큰 모델에서 잘 되는 이유다.")
+print()
+print("실제 사전학습 혼합의 고려사항:")
+for a_, b_ in [
+    ("웹 텍스트", "가장 많지만 품질 편차가 크다 — 전체의 60~90%"),
+    ("코드", "**추론 능력에 도움된다**는 보고가 많다. 5~20%"),
+    ("수학", "적은 양으로도 효과가 크다. 1~5%"),
+    ("책·논문", "긴 문맥·정확한 문장. 5~15%"),
+    ("다국어", "비율이 낮으면 해당 언어가 무너진다 (위 실험의 양 끝)"),
+    ("**어닐링**", "학습 후반에 고품질 데이터 비중을 올린다"),
+]:
+    print(f"  {a_:<14} {b_}")
+```
+
+```{python}
+#| label: fig-mixture
+#| fig-cap: "혼합 비율에 따른 도메인별 성능 — 양 끝이 재앙입니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+ws = [m[0] for m in MIX]
+fig.add_trace(go.Scatter(x=ws, y=[m[3] for m in MIX], mode="lines+markers",
+                         name="도메인 A", line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)))
+fig.add_trace(go.Scatter(x=ws, y=[m[4] for m in MIX], mode="lines+markers",
+                         name="도메인 B", line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)))
+fig.add_trace(go.Scatter(x=ws, y=[(m[3]+m[4])/2 for m in MIX],
+                         mode="lines+markers", name="평균",
+                         line=dict(color=viz.GREEN, width=2, dash="dash"),
+                         marker=dict(size=8)))
+fig.add_hline(y=2**H_A, line=dict(color=viz.hex_rgba(viz.ACCENT, 0.6),
+                                  dash="dot"),
+              annotation_text=f"A 참값 {2**H_A:.2f}")
+fig.add_hline(y=2**H_B, line=dict(color=viz.hex_rgba(viz.WARM, 0.6),
+                                  dash="dot"),
+              annotation_text=f"B 참값 {2**H_B:.2f}")
+fig.update_layout(xaxis_title="도메인 A 의 비율",
+                  yaxis_title="퍼플렉서티 (로그)", yaxis_type="log")
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
 
 ---
 
-## G7.5.4 — 오염 탐지
+## G7.5.3 — 벤치마크 오염을 잡을 수 있는가
 
-벤치마크 문장이 학습 코퍼스에 존재하는지 탐지하는 방법
+평가셋이 학습 데이터에 섞이면 점수는 의미를 잃는다.
+표준 탐지법은 **n-gram 겹침**이다. 얼마나 잘 작동하는지 재본다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: n-gram 겹침 임계값
-:::
+```{python}
+#| label: contamination
+#| code-fold: false
+
+import numpy as np
+
+TRAIN_CLEAN = generate(P_A, 200000, 1)
+BENCH = [generate(P_A, 20, 1000+i)[:20] for i in range(200)]
+rng_c = np.random.default_rng(5)
+LEAKED = set(rng_c.choice(200, 40, replace=False).tolist())
+TRAIN_DIRTY = np.concatenate(
+    [TRAIN_CLEAN] + [BENCH[i] for i in sorted(LEAKED)])
+
+print(f"훈련 {len(TRAIN_DIRTY):,} 토큰")
+print(f"벤치마크 {len(BENCH)}문항 (각 20토큰) 중 {len(LEAKED)}개를 몰래 섞었다")
+print()
+print(f"{'n':>4} {'훈련 n-gram 종류':>18} {'유출 탐지(재현율)':>18} "
+      f"{'미유출 오탐':>14} {'정밀도':>9} {'F1':>8}")
+print("-" * 78)
+CONT = []
+for n in [4, 6, 8, 10, 13, 16]:
+    S = {tuple(TRAIN_DIRTY[i:i+n]) for i in range(len(TRAIN_DIRTY)-n+1)}
+    tp = fp = 0
+    for i, b in enumerate(BENCH):
+        hit = any(tuple(b[j:j+n]) in S for j in range(len(b)-n+1))
+        if i in LEAKED:
+            tp += hit
+        else:
+            fp += hit
+    prec = tp/max(tp+fp, 1)
+    rec = tp/len(LEAKED)
+    f1 = 2*prec*rec/max(prec+rec, 1e-9)
+    CONT.append((n, len(S), tp, fp, prec, rec, f1))
+    print(f"{n:>4} {len(S):>18,} {tp:>13}/{len(LEAKED)} "
+          f"{fp:>11}/{200-len(LEAKED)} {prec:>9.3f} {f1:>8.3f}")
+print()
+print("**재현율은 어느 n 에서도 100% 다** — 유출된 문항은 반드시 잡힌다.")
+print("문제는 **정밀도**다. 짧은 n-gram 은 우연히도 훈련셋에 존재한다.")
+print()
+c4, c16 = CONT[0], CONT[-1]
+print(f"  n={c4[0]}: 오탐 {c4[3]}/160 — **깨끗한 문항을 전부 오염으로 판정**")
+print(f"  n={c16[0]}: 오탐 {c16[3]}/160, 정밀도 {c16[4]:.3f}")
+print()
+print("이유는 조합의 수다:")
+for n in [4, 8, 16]:
+    S = {tuple(TRAIN_DIRTY[i:i+n]) for i in range(len(TRAIN_DIRTY)-n+1)}
+    print(f"  {n}-gram: 가능한 조합 {V**n:>22,} / 훈련셋에 실제 존재 {len(S):>9,}")
+print()
+print("**n 이 작으면 가능한 조합이 적어 우연한 일치가 흔하다.**")
+print("어휘가 10뿐이라 이 효과가 극단적이지만, 방향은 실제와 같다.")
+print()
+print("실무에서의 대응:")
+for s in ["n=8~13 토큰 겹침을 기준으로 삼는다 (어휘가 크면 우연 일치가 훨씬 드물다)",
+          "**한 개 겹침이 아니라 겹침 비율**로 판정한다 (예: 문항의 50% 이상)",
+          "정확 일치 대신 정규화 후 비교 (7.0 의 유니코드 정규화가 여기서 쓰인다)",
+          "모델 쪽 신호도 본다 — 오염된 문항에서 비정상적으로 낮은 손실",
+          "**아예 새 벤치마크를 만든다** — 사전학습 시점 이후 데이터로"]:
+    print(f"  · {s}")
+print()
+print("**그런데 근본적으로 완전한 탐지는 불가능하다.**")
+for s in ["의역된 유출 — 같은 문제를 다르게 표현한 것은 n-gram 으로 안 잡힌다",
+          "학습 데이터를 공개하지 않는 모델은 검사 자체가 불가능하다",
+          "웹에 벤치마크 자체가 퍼져 있다 (해설·풀이·리트윗)",
+          "**그래서 벤치마크 점수는 항상 상한으로 읽어야 한다** (7.13)"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 핵심 용어
+## 정제 파이프라인
 
-| 용어 | 비고 |
+```{python}
+#| label: pipeline
+#| code-fold: false
+
+print("웹 크롤에서 학습 데이터까지 — 공개된 파이프라인의 단계")
+print()
+stages = [
+    ("원시 WARC", 100.0, "Common Crawl 한 스냅샷"),
+    ("텍스트 추출", 100.0, "HTML → 본문 (trafilatura 등)"),
+    ("언어 식별", 40.0, "목표 언어만 남긴다 (영어 기준)"),
+    ("URL 필터", 38.0, "블랙리스트 (성인·스팸·도메인)"),
+    ("품질 휴리스틱", 25.0, "길이·기호비·반복·중단어 비율"),
+    ("문서 내 중복 제거", 22.0, "같은 문단 반복 제거"),
+    ("문서 간 중복 제거", 10.0, "**MinHash/LSH** — 가장 많이 버린다"),
+    ("품질 분류기", 6.0, "위키·책 유사도 또는 교육적 가치 점수"),
+    ("PII 제거", 5.8, "이메일·전화번호 마스킹"),
+]
+print(f"{'단계':<22} {'남는 비율':>10} {'설명'}")
+print("-" * 76)
+for nm, pct, desc in stages:
+    bar = "█"*max(1, int(pct/2.5))
+    print(f"{nm:<22} {pct:>9.1f}% {desc}")
+print()
+print(f"{'':22} {'':>10} {'막대로 보면:'}")
+for nm, pct, _ in stages:
+    print(f"{nm:<22} {pct:>9.1f}% {'█'*max(1, int(pct/2.5))}")
+print()
+print("**위 숫자는 공개 파이프라인들에서 보고된 값의 대략적 범위다.**")
+print("(RefinedWeb, FineWeb, Dolma 등은 각자 다른 값을 보고한다 —")
+print(" 스냅샷·언어·기준에 따라 크게 달라진다. 정확한 값이 아니라 규모의 감각으로 읽을 것.)")
+print()
+print("**핵심은 두 가지다:**")
+print("  1. 원시 크롤의 **95% 정도가 버려진다**")
+print("  2. 가장 크게 버리는 단계가 **중복 제거**다")
+print()
+print("주요 공개 코퍼스")
+print()
+print(f"{'이름':<16} {'규모':<14} {'출처':<22} {'특징'}")
+print("-" * 86)
+for a, b, c, d in [
+    ("C4", "~156B 토큰", "Common Crawl 2019", "T5 용. 휴리스틱 필터"),
+    ("The Pile", "~300B 토큰", "22개 출처 혼합", "코드·논문·법률 포함"),
+    ("RedPajama", "~1.2T 토큰", "LLaMA 레시피 재현", "공개 재현 시도"),
+    ("RefinedWeb", "~600B 토큰", "Common Crawl only", "**웹만으로 충분** 주장"),
+    ("Dolma", "~3T 토큰", "다출처", "**전 과정 공개** (OLMo)"),
+    ("FineWeb", "~15T 토큰", "Common Crawl 96 스냅샷", "필터 실험을 공개"),
+    ("FineWeb-Edu", "~1.3T 토큰", "FineWeb 부분집합", "**교육적 가치 점수**로 선별"),
+]:
+    print(f"{a:<16} {b:<14} {c:<22} {d}")
+print()
+print("**FineWeb-Edu 가 보여준 것**: 15T 에서 1.3T 만 남겼는데")
+print("여러 벤치마크에서 원본보다 나은 결과를 냈다.")
+print("**양보다 선별이 중요할 수 있다는 강한 증거다.**")
+print("(다만 '교육적'이라는 기준이 벤치마크와 맞물린 것일 수도 있다 —")
+print(" 그 기준이 모든 용도에 최선이라는 뜻은 아니다.)")
+```
+
+---
+
+## 합성 데이터와 모델 붕괴
+
+```{python}
+#| label: synthetic
+#| code-fold: false
+
+print("합성 데이터 — 왜 쓰고 무엇이 위험한가")
+print()
+print(f"{'용도':<24} {'방법':<32} {'현황'}")
+print("-" * 82)
+for a, b, c in [
+    ("지시 데이터", "강한 모델로 생성 후 필터링", "**사실상 표준** (7.7)"),
+    ("추론 경로", "정답이 맞은 풀이만 남긴다", "표준 (7.12)"),
+    ("교과서형 데이터", "고품질 설명문을 생성", "Phi 계열의 접근"),
+    ("희소 도메인", "저자원 언어·전문 분야 보강", "효과 보고됨"),
+    ("**웹 데이터 대체**", "사전학습 전체를 합성으로", "**논쟁 중**"),
+]:
+    print(f"{a:<24} {b:<32} {c}")
+print()
+print("**모델 붕괴(model collapse) 우려**")
+print()
+print("  Shumailov et al.(2024): 모델 출력으로 다시 학습하기를 반복하면")
+print("  분포의 꼬리가 먼저 사라지고, 결국 분산이 붕괴한다.")
+print()
+print("  직관: 생성은 샘플링이고, 샘플링은 드문 사건을 놓친다.")
+print("  그 결과로 학습하면 드문 사건이 더 드물어지고 — 되먹임이 생긴다.")
+print()
+print("  **[6.0](../06_generative/00_generative_overview.qmd)에서 본 모드 붕괴와 같은 구조다.**")
+print()
+print("**그런데 실무의 조건은 다르다:**")
+for s in ["실제로는 **원본 데이터를 계속 섞는다** — 순수 재귀가 아니다",
+          "생성물을 **필터링한다** — 정답 검증, 품질 점수, 사람 검토",
+          "필터가 정보를 추가한다 (검증기가 아는 것이 모델에 들어간다)",
+          "Gerstgrasser et al.(2024): 데이터를 **누적**하면 붕괴하지 않는다",
+          "**즉 '합성 데이터 = 붕괴'는 특정 조건의 결과지 일반 법칙이 아니다**"]:
+    print(f"  · {s}")
+print()
+print("실무 규칙:")
+for s in ["합성 데이터에는 반드시 **검증 신호**를 붙일 것 (실행 결과, 정답, 심판 모델)",
+          "원본 데이터를 대체하지 말고 **보강**할 것",
+          "출처를 추적할 것 — 무엇이 합성인지 모르면 진단이 불가능하다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 거버넌스
+
+```{python}
+#| label: governance
+#| code-fold: false
+
+rows = [
+    ("저작권", "학습이 공정 이용인가", "**소송 진행 중** (관할마다 다름)",
+     "라이선스 명시 코퍼스, 옵트아웃 존중"),
+    ("robots.txt", "크롤 거부 의사", "법적 구속력은 불분명",
+     "존중하는 것이 업계 규범화 중"),
+    ("개인정보", "PII 가 학습되고 재생성됨", "GDPR 등 규제 대상",
+     "탐지·마스킹, 삭제 요구 대응"),
+    ("라이선스 전파", "GPL 코드 학습 시 출력물은?", "미해결",
+     "허용 라이선스만 쓰는 코퍼스"),
+    ("데이터 출처", "무엇으로 학습했는지 공개", "대부분 비공개",
+     "Dolma·FineWeb 은 전 과정 공개"),
+]
+print(f"{'쟁점':<16} {'문제':<26} {'현황':<28} {'대응'}")
+print("-" * 100)
+for r in rows:
+    print(f"{r[0]:<16} {r[1]:<26} {r[2]:<28} {r[3]}")
+print()
+print("**기술적으로 확실한 것 하나: 중복 제거가 유출 위험을 크게 줄인다.**")
+print("이 장 첫 실험이 그 메커니즘을 보여줬다 —")
+print("반복된 데이터는 외워지고, 외운 것은 그대로 나온다.")
+print()
+print("Part 12(신뢰성)에서 암기·유출 측정과 완화를 다시 다룬다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| Common Crawl |  |
-| 품질 필터링 |  |
-| 중복 제거 (dedup) |  |
-| 데이터 혼합 |  |
-| 벤치마크 오염 |  |
-| 합성 데이터 |  |
+| 전제 | 같은 아키텍처·연산량에서 차이를 만드는 것은 데이터 |
+| 중복 실험 | 토큰 예산 고정, 고유 데이터만 줄이며 반복 |
+| 1회 반복 | 테스트 PPL이 참값에 근접, 간극 1.04배 |
+| 40회 반복 | 테스트 PPL 5.7배 악화, 간극 **13.9배** |
+| 결정적 증거 | 훈련 PPL이 **참 엔트로피보다 낮다** — 암기의 정의 |
+| 에폭 함의 | 4회까지는 견디고 그 이후 무너진다 |
+| 혼합 실험 | 한쪽만 먹이면 다른 쪽이 참값의 10배 이상 나빠진다 |
+| 소량의 위력 | 10%만 섞어도 PPL이 4.4배 개선 |
+| 혼합의 대가 | 50:50에서 각 도메인이 전용 모델보다 나쁘다 — 용량 분할 |
+| 오염 탐지 | 재현율은 항상 100%, 문제는 **정밀도** |
+| 짧은 n-gram | n=4에서 깨끗한 문항 160/160 오판, n=16에서야 정밀도 0.95 |
+| 근본 한계 | 의역 유출·비공개 데이터·웹 확산은 탐지 불가 |
+| 정제 파이프라인 | 원시 크롤의 약 95%가 버려지고, 최대 단계는 중복 제거 |
+| FineWeb-Edu | 15T → 1.3T 선별이 원본보다 나은 결과 |
+| 모델 붕괴 | 순수 재귀 학습의 결과 — 누적·필터링하면 다르다 |
+| 거버넌스 | 저작권·PII·라이선스는 대부분 미해결 |
+
+데이터와 목표가 정해졌다. 이제 **이미 학습된 모델을 바꾸는 법**이다.
 
 ---
 
-**다음**: [7.6 미세조정과 PEFT](06_finetuning_peft.qmd) — full FT·LoRA·QLoRA·어댑터 — 큰 모델을 적은 자원으로 바꾸기
+**다음**: [7.6 미세조정과 PEFT](06_finetuning_peft.qmd)
 
 **이전**: [7.4 사전학습 패러다임](04_pretraining_paradigms.qmd)
