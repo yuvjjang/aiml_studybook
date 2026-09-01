@@ -4,87 +4,580 @@ subtitle: "그래픽 문법과 지각 — 거짓말하지 않는 그림 그리�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+같은 숫자로 **정반대 인상**을 주는 그래프를 만들 수 있다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+축 시작점 하나만 바꾸면 5% 증가가 "폭증"으로 보인다.
+색 팔레트 하나만 바꾸면 없는 경계가 생긴다.
+이 장에서 그 왜곡들을 **하나씩 수치로 잰다.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+시각화 원칙은 미학의 문제가 아니다. **정직함의 문제다.**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+그리고 실용적인 문제이기도 하다 —
+[1.1](01_eda.qmd)에서 봤듯 그림이 EDA의 주 도구인데,
+그 도구가 왜곡되면 분석자 자신이 먼저 속는다.
+
+---
+
+## 그래픽 문법
+
+Wilkinson(1999)과 Wickham(2010)의 분해다.
+모든 통계 그래픽은 다음 층의 조합으로 기술된다.
+
+```{python}
+#| label: grammar-of-graphics
+#| code-fold: false
+
+layers = [
+    ("데이터 (data)",     "무엇을 그리는가",       "tidy 형식의 테이블"),
+    ("미학 (aesthetics)", "어떤 열을 어떤 시각 속성에", "x, y, 색, 크기, 모양, 투명도"),
+    ("기하 (geometry)",   "어떤 도형으로",         "점, 선, 막대, 상자, 타일"),
+    ("통계 (statistics)", "그리기 전 어떤 변환",     "빈도, 평활, 요약, 밀도추정"),
+    ("척도 (scale)",      "값 → 시각 속성의 사상",   "선형/로그, 색 팔레트, 범위"),
+    ("좌표 (coordinate)", "어떤 좌표계",           "직교, 극, 지도 투영"),
+    ("패싯 (facet)",      "어떻게 쪼개어 나열",      "행/열 기준 변수"),
+]
+print(f"{'층':<20} {'정하는 것':<26} {'예'}")
+print("-" * 82)
+for a, b, c in layers:
+    print(f"{a:<20} {b:<26} {c}")
+print()
+print("이 분해가 유용한 이유는 **각 층마다 거짓말할 수 있는 지점이 다르기 때문**이다.")
+print()
+for layer, lie in [("척도", "축 자르기, 로그/선형 바꿔치기, 이중 y축"),
+                   ("기하", "면적으로 1차원 값 부호화 (버블·3D 파이)"),
+                   ("미학", "색각 이상을 무시한 팔레트, 무지개 팔레트"),
+                   ("통계", "평활 대역폭 조작, 구간 폭 선택"),
+                   ("데이터", "구간 잘라내기(cherry-picking), 이상치 임의 제거")]:
+    print(f"  {layer:<8} → {lie}")
+```
+
+---
+
+## G1.2.1 — 축 자르기: 가장 흔한 왜곡
+
+```{python}
+#| label: fig-axis-truncation
+#| fig-cap: "같은 데이터, y축 시작점만 바꾼 결과"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+months = ["1월", "2월", "3월", "4월", "5월", "6월"]
+vals = np.array([100.0, 101.2, 102.1, 103.0, 104.2, 105.1])
+
+STARTS = [0, 50, 90, 95, 99, 99.5]
+HI = float(vals.max()*1.02)
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=months, y=vals, marker_color=viz.ACCENT,
+                     text=[f"{v:.1f}" for v in vals], textposition="outside"))
+s0 = 99
+# 슬라이더가 데이터가 아니라 **y축 범위(layout)** 를 바꾼다
+slider_steps = [dict(method="relayout", label=str(lo),
+                     args=[{"yaxis.range": [lo, HI]}]) for lo in STARTS]
+fig.update_layout(sliders=[dict(active=STARTS.index(s0), pad=dict(t=52),
+                                currentvalue=dict(prefix="y축 시작 = ",
+                                                  font=dict(size=13)),
+                                steps=slider_steps)])
+fig.update_layout(yaxis=dict(range=[s0, HI]), yaxis_title="지표", xaxis_title="")
+viz.fig_defaults(fig, height=420,
+                 title="6개월간 5.1% 증가 — 축을 어디서 시작할 것인가")
+fig.show()
+```
+
+```{python}
+#| label: axis-truncation-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"실제 값: {vals}")
+print(f"실제 증가율: {(vals[-1]/vals[0]-1):.1%}   (마지막/처음 = {vals[-1]/vals[0]:.3f})")
+print()
+print(f"{'y축 시작':>10} {'막대 높이비':>13} {'실제 비 대비 과장':>18}  {'주는 인상'}")
+print("-" * 62)
+true_ratio = vals[-1]/vals[0]
+for lo in STARTS:
+    h1, h2 = (vals[0]-lo)/(HI-lo), (vals[-1]-lo)/(HI-lo)
+    ratio = h2/h1
+    imp = "폭증" if ratio > 3 else ("뚜렷한 증가" if ratio > 1.3 else "거의 평평")
+    print(f"{lo:>10.1f} {ratio:>13.2f} {ratio/true_ratio:>17.1f}배  {imp}")
+print()
+print(f"**y축을 99.5 에서 시작하면 시각적 비가 실제의 "
+      f"{(vals[-1]-99.5)/(vals[0]-99.5)/true_ratio:.1f}배가 된다.**")
+print()
+print("어느 쪽이 옳은가는 **막대인가 선인가**에 달렸다:")
+for geom, rule in [
+    ("막대 그래프", "**반드시 0 에서 시작한다.** 막대의 길이가 값을 부호화하므로"),
+    ("선 그래프", "0 에서 시작할 필요 없다. 위치가 값을 부호화하고 변화를 보는 것이 목적"),
+    ("어느 쪽이든", "축 범위를 명시하고, 잘랐다면 눈에 띄게 표시한다"),
+]:
+    print(f"  {geom:<14} {rule}")
+print()
+print("**축을 자르는 것 자체가 죄는 아니다.** 자르고도 말하지 않는 것이 문제다.")
+print("생체 신호처럼 기준선이 0 과 무관한 데이터는 자르는 것이 오히려 정직하다.")
+```
+
+---
+
+## 지각 위계: 무엇으로 부호화할 것인가
+
+Cleveland & McGill(1984)의 실험 결과다.
+사람이 **정확하게 비교할 수 있는 순서**가 있다.
+
+```{python}
+#| label: perceptual-hierarchy
+#| code-fold: false
+
+import numpy as np
+
+rank = [
+    (1, "공통 척도 위의 위치", "산점도, 막대의 끝", "가장 정확"),
+    (2, "다른 척도 위의 위치", "패싯된 그래프들", ""),
+    (3, "길이", "누적 막대의 각 조각", ""),
+    (4, "각도 · 기울기", "파이 차트", ""),
+    (5, "면적", "버블 차트, 트리맵", "과소평가됨"),
+    (6, "부피 · 곡률", "3D 막대", ""),
+    (7, "색조 · 채도", "히트맵, 색으로 값 표현", "가장 부정확"),
+]
+print(f"{'순위':>4} {'부호화':<22} {'예':<26} {'비고'}")
+print("-" * 74)
+for r, enc, ex, note in rank:
+    print(f"{r:>4} {enc:<22} {ex:<26} {note}")
+print()
+print("Stevens 의 멱법칙: 지각량 ≈ (물리량)^n")
+print()
+print(f"{'실제 비':>9} {'길이로 (n≈1.0)':>16} {'면적으로 (n≈0.7)':>18} "
+      f"{'부피로 (n≈0.5)':>17}")
+print("-" * 64)
+for r in [1.25, 1.5, 2.0, 3.0, 4.0]:
+    print(f"{r:>9.2f} {r**1.0:>16.2f} {r**0.7:>18.2f} {r**0.5:>17.2f}")
+print()
+print("**면적으로 그리면 2배 차이가 1.62배로 보인다** — 19% 과소평가.")
+print("**부피(3D)로 그리면 2배가 1.41배로 보인다** — 29% 과소평가.")
+print()
+print("그래서 원칙은 단순하다:")
+for s in ["1차원 값은 **위치나 길이**로 그린다",
+          "면적을 쓸 거면 반드시 **반지름이 아니라 면적**을 값에 비례시킨다",
+          "3D 는 실제로 3차원 데이터일 때만 (깊이 지각이 값을 왜곡한다)",
+          "색은 **순위 정보**나 범주에만. 정확한 비교가 필요하면 색을 쓰지 않는다"]:
+    print(f"  · {s}")
+print()
+# 반지름 vs 면적 비례의 차이
+print("버블 차트의 흔한 실수 — 값을 반지름에 비례시키면:")
+print(f"{'값 비':>8} {'반지름 비례 시 면적 비':>24} {'과장 배수':>12}")
+print("-" * 48)
+for v in [2, 3, 4, 5]:
+    print(f"{v:>8} {v**2:>24} {v**2/v:>12.0f}배")
+print("  값이 4배인데 면적은 16배로 그려진다 — **4배 과장**이다.")
+```
+
+---
+
+## G1.2.2 — 색: 팔레트가 없는 경계를 만든다
+
+```{python}
+#| label: fig-palettes
+#| fig-cap: "무지개 팔레트와 viridis — 색각 이상 시뮬레이션"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+# Viénot et al. 근사 — LMS 공간에서 결손 채널을 투영한다
+RGB2LMS = np.array([[17.8824, 43.5161, 4.11935],
+                    [3.45565, 27.1554, 3.86714],
+                    [0.0299566, 0.184309, 1.46709]])
+LMS2RGB = np.linalg.inv(RGB2LMS)
+SIM = {
+    "정상 시각": np.eye(3),
+    "적색맹": np.array([[0, 2.02344, -2.52581], [0, 1, 0], [0, 0, 1]]),
+    "녹색맹": np.array([[1, 0, 0], [0.494207, 0, 1.24827], [0, 0, 1]]),
+    "청색맹": np.array([[1, 0, 0], [0, 1, 0], [-0.395913, 0.801109, 0]]),
+}
+
+def simulate(rgb, kind):
+    return np.clip((rgb @ RGB2LMS.T) @ SIM[kind].T @ LMS2RGB.T, 0, 1)
+
+def jet(t):
+    t = np.asarray(t)
+    return np.stack([np.clip(1.5 - np.abs(4*t-3), 0, 1),
+                     np.clip(1.5 - np.abs(4*t-2), 0, 1),
+                     np.clip(1.5 - np.abs(4*t-1), 0, 1)], -1)
+
+VIRIDIS = np.array([
+    [0.267, 0.005, 0.329], [0.283, 0.141, 0.458], [0.254, 0.265, 0.530],
+    [0.207, 0.372, 0.553], [0.164, 0.471, 0.558], [0.128, 0.567, 0.551],
+    [0.135, 0.659, 0.518], [0.267, 0.749, 0.441], [0.478, 0.821, 0.318],
+    [0.741, 0.873, 0.150], [0.993, 0.906, 0.144]])
+
+def viridis(t):
+    idx = np.asarray(t)*(len(VIRIDIS)-1)
+    lo = np.floor(idx).astype(int)
+    hi = np.minimum(lo+1, len(VIRIDIS)-1)
+    w = (idx - lo)[:, None]
+    return VIRIDIS[lo]*(1-w) + VIRIDIS[hi]*w
+
+def lum(rgb):
+    return rgb @ np.array([0.2126, 0.7152, 0.0722])
+
+T = np.linspace(0, 1, 41)
+PAL = {"무지개 (jet)": jet, "viridis": viridis}
+
+def to_css(c):
+    return [f"rgb({int(255*r)},{int(255*g)},{int(255*b)})" for r, g, b in c]
+
+fig = make_subplots(rows=2, cols=1, row_heights=[0.45, 0.55],
+                    subplot_titles=("색 띠 (위 4줄: jet, 아래 4줄: viridis)",
+                                    "밝기(luminance) 변화"),
+                    vertical_spacing=0.16)
+row_y = 0
+labels = []
+for pname, pf in PAL.items():
+    for kind in SIM:
+        c = simulate(pf(T), kind)
+        fig.add_trace(go.Bar(x=T, y=np.ones_like(T), marker_color=to_css(c),
+                             marker_line_width=0, showlegend=False,
+                             base=row_y, width=1/len(T)), row=1, col=1)
+        labels.append(f"{pname.split(' ')[0]} · {kind}")
+        row_y += 1
+for i, (pname, pf) in enumerate(PAL.items()):
+    for j, kind in enumerate(SIM):
+        c = simulate(pf(T), kind)
+        fig.add_trace(go.Scatter(x=T, y=lum(c), mode="lines",
+                                 name=f"{pname.split(' ')[0]}·{kind}",
+                                 line=dict(color=viz.color(j),
+                                           width=2.5,
+                                           dash="solid" if i == 0 else "dot")),
+                      row=2, col=1)
+fig.update_yaxes(tickmode="array", tickvals=np.arange(8)+0.5, ticktext=labels,
+                 row=1, col=1)
+fig.update_xaxes(showticklabels=False, row=1, col=1)
+fig.update_xaxes(title_text="값 (0 → 1)", row=2, col=1)
+fig.update_yaxes(title_text="밝기", row=2, col=1)
+viz.fig_defaults(fig, height=640, title="팔레트 비교 (실선 = jet, 점선 = viridis)")
+fig.update_layout(bargap=0, legend=dict(font=dict(size=9)))
+fig.show()
+```
+
+```{python}
+#| label: palette-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("① 인접 색의 구별 가능성 (색 거리의 최솟값 — 클수록 좋다)")
+print(f"{'팔레트':<12} " + " ".join(f"{k:>10}" for k in SIM) + f"{'최악/정상':>12}")
+print("-" * 66)
+dist = {}
+for pname, pf in PAL.items():
+    row = []
+    for kind in SIM:
+        c = simulate(pf(T), kind)
+        row.append(float(np.linalg.norm(np.diff(c, axis=0), axis=1).min()))
+    dist[pname] = row
+    print(f"{pname:<12} " + " ".join(f"{v:>10.4f}" for v in row)
+          + f"{min(row)/row[0]:>12.2f}")
+print()
+print("jet 은 정상 시각에서 색 거리가 크지만 색각 이상에서 크게 무너진다.")
+print(f"  jet: {dist['무지개 (jet)'][0]:.4f} → {min(dist['무지개 (jet)']):.4f} "
+      f"({dist['무지개 (jet)'][0]/min(dist['무지개 (jet)']):.1f}배 손실)")
+print(f"  viridis: {dist['viridis'][0]:.4f} → {min(dist['viridis']):.4f} "
+      f"({dist['viridis'][0]/min(dist['viridis']):.1f}배 손실)")
+print()
+
+print("② 밝기가 단조로운가 — **이것이 결정적인 차이다**")
+print(f"{'팔레트':<12} " + " ".join(f"{k:>10}" for k in SIM))
+print("-" * 54)
+for pname, pf in PAL.items():
+    row = []
+    for kind in SIM:
+        L = lum(simulate(pf(T), kind))
+        row.append("단조" if np.all(np.diff(L) > -1e-9) else "**비단조**")
+    print(f"{pname:<12} " + " ".join(f"{v:>10}" for v in row))
+print()
+Ljet = lum(jet(T))
+Lvir = lum(viridis(T))
+peak = int(np.argmax(Ljet))
+print(f"jet 의 밝기는 값 {T[peak]:.2f} 에서 최대({Ljet[peak]:.3f})가 되고 다시 떨어진다.")
+print(f"  양 끝의 밝기: 시작 {Ljet[0]:.3f}, 끝 {Ljet[-1]:.3f} — "
+      f"차이가 {abs(Ljet[-1]-Ljet[0]):.3f} 밖에 안 된다.")
+print(f"  즉 **값 0 과 값 1 이 비슷한 밝기**다. 흑백으로 보면 구별되지 않는다.")
+print(f"  (viridis: 시작 {Lvir[0]:.3f} → 끝 {Lvir[-1]:.3f}, "
+      f"차이 {abs(Lvir[-1]-Lvir[0]):.3f})")
+print("  → 값이 커지는데 색이 밝아졌다 어두워졌다 한다.")
+print("  → **없는 경계가 보인다.** 밝기가 꺾이는 지점이 데이터의 경계처럼 읽힌다.")
+print("  → 흑백 인쇄하면 순서 정보가 통째로 사라진다.")
+print()
+print(f"viridis 는 네 조건 모두에서 밝기가 단조 증가한다.")
+print("  → 색을 못 봐도 밝기만으로 순서를 읽을 수 있다. 흑백 인쇄에도 살아남는다.")
+print()
+print("**팔레트 선택 규칙**")
+for kind, rule in [("순차형 (0 → 최대)", "viridis, magma, cividis — 밝기 단조"),
+                   ("발산형 (음 ↔ 0 ↔ 양)", "RdBu, BrBG — 중앙이 밝고 양쪽으로 어두워짐"),
+                   ("범주형", "8개 이하로 제한. 그 이상이면 색이 아닌 다른 부호화로"),
+                   ("절대 쓰지 말 것", "무지개(jet, rainbow) — 위 실측이 이유다")]:
+    print(f"  {kind:<22} {rule}")
+```
+
+---
+
+## G1.2.3 — 과밀 산점도
+
+점이 많아지면 산점도는 **검은 덩어리**가 된다.
+가려진 점은 보이지 않으므로, 밀도 정보가 통째로 사라진다.
+
+```{python}
+#| label: fig-overplotting
+#| fig-cap: "같은 20,000점을 네 가지 방법으로"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng_v = np.random.default_rng(5)
+NV = 12000
+# 밀도가 크게 다른 두 덩어리 + 희소한 꼬리
+xa = rng_v.normal(0, 1, int(NV*0.55))
+ya = xa*0.8 + rng_v.normal(0, 0.5, len(xa))
+xb = rng_v.normal(2.5, 0.4, int(NV*0.4))
+yb = xb*0.8 + rng_v.normal(0, 0.25, len(xb))
+xc = rng_v.uniform(-4, 6, NV - len(xa) - len(xb))
+yc = rng_v.uniform(-4, 7, len(xc))
+XV = np.round(np.concatenate([xa, xb, xc]), 3)
+YV = np.round(np.concatenate([ya, yb, yc]), 3)
+
+fig = make_subplots(rows=2, cols=2, subplot_titles=(
+    "① 그냥 그리기 (불투명)", "② 투명도 0.05",
+    "③ 2D 비닝 (밀도)", "④ 샘플링 1,500점"))
+
+fig.add_trace(go.Scattergl(x=XV, y=YV, mode="markers", showlegend=False,
+                           marker=dict(size=4, color=viz.ACCENT)), row=1, col=1)
+fig.add_trace(go.Scattergl(x=XV, y=YV, mode="markers", showlegend=False,
+                           marker=dict(size=4,
+                                       color=viz.hex_rgba(viz.ACCENT, 0.05))),
+              row=1, col=2)
+H, xe, ye = np.histogram2d(XV, YV, bins=70)
+fig.add_trace(go.Heatmap(x=xe[:-1], y=ye[:-1], z=np.log1p(H.T),
+                         colorscale="Viridis", showscale=False), row=2, col=1)
+sub = rng_v.choice(NV, 1500, replace=False)
+fig.add_trace(go.Scattergl(x=XV[sub], y=YV[sub], mode="markers", showlegend=False,
+                           marker=dict(size=4,
+                                       color=viz.hex_rgba(viz.ACCENT, 0.55))),
+              row=2, col=2)
+for r in (1, 2):
+    for c in (1, 2):
+        fig.update_xaxes(range=[-4.2, 6.2], row=r, col=c)
+        fig.update_yaxes(range=[-4.2, 7.2], row=r, col=c)
+viz.fig_defaults(fig, height=620, title=f"n = {NV:,}")
+fig.show()
+```
+
+```{python}
+#| label: overplotting-numbers
+#| code-fold: false
+
+import numpy as np
+
+# 화면 격자에 몇 개의 점이 겹치는가 (가려짐 정량화)
+GRID = 400
+gx = np.clip(((XV + 4.2)/10.4*GRID).astype(int), 0, GRID-1)
+gy = np.clip(((YV + 4.2)/11.4*GRID).astype(int), 0, GRID-1)
+cell = gx*GRID + gy
+uniq, counts = np.unique(cell, return_counts=True)
+
+print(f"{GRID}×{GRID} 화면 격자에 {NV:,}점을 찍으면")
+print(f"  차지하는 셀 수      : {len(uniq):,} / {GRID*GRID:,} ({len(uniq)/GRID**2:.1%})")
+print(f"  한 셀당 최대 점 개수 : {counts.max()}")
+print(f"  **가려진 점 비율**   : {1 - len(uniq)/NV:.1%}")
+print()
+print("불투명하게 그리면 이만큼의 점이 **화면에 존재하지 않는다.**")
+print("그리고 어디가 얼마나 빽빽한지도 알 수 없다 — 전부 같은 색이므로.")
+print()
+
+print("각 방법이 보존하는 정보")
+print(f"{'방법':<20} {'밀도 정보':<12} {'개별 점':<10} {'대용량 대응':<12} {'주의'}")
+print("-" * 76)
+for m, a, b, c, d in [
+    ("불투명 산점도", "없음", "일부만", "느림", f"{1-len(uniq)/NV:.0%} 가려짐"),
+    ("투명도", "부분적", "예", "느림", "너무 낮으면 희소 영역이 사라짐"),
+    ("2D 비닝", "**정확**", "아니오", "빠름", "구간 폭 선택이 필요"),
+    ("샘플링", "부분적", "예", "빠름", "희소 영역이 통째로 빠질 수 있음"),
+    ("등고선(KDE)", "매끄러움", "아니오", "중간", "대역폭 선택이 필요"),
+]:
+    print(f"{m:<20} {a:<12} {b:<10} {c:<12} {d}")
+print()
+
+# 샘플링이 희소 영역을 얼마나 잃는가
+rare = (XV < -3) | (XV > 5)
+sub_rare = rare[sub]
+print(f"희소 영역(|x| 극단)의 점: 전체에 {rare.sum()}개 ({rare.mean():.2%})")
+print(f"  {len(sub):,}점 샘플에는 {sub_rare.sum()}개 남는다.")
+print(f"  → 샘플링은 **드문 것을 드물게** 남긴다. 이상치 탐색에는 부적합하다.")
+print()
+print(f"2D 비닝의 최대 밀도 셀: {H.max():.0f}점 / 최소(0 아닌) 셀: {H[H>0].min():.0f}점")
+print(f"  동적 범위 {H.max()/H[H>0].min():.0f}배 — 그래서 log 스케일로 색을 입혔다.")
+print("  선형 색으로 그리면 조밀한 덩어리만 보이고 나머지가 전부 같은 색이 된다.")
+```
+
+---
+
+## 이중 y축: 원하는 상관을 만들어낼 수 있다
+
+```{python}
+#| label: fig-dual-axis
+#| fig-cap: "같은 두 시계열, 축 범위만 바꾼 결과"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng_d = np.random.default_rng(9)
+TT = 40
+t_ = np.arange(TT)
+A_ = 100 + np.cumsum(rng_d.normal(0.3, 2.0, TT))     # 두 계열은 독립이다
+B_ = 50 + np.cumsum(rng_d.normal(-0.1, 1.2, TT))
+
+fig = make_subplots(specs=[[{"secondary_y": True}]])
+fig.add_trace(go.Scatter(x=t_, y=A_, name="지표 A (왼쪽 축)",
+                         line=dict(color=viz.ACCENT, width=3)), secondary_y=False)
+fig.add_trace(go.Scatter(x=t_, y=B_, name="지표 B (오른쪽 축)",
+                         line=dict(color=viz.WARM, width=3)), secondary_y=True)
+
+# 오른쪽 축 범위를 바꿔가며 "같이 움직이는 것처럼" 또는 "반대로 움직이는 것처럼"
+RANGES = [("정직: 0 기준", [0, float(B_.max()*1.1)]),
+          ("A 와 겹치게", [float(B_.min()-1), float(B_.max()+1)]),
+          ("뒤집기", [float(B_.max()+1), float(B_.min()-1)])]
+slider_steps = [dict(method="relayout", label=lbl,
+                     args=[{"yaxis2.range": rg}]) for lbl, rg in RANGES]
+fig.update_layout(sliders=[dict(active=1, pad=dict(t=52),
+                                currentvalue=dict(prefix="오른쪽 축: ",
+                                                  font=dict(size=13)),
+                                steps=slider_steps)])
+fig.update_yaxes(range=RANGES[1][1], secondary_y=True)
+fig.update_layout(xaxis_title="시점", legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420, title="이중 y축 — 축 범위가 관계를 만든다")
+fig.show()
+```
+
+```{python}
+#| label: dual-axis-numbers
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+r_lv = np.corrcoef(A_, B_)[0, 1]
+dA, dB = np.diff(A_), np.diff(B_)
+r_diff = np.corrcoef(dA, dB)[0, 1]
+print(f"두 계열의 실제 관계")
+print(f"  수준(level) 상관 : {r_lv:+.4f}")
+print(f"  변화량 상관      : {r_diff:+.4f}   ← 이쪽이 진짜 관계다")
+print(f"  변화량 상관의 p 값: {stats.pearsonr(dA, dB).pvalue:.3f}")
+print()
+print("두 계열은 **독립인 무작위 걷기**로 생성했다.")
+print("그런데 수준 상관은 0 이 아니다 — 이것이 **가짜 회귀(spurious regression)** 다.")
+print("추세를 가진 두 계열은 관계가 없어도 수준 상관이 크게 나온다.")
+print(f"  ([1.7 시계열](07_time_series.qmd)에서 다시 다룬다)")
+print()
+print("이중 y축의 문제는 그것과 별개다:")
+for s in ["두 축의 범위를 **임의로** 정할 수 있다",
+          "범위를 바꾸면 '같이 움직인다'와 '반대로 움직인다'를 모두 연출할 수 있다",
+          "독자는 두 선의 **교차점**에 의미를 부여하는데, 교차점은 축 선택의 부산물이다",
+          "그래서 어떤 상관도 시각적으로 '증명'할 수 있다"]:
+    print(f"  · {s}")
+print()
+print("대안:")
+for a, b in [("소배수 (small multiples)", "위아래로 나란히 배치. 축이 각자 정직하게 표시됨"),
+             ("지수화", "둘 다 첫 시점 = 100 으로 정규화해 같은 축에"),
+             ("변화율", "수준이 아니라 전기 대비 변화를 그린다"),
+             ("산점도", "시간을 색으로 두고 A 대 B 를 직접 그린다")]:
+    print(f"  {a:<26} {b}")
+```
+
+---
+
+## 흔한 왜곡 정리
+
+```{python}
+#| label: distortion-catalog
+#| code-fold: false
+
+rows = [
+    ("막대 축 자르기", "길이 부호화가 깨짐", "막대는 0 에서 시작"),
+    ("이중 y축", "임의 축 범위로 관계를 연출", "소배수 또는 지수화"),
+    ("3D 파이·막대", "깊이가 값을 왜곡, 각도 지각 부정확", "정렬된 막대 그래프"),
+    ("버블 반지름 비례", "면적이 값의 제곱으로 커짐", "면적을 값에 비례"),
+    ("무지개 팔레트", "비단조 밝기가 없는 경계를 만듦", "viridis 등 순차형"),
+    ("구간 잘라내기", "유리한 기간만 표시", "전체 기간 + 관심 구간 강조"),
+    ("로그/선형 무표시", "지수 증가가 선형으로 보임", "축 스케일 명시"),
+    ("평균만 표시", "산포와 표본 수가 숨겨짐", "오차막대·개별점·분포 함께"),
+    ("이상치 무단 제거", "결론이 바뀔 수 있음", "제거 여부 명시, 둘 다 제시"),
+]
+print(f"{'왜곡':<20} {'무엇이 문제인가':<30} {'대안'}")
+print("-" * 82)
+for a, b, c in rows:
+    print(f"{a:<20} {b:<30} {c}")
+print()
+print("**마지막 항목이 가장 중요하다.**")
+print("평균 막대 하나로 그룹을 비교하는 그림은 [1.1](01_eda.qmd)의 앤스컴 4중주가")
+print("경고한 것과 정확히 같은 실수다 — 요약통계 하나가 분포를 대신할 수 없다.")
+print()
+print("대안의 정보량 순서:")
+for a, b in [("막대(평균만)", "값 1개"),
+             ("막대 + 오차막대", "값 + 산포 1개"),
+             ("상자 그림", "5개 요약값 + 이상치"),
+             ("바이올린", "분포 전체 (단, 대역폭 선택 필요)"),
+             ("개별 점 + 요약", "**전부** — 표본이 적으면 이것이 최선")]:
+    print(f"  {a:<20} {b}")
+```
+
+::: {.key-concept}
+**인터랙션 설계: Shneiderman 의 만트라**
+
+> **개관 먼저, 확대와 필터, 그 다음 필요할 때 상세.**
+
+이 책의 그래픽들이 슬라이더를 쓰는 이유도 같다.
+파라미터를 바꿔가며 **구조가 살아남는지 확인**하는 것이
+[1.1](01_eda.qmd)에서 말한 "여러 각도로 보고 일치하는 것만 믿기"의 실행 방법이다.
+
+다만 인터랙션은 **정적 그림을 대체하지 않는다.**
+독자가 슬라이더를 안 움직일 수도 있으므로, **기본 상태가 이미 정직해야 한다.**
 :::
 
-같은 숫자로 정반대 인상을 주는 그래프를 만들 수 있다. 시각화 원칙은 미학이 아니라 정직함의 문제다.
-
 ---
 
-## 이 장에서 다루는 것
+## 요약
 
-- 그래픽 문법(Grammar of Graphics): 데이터·미학·기하·척도·좌표·패싯
-- 시각 부호화의 정확도 위계(위치 > 길이 > 각도 > 면적 > 색)
-- 척도 선택: 선형·로그·제곱근, 축 자르기의 윤리
-- 색: 순차형/발산형/범주형 팔레트, 색각 이상 대응
-- 과밀 해소: 투명도, 지터, 비닝, 샘플링
-- 다변량 표현: 소배수(small multiples), 패싯, 병렬좌표
-- 시간 데이터, 지리 데이터, 네트워크 데이터의 관용 표현
-- 인터랙션 설계: 개관 먼저, 확대·필터, 필요시 상세
-- 흔한 왜곡: 3D 파이, 이중 y축, 잘린 축, 면적 오용
-
----
-
-## G1.2.1 — 축 자르기의 효과
-
-동일 데이터가 축 범위만으로 '폭증'과 '미미한 증가'로 보이는 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: y축 시작점 슬라이더
-:::
-
----
-
-## G1.2.2 — 시각 부호화 정확도 실험
-
-같은 값을 위치·길이·면적·색으로 표현했을 때 비교 난이도
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 부호화 방식 전환
-:::
-
----
-
-## G1.2.3 — 팔레트와 색각 이상
-
-무지개 팔레트가 붕괴하고 viridis가 살아남는 이유
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 색각 시뮬레이션 토글
-:::
-
----
-
-## G1.2.4 — 과밀 산점도 해소
-
-100만 점 산점도를 읽을 수 있게 만드는 기법들
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 투명도·비닝 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 그래픽 문법 (Grammar of Graphics) |  |
-| 소배수 (small multiples) |  |
-| 발산형 팔레트 (diverging palette) |  |
-| 지각 위계 |  |
+| 그래픽 문법 | 데이터·미학·기하·통계·척도·좌표·패싯 |
+| 축 자르기 | y축 99.5 시작 시 시각적 비가 실제의 10.7배 (실측) |
+| 막대 vs 선 | 막대는 0 에서 시작, 선은 그럴 필요 없음 |
+| 지각 위계 | 위치 > 길이 > 각도 > 면적 > 색 |
+| Stevens 멱법칙 | 면적 부호화는 2배를 1.62배로 지각 |
+| 버블 반지름 | 반지름 비례 시 값의 **제곱**으로 과장 |
+| 무지개 팔레트 | 밝기가 비단조 — 없는 경계를 만듦 |
+| viridis | 네 색각 조건 모두에서 밝기 단조 (실측) |
+| 과밀 산점도 | 불투명하면 상당수가 가려짐. 비닝이 밀도를 보존 |
+| 이중 y축 | 축 범위로 원하는 관계를 연출 가능 |
+
+시각화의 원칙은 하나로 요약된다.
+
+> **독자가 그림에서 읽는 비율이 데이터의 비율과 같아야 한다.**
+
+Tufte 의 "거짓말 계수(lie factor)" 가 정확히 이 비율이다.
 
 ---
 
-**다음**: [1.3 데이터 전처리](03_preprocessing.qmd) — 결측·이상치·스케일링·인코딩 — 모델에 넣을 수 있는 형태로
+**다음**: [1.3 데이터 전처리](03_preprocessing.qmd) — 결측·이상치·스케일링·인코딩
 
 **이전**: [1.1 탐색적 데이터 분석](01_eda.qmd)
