@@ -4,89 +4,713 @@ subtitle: "지역성·가중치 공유·수용영역 — 이미지에 맞춘 귀
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[Part 3](../03_deep_learning/00_perceptron_mlp.qmd)에서 신경망을 **학습시키는** 부품을 전부 만들었다.
+이제 그 부품으로 **구조를 짓는다.**
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+CNN은 "데이터의 성질을 아키텍처에 새겨 넣는다"는 발상의 원형이다.
+이미지에는 두 가지 명백한 사실이 있다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+1. **가까운 픽셀끼리 관련이 깊다** (지역성)
+2. **고양이는 왼쪽 위에 있든 오른쪽 아래에 있든 고양이다** (평행이동)
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+MLP는 이 둘을 전혀 모른다. CNN은 이 둘을 **구조로 강제한다.**
+
+그리고 이 장을 제대로 읽어야 [Part 5](../05_transformer/00_attention_mechanism.qmd)의 어텐션이
+왜 그 강제를 **다시 버리는지** 이해할 수 있다.
+
+---
+
+## MLP를 이미지에 쓰면 무슨 일이 생기는가
+
+```{python}
+#| label: mlp-vs-cnn-params
+#| code-fold: false
+
+import numpy as np
+
+print("첫 층 하나의 파라미터 수 비교 (출력 채널 64개 기준)")
+print()
+print(f"{'입력 해상도':>16} {'입력 차원':>12} {'MLP(완전연결)':>18} {'CNN(3×3 커널)':>16} {'비율'}")
+print("-" * 76)
+for h, w, c in [(28, 28, 1), (64, 64, 3), (224, 224, 3), (1024, 1024, 3)]:
+    n_in = h*w*c
+    mlp = n_in * 64 + 64                 # 완전연결
+    cnn = 3*3*c*64 + 64                  # 3×3 커널 64개
+    print(f"{f'{h}×{w}×{c}':>16} {n_in:>12,} {mlp:>18,} {cnn:>16,} {mlp/cnn:>10,.0f}배")
+print()
+print("CNN 의 파라미터 수는 **입력 해상도와 무관하다.** 커널 크기와 채널 수만으로 정해진다.")
+print("MLP 는 해상도의 제곱에 비례해 커지므로, 격차가 해상도와 함께 벌어진다:")
+print("  224×224 에서 5,376배, 1024×1024 에서 112,347배.")
+```
+
+파라미터 수만 문제가 아니다. 더 근본적인 문제가 있다.
+
+```{python}
+#| label: mlp-translation
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import datasets, imaging
+
+img = datasets.image_grid(32)
+
+# 같은 이미지를 5픽셀 오른쪽으로 옮긴다
+shifted = np.roll(img, 5, axis=1)
+
+# MLP 의 입력은 평탄화된 벡터다 — 두 벡터가 얼마나 다른가?
+v1, v2 = img.ravel(), shifted.ravel()
+cos = float(v1 @ v2 / (np.linalg.norm(v1)*np.linalg.norm(v2)))
+c1, c2 = v1 - v1.mean(), v2 - v2.mean()
+corr = float(c1 @ c2 / (np.linalg.norm(c1)*np.linalg.norm(c2)))
+print(f"원본과 5픽셀 이동본:")
+print(f"  코사인 유사도          {cos:.4f}   (밝기 기준선이 공유돼 높게 나온다)")
+print(f"  평균 제거 후 상관계수   {corr:.4f}   ← 실제 패턴의 유사도")
+print(f"  값이 바뀐 픽셀 비율     {float(np.mean(np.abs(img-shifted) > 0.01)):.1%}")
+print()
+print("MLP 의 가중치는 **픽셀 위치마다 따로** 있다. 79% 의 픽셀 값이 바뀌었다는 것은")
+print("그 가중치들이 보는 입력이 거의 전부 달라졌다는 뜻이다.")
+print("모든 위치에서 같은 패턴을 인식하려면 모든 위치마다 따로 학습해야 한다.")
+print()
+
+# CNN 은 어떤가 — 같은 커널로 두 이미지를 필터링해 본다
+k = imaging.KERNELS["소벨 x"]
+f1, f2 = imaging.convolve2d(img, k), imaging.convolve2d(shifted, k)
+# 특성맵도 정확히 같은 만큼 이동해 있는가?
+f1_rolled = np.roll(f1, 5, axis=1)
+inner = np.abs(f1_rolled[:, 8:-8] - f2[:, 8:-8]).max()      # 경계 제외
+print(f"CNN: conv(shift(x)) 와 shift(conv(x)) 의 최대 차이 (경계 제외): {inner:.2e}")
+print("→ 특성맵이 입력과 **정확히 같은 만큼** 함께 이동한다. 이것이 등변성(equivariance)이다.")
+```
+
+::: {.key-concept}
+**등변성(equivariance)과 불변성(invariance)은 다르다**
+
+- **등변성** — 입력을 옮기면 출력도 **같이 옮겨진다**: $f(T x) = T f(x)$
+- **불변성** — 입력을 옮겨도 출력이 **그대로다**: $f(T x) = f(x)$
+
+합성곱 층은 **등변**이고, 전역 풀링이나 분류 헤드가 그것을 **불변**으로 바꾼다.
+
+이 구분이 중요한 이유: 분할(segmentation)이나 검출에서는 **위치를 알아야 하므로**
+불변이면 안 된다. 등변성을 유지한 채 끝까지 가야 한다.
 :::
 
-CNN은 '구조를 아키텍처에 새겨 넣는다'는 발상의 원형이며, 그 발상은 이후 어텐션이 그것을 버리는 방식과 대비해서 볼 때 가장 잘 이해된다.
+---
+
+## 합성곱 연산
+
+$$(f * k)[i, j] = \sum_{m}\sum_{n} f[i+m,\ j+n] \cdot k[m, n]$$
+
+수학의 합성곱은 커널을 180° 뒤집지만, 딥러닝 프레임워크는 뒤집지 않는
+**상호상관(cross-correlation)** 을 쓰면서 "합성곱"이라 부른다.
+커널을 학습으로 얻으므로 뒤집힘이 파라미터에 흡수되기 때문이다.
+
+```{python}
+#| label: conv-vs-corr
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import imaging
+
+img = np.zeros((7, 7)); img[3, 3] = 1.0          # 델타 함수 (점 하나)
+k = np.arange(9).reshape(3, 3).astype(float)     # 비대칭 커널
+
+corr = imaging.convolve2d(img, k, pad="constant")
+true_conv = imaging.convolve2d(img, k[::-1, ::-1], pad="constant")
+
+print("비대칭 커널:")
+print(k.astype(int))
+print()
+print("델타 입력에 대한 상호상관 결과 (중심 3×3):")
+print(corr[2:5, 2:5].astype(int))
+print()
+print("진짜 합성곱 결과 (중심 3×3):")
+print(true_conv[2:5, 2:5].astype(int))
+print()
+print("→ 정확히 180° 뒤집힌 관계다. 커널이 학습 대상이면 이 차이는 의미가 없다.")
+print("  이 책도 프레임워크 관례를 따라 상호상관을 '합성곱'이라 부른다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G4.0.1 — 커널이 슬라이딩하며 특성맵을 만든다
 
-- MLP를 이미지에 쓸 때의 문제: 파라미터 폭발, 평행이동 불변성 없음
-- 합성곱 연산의 정의와 상호상관(cross-correlation)과의 차이
-- 커널·스트라이드·패딩·팽창(dilation)과 출력 크기 공식
-- 가중치 공유와 평행이동 등변성(equivariance)
-- 풀링과 불변성, 최근의 stride 대체 경향
-- 수용영역(receptive field) 계산과 깊이의 역할
-- 채널과 1×1 합성곱, 병목 구조
-- 깊이별 분리 합성곱(depthwise separable)과 효율
-- 전치 합성곱과 업샘플링
-- CNN의 파라미터·FLOPs 계산
+```{python}
+#| label: fig-conv-sliding
+#| fig-cap: "커널이 위치를 옮겨가며 특성맵의 값을 하나씩 채웁니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+H = W = 8
+K = 3
+inp = np.round(rng.integers(0, 5, (H, W)).astype(float), 0)
+kern = np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]], float)     # 소벨 x
+
+OH = OW = H - K + 1
+out_full = np.zeros((OH, OW))
+for i in range(OH):
+    for j in range(OW):
+        out_full[i, j] = np.sum(inp[i:i+K, j:j+K] * kern)
+
+# 슬라이더 단계마다: 입력 위 강조 사각형 + 부분적으로 채워진 출력
+positions = [(i, j) for i in range(OH) for j in range(OW)]
+partial, partial_txt = [], []
+running = np.full((OH, OW), np.nan)
+for (i, j) in positions:
+    running = running.copy()
+    running[i, j] = out_full[i, j]
+    partial.append(running)
+    # 아직 계산되지 않은 칸은 빈 문자열로 (NaN 이 "nan" 으로 찍히는 것 방지)
+    partial_txt.append(np.where(np.isnan(running), "",
+                                np.round(running, 0).astype(object)))
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.4, 0.2, 0.4],
+                    subplot_titles=("입력 (8×8)", "커널 (3×3)", "특성맵 (6×6)"))
+fig.add_trace(go.Heatmap(z=inp, colorscale="Blues", showscale=False,
+                         text=inp, texttemplate="%{text:.0f}",
+                         textfont=dict(size=10)), row=1, col=1)
+fig.add_trace(go.Heatmap(z=kern, colorscale="RdBu", showscale=False, zmid=0,
+                         text=kern, texttemplate="%{text:.0f}",
+                         textfont=dict(size=12)), row=1, col=2)
+fig.add_trace(go.Heatmap(z=partial[0], colorscale="Viridis", showscale=False,
+                         zmin=float(np.nanmin(out_full)), zmax=float(np.nanmax(out_full)),
+                         text=partial_txt[0], texttemplate="%{text}",
+                         textfont=dict(size=10)), row=1, col=3)
+
+STEP_IDX = [0, 1, 2, 5, 8, 14, 20, 27, 34, 35]
+steps = []
+for s in STEP_IDX:
+    i, j = positions[s]
+    steps.append((f"({i},{j})", {
+        "z": [inp, kern, partial[s]],
+        "text": [inp, kern, partial_txt[s]],
+    }))
+fig.update_layout(sliders=[viz.slider(steps, prefix="커널 위치 ", pad_t=52)])
+for c in (1, 2, 3):
+    fig.update_yaxes(autorange="reversed", row=1, col=c)
+    fig.update_xaxes(showticklabels=False, row=1, col=c)
+    fig.update_yaxes(showticklabels=False, row=1, col=c)
+viz.fig_defaults(fig, height=380,
+                 title="합성곱 = 커널을 모든 위치에 대고 내적하기")
+fig.show()
+```
+
+```{python}
+#| label: conv-sliding-numbers
+#| code-fold: false
+
+import numpy as np
+
+i, j = 0, 0
+patch = inp[i:i+K, j:j+K]
+print(f"출력 (0,0) 이 계산되는 방식:")
+print(f"  입력 패치            커널")
+for r in range(K):
+    print(f"  {patch[r].astype(int)}      {kern[r].astype(int)}")
+print(f"  원소별 곱의 합 = {float(np.sum(patch*kern)):.0f}  →  특성맵[0,0]")
+print()
+print(f"입력 {H}×{W}, 커널 {K}×{K} (패딩 없음, 스트라이드 1) → 출력 {OH}×{OW}")
+print(f"곱셈-덧셈 연산 횟수: {OH*OW} 위치 × {K*K} = {OH*OW*K*K:,} 회")
+print()
+print(f"**커널의 값 {K*K}개가 {OH*OW}개 위치 전부에서 재사용된다.**")
+print(f"이것이 가중치 공유(weight sharing)다. 완전연결이라면 "
+      f"{H*W} × {OH*OW} = {H*W*OH*OW:,} 개의 가중치가 필요하다.")
+```
 
 ---
 
-## G4.0.1 — 합성곱 슬라이딩
+## G4.0.2 — 커널마다 다른 것을 본다
 
-커널이 이미지를 훑으며 특성맵을 만드는 과정 단계별 표시
+CNN이 **학습으로 얻는 것**이 바로 이런 커널들이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 커널 위치 애니메이션
+```{python}
+#| label: fig-kernel-gallery
+#| fig-cap: "같은 이미지에 서로 다른 커널을 적용한 결과"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, imaging, viz
+
+img = datasets.image_grid(64)
+names = ["항등", "박스 블러", "샤픈", "소벨 x", "소벨 y", "라플라시안", "엠보스"]
+results = {n: np.round(imaging.convolve2d(img, imaging.KERNELS[n]), 3) for n in names}
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.42, 0.58],
+                    subplot_titles=("커널 (3×3)", "출력 특성맵"))
+n0 = "소벨 x"
+k0 = imaging.KERNELS[n0]
+fig.add_trace(go.Heatmap(z=k0, colorscale="RdBu", zmid=0, showscale=False,
+                         text=np.round(k0, 2), texttemplate="%{text}",
+                         textfont=dict(size=13)), row=1, col=1)
+fig.add_trace(go.Heatmap(z=results[n0], colorscale="Greys", showscale=False),
+              row=1, col=2)
+
+steps = [(n, {"z": [imaging.KERNELS[n], results[n]],
+              "text": [np.round(imaging.KERNELS[n], 2), None]}) for n in names]
+fig.update_layout(sliders=[viz.slider(steps, prefix="커널: ",
+                                      active=names.index(n0), pad_t=52)])
+for c in (1, 2):
+    fig.update_yaxes(autorange="reversed", showticklabels=False, row=1, col=c)
+    fig.update_xaxes(showticklabels=False, row=1, col=c)
+viz.fig_defaults(fig, height=400, title="3×3 커널 9개 숫자가 만드는 차이")
+fig.show()
+```
+
+```{python}
+#| label: kernel-stats
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'커널':<12} {'합':>7} {'출력 평균':>10} {'출력 표준편차':>13} {'하는 일'}")
+print("-" * 66)
+desc = {"항등": "그대로 통과", "박스 블러": "고주파 제거",
+        "샤픈": "고주파 강조", "소벨 x": "세로 에지 검출",
+        "소벨 y": "가로 에지 검출", "라플라시안": "2차 미분 — 모든 에지",
+        "엠보스": "방향성 음영"}
+for n in names:
+    k = imaging.KERNELS[n]
+    r = results[n]
+    print(f"{n:<12} {k.sum():>7.2f} {r.mean():>10.4f} {r.std():>13.4f}   {desc[n]}")
+print()
+print("**커널 합이 1이면 밝기를 보존하고, 0이면 변화량만 남긴다.**")
+edge = [n for n in names if abs(imaging.KERNELS[n].sum()) < 1e-9]
+print(f"  합 = 0 인 커널: {', '.join(edge)} → 출력 평균이 0 근처")
+for n in edge:
+    print(f"    {n:<12} 출력 평균 {results[n].mean():+.4f}")
+print()
+print("CNN 은 이 9개 숫자를 손으로 정하지 않고 **역전파로 찾는다.**")
+print("첫 층이 학습한 커널을 시각화하면 실제로 에지·색 대비 검출기가 나온다.")
+```
+
+---
+
+## 출력 크기 공식
+
+$$O = \left\lfloor \frac{I + 2P - D(K-1) - 1}{S} \right\rfloor + 1$$
+
+$I$ 입력 크기, $K$ 커널, $P$ 패딩, $S$ 스트라이드, $D$ 팽창(dilation).
+
+```{python}
+#| label: fig-output-size
+#| fig-cap: "스트라이드·패딩·팽창에 따른 출력 크기와 비용"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def out_size(I, K, P, S, D=1):
+    return (I + 2*P - D*(K-1) - 1)//S + 1
+
+I0, C_IN, C_OUT = 224, 64, 128
+Ks = [1, 3, 5, 7, 9, 11]
+Ss = [1, 2, 3, 4]
+
+# (커널, 스트라이드) 격자에서 출력 크기 / FLOPs
+grid_o = np.array([[out_size(I0, k, k//2, s) for k in Ks] for s in Ss])
+grid_f = np.array([[out_size(I0, k, k//2, s)**2 * k*k * C_IN * C_OUT / 1e9
+                    for k in Ks] for s in Ss])
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("출력 해상도 (입력 224, 'same' 패딩)",
+                                    "FLOPs (G, 곱셈-덧셈)"))
+fig.add_trace(go.Heatmap(z=grid_o, x=[f"K={k}" for k in Ks], y=[f"S={s}" for s in Ss],
+                         colorscale="Blues", showscale=False,
+                         text=grid_o, texttemplate="%{text}",
+                         textfont=dict(size=12)), row=1, col=1)
+fig.add_trace(go.Heatmap(z=np.round(grid_f, 2), x=[f"K={k}" for k in Ks],
+                         y=[f"S={s}" for s in Ss],
+                         colorscale="Reds", showscale=False,
+                         text=np.round(grid_f, 1), texttemplate="%{text}",
+                         textfont=dict(size=11)), row=1, col=2)
+for c in (1, 2):
+    fig.update_yaxes(autorange="reversed", row=1, col=c)
+viz.fig_defaults(fig, height=360,
+                 title=f"입력 {I0}×{I0}, {C_IN}→{C_OUT} 채널")
+fig.show()
+```
+
+```{python}
+#| label: output-size-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("자주 쓰는 설정들")
+print(f"{'설명':<26} {'K':>3} {'P':>3} {'S':>3} {'D':>3} {'224 → 출력':>12}")
+print("-" * 62)
+cfgs = [
+    ("크기 유지 ('same')",        3, 1, 1, 1),
+    ("절반으로 (stride 2)",       3, 1, 2, 1),
+    ("1×1 (채널만 섞기)",          1, 0, 1, 1),
+    ("VGG 스타일 3×3",           3, 1, 1, 1),
+    ("팽창 2 (수용영역 ↑)",        3, 2, 1, 2),
+    ("팽창 4",                   3, 4, 1, 4),
+    ("초기 다운샘플 (7×7 s2)",     7, 3, 2, 1),
+]
+for name, k, p, s, d in cfgs:
+    print(f"{name:<26} {k:>3} {p:>3} {s:>3} {d:>3} {out_size(224, k, p, s, d):>12}")
+print()
+print("크기를 유지하려면 P = D(K−1)/2 이면 된다 (S=1 일 때).")
+for k, d in [(3, 1), (5, 1), (7, 1), (3, 2), (3, 4)]:
+    p = d*(k-1)//2
+    print(f"  K={k}, D={d} → P={p}, 출력 {out_size(224, k, p, 1, d)}  "
+          f"(유효 커널 폭 {d*(k-1)+1})")
+print()
+print("**팽창은 파라미터를 늘리지 않고 수용영역만 키운다.**")
+print("분할(segmentation)에서 해상도를 잃지 않고 문맥을 넓힐 때 쓴다.")
+```
+
+---
+
+## G4.0.3 — 수용영역은 어떻게 자라는가
+
+한 뉴런이 **원본 이미지의 몇 픽셀을 보는가.**
+이것이 CNN 설계의 핵심 제약이다.
+
+$$r_l = r_{l-1} + (k_l - 1)\prod_{i<l} s_i$$
+
+```{python}
+#| label: fig-receptive-field
+#| fig-cap: "층을 쌓을수록 한 뉴런이 보는 원본 영역이 넓어집니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import imaging, viz
+
+L = 12
+configs = {
+    "3×3, stride 1":       dict(kernel=3, stride=1),
+    "3×3, stride 2":       dict(kernel=3, stride=2),
+    "5×5, stride 1":       dict(kernel=5, stride=1),
+    "7×7, stride 2":       dict(kernel=7, stride=2),
+}
+rf = {k: imaging.receptive_field(L, **v) for k, v in configs.items()}
+
+# 팽창을 늘려가는 스택 (WaveNet/DeepLab 방식) — 직접 계산
+def rf_dilated(n, k=3, base=2):
+    r, out = 1, []
+    for l in range(n):
+        r = r + (k-1) * (base**l)
+        out.append(r)
+    return out
+rf["3×3, 팽창 1,2,4,8…"] = rf_dilated(L)
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("층 수에 따른 수용영역",
+                                    "224 입력을 다 보려면 몇 층?"))
+need = {}
+for i, (k, v) in enumerate(rf.items()):
+    fig.add_trace(go.Scatter(x=np.arange(1, L+1), y=v, mode="lines+markers", name=k,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    over = [l for l, r in enumerate(v, start=1) if r >= 224]
+    need[k] = over[0] if over else None
+fig.add_hline(y=224, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="입력 224", row=1, col=1)
+labels = list(need)
+vals = [need[k] if need[k] else L+3 for k in labels]
+fig.add_trace(go.Bar(x=vals, y=labels, orientation="h", showlegend=False,
+                     marker_color=[viz.color(i) for i in range(len(labels))],
+                     text=[f"{need[k]}층" if need[k] else f">{L}층" for k in labels],
+                     textposition="outside"), row=1, col=2)
+fig.update_xaxes(title_text="층 수", row=1, col=1)
+fig.update_yaxes(title_text="수용영역 (픽셀)", type="log", row=1, col=1)
+fig.update_xaxes(title_text="필요한 층 수", row=1, col=2)
+viz.fig_defaults(fig, height=430, title="수용영역 성장")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: receptive-field-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'구성':<24} " + " ".join(f"{l:>6}" for l in [1, 2, 4, 6, 8, 10, 12]) + "  (층)")
+print("-" * 76)
+for k, v in rf.items():
+    print(f"{k:<24} " + " ".join(f"{v[l-1]:>6}" for l in [1, 2, 4, 6, 8, 10, 12]))
+print()
+print("224×224 입력 전체를 보려면:")
+for k, n in need.items():
+    print(f"  {k:<24} {f'{n}층' if n else f'12층으로는 부족 (최대 {rf[k][-1]})'}")
+print()
+r3 = rf["3×3, stride 1"]
+print(f"stride 1 만 쓰면 수용영역이 **선형**으로 자란다: {r3[0]} → {r3[-1]} (층당 +2)")
+print(f"  → 224 를 다 보려면 {(224-1)//2 + 1}층이 필요하다. 비현실적이다.")
+print()
+r3s2 = rf["3×3, stride 2"]
+rd = rf["3×3, 팽창 1,2,4,8…"]
+print(f"stride 2 와 팽창 2배는 **수치가 완전히 같다**: {r3s2 == rd}")
+print(f"  둘 다 {r3s2[0]} → {r3s2[-1]} 로 지수 성장한다. 점화식이 동일하기 때문이다.")
+print()
+print("차이는 수용영역이 아니라 **출력 해상도**에 있다:")
+print(f"{'층':>4} {'수용영역':>10} {'stride2 해상도':>15} {'팽창 해상도':>13}")
+print("-" * 46)
+for l in [1, 3, 5, 7, 9]:
+    print(f"{l:>4} {r3s2[l-1]:>10} {224/2**l:>15.2f} {224:>13}")
+print()
+print("7층이면 둘 다 224 전체를 보지만, stride 쪽은 특성맵이 1.75픽셀만 남는다.")
+print("**분할·검출은 해상도가 답이므로 팽창을 쓴다** (DeepLab). 분류는 stride 로 충분하다.")
+print()
+print("설계 규칙: **분류하려는 대상의 크기만큼은 수용영역이 커야 한다.**")
+print("수용영역이 물체보다 작으면 모델은 물체 전체를 한 번에 볼 수 없다.")
+```
+
+### 3×3 두 층 = 5×5 한 층 (VGG의 발견)
+
+3×3 층 두 개를 쌓으면 수용영역이 5×5가 된다. 그런데:
+
+```{python}
+#| label: vgg-trick
+#| code-fold: false
+
+C = 64
+one_5 = 5*5*C*C
+two_3 = 2 * (3*3*C*C)
+print(f"채널 {C}→{C} 기준")
+print(f"  5×5 한 층    : {one_5:,} 파라미터")
+print(f"  3×3 두 층    : {two_3:,} 파라미터  ({two_3/one_5:.0%})")
+print(f"  7×7 한 층    : {7*7*C*C:,}")
+print(f"  3×3 세 층    : {3*(3*3*C*C):,}  ({3*(3*3*C*C)/(7*7*C*C):.0%})")
+print()
+print("같은 수용영역을 **더 적은 파라미터로**, 게다가 비선형성을 더 많이 끼워서 얻는다.")
+print("VGG(2014) 가 이것을 밀어붙여 3×3 만으로 망을 쌓았고, 이후 표준이 되었다.")
+```
+
+---
+
+## 채널: 1×1 합성곱과 병목
+
+1×1 커널은 공간적으로는 아무것도 안 한다. **채널만 섞는다.**
+각 픽셀 위치에서 $C_{\text{in}}$ 차원 벡터에 완전연결층을 적용하는 것과 같다.
+
+```{python}
+#| label: bottleneck
+#| code-fold: false
+
+import numpy as np
+
+H = W = 56
+C = 256
+BOTTLE = 64
+
+def flops(hw, k, cin, cout):
+    return hw*hw * k*k * cin * cout
+
+plain = flops(H, 3, C, C)
+bottleneck = (flops(H, 1, C, BOTTLE)         # 1×1 축소
+              + flops(H, 3, BOTTLE, BOTTLE)  # 3×3 (좁은 채널에서)
+              + flops(H, 1, BOTTLE, C))      # 1×1 복원
+
+print(f"{H}×{W} 특성맵, {C} 채널")
+print()
+print(f"  단순 3×3 {C}→{C}                     : {plain/1e9:>7.2f} GFLOPs")
+print(f"  병목 1×1({C}→{BOTTLE}) 3×3 1×1({BOTTLE}→{C}) : {bottleneck/1e9:>7.2f} GFLOPs "
+      f"({bottleneck/plain:.0%})")
+print()
+print(f"파라미터")
+print(f"  단순 3×3 : {3*3*C*C:>10,}")
+print(f"  병목      : {1*1*C*BOTTLE + 3*3*BOTTLE*BOTTLE + 1*1*BOTTLE*C:>10,}"
+      f"  ({(1*1*C*BOTTLE + 3*3*BOTTLE*BOTTLE + 1*1*BOTTLE*C)/(3*3*C*C):.0%})")
+print()
+print("ResNet-50 이상이 전부 이 병목 블록을 쓴다. 비싼 3×3 을 좁은 채널에서만 한다.")
+print()
+
+# depthwise separable
+dw = flops(H, 3, C, 1) + flops(H, 1, C, C)   # 채널별 3×3 + 1×1 점별
+print(f"깊이별 분리 합성곱 (MobileNet)")
+print(f"  depthwise 3×3 + pointwise 1×1     : {dw/1e9:>7.2f} GFLOPs ({dw/plain:.1%})")
+print(f"  이론 감소율 = 1/C_out + 1/K² = 1/{C} + 1/9 = {1/C + 1/9:.4f}")
+print(f"  실측 비율                          = {dw/plain:.4f}")
+```
+
+::: {.key-concept}
+**깊이별 분리 합성곱**
+
+일반 합성곱은 **공간(K×K)과 채널(C_in×C_out)을 동시에** 섞는다.
+분리 합성곱은 이 둘을 두 단계로 나눈다.
+
+1. **depthwise** — 채널마다 독립적으로 $K\times K$ (채널 간 섞지 않음)
+2. **pointwise** — $1\times1$ 로 채널만 섞음
+
+비용이 $\frac{1}{C_{\text{out}}} + \frac{1}{K^2}$ 배로 준다.
+$K=3$ 이면 대략 **1/9 수준**이다.
+
+MobileNet, EfficientNet, 그리고 ConvNeXt까지 전부 이 구조를 쓴다.
+[4.1](01_cnn_modern.qmd)에서 다시 본다.
 :::
 
 ---
 
-## G4.0.2 — 커널이 보는 것
+## 풀링: 불변성을 사는 값
 
-에지·블러·샤픈 커널이 같은 이미지에서 추출하는 서로 다른 특성
+```{python}
+#| label: fig-pooling
+#| fig-cap: "풀링과 stride가 만드는 이동 불변성 — 그리고 잃는 것"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 커널 종류 선택
-:::
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import datasets, imaging, viz
+
+img = datasets.image_grid(64)
+shifts = list(range(0, 9))
+
+def maxpool(a, k=2):
+    h, w = a.shape
+    a = a[:h//k*k, :w//k*k]
+    return a.reshape(h//k, k, w//k, k).max(axis=(1, 3))
+
+def avgpool(a, k=2):
+    return imaging.downsample(a, k)
+
+feat = lambda x: np.maximum(imaging.convolve2d(x, imaging.KERNELS["소벨 x"]), 0)
+
+curves = {}
+for name, fn in [("풀링 없음", lambda a: a),
+                 ("max pool 2×2", maxpool),
+                 ("avg pool 2×2", avgpool),
+                 ("max pool 4×4", lambda a: maxpool(maxpool(a))),
+                 ("전역 max pool", lambda a: a.max(keepdims=True))]:
+    base = fn(feat(img))
+    diffs = []
+    for s in shifts:
+        cur = fn(feat(np.roll(img, s, axis=1)))
+        num = np.linalg.norm(cur - base)
+        den = np.linalg.norm(base) + 1e-12
+        diffs.append(float(num/den))
+    curves[name] = diffs
+
+fig = go.Figure()
+for i, (k, v) in enumerate(curves.items()):
+    fig.add_trace(go.Scatter(x=shifts, y=v, mode="lines+markers", name=k,
+                             line=dict(color=viz.color(i), width=2.5)))
+fig.update_layout(xaxis_title="입력을 오른쪽으로 이동한 픽셀 수",
+                  yaxis_title="특성의 상대 변화량",
+                  legend=dict(x=0.02, y=0.98, font=dict(size=11)))
+viz.fig_defaults(fig, height=410, title="이동에 대한 특성 안정성")
+fig.show()
+```
+
+```{python}
+#| label: pooling-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'방식':<16} " + " ".join(f"{s:>6}" for s in shifts) + "   (이동 픽셀)")
+print("-" * 78)
+for k, v in curves.items():
+    print(f"{k:<16} " + " ".join(f"{x:>6.3f}" for x in v))
+print()
+print("작은 이동(1~2px)에서의 평균 변화량:")
+for k, v in curves.items():
+    print(f"  {k:<16} {np.mean(v[1:3]):.4f}")
+print()
+best = min(curves, key=lambda k: np.mean(curves[k][1:3]))
+print(f"→ 가장 안정적인 것: {best}")
+print()
+print("**공짜가 아니다.** 전역 풀링은 완전히 불변이지만 위치 정보를 전부 버린다.")
+print("검출·분할처럼 '어디에 있는지'가 답인 과제에서는 쓸 수 없다.")
+print()
+print("최근 경향: 풀링 대신 **stride 합성곱**을 쓴다.")
+print("  · 다운샘플링을 학습 가능한 연산으로 만든다")
+print("  · max pooling 의 비선형성은 이미 활성화 함수가 제공한다")
+print("  · ResNet 이후 대부분의 아키텍처가 stride 2 합성곱으로 해상도를 줄인다")
+```
 
 ---
 
-## G4.0.3 — 수용영역 성장
+## 파라미터와 FLOPs 회계
 
-층을 쌓을수록 한 뉴런이 보는 원본 영역이 넓어지는 모습
+```{python}
+#| label: cnn-budget
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 깊이 슬라이더
-:::
+import numpy as np
+
+def conv_cost(hw_out, k, cin, cout, groups=1):
+    params = k*k*cin//groups*cout + cout
+    flops = hw_out*hw_out * k*k * (cin//groups) * cout
+    return params, flops
+
+# VGG-16 스타일 백본의 층별 비용
+layers = [
+    ("conv1  3→64",    224, 3,   3,   64),
+    ("conv2  64→64",   224, 3,   64,  64),
+    ("conv3  64→128",  112, 3,   64,  128),
+    ("conv4  128→128", 112, 3,   128, 128),
+    ("conv5  128→256", 56,  3,   128, 256),
+    ("conv6  256→256", 56,  3,   256, 256),
+    ("conv7  256→512", 28,  3,   256, 512),
+    ("conv8  512→512", 28,  3,   512, 512),
+    ("conv9  512→512", 14,  3,   512, 512),
+    ("fc     25088→4096", 1, 1, 25088, 4096),
+]
+print(f"{'층':<20} {'해상도':>8} {'파라미터':>14} {'FLOPs(M)':>12} {'파라미터%':>10} {'FLOPs%':>9}")
+print("-" * 78)
+rows = [(n,) + conv_cost(hw, k, ci, co) + (hw,) for n, hw, k, ci, co in layers]
+tp = sum(r[1] for r in rows); tf = sum(r[2] for r in rows)
+for n, p, f, hw in rows:
+    print(f"{n:<20} {hw:>8} {p:>14,} {f/1e6:>12,.0f} {p/tp:>10.1%} {f/tf:>9.1%}")
+print("-" * 78)
+print(f"{'합계':<20} {'':>8} {tp:>14,} {tf/1e6:>12,.0f}")
+print()
+conv_p = sum(r[1] for r in rows[:-1]); fc_p = rows[-1][1]
+conv_f = sum(r[2] for r in rows[:-1]); fc_f = rows[-1][2]
+print(f"합성곱 층: 파라미터 {conv_p/tp:.1%}, FLOPs {conv_f/tf:.1%}")
+print(f"FC 층    : 파라미터 {fc_p/tp:.1%}, FLOPs {fc_f/tf:.1%}")
+print()
+print("**파라미터와 연산량이 정반대로 몰려 있다.**")
+print("  · FC 층 하나가 파라미터의 대부분을 차지한다 (해상도 1×1 인데도)")
+print("  · 연산량은 해상도가 큰 초반 합성곱 층에 몰린다")
+print()
+print("그래서 두 최적화가 서로 다른 곳을 겨냥한다:")
+print("  · 모델 크기를 줄이려면 → FC 를 전역 평균 풀링으로 대체 (NiN, ResNet)")
+print("  · 속도를 올리려면    → 초반에 빨리 다운샘플 (stem stride 2, 7×7 s2)")
+```
 
 ---
 
-## G4.0.4 — 출력 크기 계산기
+## 요약
 
-하이퍼파라미터에 따른 출력 해상도와 파라미터 수
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: stride·padding 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 합성곱 (convolution) |  |
-| 가중치 공유 |  |
-| 수용영역 |  |
-| 등변성 (equivariance) |  |
-| depthwise separable |  |
+| 지역성 | 커널이 국소 패치만 본다 |
+| 가중치 공유 | 같은 커널을 모든 위치에 재사용 → 파라미터가 해상도와 무관 |
+| 등변성 | $f(Tx) = Tf(x)$ — 특성맵이 함께 이동 |
+| 불변성 | 풀링·전역 풀링이 만듦. **위치 정보를 버리는 대가** |
+| 출력 크기 | $O = \lfloor (I+2P-D(K-1)-1)/S \rfloor + 1$ |
+| 수용영역 | $r_l = r_{l-1} + (k-1)\prod s_i$ — stride/팽창이 지수 성장 |
+| 3×3 쌓기 | 5×5 한 층보다 파라미터 72%, 비선형 2배 |
+| 1×1 병목 | 비싼 3×3 을 좁은 채널에서만 |
+| depthwise separable | 비용 $1/C_{out} + 1/K^2$ |
+| 비용 분포 | 파라미터는 FC 에, FLOPs 는 초반 합성곱에 |
+
+CNN은 **이미지의 성질을 아키텍처에 새겨 넣었다.**
+그 대가로 파라미터가 극적으로 줄었고, 적은 데이터로도 학습이 됐다.
+
+하지만 새겨 넣은 가정은 **깨질 수도 있다.**
+수용영역 밖의 관계는 볼 수 없고, 지역성이 틀린 데이터에서는 오히려 방해가 된다.
+
+다음 장은 그 제약 안에서 깊이를 밀어붙인 설계들을 본다.
 
 ---
 
-**다음**: [4.1 현대 CNN 아키텍처](01_cnn_modern.qmd) — ResNet·Inception·EfficientNet·ConvNeXt — 깊이를 다루는 설계들
+**다음**: [4.1 현대 CNN 아키텍처](01_cnn_modern.qmd) — ResNet·Inception·EfficientNet·ConvNeXt
 
 **이전**: [3.9 학습 실전과 디버깅](../03_deep_learning/09_training_practice.qmd)
