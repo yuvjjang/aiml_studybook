@@ -4,89 +4,834 @@ subtitle: "메시지 전달·GCN·GAT — 관계 데이터를 위한 아키텍�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[CNN](00_cnn.qmd)은 **격자**에, [RNN](02_rnn.qmd)은 **사슬**에 맞춰진 구조다.
+둘 다 그래프의 특수한 경우다 — 격자는 각 노드가 이웃 4개와 연결된 그래프이고,
+사슬은 이웃 1개와 연결된 그래프다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그렇다면 **일반적인 그래프**는?
+분자, 소셜 네트워크, 지식 그래프, 추천의 사용자–상품 이분 그래프.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장의 진짜 목적은 GNN을 쓰는 법이 아니다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+> **셀프 어텐션은 완전 그래프 위의 GNN이다.**
+
+이 등식을 **수치로 확인**하고 나면
+[Part 5](../05_transformer/00_attention_mechanism.qmd)의 Transformer가
+왜 그렇게 일반적인 구조인지 한눈에 보인다.
+
+---
+
+## 그래프가 요구하는 것: 순열 불변성
+
+이미지의 픽셀에는 **순서가 있다**. 왼쪽 위가 첫 번째다.
+그래프의 노드에는 순서가 없다. 노드 번호를 어떻게 매기든 **같은 그래프**다.
+
+따라서 모델은 노드 번호를 바꿔도 같은 답을 내야 한다.
+
+$$f(PAP^\top, PX) = P\,f(A, X) \quad\text{(등변)}
+\qquad
+g(PAP^\top, PX) = g(A, X) \quad\text{(불변)}$$
+
+노드 예측은 **등변**이어야 하고, 그래프 전체 예측은 **불변**이어야 한다.
+([4.0](00_cnn.qmd)의 평행이동 등변성과 같은 이야기다.)
+
+```{python}
+#| label: graph-setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+def sbm(n=120, C=4, p_in=0.18, p_out=0.02, d_feat=8, noise=1.0, seed=0):
+    """확률적 블록 모델 — 같은 커뮤니티끼리 연결이 잦은 그래프."""
+    rng = np.random.default_rng(seed)
+    label = np.repeat(np.arange(C), n // C)
+    P = np.where(label[:, None] == label[None, :], p_in, p_out)
+    A = (rng.random((n, n)) < P).astype(float)
+    A = np.triu(A, 1); A = A + A.T                 # 무방향, 자기 루프 없음
+    centers = rng.normal(0, 1, (C, d_feat))
+    X = centers[label] + rng.normal(0, noise, (n, d_feat))
+    return A, X, label
+
+def norm_adj(A):
+    """Â = D^{-1/2}(A + I)D^{-1/2} — GCN 이 쓰는 대칭 정규화 인접행렬."""
+    A2 = A + np.eye(len(A))
+    dinv = 1.0/np.sqrt(np.maximum(A2.sum(1), 1e-12))
+    return A2 * dinv[:, None] * dinv[None, :]
+
+A, X, label = sbm()
+n, d_feat = X.shape
+C_COM = len(set(label))
+Ahat = norm_adj(A)
+
+print(f"그래프: 노드 {n}, 엣지 {int(A.sum()//2)}, 커뮤니티 {C_COM}")
+print(f"평균 차수 {A.sum(1).mean():.1f}  (최소 {int(A.sum(1).min())}, "
+      f"최대 {int(A.sum(1).max())})")
+print(f"노드 특성 {d_feat}차원 — 커뮤니티 중심 + 잡음")
+print()
+
+# 순열 등변성 확인
+pi = np.random.default_rng(1).permutation(n)
+H_orig = Ahat @ X
+H_perm = norm_adj(A[np.ix_(pi, pi)]) @ X[pi]
+print(f"순열 등변성 확인: ‖Â(πAπᵀ)·πX − π(ÂX)‖_max = "
+      f"{np.abs(H_perm - H_orig[pi]).max():.2e}")
+print("노드 번호를 뒤섞어도 결과가 정확히 따라 움직인다 —")
+print("**인접행렬을 통한 집계는 구조적으로 순열 등변이다.**")
+```
+
+---
+
+## 메시지 전달: 집계 + 갱신
+
+모든 GNN은 두 단계의 반복이다.
+
+$$m_v^{(l)} = \underset{u \in \mathcal{N}(v)}{\text{AGGREGATE}}\left(h_u^{(l)}\right),
+\qquad
+h_v^{(l+1)} = \text{UPDATE}\left(h_v^{(l)},\, m_v^{(l)}\right)$$
+
+집계는 **순서에 무관**해야 한다 (합·평균·최댓값).
+이것이 순열 불변성을 구조로 보장하는 방법이다.
+
+```{python}
+#| label: mp-family
+#| code-fold: false
+
+rows = [
+    ("GCN",       "차수로 정규화한 합",      "선형 + 활성화",  "0",
+     "가장 단순, 강력한 기준선"),
+    ("GraphSAGE", "평균 / 최대 / LSTM",   "자기+이웃 이어붙임", "≈2×",
+     "이웃 샘플링으로 대규모 확장"),
+    ("GAT",       "**학습된 어텐션 가중합**", "선형 + 활성화",  "≈2×",
+     "이웃마다 다른 가중치"),
+    ("GIN",       "합 + MLP",             "MLP",         "≈3×",
+     "1-WL 만큼 강한 표현력"),
+    ("셀프 어텐션",  "**완전 그래프 어텐션**",  "선형 + FFN",   "≈4×",
+     "이웃 = 모든 노드"),
+]
+print(f"{'모델':<12} {'AGGREGATE':<24} {'UPDATE':<18} {'파라미터':>9} {'특징'}")
+print("-" * 92)
+for r in rows:
+    print(f"{r[0]:<12} {r[1]:<24} {r[2]:<18} {r[3]:>9} {r[4]}")
+print()
+print("GCN 의 한 층은 놀랄 만큼 단순하다:")
+print()
+print("    H' = σ( Â H W )        Â = D^{-1/2}(A+I)D^{-1/2}")
+print()
+print("Â H 가 '이웃 평균내기'이고, W 가 '특성 변환'이다.")
+print("합성곱과의 대응: 커널이 고정된 평균 필터이고, 1×1 합성곱이 W 다.")
+print("**공간 구조 대신 그래프 구조를 쓴다는 것만 다르다.**")
+```
+
+---
+
+## G4.6.1 — 층을 쌓으면 얼마나 멀리 보는가
+
+[4.0](00_cnn.qmd)의 수용영역과 같은 개념이다.
+$l$ 층이면 $l$-홉 이웃까지 본다.
+
+```{python}
+#| label: fig-receptive-hops
+#| fig-cap: "층 수에 따라 도달하는 이웃 수"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+reach = (A > 0).astype(bool) | np.eye(n, dtype=bool)
+sizes, cur = [], reach.copy()
+for k in range(1, 7):
+    sizes.append(cur.sum(1).mean())
+    cur = (cur @ reach) > 0
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("k-홉 이웃의 평균 크기", "전체 노드 대비 비율"))
+ks = np.arange(1, 7)
+fig.add_trace(go.Scatter(x=ks, y=sizes, mode="lines+markers", name="실측",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+deg_mean = A.sum(1).mean()
+fig.add_trace(go.Scatter(x=ks, y=[min(deg_mean**k, n) for k in ks], mode="lines",
+                         name=f"평균차수^k ({deg_mean:.1f}^k)",
+                         line=dict(color=viz.YELLOW, width=2, dash="dash")),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=ks, y=[s/n for s in sizes], mode="lines+markers",
+                         showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="전체", row=1, col=2)
+fig.update_xaxes(title_text="층 수 k (= 홉 수)")
+fig.update_yaxes(title_text="노드 수", type="log", row=1, col=1)
+fig.update_yaxes(title_text="비율", range=[0, 1.1], row=1, col=2)
+viz.fig_defaults(fig, height=400, title=f"노드 {n}개 SBM 그래프")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: receptive-hops-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'층 k':>6} {'평균 이웃 수':>14} {'전체 대비':>11} {'평균차수^k':>13}")
+print("-" * 48)
+for k, s in enumerate(sizes, start=1):
+    print(f"{k:>6} {s:>14.1f} {s/n:>11.1%} {min(deg_mean**k, n):>13.1f}")
+print()
+full = next((k for k, s in enumerate(sizes, 1) if s/n > 0.99), None)
+print(f"거의 모든 노드에 도달하는 층 수: {full}")
+print()
+print("**CNN 과 정반대의 문제가 생긴다.**")
+print(f"CNN 은 3×3 커널로 층당 +2 픽셀씩 **선형으로** 넓어져서")
+print(f"224 픽셀을 보려면 112층이 필요했다 ([4.0](00_cnn.qmd)).")
+print(f"GNN 은 처음에 **곱셈적으로** 넓어진다 — 1→2층에서 "
+      f"{sizes[1]/sizes[0]:.1f}배.")
+print("다만 이웃이 겹치기 시작하면 곧 포화한다:")
+for k in range(1, len(sizes)):
+    print(f"  {k}→{k+1}층  {sizes[k-1]:>6.1f} → {sizes[k]:>6.1f}  "
+          f"({sizes[k]/sizes[k-1]:.2f}배)")
+print(f"평균차수가 {deg_mean:.1f} 인데 실제 증가율이 그보다 작은 것은")
+print(f"이미 도달한 노드를 다시 세지 않기 때문이다. 결국 {full}층이면 전체를 본다.")
+print()
+print("즉 GNN 에서 '깊게 쌓기'는 CNN 과 다른 뜻이다 —")
+print("금방 전체에 도달하므로 층을 늘릴 이유가 별로 없고,")
+print("오히려 **다음 절의 문제**가 생긴다.")
+```
+
+---
+
+## G4.6.2 — 과평활화: 모든 노드가 같아진다
+
+$\hat{A}$ 를 반복 곱하면 어떻게 되는가?
+$\hat{A}$ 의 최대 고윳값은 1이고, 그 고유벡터는 $D^{1/2}\mathbf{1}$ 이다.
+
+**따라서 $\hat{A}^k X$ 는 $k \to \infty$ 에서 차수에만 의존하는 벡터로 수렴한다.**
+노드의 특성이 전부 지워진다.
+
+```{python}
+#| label: fig-oversmoothing
+#| fig-cap: "Â 를 반복 적용하면 노드 표현이 붕괴합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def mad(H):
+    """평균 쌍별 코사인 거리 — 0 이면 모든 노드가 같은 방향."""
+    Hn = H/(np.linalg.norm(H, axis=1, keepdims=True) + 1e-12)
+    Cm = Hn @ Hn.T
+    return float((1 - Cm[~np.eye(len(H), dtype=bool)]).mean())
+
+def dirichlet(H):
+    """디리클레 에너지 — 이웃 간 표현 차이 (정규화)."""
+    return float(np.trace(H.T @ (np.eye(len(H)) - Ahat) @ H)
+                 / (np.linalg.norm(H)**2 + 1e-12))
+
+same_c = label[:, None] == label[None, :]
+off_d = ~np.eye(n, dtype=bool)
+
+KMAX = 20
+H = X.copy()
+mads, dirs, seps = [], [], []
+for k in range(KMAX+1):
+    if k > 0:
+        H = Ahat @ H
+    Hn = H/(np.linalg.norm(H, axis=1, keepdims=True) + 1e-12)
+    Cm = Hn @ Hn.T
+    mads.append(mad(H)); dirs.append(dirichlet(H))
+    seps.append(float(Cm[same_c & off_d].mean() - Cm[~same_c].mean()))
+
+# 차수 벡터로의 수렴
+deg_vec = np.sqrt((A + np.eye(n)).sum(1)); deg_vec /= np.linalg.norm(deg_vec)
+convs = []
+H2 = X.copy()
+for k in range(KMAX+1):
+    if k > 0:
+        H2 = Ahat @ H2
+    col = H2[:, 0]/(np.linalg.norm(H2[:, 0]) + 1e-12)
+    convs.append(abs(float(col @ deg_vec)))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("표현의 다양성이 사라진다",
+                                    "차수 벡터 √deg 로 수렴한다"))
+for nm, v, col in [("MAD (평균 쌍별 코사인 거리)", mads, viz.ACCENT),
+                   ("디리클레 에너지", dirs, viz.WARM),
+                   ("커뮤니티 분리도", seps, viz.GREEN)]:
+    fig.add_trace(go.Scatter(x=np.arange(KMAX+1), y=np.maximum(v, 1e-8),
+                             mode="lines+markers", name=nm,
+                             line=dict(width=2.5, color=col),
+                             marker=dict(size=6)), row=1, col=1)
+fig.add_trace(go.Scatter(x=np.arange(KMAX+1), y=convs, mode="lines+markers",
+                         showlegend=False,
+                         line=dict(color=viz.PINK, width=2.5),
+                         marker=dict(size=6)), row=1, col=2)
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"), row=1, col=2)
+fig.update_xaxes(title_text="Â 를 적용한 횟수 k")
+fig.update_yaxes(title_text="값", type="log", row=1, col=1)
+fig.update_yaxes(title_text="|cos(H[:,0], √deg)|", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="과평활화 (가중치 없이 전파만)")
+fig.update_layout(legend=dict(x=0.02, y=0.25, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: oversmoothing-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'k':>4} {'MAD':>11} {'디리클레':>11} {'커뮤니티 분리도':>16} "
+      f"{'√deg 와의 |cos|':>16}")
+print("-" * 64)
+for k in [0, 1, 2, 3, 5, 8, 12, 16, 20]:
+    print(f"{k:>4} {mads[k]:>11.5f} {dirs[k]:>11.5f} {seps[k]:>16.5f} "
+          f"{convs[k]:>16.6f}")
+print()
+kbest = int(np.argmax(seps))
+print(f"① **커뮤니티 분리도가 최대인 지점은 k={kbest} 이다** ({seps[kbest]:.5f}).")
+print(f"   전파를 안 하면 {seps[0]:.5f}, 한 번 하면 {seps[1]:.5f} 로 올라갔다가")
+print(f"   그 뒤로는 계속 떨어져 k=20 에서 {seps[20]:.5f} 다.")
+print("   **이웃 정보는 도움이 되지만, 너무 섞으면 구별이 사라진다.**")
+print()
+print(f"② MAD 가 {mads[0]:.5f} → {mads[20]:.2e} 로 "
+      f"{mads[0]/max(mads[20], 1e-12):.0f}배 줄었다.")
+print("   모든 노드의 표현이 같은 방향을 가리키게 됐다는 뜻이다.")
+print()
+print(f"③ 그 방향이 무엇인지도 확인된다 — √deg 와의 코사인이 "
+      f"{convs[1]:.4f} → {convs[20]:.6f}.")
+print("   이론이 예측한 대로 **차수 벡터로 수렴한다.**")
+print("   최종 표현은 '이 노드의 차수가 얼마인가'만 담고 있다.")
+```
+
+::: {.key-concept}
+**과평활화는 스펙트럼의 성질이다**
+
+$\hat{A} = D^{-1/2}(A+I)D^{-1/2}$ 는 대칭이고 고윳값이 $[-1, 1]$ 에 있다.
+연결 그래프에서 최대 고윳값은 정확히 1이고, 그 고유벡터는 $D^{1/2}\mathbf{1}$ 이다.
+
+$$\hat{A}^k X = \sum_i \lambda_i^k\, u_i (u_i^\top X)
+\;\xrightarrow{k\to\infty}\;
+u_1 (u_1^\top X)$$
+
+$|\lambda_i| < 1$ 인 성분은 전부 지수적으로 사라지고 $u_1$ 만 남는다.
+**이것은 학습으로 피할 수 있는 문제가 아니라 연산자의 성질이다.**
+
+완화책:
+
+- **잔차 연결** — $H' = \hat{A}HW + H$ ([4.1](01_cnn_modern.qmd)과 같은 처방)
+- **초기 특성 재주입** (APPNP) — 매 층에서 $X$ 를 조금씩 다시 섞는다
+- **정규화** — PairNorm, NodeNorm 이 노드 간 분산을 유지시킨다
+- **그냥 얕게 쌓기** — 실무에서 가장 흔한 답이다 (2~3층)
 :::
 
-어텐션은 완전 그래프 위의 GNN이다. 이 관점을 얻으면 Transformer가 왜 그렇게 일반적인 구조인지 한눈에 보인다.
+---
+
+## 그런데 학습된 GCN은 어떤가
+
+위는 **가중치 없이** 전파만 한 결과다. 실제 GCN은 층마다 $W$ 를 학습한다.
+학습이 과평활화를 얼마나 막아 주는가?
+
+```{python}
+#| label: fig-gcn-depth
+#| fig-cap: "GCN 깊이에 따른 노드 분류 성능"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+split = np.random.default_rng(0).permutation(n)
+tr_idx, te_idx = split[:40], split[40:]
+
+def train_gcn(depth, hid=16, steps=300, lr=0.02, seed=0):
+    r = np.random.default_rng(seed)
+    dims = [d_feat] + [hid]*(depth-1) + [C_COM]
+    Ws = [r.normal(0, np.sqrt(2/dims[i]), (dims[i], dims[i+1])) for i in range(depth)]
+    P = {f"W{i}": Ws[i] for i in range(depth)}
+    opt = nn.Optimizer("adam", lr=lr)
+    for _ in range(steps):
+        Hs, Zs, H = [X], [], X
+        for i in range(depth):
+            Z = Ahat @ (H @ Ws[i])
+            Zs.append(Z)
+            H = np.maximum(Z, 0) if i < depth-1 else Z
+            Hs.append(H)
+        _, dl = nn.softmax_ce_loss(H[tr_idx], label[tr_idx])
+        dZ = np.zeros_like(H); dZ[tr_idx] = dl
+        g = {}
+        for i in range(depth-1, -1, -1):
+            if i < depth-1:
+                dZ = dZ * (Zs[i] > 0)
+            g[f"W{i}"] = (Ahat @ Hs[i]).T @ dZ
+            dZ = Ahat @ (dZ @ Ws[i].T)
+        opt.step(P, g)
+    H = X
+    for i in range(depth):
+        Z = Ahat @ (H @ Ws[i])
+        H = np.maximum(Z, 0) if i < depth-1 else Z
+    return float((H[te_idx].argmax(1) == label[te_idx]).mean()), H
+
+DEPTHS = [1, 2, 3, 4, 6, 8, 12]
+acc_d, mad_d = {}, {}
+for dep in DEPTHS:
+    rs = [train_gcn(dep, seed=s) for s in [0, 1, 2]]
+    acc_d[dep] = float(np.mean([a for a, _ in rs]))
+    mad_d[dep] = float(np.mean([mad(H) for _, H in rs]))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("시험 정확도", "최종 표현의 MAD"))
+fig.add_trace(go.Scatter(x=DEPTHS, y=[acc_d[d] for d in DEPTHS], mode="lines+markers",
+                         name="학습된 GCN", line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_trace(go.Scatter(x=DEPTHS, y=[mad_d[d] for d in DEPTHS], mode="lines+markers",
+                         name="학습된 GCN", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_trace(go.Scatter(x=DEPTHS, y=[mads[d] for d in DEPTHS], mode="lines+markers",
+                         name="가중치 없는 전파",
+                         line=dict(color=viz.WARM, width=2.5, dash="dot"),
+                         marker=dict(size=8)), row=1, col=2)
+fig.update_xaxes(title_text="층 수", type="log")
+fig.update_yaxes(title_text="정확도", row=1, col=1)
+fig.update_yaxes(title_text="MAD", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=400,
+                 title=f"라벨 {len(tr_idx)}개로 학습 · 시드 3개 평균")
+fig.update_layout(legend=dict(x=0.02, y=0.3, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: gcn-depth-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'층 수':>6} {'시험 정확도':>13} {'학습된 MAD':>13} {'전파만 했을 때 MAD':>19}")
+print("-" * 56)
+for dep in DEPTHS:
+    print(f"{dep:>6} {acc_d[dep]:>13.3f} {mad_d[dep]:>13.5f} {mads[dep]:>19.5f}")
+print()
+best_d = max(DEPTHS, key=lambda d: acc_d[d])
+print(f"최고 정확도 깊이: {best_d}층 ({acc_d[best_d]:.3f})")
+print(f"12층에서는 {acc_d[12]:.3f} 로 {acc_d[best_d]-acc_d[12]:.3f} 떨어진다.")
+print()
+print("**그런데 학습된 모델의 MAD 는 붕괴하지 않았다.**")
+print(f"  12층 학습 모델 MAD {mad_d[12]:.5f} vs 전파만 했을 때 {mads[12]:.5f} "
+      f"— {mad_d[12]/max(mads[12], 1e-12):.0f}배 차이")
+print()
+print("학습된 W 가 평활화를 상당히 밀어낸다는 뜻이다.")
+print("**따라서 깊은 GCN 의 성능 저하를 전부 과평활화로 돌리면 안 된다.**")
+print("[4.1](01_cnn_modern.qmd)에서 본 최적화 난이도 문제도 함께 작용한다 —")
+print("여기에는 잔차 연결도 정규화 층도 없으니 12층은 그 자체로 학습이 어렵다.")
+print()
+print("확실히 말할 수 있는 것은 두 가지다:")
+print("  · 전파 연산자 자체는 반드시 표현을 붕괴시킨다 (앞 절, 이론과 실측 일치)")
+print("  · 실제 성능 저하의 원인 분해는 이 실험만으로 확정할 수 없다")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G4.6.3 — 과압축: 병목을 지나야 할 때
 
-- 그래프 데이터와 인접행렬, 순열 불변성 요구
-- 메시지 전달 프레임워크: 집계(aggregate) + 갱신(update)
-- GCN: 정규화된 인접행렬을 통한 스펙트럼 관점 유도
-- GraphSAGE: 샘플링 기반 확장
-- GAT: 이웃에 어텐션 가중치 주기
-- 과평활화(over-smoothing)와 깊은 GNN의 어려움
-- 과압축(over-squashing)과 그래프 병목
-- Transformer = 완전 그래프 GNN이라는 관점
-- 그래프 수준·노드 수준·엣지 수준 과제와 풀링
-- 응용: 분자, 추천, 지식그래프, 물리 시뮬레이션
+수용영역이 넓어져도, 그 정보가 **좁은 통로를 지나야 하면** 압축되어 뭉개진다.
+
+```{python}
+#| label: fig-oversquashing
+#| fig-cap: "아령 그래프에서 다리 건너편 노드의 영향력"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+M = 12
+Ab = np.zeros((2*M, 2*M))
+Ab[:M, :M] = 1 - np.eye(M)          # 왼쪽 클리크
+Ab[M:, M:] = 1 - np.eye(M)          # 오른쪽 클리크
+Ab[M-1, M] = Ab[M, M-1] = 1         # 다리 하나
+Ahb = norm_adj(Ab)
+
+KS = range(1, 11)
+same_side, other_side = [], []
+Pk = np.eye(2*M)
+for k in KS:
+    Pk = Ahb @ Pk
+    same_side.append(float(Pk[0, 1:M].mean()))
+    other_side.append(float(Pk[0, M:].mean()))
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=list(KS), y=same_side, mode="lines+markers",
+                         name="같은 클리크 (평균)",
+                         line=dict(color=viz.ACCENT, width=2.5), marker=dict(size=9)))
+fig.add_trace(go.Scatter(x=list(KS), y=np.maximum(other_side, 1e-12),
+                         mode="lines+markers", name="다리 건너편 (평균)",
+                         line=dict(color=viz.WARM, width=2.5), marker=dict(size=9)))
+fig.update_layout(xaxis_title="층 수 k", yaxis_title="영향력 (Âᵏ)₀ⱼ",
+                  yaxis_type="log", legend=dict(x=0.5, y=0.3))
+viz.fig_defaults(fig, height=390,
+                 title=f"아령 그래프 (클리크 {M}개씩 + 다리 1개) · 노드 0 기준")
+fig.show()
+```
+
+```{python}
+#| label: oversquashing-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"노드 0 (왼쪽 클리크) 이 각 노드에 미치는 영향력 (Âᵏ 의 원소)")
+print(f"{'층 k':>6} {'같은 클리크':>14} {'다리 건너편':>14} {'비율':>12}")
+print("-" * 50)
+for k, a, b in zip(KS, same_side, other_side):
+    ratio = "∞ (도달 못함)" if b < 1e-12 else f"{a/b:>10.1f}배"
+    print(f"{k:>6} {a:>14.6f} {b:>14.6f} {ratio:>12}")
+print()
+print("① k=1 에서는 다리 건너편에 **전혀 도달하지 못한다** (거리가 2 이상).")
+k2 = 2
+print(f"② k={k2} 부터 도달하지만 영향력이 {same_side[k2-1]/other_side[k2-1]:.0f}배 작다.")
+print(f"③ k=10 까지 가도 여전히 {same_side[9]/other_side[9]:.0f}배 차이가 난다.")
+print()
+print("**층을 더 쌓아도 격차가 빠르게 좁혀지지 않는다.**")
+print("정보가 다리 하나를 통과해야 하는데, 그 다리의 폭이 표현 차원으로 고정돼 있다.")
+print("멀리 있는 노드 여러 개의 정보가 그 좁은 통로에 눌러 담긴다 — **과압축**이다.")
+print()
+print("[4.3](03_lstm_gru.qmd)의 문맥 벡터 병목과 같은 문제다.")
+print("거기서는 문장 전체가 벡터 하나를 지나야 했고, 여기서는 그래프 절반이 다리 하나를 지난다.")
+print()
+print("해법도 비슷한 계보다:")
+for s in ["그래프 재배선(rewiring) — 병목을 우회하는 엣지를 추가",
+          "가상 노드(virtual node) — 모든 노드와 연결된 노드 하나를 넣어 지름길을 만듦",
+          "**완전 그래프로 만들기 — 즉 셀프 어텐션**"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G4.6.1 — 메시지 전달 한 스텝
+## G4.6.4 — GAT: 이웃마다 다른 가중치
 
-선택한 노드가 이웃 메시지를 모아 상태를 갱신하는 과정
+GCN은 이웃을 **차수로만** 가중한다. 어떤 이웃이 더 중요한지는 모른다.
+GAT(2018)는 그 가중치를 학습한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 노드 선택
+$$e_{ij} = \text{LeakyReLU}\left(\mathbf{a}^\top [Wh_i \,\|\, Wh_j]\right),
+\qquad
+\alpha_{ij} = \text{softmax}_j(e_{ij})$$
+
+그런데 이 식에는 알려진 한계가 있다. $\mathbf{a} = [\mathbf{a}_1; \mathbf{a}_2]$ 로 나누면
+
+$$e_{ij} = \text{LeakyReLU}\left(\mathbf{a}_1^\top Wh_i + \mathbf{a}_2^\top Wh_j\right)$$
+
+**$i$ 항과 $j$ 항이 분리되어 더해진다.** LeakyReLU가 거의 선형이므로,
+$j$ 들의 순위가 $i$ 와 거의 무관하게 정해진다 — **정적 어텐션**이다(Brody et al. 2021).
+
+GATv2는 비선형을 내적 **앞으로** 옮겨 이를 고친다.
+
+$$e_{ij} = \mathbf{a}^\top \text{LeakyReLU}\left(W_l h_i + W_r h_j\right)$$
+
+```{python}
+#| label: fig-gat
+#| fig-cap: "잡음 엣지를 늘려가며 GCN·GAT·GATv2 비교"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+SLOPE = 0.2
+
+def add_noise_edges(A, frac, seed=0):
+    """서로 다른 커뮤니티를 잇는 무작위 엣지를 추가한다 (= 쓸모없는 이웃)."""
+    r = np.random.default_rng(seed)
+    A = A.copy()
+    target, cnt = int(A.sum()//2 * frac), 0
+    while cnt < target:
+        i, j = r.integers(0, n, 2)
+        if i != j and label[i] != label[j] and A[i, j] == 0:
+            A[i, j] = A[j, i] = 1.0
+            cnt += 1
+    return A
+
+def run_gnn(A_, kind, depth=2, hid=16, steps=400, lr=0.02, seed=0):
+    """kind: gcn / gat / gatv2 — 같은 학습 루프에서 집계 방식만 바꾼다."""
+    Ah = norm_adj(A_)
+    MASK = (A_ + np.eye(n)) > 0
+    r = np.random.default_rng(seed)
+    dims = [d_feat] + [hid]*(depth-1) + [C_COM]
+    Wl = [r.normal(0, np.sqrt(2/dims[i]), (dims[i], dims[i+1])) for i in range(depth)]
+    P = {f"W{i}": Wl[i] for i in range(depth)}
+    if kind != "gcn":
+        Wr = [r.normal(0, np.sqrt(2/dims[i]), (dims[i], dims[i+1])) for i in range(depth)]
+        av = [r.normal(0, 0.3, dims[i+1]) for i in range(depth)]
+        for i in range(depth):
+            P[f"Wr{i}"] = Wr[i]; P[f"av{i}"] = av[i]
+    opt = nn.Optimizer("adam", lr=lr)
+
+    def fwd(i, H):
+        Wh = H @ Wl[i]
+        if kind == "gcn":
+            return Ah @ Wh, dict(H=H, Wh=Wh, Al=Ah)
+        Wrh = H @ Wr[i]
+        if kind == "gat":                                   # 분리 가산 (정적)
+            E = (Wh @ av[i])[:, None] + (Wrh @ av[i])[None, :]
+            E = np.where(E > 0, E, SLOPE*E); pre = None
+        else:                                               # GATv2 (동적)
+            pre = Wh[:, None, :] + Wrh[None, :, :]
+            E = np.where(pre > 0, pre, SLOPE*pre) @ av[i]
+        E = np.where(MASK, E, -np.inf)
+        Ex = np.exp(E - E.max(1, keepdims=True))
+        Al = Ex/Ex.sum(1, keepdims=True)
+        return Al @ Wrh, dict(H=H, Wh=Wh, Wrh=Wrh, Al=Al, pre=pre)
+
+    for _ in range(steps):
+        H, cs, zs = X, [], []
+        for i in range(depth):
+            Z, c = fwd(i, H); cs.append(c); zs.append(Z)
+            H = np.maximum(Z, 0) if i < depth-1 else Z
+        _, dl = nn.softmax_ce_loss(H[tr_idx], label[tr_idx])
+        dZ = np.zeros_like(H); dZ[tr_idx] = dl
+        g = {}
+        for i in range(depth-1, -1, -1):
+            if i < depth-1:
+                dZ = dZ*(zs[i] > 0)
+            c = cs[i]
+            if kind == "gcn":
+                dWh = c["Al"].T @ dZ
+                g[f"W{i}"] = c["H"].T @ dWh
+                dZ = dWh @ Wl[i].T
+            else:
+                dWr = c["Al"].T @ dZ
+                dAl = dZ @ c["Wrh"].T
+                dE = c["Al"]*(dAl - (dAl*c["Al"]).sum(1, keepdims=True))*MASK
+                dWh = np.zeros_like(c["Wh"])
+                if kind == "gatv2":
+                    act = np.where(c["pre"] > 0, c["pre"], SLOPE*c["pre"])
+                    g[f"av{i}"] = np.einsum("ij,ijd->d", dE, act)
+                    dpre = dE[:, :, None]*av[i]*np.where(c["pre"] > 0, 1.0, SLOPE)
+                    dWh += dpre.sum(1); dWr += dpre.sum(0)
+                else:
+                    raw = (c["Wh"] @ av[i])[:, None] + (c["Wrh"] @ av[i])[None, :]
+                    dEl = dE*np.where(raw > 0, 1.0, SLOPE)
+                    g[f"av{i}"] = c["Wh"].T @ dEl.sum(1) + c["Wrh"].T @ dEl.sum(0)
+                    dWh += np.outer(dEl.sum(1), av[i]); dWr += np.outer(dEl.sum(0), av[i])
+                g[f"W{i}"] = c["H"].T @ dWh
+                g[f"Wr{i}"] = c["H"].T @ dWr
+                dZ = dWh @ Wl[i].T + dWr @ Wr[i].T
+        opt.step(P, g)
+
+    H, al0 = X, None
+    for i in range(depth):
+        Z, c = fwd(i, H)
+        if i == 0:
+            al0 = c["Al"]
+        H = np.maximum(Z, 0) if i < depth-1 else Z
+    return float((H[te_idx].argmax(1) == label[te_idx]).mean()), al0, MASK
+
+# 모델마다 학습률을 따로 탐색한다 (4.1 에서 정한 공정 비교 규칙)
+FRACS = [0.0, 0.5, 1.0]
+LRS = [0.01, 0.03]
+KINDS = ["gcn", "gat", "gatv2"]
+KLBL = {"gcn": "GCN", "gat": "GAT", "gatv2": "GATv2"}
+res_g, ratio_g = {}, {}
+for frac in FRACS:
+    A_ = add_noise_edges(A, frac)
+    for kind in KINDS:
+        cands = []
+        for lr in LRS:
+            outs = [run_gnn(A_, kind, lr=lr, seed=s) for s in [0, 1, 2]]
+            cands.append((float(np.mean([o[0] for o in outs])), outs))
+        best_acc, outs = max(cands, key=lambda t: t[0])
+        res_g[(kind, frac)] = best_acc
+        if kind != "gcn":
+            rr = []
+            for _, Al, MASK in outs:
+                nb = MASK & ~np.eye(n, dtype=bool)
+                rr.append(Al[nb & same_c].mean()/max(Al[nb & ~same_c].mean(), 1e-12))
+            ratio_g[(kind, frac)] = float(np.mean(rr))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("시험 정확도", "같은 커뮤니티 이웃에 준 가중치 비율"))
+for i, kind in enumerate(KINDS):
+    fig.add_trace(go.Scatter(x=FRACS, y=[res_g[(kind, f)] for f in FRACS],
+                             mode="lines+markers", name=KLBL[kind],
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=10)), row=1, col=1)
+    if kind != "gcn":
+        fig.add_trace(go.Scatter(x=FRACS, y=[ratio_g[(kind, f)] for f in FRACS],
+                                 mode="lines+markers", showlegend=False,
+                                 line=dict(color=viz.color(i), width=2.5),
+                                 marker=dict(size=10)), row=1, col=2)
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="구분 없음", row=1, col=2)
+fig.update_xaxes(title_text="추가한 잡음 엣지 비율")
+fig.update_yaxes(title_text="정확도", row=1, col=1)
+fig.update_yaxes(title_text="같은 커뮤니티 / 다른 커뮤니티", row=1, col=2)
+viz.fig_defaults(fig, height=410,
+                 title="2층 · 학습률 2개 중 최선 · 시드 3개 평균")
+fig.update_layout(legend=dict(x=0.02, y=0.3, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: gat-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("시험 정확도 (모델마다 학습률 탐색 후 최선, 시드 3개 평균)")
+print(f"{'잡음 비율':>10} " + " ".join(f"{KLBL[k]:>10}" for k in KINDS))
+print("-" * 44)
+for f in FRACS:
+    print(f"{f:>10.2f} " + " ".join(f"{res_g[(k, f)]:>10.3f}" for k in KINDS))
+print()
+print("어텐션이 같은 커뮤니티 이웃을 더 보는가 (1 이면 전혀 구분 못 함)")
+print(f"{'잡음 비율':>10} {'GAT':>10} {'GATv2':>10}")
+print("-" * 34)
+for f in FRACS:
+    print(f"{f:>10.2f} {ratio_g[('gat', f)]:>10.2f} {ratio_g[('gatv2', f)]:>10.2f}")
+print()
+
+gat_r = np.mean([ratio_g[("gat", f)] for f in FRACS])
+v2_r = np.mean([ratio_g[("gatv2", f)] for f in FRACS])
+print(f"① **GAT 의 어텐션은 커뮤니티를 구분하지 못한다** (평균 비율 {gat_r:.2f}).")
+print(f"   GATv2 는 {v2_r:.2f} 로 같은 커뮤니티 이웃을 더 본다.")
+print("   위에서 유도한 정적 어텐션의 한계가 그대로 측정된다 —")
+print("   GAT 의 점수는 i 항과 j 항의 합이라 i 마다 다른 순위를 만들 수 없다.")
+print()
+print("② **그런데 정확도는 세 조건 모두 GCN 이 가장 높다.**")
+for f in FRACS:
+    w = max(KINDS, key=lambda k: res_g[(k, f)])
+    print(f"   잡음 {f:.2f}: 최고 = {KLBL[w]} ({res_g[(w, f)]:.3f})")
+print()
+print("어텐션이 '더 잘 구분한다'는 것과 '더 잘 맞힌다'는 것이 일치하지 않았다.")
+print("이 설정의 조건을 보면 이유를 짐작할 수 있다:")
+for s in [f"라벨이 {len(tr_idx)}개뿐이라 파라미터가 2~3배 많은 모델이 불리하다",
+          "SBM 은 동질적(homophilous) 이라 모든 이웃이 이미 유용하다 — 고를 이유가 적다",
+          "헤드 1개, 드롭아웃 없음 — 원논문 설정과 다르다"]:
+    print(f"  · {s}")
+print()
+print("**GCN 은 잘 알려진 강한 기준선이다.** 어텐션이 항상 이기지 않는다는 것이")
+print("이 실험의 결론이고, 문헌의 벤치마크 결과와도 어긋나지 않는다.")
+print("(Shchur et al. 2018 은 공정한 평가에서 GNN 모델 간 격차가")
+print(" 보고된 것보다 훨씬 작다고 보고했다.)")
+```
+
+---
+
+## 셀프 어텐션 = 완전 그래프 GNN
+
+이 장의 결론이다. **수치로 확인한다.**
+
+```{python}
+#| label: attention-is-gnn
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import attention as at
+
+rng = np.random.default_rng(0)
+n_tok, d_tok = 6, 8
+Xs = rng.normal(0, 1, (n_tok, d_tok))
+Wq = rng.normal(0, 0.3, (d_tok, d_tok))
+Wk = rng.normal(0, 0.3, (d_tok, d_tok))
+Wv = rng.normal(0, 0.3, (d_tok, d_tok))
+
+# (A) 표준 셀프 어텐션 — 행렬 연산
+Q, Kk, Vv_ = Xs @ Wq, Xs @ Wk, Xs @ Wv
+out_attn = at.softmax(Q @ Kk.T / np.sqrt(d_tok), axis=-1) @ Vv_
+
+# (B) 완전 그래프에서 노드별 메시지 전달 — 루프
+A_full = np.ones((n_tok, n_tok))              # 모든 노드가 서로 이웃
+out_mp = np.zeros((n_tok, d_tok))
+for i in range(n_tok):
+    nbrs = np.where(A_full[i] > 0)[0]
+    e = np.array([(Xs[i] @ Wq) @ (Xs[j] @ Wk) / np.sqrt(d_tok) for j in nbrs])
+    alpha = np.exp(e - e.max()); alpha /= alpha.sum()          # 이웃에 대한 softmax
+    out_mp[i] = sum(alpha[k]*(Xs[j] @ Wv) for k, j in enumerate(nbrs))
+
+print(f"셀프 어텐션 출력과 완전 그래프 메시지 전달 출력")
+print(f"  최대 차이 : {np.abs(out_attn - out_mp).max():.2e}")
+print(f"  동일한가  : {np.allclose(out_attn, out_mp)}")
+print()
+print("**같은 연산이다.** 셀프 어텐션은 다음 조건의 GNN 이다:")
+for s in ["그래프 = 완전 그래프 (모든 토큰이 모든 토큰의 이웃)",
+          "AGGREGATE = 어텐션 가중합",
+          "메시지 = W_v h_j,  가중치 = softmax(q_i·k_j/√d)"]:
+    print(f"  · {s}")
+print()
+print(f"{'':<18} {'GNN':<26} {'Transformer'}")
+print("-" * 74)
+for a, b_, c_ in [("그래프", "데이터가 준 인접행렬", "완전 그래프 (또는 마스크)"),
+                  ("이웃 수", "차수 (보통 작음)", "T − 1 (전부)"),
+                  ("가중치", "고정(GCN) 또는 학습(GAT)", "학습 (QK 내적)"),
+                  ("위치 정보", "그래프 구조가 내포", "**위치 인코딩으로 별도 주입**"),
+                  ("과압축", "병목 엣지에서 발생", "없음 — 모두가 직접 연결"),
+                  ("비용", "O(|E|·d)", "O(T²·d)")]:
+    print(f"{a:<18} {b_:<26} {c_}")
+print()
+print("두 가지가 특히 중요하다.")
+print()
+print("① **위치 정보** — 그래프는 구조 자체가 정보라 별도 인코딩이 필요 없다.")
+print("   완전 그래프는 구조가 아무 정보도 주지 않으므로 위치를 따로 넣어야 한다.")
+print("   [4.4](04_seq2seq_attention.qmd)에서 위치 인코딩이 없으면 길이 32 에서")
+print("   무너지는 것을 측정했다. 이 표의 한 칸이 그 실험의 이유다.")
+print()
+print("② **과압축이 없다** — 모든 노드가 직접 연결되므로 병목이 존재하지 않는다.")
+print("   대신 비용이 O(T²) 로 오른다. **어텐션은 계산량으로 병목을 산 것이다.**")
+```
+
+::: {.key-concept}
+**이 관점이 주는 것**
+
+Transformer를 "완전 그래프 GNN"으로 읽으면 여러 설계가 한 줄로 설명된다.
+
+- **희소 어텐션**(Longformer, BigBird) — 완전 그래프를 다시 희소 그래프로
+- **마스킹** — 인접행렬을 바꾸는 것. 인과 마스크 = 방향 그래프
+- **그래프 Transformer** — 실제 그래프에 어텐션을 얹고, 구조를 위치 인코딩으로 주입
+- **Mixture-of-Experts 라우팅** — 이분 그래프 위의 메시지 전달
+
+반대 방향도 성립한다. GNN이 겪는 문제는 Transformer도 겪는다 —
+층을 깊게 쌓으면 토큰 표현이 서로 비슷해지는 현상이 보고되어 있고,
+이것은 **과평활화와 같은 메커니즘**이다.
 :::
 
 ---
 
-## G4.6.2 — 수용 이웃 확장
+## 요약
 
-층이 깊어질수록 참조하는 홉(hop) 거리가 넓어지는 모습
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 수 슬라이더
-:::
-
----
-
-## G4.6.3 — 과평활화
-
-층이 많아지면 모든 노드 표현이 같아지는 현상
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 수 슬라이더
-:::
-
----
-
-## G4.6.4 — GAT 어텐션 가중치
-
-이웃마다 다른 가중치가 부여되는 그래프 시각화
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 노드 선택
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| GNN |  |
-| 메시지 전달 |  |
-| GCN |  |
-| GAT |  |
-| 과평활화 (over-smoothing) |  |
+| 순열 등변성 | 인접행렬 집계는 구조적으로 보장 (실측 4e-16) |
+| 메시지 전달 | AGGREGATE(이웃) + UPDATE(자기, 메시지) |
+| GCN | $H' = \sigma(\hat{A}HW)$ — 차수 정규화 합 |
+| 수용 이웃 | 층당 **지수적** 확장 (CNN 은 선형) |
+| 과평활화 | $\hat{A}^k X \to$ 차수 벡터. **연산자의 성질** |
+| 최적 깊이 | 이 실험에서 2층. 12층은 정확도 0.26 하락 |
+| 과압축 | 병목 엣지를 지나는 정보가 눌림 — 문맥 벡터 병목과 동형 |
+| GAT | 정적 어텐션 한계 — 커뮤니티 구분 못 함 (비율 ≈1) |
+| GATv2 | 비선형 위치를 바꿔 동적 어텐션 회복 |
+| **셀프 어텐션** | **완전 그래프 GNN (실측 차이 3e-16)** |
+
+Part 4가 끝났다.
+
+[CNN](00_cnn.qmd)은 공간에, [RNN](02_rnn.qmd)은 시간에, GNN은 관계에 맞춘 구조였다.
+각각 **데이터의 모양을 아키텍처에 새겨 넣는** 방식이었다.
+
+그리고 마지막에 이상한 일이 일어났다.
+그 새겨 넣기를 **전부 지운** 구조 — 완전 그래프 위의 어텐션 — 가
+세 영역 모두에서 가장 잘 작동하기 시작했다.
+
+왜 그런지가 다음 파트의 주제다.
 
 ---
 
-**다음**: [5.0 어텐션 메커니즘](../05_transformer/00_attention_mechanism.qmd) — Query·Key·Value와 스케일드 닷프로덕트 — 이 책의 중심
+**다음**: [5.0 어텐션 메커니즘](../05_transformer/00_attention_mechanism.qmd)
 
 **이전**: [4.5 임베딩](05_embeddings.qmd)
