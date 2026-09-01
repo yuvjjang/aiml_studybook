@@ -4,91 +4,666 @@ subtitle: "BPE·WordPiece·SentencePiece — 모델이 보는 최소 단위"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[7.0](00_text_representation.qmd)은 결론 하나를 남겼다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> 어휘를 10배 늘려도 OOV는 26%에서 11%로밖에 안 준다.
+> **어휘를 키우지 말고 단위를 바꿔야 한다.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그 "단위"를 정하는 것이 토크나이저다.
+그리고 토크나이저에는 다른 부품에 없는 성질이 하나 있다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+> **학습이 끝나면 바꿀 수 없다.**
 
-토크나이저는 모델의 성능·비용·다국어 공정성을 조용히 결정한다. 그리고 학습 후에는 절대 바꿀 수 없다.
+임베딩 행렬의 각 행이 토큰 ID에 묶여 있고, 모델의 모든 가중치가
+그 ID 체계 위에서 학습되었기 때문이다.
+토크나이저를 바꾸는 것은 사실상 새 모델을 학습하는 것이다.
 
----
-
-## 이 장에서 다루는 것
-
-- 어휘 설계의 트레이드오프: 어휘 크기 vs 시퀀스 길이 vs OOV
-- 문자·단어·서브워드 수준의 비교
-- BPE 알고리즘: 병합 규칙 학습과 적용 (직접 구현)
-- WordPiece: 우도 기반 병합 기준
-- Unigram LM 토크나이저와 SentencePiece
-- byte-level BPE — 어떤 바이트열도 인코딩 가능하게
-- 사전 토큰화(pre-tokenization) 규칙과 공백 처리
-- 특수 토큰: BOS/EOS/PAD/UNK, 채팅 템플릿 토큰
-- 다국어 토큰 효율 불균형과 비용 형평성
-- 숫자·코드·공백 토큰화가 성능에 미치는 영향
-- 토크나이저 교체·확장과 임베딩 재초기화
+**모델 설계에서 가장 먼저 정하고 가장 오래 후회하는 결정**이 이것이다.
 
 ---
 
-## G7.1.1 — BPE 병합 과정
+## 어휘 설계의 삼중 트레이드오프
 
-말뭉치에서 가장 빈번한 쌍이 하나씩 병합되며 어휘가 자라는 과정
+```{python}
+#| label: tradeoff
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 병합 스텝 재생
+rows = [
+    ("문자 단위", "수십~수천", "**아주 길다**", "**없음**",
+     "시퀀스가 길어 학습·추론이 비싸다"),
+    ("바이트 단위", "**256**", "가장 길다", "**없음**",
+     "어떤 입력도 표현 가능"),
+    ("서브워드", "8k~256k", "중간", "**없음** (문자 폴백)",
+     "**현재 표준**"),
+    ("단어 단위", "수십만~", "짧다", "**심각**",
+     "신조어·오타·고유명사에 취약"),
+]
+print(f"{'단위':<14} {'어휘 크기':<12} {'시퀀스 길이':<12} {'OOV':<16} {'비고'}")
+print("-" * 84)
+for r in rows:
+    print(f"{r[0]:<14} {r[1]:<12} {r[2]:<12} {r[3]:<16} {r[4]}")
+print()
+print("**세 가지를 동시에 만족할 수 없다.**")
+print("  · 어휘를 키우면 → 시퀀스는 짧아지고 임베딩·소프트맥스가 커진다")
+print("  · 어휘를 줄이면 → 파라미터는 줄고 시퀀스가 길어진다")
+print("  · 단어 단위로 가면 → OOV 가 살아난다")
+print()
+print("서브워드는 이 셋을 **데이터에서 배운 경계**로 절충한다:")
+print("  자주 나오는 것은 통째로, 드문 것은 조각으로.")
+print("  그러면 어휘가 유한하면서 OOV 가 없다.")
+```
+
+---
+
+## G7.1.1 — BPE를 직접 만든다
+
+**Byte Pair Encoding**은 원래 데이터 압축 알고리즘이었다(Gage 1994).
+Sennrich et al.(2016)이 기계번역에 가져왔다.
+
+::: {.key-concept}
+**알고리즘**
+
+1. 모든 단어를 **문자 단위로 쪼갠다**
+2. 말뭉치 전체에서 **가장 빈번한 인접 쌍**을 찾는다
+3. 그 쌍을 하나의 토큰으로 **병합**하고 규칙에 기록한다
+4. 원하는 어휘 크기가 될 때까지 2–3 반복
+
+새 텍스트에는 **학습된 순서대로** 규칙을 적용한다.
 :::
+
+```{python}
+#| label: bpe-en
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+from src.tokenizer import (KO_CORPUS, EN_CORPUS, word_freqs, train_bpe,
+                           apply_bpe, train_wordpiece, bpe_vocab,
+                           byte_word_freqs, encode_corpus)
+
+FE = word_freqs(EN_CORPUS)
+FK = word_freqs(KO_CORPUS)
+
+print("말뭉치 (작다 — 알고리즘의 동작을 보기 위한 크기다)")
+print(f"  영어  : 고유 단어 {len(FE)}, 총 {sum(FE.values())}, "
+      f"고유 문자 {len({c for w in FE for c in w})}")
+print(f"  한국어: 고유 어절 {len(FK)}, 총 {sum(FK.values())}, "
+      f"고유 문자 {len({c for w in FK for c in w})}")
+print()
+print("**시작부터 큰 차이가 있다: 기본 문자가 영어 34개, 한국어 126개다.**")
+print("한글은 음절 하나가 문자 하나라 알파벳 자체가 크다 (완성형 11,172자).")
+print("어휘 예산의 상당 부분이 병합을 시작하기도 전에 소모된다.")
+print()
+
+M_EN, _ = train_bpe(FE, 24)
+print("영어 BPE 병합 (앞 14개)")
+print(f"{'#':>4} {'병합':<26} {'결과':<14} {'빈도':>6}")
+print("-" * 54)
+for i, ((a, b), c) in enumerate(M_EN[:14], 1):
+    print(f"{i:>4} {repr(a)+' + '+repr(b):<26} {repr(a+b):<14} {c:>6}")
+print()
+print("**9~10번을 보라: 'to'+'k' → 'tok', 'tok'+'en' → 'token'.**")
+print("빈도 높은 조각이 먼저 뭉치고, 그 조각들이 다시 뭉쳐 단어가 된다.")
+print("형태소를 알려준 적이 없는데 'ing' 같은 접미사가 나온다 — 통계만으로.")
+```
+
+```{python}
+#| label: bpe-ko
+#| code-fold: false
+
+M_KO, _ = train_bpe(FK, 24)
+print("한국어 BPE 병합 (앞 14개)")
+print(f"{'#':>4} {'병합':<26} {'결과':<14} {'빈도':>6}")
+print("-" * 54)
+for i, ((a, b), c) in enumerate(M_KO[:14], 1):
+    print(f"{i:>4} {repr(a)+' + '+repr(b):<26} {repr(a+b):<14} {c:>6}")
+print()
+print("**한국어도 의미 있는 조각을 찾아낸다** — '토큰', '단위', '토크나이저'.")
+print("그런데 1번이 '다' + '.' 이다. 문장 종결어미와 마침표가 붙었다.")
+print("**사전 토큰화(pre-tokenization)를 안 하면 이런 일이 생긴다.**")
+print()
+print("실제 토크나이저는 병합 전에 규칙을 먼저 적용한다:")
+for s in ["구두점을 단어에서 분리",
+          "숫자를 따로 다룸",
+          "공백을 특수 기호로 표시 (GPT-2 의 'Ġ', SentencePiece 의 '▁')",
+          "**병합이 단어 경계를 넘지 못하게 막음**"]:
+    print(f"  · {s}")
+print()
+print("마지막이 중요하다. 막지 않으면 '한다. 토큰' 같은 조각이 생겨")
+print("어휘를 낭비하고 일반화를 해친다.")
+```
+
+```{python}
+#| label: apply
+#| code-fold: false
+
+print("학습된 규칙을 새 단어에 적용 (영어, 병합 24개)")
+print()
+print(f"{'입력':<16} {'토큰':<44} {'개수':>5}")
+print("-" * 68)
+for w in ["token", "tokens", "tokenizer", "tokenization",
+          "detokenize", "xyzzy"]:
+    t = apply_bpe(w, M_EN)
+    print(f"{w:<16} {str(list(t)):<44} {len(t):>5}")
+print()
+print("**'token' 은 통째로, 'tokenization' 은 조각으로 나뉜다.**")
+print("학습 때 본 적 없는 'xyzzy' 도 처리된다 — 문자로 쪼개면 되니까.")
+print("**이것이 OOV 를 없애는 방법이다.** 최악의 경우 문자 단위로 내려갈 뿐이다.")
+```
 
 ---
 
 ## G7.1.2 — 어휘 크기와 시퀀스 길이
 
-어휘를 키울수록 토큰 수가 줄어드는 곡선
+```{python}
+#| label: vocab-length
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 어휘 크기 슬라이더
-:::
+import sys; sys.path.append("../..")
+from src.tokenizer import train_bpe, word_freqs
+
+CURVES = {}
+for nm, freqs in [("영어", FE), ("한국어", FK)]:
+    base = len({c for w in freqs for c in w})
+    n_char = sum(len(w)*f for w, f in freqs.items())
+    rows = []
+    for nmg in [0, 25, 50, 100, 200, 400]:
+        mm, sp = train_bpe(freqs, nmg)
+        n_tok = sum(len(sp[w])*f for w, f in freqs.items())
+        rows.append((nmg, base + len(mm), n_tok, n_char/n_tok,
+                     1 - n_tok/n_char))
+    CURVES[nm] = (base, n_char, rows)
+
+for nm, (base, n_char, rows) in CURVES.items():
+    print(f"[{nm}]  기본 문자 어휘 {base}, 전체 문자 수 {n_char}")
+    print(f"  {'병합 수':>8} {'어휘 크기':>10} {'총 토큰':>9} "
+          f"{'문자/토큰':>10} {'압축률':>9}")
+    print("  " + "-" * 50)
+    for nmg, v, t, cpt, comp in rows:
+        print(f"  {nmg:>8} {v:>10} {t:>9} {cpt:>10.2f} {comp:>8.1%}")
+    print()
+
+r_en = CURVES["영어"][2]
+r_ko = CURVES["한국어"][2]
+print(f"**압축은 빠르게 시작해 서서히 포화한다.**")
+print(f"  영어: 병합 100개로 압축률 {r_en[3][4]:.0%}, "
+      f"400개로 {r_en[5][4]:.0%}")
+print(f"  한국어: 200개에서 {r_ko[4][4]:.0%} 이고 400개에서도 "
+      f"{r_ko[5][4]:.0%} — **더 늘지 않는다**")
+print()
+print("한국어가 멈추는 이유: 말뭉치가 작아 모든 어절이 이미 한 토큰이 되었다.")
+print(f"  총 토큰 {r_ko[5][2]} = 총 어절 수 {sum(FK.values())}. 더 뭉칠 것이 없다.")
+print("  실제 대규모 말뭉치에서는 훨씬 나중에 포화한다.")
+print()
+print("**어휘를 키우는 것이 공짜가 아닌 이유** (d_model = 4096 기준)")
+D = 4096
+print(f"  {'어휘 V':>10} {'임베딩(공유)':>16} {'임베딩+출력(비공유)':>22} "
+      f"{'8B 모델 대비':>14}")
+print("  " + "-" * 68)
+for V in [8000, 32000, 50000, 128000, 256000]:
+    tied, untied = V*D, 2*V*D
+    print(f"  {V:>10,} {tied:>16,} {untied:>22,} {untied/8e9:>13.1%}")
+print()
+print("  Llama 3 는 어휘를 32k → 128k 로 키웠다.")
+print(f"  임베딩+출력이 {2*32000*D/1e6:.0f}M → {2*128000*D/1e6:.0f}M "
+      f"파라미터로 늘었다 (8B 모델의 {2*128000*D/8e9:.0%}).")
+print("  대신 같은 텍스트의 토큰 수가 줄어 학습·추론·문맥에서 이득을 본다.")
+print("  **비영어 언어에서 이득이 특히 크다** — 다음 절에서 이유를 본다.")
+```
+
+```{python}
+#| label: fig-vocab
+#| fig-cap: "어휘를 키울수록 시퀀스가 짧아지지만 이득은 포화합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("어휘 크기 vs 문자/토큰",
+                                    "어휘 크기 vs 임베딩 파라미터"))
+for i, (nm, (base, n_char, rows)) in enumerate(CURVES.items()):
+    fig.add_trace(go.Scatter(x=[r[1] for r in rows], y=[r[3] for r in rows],
+                             mode="lines+markers", name=nm,
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)), row=1, col=1)
+VS = np.array([8000, 16000, 32000, 50000, 128000, 256000])
+for nm, mult, c in [("공유 임베딩", 1, viz.GREEN), ("비공유 (임베딩+출력)", 2, viz.PINK)]:
+    fig.add_trace(go.Scatter(x=VS, y=VS*4096*mult/1e6, mode="lines+markers",
+                             name=nm, line=dict(color=c, width=2.5),
+                             marker=dict(size=8)), row=1, col=2)
+for v, lbl in [(32000, "Llama 2"), (128000, "Llama 3")]:
+    fig.add_vline(x=v, line=dict(color=viz.YELLOW, dash="dot"),
+                  annotation_text=lbl, row=1, col=2)
+fig.update_xaxes(title_text="어휘 크기", type="log", row=1, col=1)
+fig.update_yaxes(title_text="문자 / 토큰 (클수록 효율적)", row=1, col=1)
+fig.update_xaxes(title_text="어휘 크기", type="log", row=1, col=2)
+fig.update_yaxes(title_text="파라미터 (백만, d=4096)", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=390, title="")
+fig.show()
+```
 
 ---
 
-## G7.1.3 — 언어별 토큰 효율
+## G7.1.3 — WordPiece: 기준이 다르면 결과가 다르다
 
-같은 의미의 문장이 언어마다 몇 토큰이 되는지 비교
+BPE는 **빈도**로 병합을 고른다. WordPiece(BERT)는 **우도 증가량**으로 고른다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 언어 선택
-:::
+$$\text{score}(a, b) = \frac{\text{freq}(ab)}{\text{freq}(a)\cdot\text{freq}(b)}$$
+
+$a$ 와 $b$ 가 각각 흔하면 분모가 커져 점수가 낮아진다.
+**"자주 붙어 다니는가"가 아니라 "붙어 다니는 것이 놀라운가"를 본다.**
+
+```{python}
+#| label: wordpiece
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+from src.tokenizer import train_bpe, train_wordpiece
+
+MB, _ = train_bpe(FE, 10)
+MW1, _ = train_wordpiece(FE, 10, min_freq=1)
+MW5, _ = train_wordpiece(FE, 10, min_freq=5)
+
+print(f"{'#':>3}  {'BPE (빈도)':<24} {'WordPiece (우도, 하한 없음)':<30} "
+      f"{'WordPiece (최소빈도 5)'}")
+print("-" * 96)
+for i in range(10):
+    b = f"{MB[i][0][0]}+{MB[i][0][1]} ({MB[i][1]})"
+    w1 = f"{MW1[i][0][0]}+{MW1[i][0][1]} ({MW1[i][1]})"
+    w5 = f"{MW5[i][0][0]}+{MW5[i][0][1]} ({MW5[i][1]})"
+    print(f"{i+1:>3}  {b:<24} {w1:<30} {w5}")
+print()
+sb, sw = {m[0] for m in MB}, {m[0] for m in MW1}
+print(f"**BPE 와 WordPiece 의 첫 10개 병합이 {len(sb & sw)}개 겹친다.**")
+print()
+print("WordPiece 의 1번은 'q'+'u' 다. 빈도는 4밖에 안 되는데 1등이다 —")
+print("**'q' 뒤에는 거의 항상 'u' 가 오기 때문**이다. 예측 이득이 크다.")
+print("BPE 의 1번 'i'+'n' 은 빈도 15 지만 'i' 도 'n' 도 흔해서 놀랍지 않다.")
+print()
+print("**그런데 하한이 없으면 WordPiece 가 망가진다.**")
+print(f"  2~4번이 'S'+'u' → 'Su' → 'Sub' → 'Subw' — 전부 빈도 1 이다.")
+print("  분모가 아주 작으면 점수가 폭발한다. 딱 한 번 나온 쌍이 최고점을 받는다.")
+print()
+print("최소 빈도 5 를 두면 정상으로 돌아온다:")
+for i, ((a, b), c, s) in enumerate(MW5[:8], 1):
+    print(f"    {i}: {a!r}+{b!r} → {(a+b)!r}  (빈도 {c})")
+print("  'tok' → 'toke' → 'token' → 'tokens' 로 단어를 쌓아 올린다.")
+print()
+print("**그런데 하한에는 대가가 있다.**")
+print(f"  빈도 하한 5 를 두면 'q'+'u' (빈도 4) 자체가 후보에서 빠진다 —")
+print(f"  위 목록에 'qu' 가 없다. **가장 유익한 병합을 빈도가 낮다는 이유로 버린 것**이다.")
+print("  하한이 너무 높으면 우도 기준의 장점이 사라지고 BPE 에 가까워진다.")
+print()
+print("**교훈: 우도 기준은 빈도 하한과 함께 쓰되, 하한 자체가 하이퍼파라미터다.**")
+print("실제 WordPiece 구현에도 최소 빈도 임계값이 들어 있고, 그 값이 결과를 바꾼다.")
+```
+
+```{python}
+#| label: unigram
+#| code-fold: false
+
+rows = [
+    ("BPE", "빈도 최대 쌍을 병합 (상향식)", "GPT 계열, Llama",
+     "결정론적, 구현 단순"),
+    ("WordPiece", "우도 증가량으로 병합 (상향식)", "BERT, DistilBERT",
+     "'놀라운' 결합을 선호"),
+    ("Unigram LM", "큰 후보에서 **제거**해 나감 (하향식)", "T5, ALBERT, mBART",
+     "**확률적 분절 가능**"),
+    ("SentencePiece", "위 방식들의 구현 라이브러리", "다수",
+     "공백을 문자로 취급, 언어 무관"),
+]
+print(f"{'방식':<16} {'병합/선택 기준':<34} {'대표 모델':<22} {'특징'}")
+print("-" * 96)
+for r in rows:
+    print(f"{r[0]:<16} {r[1]:<34} {r[2]:<22} {r[3]}")
+print()
+print("**Unigram LM 은 방향이 반대다.**")
+print("  1. 아주 큰 후보 어휘로 시작한다")
+print("  2. 각 토큰을 뺐을 때 말뭉치 우도가 얼마나 떨어지는지 계산한다")
+print("  3. 손실이 가장 적은 토큰들을 버린다")
+print("  4. 목표 크기가 될 때까지 반복")
+print()
+print("얻는 것: **한 단어를 여러 방식으로 분절할 수 있고 각각에 확률이 있다.**")
+print("  · subword regularization — 학습 때 분절을 무작위로 바꿔 정규화")
+print("  · BPE-dropout 이 BPE 쪽에서 비슷한 효과를 낸다")
+print()
+print("**SentencePiece 는 알고리즘이 아니라 구현이다.**")
+print("핵심 기여는 '공백을 특별 취급하지 않는 것'이다:")
+print("  · 공백을 '▁' 문자로 바꿔 텍스트에 포함시킨다")
+print("  · 그러면 사전 토큰화가 필요 없다 → **언어 독립적**")
+print("  · 디코딩이 완전히 무손실이다 (공백 복원이 정확하다)")
+print("  · 중국어·일본어·태국어처럼 띄어쓰기 없는 언어에 필수적")
+```
 
 ---
 
-## G7.1.4 — 토큰 경계 시각화
+## G7.1.4 — 다국어 토큰 형평성
 
-실제 문장이 서브워드로 잘리는 경계와 ID 표시
+실제 LLM 토크나이저는 **영어가 지배적인 말뭉치**에서 학습된다.
+그 상황을 흉내내 보자 — 영어:한국어 = 9:1 로 섞어 BPE를 학습한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 문장 입력
-:::
+```{python}
+#| label: multilingual
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+from src.tokenizer import (KO_CORPUS, EN_CORPUS, word_freqs, train_bpe,
+                           apply_bpe)
+
+MIXED = collections.Counter()
+for w, f in word_freqs(EN_CORPUS).items():
+    MIXED[w] += f*9
+for w, f in word_freqs(KO_CORPUS).items():
+    MIXED[w] += f*1
+
+M_MIX, _ = train_bpe(MIXED, 300)
+n_ko_rule = sum(1 for (a, b), c in M_MIX
+                if any('가' <= ch <= '힣' for ch in a+b))
+print(f"혼합 말뭉치: 고유 {len(MIXED)}, 총 {sum(MIXED.values())} (영어:한국어 9:1)")
+print(f"학습된 병합 규칙 {len(M_MIX)}개, 그중 한글 포함 {n_ko_rule}개 "
+      f"({n_ko_rule/len(M_MIX):.1%})")
+print()
+
+PAR = [
+    ("영어", "The tokenizer decides the smallest unit the model can see."),
+    ("한국어", "토크나이저는 모델이 보는 최소 단위를 정한다."),
+]
+print("같은 뜻의 문장을 이 토크나이저로 자르면")
+print()
+print(f"{'언어':<8} {'문자':>6} {'UTF-8':>7} {'토큰':>6} {'문자/토큰':>10} "
+      f"{'토큰/문자':>10}")
+print("-" * 54)
+TOK = {}
+for lang, s in PAR:
+    t = []
+    for w in s.split():
+        t += list(apply_bpe(w, M_MIX))
+    TOK[lang] = t
+    ch = len(s.replace(" ", ""))
+    print(f"{lang:<8} {ch:>6} {len(s.encode('utf-8')):>7} {len(t):>6} "
+          f"{ch/len(t):>10.2f} {len(t)/ch:>10.2f}")
+print()
+for lang in TOK:
+    print(f"  {lang}: {TOK[lang]}")
+print()
+e_cpt = len(PAR[0][1].replace(" ", ""))/len(TOK["영어"])
+k_cpt = len(PAR[1][1].replace(" ", ""))/len(TOK["한국어"])
+print(f"**한국어는 문자당 토큰 효율이 영어의 {k_cpt/e_cpt:.2f}배다** "
+      f"({k_cpt:.2f} vs {e_cpt:.2f} 문자/토큰).")
+ch_en = len(PAR[0][1].replace(" ", ""))
+ch_ko = len(PAR[1][1].replace(" ", ""))
+print(f"한국어 문장이 문자로는 {ch_en/ch_ko:.1f}배 짧은데 "
+      f"({ch_ko} vs {ch_en}자) 토큰은 오히려 많다 "
+      f"({len(TOK['한국어'])} vs {len(TOK['영어'])}개).")
+print()
+print("영어 토큰을 보면 단어가 통째로 남았다. 한국어는 '보', '는', '최', '소' 처럼")
+print("음절 단위로 쪼개진 조각이 많다.")
+print()
+print("**이것이 실무에 미치는 영향:**")
+for s in ["**API 비용** — 토큰 단위 과금이라 비영어 사용자가 더 낸다",
+          "**문맥 창** — 같은 창에 담을 수 있는 내용이 언어마다 다르다",
+          "**추론 속도** — 토큰 수에 비례하니 생성이 느리다",
+          "**성능** — 조각난 표현은 학습이 어렵고 일반화가 나쁘다",
+          "**긴 꼬리 언어** — 저자원 언어일수록 격차가 커진다"]:
+    print(f"  · {s}")
+print()
+print("이 말뭉치는 작아서 실제 격차를 그대로 재현하지는 않는다.")
+print("공개 토크나이저에서 보고되는 값은 대체로 다음과 같다:")
+print(f"  {'토크나이저':<22} {'영어':>8} {'한국어':>8} {'비율'}")
+print("  " + "-"*50)
+for nm, e, k in [("GPT-2 (50k)", 4.0, 0.9), ("GPT-4 / cl100k", 4.0, 1.5),
+                 ("Llama 2 (32k)", 3.7, 0.8), ("Llama 3 (128k)", 3.9, 1.7)]:
+    print(f"  {nm:<22} {e:>8.1f} {k:>8.1f} {e/k:>6.1f}배")
+print("  (문자/토큰. 출처마다 측정 문장이 달라 값은 대략치다.)")
+print()
+print("**어휘를 32k → 128k 로 키우면 한국어가 가장 크게 개선된다.**")
+print("영어는 이미 포화 상태라 늘릴 여지가 적기 때문이다.")
+```
 
 ---
 
-## 핵심 용어
+## G7.1.5 — byte-level BPE: UNK를 없애기
 
-| 용어 | 비고 |
+```{python}
+#| label: byte-level
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+from src.tokenizer import byte_word_freqs, train_bpe
+
+BASE_CHARS = {c for w in MIXED for c in w}
+print(f"문자 단위 BPE 의 기본 어휘: {len(BASE_CHARS)}개 문자")
+print("이 말뭉치에 없던 문자를 만나면?")
+print()
+print(f"{'입력':<10} {'문자 수':>8} {'미등록':>8} {'미등록 문자'}")
+print("-" * 52)
+for u in ["日本語", "café", "🎉", "Ω", "tokenizer"]:
+    oov = [c for c in u if c not in BASE_CHARS]
+    print(f"{u:<10} {len(u):>8} {len(oov):>8} {oov}")
+print()
+print("→ 문자 단위 BPE 는 이들을 **UNK 토큰**으로만 처리할 수 있다.")
+print("  정보가 통째로 사라지고, 디코딩하면 원문을 복원할 수 없다.")
+print()
+print("**byte-level BPE 의 해법: 문자가 아니라 UTF-8 바이트에서 시작한다.**")
+print()
+print(f"{'입력':<10} {'UTF-8 바이트':>14} {'바이트 값 (앞 8개)'}")
+print("-" * 60)
+for u in ["日本語", "café", "🎉", "Ω"]:
+    bs = list(u.encode("utf-8"))
+    print(f"{u:<10} {len(bs):>14} {bs[:8]}")
+print()
+print("**기본 어휘가 정확히 256개고, 세상의 모든 바이트열이 그 안에 있다.**")
+print("  · OOV 가 원천적으로 없다")
+print("  · 디코딩이 무손실이다")
+print("  · 이모지·다국어·이진 데이터 조각까지 표현된다")
+print()
+
+BF = byte_word_freqs(EN_CORPUS)
+MBY, SPB = train_bpe(BF, 30, pre_split=False)
+print("바이트 위에서 학습한 BPE 병합 (앞 10개)")
+print(f"{'#':>4} {'병합 결과 (바이트)':<28} {'디코딩':<12} {'빈도':>6}")
+print("-" * 56)
+for i, ((a, b), c) in enumerate(MBY[:10], 1):
+    merged = a + b
+    try:
+        shown = repr(merged.decode("utf-8"))
+    except UnicodeDecodeError:
+        shown = "(불완전)"
+    print(f"{i:>4} {str(merged):<28} {shown:<12} {c:>6}")
+print()
+print("영어에서는 문자 단위 BPE 와 사실상 같은 결과가 나온다 (ASCII 라 1바이트=1문자).")
+print("차이는 **비ASCII 에서** 드러난다 — 한글 한 글자가 3바이트로 시작한다.")
+print()
+print("**대가**: 한국어가 더 불리해진다.")
+print("  · 문자 단위: 한글 1글자 = 기본 토큰 1개")
+print("  · 바이트 단위: 한글 1글자 = 기본 토큰 3개")
+print("  · 병합으로 되돌리려면 그만큼 어휘 예산을 써야 한다")
+print()
+print("**그럼에도 byte-level 이 표준이 된 이유는 견고성이다.**")
+print("깨진 인코딩, 처음 보는 문자, 이진 조각 — 무엇이 들어와도 죽지 않는다.")
+print("대규모 웹 말뭉치에서는 이 성질이 효율보다 중요하다.")
+print()
+print("(GPT-2 는 바이트를 출력 가능한 유니코드 문자로 한 번 더 매핑한다.")
+print(" 제어 문자가 토큰 문자열에 그대로 들어가는 것을 피하려는 구현 기법이다.)")
+```
+
+---
+
+## G7.1.6 — 숫자, 공백, 코드
+
+```{python}
+#| label: numbers
+#| code-fold: false
+
+print("숫자가 어떻게 잘리는가 (혼합 말뭉치 BPE)")
+print()
+print(f"{'입력':>12} {'토큰':<40} {'개수':>5}")
+print("-" * 60)
+for n in ["7", "42", "127", "1000", "2024", "3.14159", "12345678"]:
+    t = apply_bpe(n, M_MIX)
+    print(f"{n:>12} {str(list(t)):<40} {len(t):>5}")
+print()
+print("우리 말뭉치에는 숫자가 거의 없어 전부 한 자리씩 쪼개졌다.")
+print("**실제 대규모 말뭉치에서는 그렇지 않은 것이 문제였다.**")
+print()
+print("GPT-2/3 계열에서 관찰된 현상:")
+print(f"  {'숫자':>10} {'분절 (예시)':<24} {'문제'}")
+print("  " + "-"*62)
+for n, seg, prob in [("1000", "['1000']", "한 토큰"),
+                     ("1001", "['100', '1']", "**경계가 다르다**"),
+                     ("1234", "['123', '4']", "자리수가 안 맞는다"),
+                     ("12345", "['123', '45']", "일관성 없음")]:
+    print(f"  {n:>10} {seg:<24} {prob}")
+print()
+print("**같은 자릿수 숫자가 서로 다르게 쪼개지면 산술이 어려워진다.**")
+print("덧셈은 자릿수를 맞춰야 하는데 토큰 경계가 자릿수와 무관하기 때문이다.")
+print()
+print("현재의 해법:")
+for s in ["**한 자리씩 강제 분리** — Llama 3, Gemma 등이 채택",
+          "자릿수를 3자리로 고정 분리 (일부 모델)",
+          "오른쪽 정렬 분절 — 일의 자리부터 자르기",
+          "그래도 완전히 해결되지는 않는다 — 큰 수 산술은 여전히 약하다"]:
+    print(f"  · {s}")
+print()
+print("**공백과 코드**")
+print()
+print(f"  {'상황':<28} {'문제':<34} {'대응'}")
+print("  " + "-"*86)
+for a, b, c in [
+    ("들여쓰기 4칸 × 여러 겹", "공백마다 토큰 하나면 낭비가 크다",
+     "연속 공백을 한 토큰으로"),
+    ("선행 공백 ' the' vs 'the'", "같은 단어가 다른 토큰이 된다",
+     "GPT 계열은 선행 공백을 단어에 포함"),
+    ("탭 vs 스페이스", "둘이 다른 토큰",
+     "코드 모델은 별도 처리"),
+    ("줄바꿈", "코드에서 매우 흔하다",
+     "'\\n', '\\n\\n' 를 토큰으로 확보"),
+]:
+    print(f"  {a:<28} {b:<34} {c}")
+print()
+print("**'선행 공백' 문제는 프롬프트 작성에서 실제로 만난다.**")
+print("프롬프트를 공백으로 끝내면 모델이 예상과 다른 토큰 분포를 보게 된다 —")
+print("다음 단어가 대개 '␣word' 형태의 토큰인데 공백이 이미 소비되었기 때문이다.")
+```
+
+---
+
+## 특수 토큰과 채팅 템플릿
+
+```{python}
+#| label: special-tokens
+#| code-fold: false
+
+rows = [
+    ("<|endoftext|> / </s>", "문서·시퀀스 끝", "생성 종료 신호"),
+    ("<s> / <|begin_of_text|>", "시퀀스 시작", "위치 기준점"),
+    ("<pad>", "배치 길이 맞춤", "어텐션 마스크로 무시"),
+    ("<unk>", "미등록 토큰", "byte-level 이면 불필요"),
+    ("<|im_start|>, <|im_end|>", "대화 턴 경계", "ChatML 계열"),
+    ("<|user|>, <|assistant|>", "역할 표시", "지시 조정 모델"),
+    ("<|tool_call|>", "도구 호출 구간", "에이전트 (7.11)"),
+    ("<fim_prefix/suffix/middle>", "중간 채우기", "코드 補完"),
+]
+print(f"{'토큰':<28} {'용도':<20} {'비고'}")
+print("-" * 76)
+for r in rows:
+    print(f"{r[0]:<28} {r[1]:<20} {r[2]}")
+print()
+print("**특수 토큰은 반드시 어휘에 '예약'되어 있어야 한다.**")
+print("사용자 입력에 '<|im_end|>' 라는 문자열이 들어오면 어떻게 되는가?")
+print("  · 특수 토큰으로 해석되면 → **프롬프트 인젝션**이 된다")
+print("  · 그래서 실무에서는 사용자 입력에서 특수 토큰 문자열을 이스케이프하거나")
+print("    토크나이저 옵션으로 특수 토큰 파싱을 끈다")
+print("  · 7.15 안전성에서 다시 다룬다")
+print()
+print("**채팅 템플릿의 실체는 문자열 포매팅이다:**")
+print()
+print("   <|im_start|>system\\n너는 도움이 되는 비서다<|im_end|>")
+print("   <|im_start|>user\\n안녕<|im_end|>")
+print("   <|im_start|>assistant\\n")
+print()
+print("모델은 '대화'를 모른다. 이 형식으로 학습되었을 뿐이다.")
+print("**템플릿이 학습 때와 다르면 성능이 눈에 띄게 떨어진다** —")
+print("모델을 쓸 때 그 모델의 정확한 템플릿을 써야 하는 이유다.")
+```
+
+---
+
+## 토크나이저를 바꿔야 한다면
+
+```{python}
+#| label: swap
+#| code-fold: false
+
+print("토크나이저 교체가 왜 어려운가")
+print()
+print("  임베딩 행렬의 i 번째 행 = 토큰 ID i 의 의미")
+print("  토크나이저를 바꾸면 그 대응이 전부 깨진다")
+print()
+print(f"{'상황':<24} {'방법':<38} {'비용'}")
+print("-" * 82)
+for a, b, c in [
+    ("어휘 확장 (추가만)", "새 행을 붙이고 초기화 후 계속 학습",
+     "중간 — 기존 ID 는 보존됨"),
+    ("도메인 토큰 추가", "특수 토큰 몇 개 추가 + 임베딩 학습",
+     "낮음"),
+    ("**완전 교체**", "임베딩·출력층 재초기화 후 재학습",
+     "**아주 높음 — 사실상 재사전학습**"),
+    ("다국어 확장", "대상 언어 토큰 추가 + 계속 사전학습",
+     "높음 (수십B 토큰 규모)"),
+]:
+    print(f"{a:<24} {b:<38} {c}")
+print()
+print("**새 토큰 임베딩을 어떻게 초기화하는가**")
+for s in ["무작위 — 가장 단순하지만 초기 학습이 불안정",
+          "**기존 토큰들의 평균** — 안전한 기본값, 널리 쓰임",
+          "**옛 토크나이저의 분절 평균** — 새 토큰 '토크나이저' 를",
+          "   옛 조각 ['토','크','나','이','저'] 임베딩의 평균으로 시작",
+          "이 방법이 대체로 가장 잘 동작한다고 보고된다"]:
+    print(f"  · {s}")
+print()
+print("**실무 조언**")
+for s in ["가능하면 바꾸지 말 것 — 비용이 재학습 수준이다",
+          "다국어를 목표하면 **처음부터** 다국어 말뭉치로 학습할 것",
+          "숫자 처리는 처음에 정할 것 (자리 분리 여부)",
+          "특수 토큰 여유분을 미리 확보해 둘 것 (나중에 쓸 자리)",
+          "어휘 크기는 대상 언어 비중을 보고 정할 것"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| BPE |  |
-| WordPiece |  |
-| SentencePiece |  |
-| byte-level BPE |  |
-| 어휘 크기 |  |
-| 토큰 효율 |  |
+| 왜 중요한가 | **학습 후에는 바꿀 수 없다** — 임베딩이 ID에 묶여 있다 |
+| 삼중 트레이드오프 | 어휘 크기 ↔ 시퀀스 길이 ↔ OOV |
+| BPE | 가장 **빈번한** 인접 쌍을 반복 병합 |
+| 확인 | 통계만으로 'tok'+'en'→'token', 'ing' 같은 접미사를 찾아낸다 |
+| 기본 문자 수 | 영어 34개 vs **한국어 126개** — 시작부터 불리하다 |
+| 압축 포화 | 영어 병합 100개로 57%, 400개로 82% |
+| 어휘 비용 | 128k 어휘 = 비공유 시 1.05B 파라미터 (8B의 13%) |
+| WordPiece | 빈도가 아니라 $\text{freq}(ab)/(\text{freq}(a)\text{freq}(b))$ |
+| 측정된 차이 | BPE와 첫 10개 병합이 **0개 겹친다**. WP는 'qu'를 1등으로 |
+| WordPiece의 함정 | 하한이 없으면 빈도 1짜리가 1등, 하한이 높으면 'qu'가 탈락 |
+| Unigram LM | 하향식 제거. 확률적 분절이 가능해 정규화에 쓴다 |
+| SentencePiece | 공백을 '▁'로 흡수 → 사전 토큰화 불필요, 언어 독립 |
+| 다국어 형평성 | 한국어 문자당 효율이 영어의 **0.34배** (측정) |
+| 실무 영향 | API 비용·문맥 창·속도·성능이 모두 언어에 따라 달라진다 |
+| byte-level | 기본 어휘 256, **OOV 없음**, 무손실 디코딩 |
+| byte-level 의 대가 | 한글 1글자 = 기본 토큰 3개 |
+| 숫자 | 자릿수와 토큰 경계가 어긋나면 산술이 망가진다 → 한 자리씩 분리 |
+| 특수 토큰 | 사용자 입력에 섞이면 **프롬프트 인젝션** (7.15) |
+| 교체 | 완전 교체는 사실상 재사전학습. 옛 분절 평균으로 초기화 |
+
+토큰이 정해졌으니, 이제 그 토큰들의 **확률**을 다룰 차례다.
 
 ---
 
-**다음**: [7.2 언어모델의 기초](02_language_models.qmd) — n-gram·스무딩·퍼플렉서티 — 신경망 이전의 언어모델
+**다음**: [7.2 언어모델의 기초](02_language_models.qmd)
 
 **이전**: [7.0 텍스트를 다루기](00_text_representation.qmd)
