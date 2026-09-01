@@ -4,86 +4,638 @@ subtitle: "도메인 지식을 숫자로 — 딥러닝 시대에도 살아남은
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+정형 데이터에서는 **좋은 특성 하나가 모델 교체보다 큰 이득을 준다.**
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장의 첫 실험이 그것을 보여준다.
+선형 모델이 정확도 0.51(사실상 동전 던지기)로 실패하는 문제에,
+특성 **하나**를 추가하면 정확도 1.00이 된다.
+모델은 그대로다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+특성 공학의 목표는 하나로 요약된다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+> **표현을 바꿔서 문제를 선형에 가깝게 만드는 것.**
 
-정형 데이터에서는 좋은 특성 하나가 모델 교체보다 큰 이득을 준다. 그리고 특성 설계는 여전히 자동화되지 않는다.
-
----
-
-## 이 장에서 다루는 것
-
-- 특성 공학의 목표: 표현을 바꿔 문제를 선형에 가깝게 만들기
-- 수치 특성: 구간화(binning), 다항 특성, 상호작용, 비율·차이
-- 시간 특성: 주기 인코딩(sin/cos), 시차(lag), 롤링 통계, 시간 이후 경과
-- 텍스트 특성: BoW, TF-IDF, n-gram, 문자 수준 통계
-- 집계 특성: group-by 통계, 개체별 히스토리 요약
-- 특성 선택: 필터(상관·상호정보), 래퍼(RFE), 임베디드(L1·트리 중요도)
-- 특성 스토어와 학습/서빙 스큐(training-serving skew)
-- 자동 특성 생성의 한계와 위험(조합 폭발, 과적합)
+[Part 3](../03_deep_learning/00_perceptron_mlp.qmd)의 신경망은 이 일을
+자동으로 하려는 시도다. 하지만 정형 데이터에서는 여전히 사람이 더 잘한다 —
+**도메인 지식이 데이터 안에 없기 때문이다.**
 
 ---
 
-## G1.4.1 — 표현 변경으로 선형화
+## G1.4.1 — 표현을 바꾸면 문제가 바뀐다
 
-원형 경계 데이터가 반지름 특성 추가로 선형 분리되는 순간
+```{python}
+#| label: fig-linearization
+#| fig-cap: "동심원 데이터가 반지름 특성 하나로 선형 분리됩니다"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 좌표계 전환
-:::
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+def logreg_cv(X, y, steps=800, lr=0.1, seed=0, k=5):
+    """표준화 후 로지스틱 회귀. k-폴드 교차검증 정확도."""
+    X = (X - X.mean(0))/(X.std(0) + 1e-12)
+    folds = np.arange(len(X)) % k
+    accs = []
+    for f in range(k):
+        tr, te = folds != f, folds == f
+        r = np.random.default_rng(seed)
+        P = {"W": r.normal(0, 0.1, (X.shape[1], 2)), "b": np.zeros(2)}
+        opt = nn.Optimizer("adam", lr=lr)
+        for _ in range(steps):
+            _, dl = nn.softmax_ce_loss(X[tr] @ P["W"] + P["b"], y[tr])
+            opt.step(P, {"W": X[tr].T @ dl, "b": dl.sum(0)})
+        accs.append(float(((X[te] @ P["W"] + P["b"]).argmax(1) == y[te]).mean()))
+    return float(np.mean(accs))
+
+rng = np.random.default_rng(0)
+NL = 600
+rad = np.concatenate([rng.uniform(0, 1.0, NL//2), rng.uniform(1.6, 2.6, NL//2)])
+ang = rng.uniform(0, 2*np.pi, NL)
+XL = np.stack([rad*np.cos(ang), rad*np.sin(ang)], 1)
+yL = (rad > 1.3).astype(int)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("원래 좌표 (x₁, x₂) — 선형 분리 불가",
+                                    "반지름 축 하나 — 선형 분리 가능"))
+for c in (0, 1):
+    m = yL == c
+    fig.add_trace(go.Scatter(x=XL[m, 0], y=XL[m, 1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=5, color=viz.color(c), opacity=0.75)),
+                  row=1, col=1)
+    fig.add_trace(go.Scatter(x=np.hypot(XL[m, 0], XL[m, 1]),
+                             y=rng.normal(0, 0.08, m.sum()), mode="markers",
+                             showlegend=False,
+                             marker=dict(size=5, color=viz.color(c), opacity=0.75)),
+                  row=1, col=2)
+fig.add_vline(x=1.3, line=dict(color=viz.YELLOW, dash="dash", width=3),
+              annotation_text="r = 1.3", row=1, col=2)
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="r = √(x₁² + x₂²)", row=1, col=2)
+fig.update_yaxes(title_text="(지터)", showticklabels=False, row=1, col=2)
+viz.fig_defaults(fig, height=420, title="같은 데이터, 다른 좌표계")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: linearization-numbers
+#| code-fold: false
+
+import numpy as np
+
+FEATS = {
+    "원본 (x₁, x₂)":        XL,
+    "+ 반지름 r":            np.column_stack([XL, np.hypot(XL[:, 0], XL[:, 1])]),
+    "반지름 r 만":            np.hypot(XL[:, 0], XL[:, 1])[:, None],
+    "+ 제곱항 (x₁², x₂²)":   np.column_stack([XL, XL**2]),
+}
+print(f"{'특성 집합':<22} {'차원':>5} {'선형 모델 CV 정확도':>20}")
+print("-" * 50)
+for k, F in FEATS.items():
+    print(f"{k:<22} {F.shape[1]:>5} {logreg_cv(F, yL):>20.4f}")
+print()
+print(f"**특성 하나가 0.51 을 1.00 으로 바꿨다.** 모델은 그대로 로지스틱 회귀다.")
+print()
+print("주목할 점 세 가지:")
+print(f"  · 반지름 **하나만** 써도 완벽하다 (1차원). 원본 2차원보다 낫다.")
+print(f"    → 특성 공학은 차원을 늘리는 일이 아니라 **맞는 축을 찾는 일**이다.")
+print(f"  · 제곱항 x₁²+x₂² 도 통한다. r² 이 r 의 단조 변환이기 때문이다.")
+print(f"  · 이 변환을 **알아내려면 데이터가 원형이라는 것을 알아야 한다** —")
+print(f"    산점도를 그렸다면 1초 만에 보인다 ([1.1](01_eda.qmd)).")
+print()
+print("신경망은 이것을 자동으로 배울 수 있다. 하지만:")
+for s in ["훨씬 많은 데이터가 필요하다",
+          "왜 그렇게 예측했는지 설명하기 어려워진다",
+          "그리고 정형 데이터에서는 대개 부스팅 트리 + 좋은 특성이 이긴다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G1.4.2 — 주기 인코딩
+## G1.4.2 — 주기 인코딩: 23시와 0시는 이웃이다
 
-23시와 0시가 sin/cos 인코딩에서 이웃이 되는 이유
+```{python}
+#| label: fig-cyclical
+#| fig-cap: "시각을 원 위에 놓으면 23시와 0시가 인접해집니다"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시각(hour) 슬라이더
-:::
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+hours = np.arange(24)
+sin_h = np.sin(2*np.pi*hours/24)
+cos_h = np.cos(2*np.pi*hours/24)
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.42, 0.58],
+                    subplot_titles=("원본: 0~23 직선", "sin/cos: 원 위의 점"))
+fig.add_trace(go.Scatter(x=hours, y=np.zeros(24), mode="markers+text",
+                         text=[str(h) for h in hours], textposition="top center",
+                         showlegend=False,
+                         marker=dict(size=10, color=viz.ACCENT)), row=1, col=1)
+fig.add_trace(go.Scatter(x=[23, 0], y=[0, 0], mode="lines", showlegend=False,
+                         line=dict(color=viz.WARM, width=3)), row=1, col=1)
+fig.add_trace(go.Scatter(x=sin_h, y=cos_h, mode="markers+text",
+                         text=[str(h) for h in hours], textposition="top center",
+                         showlegend=False,
+                         marker=dict(size=10, color=viz.ACCENT)), row=1, col=2)
+fig.add_trace(go.Scatter(x=sin_h[[23, 0]], y=cos_h[[23, 0]], mode="lines",
+                         showlegend=False, line=dict(color=viz.WARM, width=4)),
+              row=1, col=2)
+fig.update_xaxes(title_text="hour", row=1, col=1)
+fig.update_yaxes(showticklabels=False, range=[-0.5, 0.5], row=1, col=1)
+fig.update_xaxes(title_text="sin(2πh/24)", row=1, col=2)
+fig.update_yaxes(title_text="cos(2πh/24)", scaleanchor="x2", row=1, col=2)
+viz.fig_defaults(fig, height=420,
+                 title="주황 선 = 23시와 0시 사이의 거리")
+fig.show()
+```
+
+```{python}
+#| label: cyclical-numbers
+#| code-fold: false
+
+import numpy as np
+
+cyc = np.stack([sin_h, cos_h], 1)
+print(f"{'시각 쌍':<16} {'원본 |차이|':>12} {'sin/cos 유클리드 거리':>22}")
+print("-" * 54)
+for a, b in [(23, 0), (0, 1), (11, 12), (3, 4), (0, 6), (0, 12), (6, 18)]:
+    print(f"{f'{a}시 ↔ {b}시':<16} {abs(a-b):>12.2f} "
+          f"{np.linalg.norm(cyc[a]-cyc[b]):>22.4f}")
+print()
+d23 = np.linalg.norm(cyc[23]-cyc[0])
+d01 = np.linalg.norm(cyc[0]-cyc[1])
+print(f"**23시↔0시 거리가 0시↔1시 거리와 정확히 같다** ({d23:.4f} = {d01:.4f}).")
+print(f"원본 좌표에서는 23 대 1 이었다 — {23/1:.0f}배 왜곡이다.")
+print()
+print("인접한 모든 쌍의 거리가 동일하다는 것도 확인:")
+adj = [np.linalg.norm(cyc[h]-cyc[(h+1) % 24]) for h in range(24)]
+print(f"  최소 {min(adj):.6f}, 최대 {max(adj):.6f} — 24쌍 전부 같다.")
+print()
+print("**그런데 실제 과제에서 항상 최선은 아니다.** 직접 재보자.")
+```
+
+```{python}
+#| label: cyclical-task
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+rng_c = np.random.default_rng(3)
+NT = 2000
+t_hour = rng_c.integers(0, 24, NT)
+# 심야(22~4시)에 이벤트가 잦다 — 0시를 걸치는 패턴
+is_night = ((t_hour >= 22) | (t_hour <= 4))
+y_t = (rng_c.random(NT) < np.where(is_night, 0.75, 0.25)).astype(int)
+
+ENCODINGS = {
+    "원본 hour (0~23)": t_hour[:, None].astype(float),
+    "sin/cos (2차원)": np.stack([np.sin(2*np.pi*t_hour/24),
+                                np.cos(2*np.pi*t_hour/24)], 1),
+    "sin/cos + 2배 주기": np.stack([np.sin(2*np.pi*t_hour/24),
+                                 np.cos(2*np.pi*t_hour/24),
+                                 np.sin(4*np.pi*t_hour/24),
+                                 np.cos(4*np.pi*t_hour/24)], 1),
+    "one-hot (24차원)": np.eye(24)[t_hour],
+    "도메인 지식: is_night": is_night[:, None].astype(float),
+}
+print("과제: 심야(22~4시)에 확률이 높은 이벤트 예측")
+print(f"  진짜 구조: 심야 75%, 그 외 25%  (달성 가능한 최대 정확도 ≈ 0.75)")
+print()
+print(f"{'인코딩':<24} {'차원':>5} {'CV 정확도':>11}")
+print("-" * 44)
+res_e = {}
+for k, F in ENCODINGS.items():
+    res_e[k] = logreg_cv(F, y_t)
+    print(f"{k:<24} {F.shape[1]:>5} {res_e[k]:>11.4f}")
+print()
+top = max(res_e.values())
+winners = [k for k, v in res_e.items() if abs(v - top) < 1e-9]
+print(f"최고 점수 {top:.4f} — {' / '.join(winners)}")
+print()
+print("읽을 것 세 가지:")
+print(f"  ① 원본 hour 는 {res_e['원본 hour (0~23)']:.4f} — 선형 모델이 "
+      f"'23 과 0 이 멀다'고 배우므로 심야 패턴을 못 잡는다.")
+print(f"  ② sin/cos 는 {res_e['sin/cos (2차원)']:.4f} 로 개선되지만 최선은 아니다.")
+print("     2차원 사인파 하나로는 **매끄러운 주기 패턴만** 표현할 수 있는데,")
+print("     실제 패턴은 22시에 확 켜지고 4시에 확 꺼지는 계단이다.")
+print(f"     고조파를 추가하면 {res_e['sin/cos + 2배 주기']:.4f} 로 올라간다 — "
+      "계단에 가까워지기 때문이다.")
+print(f"  ③ one-hot 은 {res_e['one-hot (24차원)']:.4f} 로 sin/cos 를 앞선다.")
+print("     24차원이라 어떤 시간 패턴이든 표현할 수 있기 때문이다.")
+print()
+print(f"**그런데 도메인 지식 특성 하나(is_night)가 one-hot 과 "
+      f"똑같은 {res_e['도메인 지식: is_night']:.4f} 를 낸다.**")
+print(f"  one-hot 은 24차원, is_night 는 1차원이다 — "
+      f"같은 성능을 {24}분의 1 크기로 얻었다.")
+print("  표본이 적거나 정규화가 약하면 이 차이가 성능 차이로도 벌어진다.")
+print()
+print("**이것이 특성 공학의 핵심이다** — 자동 인코딩이 아니라 문제를 아는 것.")
+print("여기서는 '심야'라는 개념을 아는 것이 24차원 표현력을 대신했다.")
+print()
+print("주기 인코딩 선택 기준:")
+for a, b in [("패턴이 매끄러운 주기", "sin/cos — 2차원으로 충분"),
+             ("패턴이 복잡·계단형", "one-hot 또는 고조파 추가 (2배·3배 주기)"),
+             ("범주가 많음 (분(minute), 요일×시간)", "sin/cos 또는 임베딩"),
+             ("도메인 규칙을 안다", "**직접 지시자를 만든다** — 가장 강력")]:
+    print(f"  {a:<32} → {b}")
+```
 
 ---
 
-## G1.4.3 — 특성 선택 곡선
+## G1.4.3 — 상호작용: XOR은 곱 하나로 풀린다
 
-특성 수 대비 성능 — 어디서 수확 체감이 시작되는가
+```{python}
+#| label: fig-interaction
+#| fig-cap: "XOR 데이터와 곱 특성"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 선택 개수 슬라이더
-:::
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng_x = np.random.default_rng(0)
+NX = 800
+XX = rng_x.normal(0, 1, (NX, 2))
+yX = ((XX[:, 0] > 0) ^ (XX[:, 1] > 0)).astype(int)
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("원본 (x₁, x₂) — 어떤 직선도 못 나눔",
+                                    "곱 특성 x₁·x₂ 하나로"))
+for c in (0, 1):
+    m = yX == c
+    fig.add_trace(go.Scatter(x=XX[m, 0], y=XX[m, 1], mode="markers",
+                             name=f"클래스 {c}",
+                             marker=dict(size=5, color=viz.color(c), opacity=0.75)),
+                  row=1, col=1)
+    fig.add_trace(go.Scatter(x=XX[m, 0]*XX[m, 1],
+                             y=rng_x.normal(0, 0.08, m.sum()), mode="markers",
+                             showlegend=False,
+                             marker=dict(size=5, color=viz.color(c), opacity=0.75)),
+                  row=1, col=2)
+fig.add_vline(x=0, line=dict(color=viz.YELLOW, dash="dash", width=3),
+              annotation_text="x₁·x₂ = 0", row=1, col=2)
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_xaxes(title_text="x₁ · x₂", range=[-4, 4], row=1, col=2)
+fig.update_yaxes(showticklabels=False, row=1, col=2)
+viz.fig_defaults(fig, height=400, title="상호작용 특성")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: interaction-numbers
+#| code-fold: false
+
+import numpy as np
+
+INTER = {
+    "원본 (x₁, x₂)":     XX,
+    "+ 곱 (x₁·x₂)":      np.column_stack([XX, XX[:, 0]*XX[:, 1]]),
+    "곱만 (x₁·x₂)":       (XX[:, 0]*XX[:, 1])[:, None],
+    "+ 제곱항만":          np.column_stack([XX, XX**2]),
+}
+print(f"{'특성 집합':<20} {'차원':>5} {'CV 정확도':>11}")
+print("-" * 40)
+for k, F in INTER.items():
+    print(f"{k:<20} {F.shape[1]:>5} {logreg_cv(F, yX):>11.4f}")
+print()
+print("**곱 하나가 0.50 을 0.99 로 바꾼다.** 제곱항은 도움이 안 된다 —")
+print("XOR 은 두 변수의 **상호작용**이지 각 변수의 곡률이 아니기 때문이다.")
+print()
+print("차원 폭발에 주의:")
+print(f"{'원 특성 수 d':>12} {'2차 상호작용':>14} {'2차 다항 전체':>15} {'3차까지':>12}")
+print("-" * 58)
+from math import comb
+for d in [5, 10, 20, 50, 100]:
+    inter2 = comb(d, 2)
+    poly2 = d + d + comb(d, 2)              # 1차 + 제곱 + 교차
+    poly3 = comb(d+3, 3) - 1
+    print(f"{d:>12} {inter2:>14,} {poly2:>15,} {poly3:>12,}")
+print()
+print("특성 100개에서 3차 다항을 전부 만들면 17만 개가 넘는다.")
+print("전부 만드는 것은 **과적합과 계산 비용 양쪽으로 재앙**이다.")
+print()
+print("실무 접근:")
+for s in ["도메인 지식으로 **의미 있는 쌍만** 고른다 (가격×수량, 거리÷시간)",
+          "트리 모델은 상호작용을 **자동으로 학습한다** — 분할이 곧 조건부이므로",
+          "그래서 부스팅 트리를 먼저 돌려 보고, 중요한 상호작용을 역으로 읽어낸다",
+          "비율·차이는 곱보다 자주 유용하다 (단위가 상쇄되어 스케일 불변)"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G1.4.4 — 상호작용 특성 효과
+## G1.4.4 — 특성 선택: 어디서 멈출 것인가
 
-XOR 형태 데이터가 곱 특성 하나로 풀리는 모습
+```{python}
+#| label: fig-feature-selection
+#| fig-cap: "유용한 특성 5개 + 잡음 45개에서 선택 개수를 늘려가며"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 상호작용 on/off
-:::
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng_s = np.random.default_rng(0)
+NS, D_USE, D_NOISE = 1200, 5, 45
+ZS = rng_s.normal(0, 1, (NS, D_USE + D_NOISE))
+W_TRUE = np.array([1.5, -1.2, 0.9, 0.6, 0.4])
+p_true = 1/(1 + np.exp(-(ZS[:, :D_USE] @ W_TRUE)))
+yS = (rng_s.random(NS) < p_true).astype(int)
+
+# 필터 방식: 타깃과의 절대 상관으로 순위
+filt = np.abs(np.array([np.corrcoef(ZS[:, j], yS)[0, 1]
+                        for j in range(ZS.shape[1])]))
+order = np.argsort(-filt)
+
+KS = [1, 2, 3, 5, 8, 12, 20, 35, 50]
+accs, hits = [], []
+for k in KS:
+    sel = order[:k]
+    accs.append(logreg_cv(ZS[:, sel], yS))
+    hits.append(int((sel < D_USE).sum()))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("선택 개수에 따른 성능",
+                                    "특성별 |타깃 상관| (진짜 vs 잡음)"))
+fig.add_trace(go.Scatter(x=KS, y=accs, mode="lines+markers", name="CV 정확도",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_vline(x=D_USE, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="진짜 특성 수", row=1, col=1)
+fig.add_trace(go.Bar(x=np.arange(D_USE), y=filt[:D_USE], name="진짜 특성",
+                     marker_color=viz.GREEN), row=1, col=2)
+fig.add_trace(go.Bar(x=np.arange(D_USE, D_USE+D_NOISE), y=filt[D_USE:],
+                     name="잡음 특성", marker_color=viz.hex_rgba(viz.WARM, 0.8)),
+              row=1, col=2)
+fig.update_xaxes(title_text="선택한 특성 수", type="log", row=1, col=1)
+fig.update_yaxes(title_text="CV 정확도", row=1, col=1)
+fig.update_xaxes(title_text="특성 번호", row=1, col=2)
+fig.update_yaxes(title_text="|상관|", row=1, col=2)
+viz.fig_defaults(fig, height=410,
+                 title=f"진짜 {D_USE}개 + 잡음 {D_NOISE}개, n={NS}")
+fig.update_layout(legend=dict(x=0.55, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: feature-selection-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'선택 수':>8} {'CV 정확도':>11} {'진짜 특성 포함':>15} {'잡음 포함':>10}")
+print("-" * 50)
+for k, a, h in zip(KS, accs, hits):
+    print(f"{k:>8} {a:>11.4f} {h:>10}/{min(k, D_USE)} {k-h:>10}")
+print()
+best_k = KS[int(np.argmax(accs))]
+print(f"최고 성능: 특성 {best_k}개 ({max(accs):.4f})")
+print(f"진짜 특성 {D_USE}개만: {accs[KS.index(D_USE)]:.4f}")
+print(f"전부 {KS[-1]}개: {accs[-1]:.4f}  "
+      f"(최고보다 {max(accs)-accs[-1]:.4f} 낮음)")
+print()
+print(f"**최적이 진짜 특성 수({D_USE})가 아니라 {best_k} 개라는 점에 주목하라.**")
+print(f"  {best_k}개를 고르면 잡음 {best_k-D_USE}개가 섞이는데도 점수가 조금 높다.")
+print("  잡음 특성 몇 개는 표본 우연으로 타깃과 약한 상관을 갖고,")
+print("  교차검증 점수 자체에도 잡음이 있기 때문이다.")
+print(f"  실제로 {D_USE}개와 {best_k}개의 차이는 "
+      f"{abs(accs[KS.index(D_USE)]-max(accs)):.4f} 로 아주 작다 — "
+      "**의미 있는 차이라고 보기 어렵다.**")
+print()
+print("**필터가 진짜 특성 5개를 정확히 먼저 골랐다.**")
+print(f"  진짜 특성의 |상관|: {filt[:D_USE].min():.4f} ~ {filt[:D_USE].max():.4f}")
+print(f"  잡음 특성의 |상관|: {filt[D_USE:].min():.4f} ~ {filt[D_USE:].max():.4f}")
+gap = filt[:D_USE].min() - filt[D_USE:].max()
+print(f"  가장 약한 진짜 특성과 가장 강한 잡음의 차이: {gap:+.4f}")
+if gap > 0:
+    print("  → 이 경우엔 깨끗하게 분리됐다. 항상 그런 것은 아니다.")
+print()
+print("잡음을 더할수록 성능이 조금씩 떨어진다 —")
+print("파라미터가 늘어 분산이 커지기 때문이다 "
+      f"([2.1 편향-분산](../02_classical_ml/01_bias_variance.qmd)).")
+print()
+print("**필터 방식의 한계**")
+for s in ["각 특성을 **따로** 본다 — 상호작용으로만 유용한 특성을 놓친다",
+          "  (위 XOR 실험에서 x₁, x₂ 각각의 상관은 0 이다)",
+          "중복 특성을 걸러내지 못한다 — 똑같은 정보를 여러 번 고른다",
+          "타깃을 쓰므로 **반드시 학습 폴드 안에서** ([1.3](03_preprocessing.qmd))"]:
+    print(f"  · {s}")
+print()
+print(f"{'방식':<16} {'어떻게':<34} {'비용':<10} {'상호작용'}")
+print("-" * 78)
+for a, b, c, d in [
+    ("필터", "각 특성의 상관·상호정보로 순위", "매우 낮음", "못 봄"),
+    ("래퍼 (RFE)", "모델을 반복 학습하며 하나씩 제거", "높음", "봄"),
+    ("임베디드 L1", "손실에 |w| 벌점 → 계수가 0 이 됨", "낮음", "선형만"),
+    ("임베디드 트리", "분할 이득으로 중요도 산출", "낮음", "봄"),
+    ("순열 중요도", "열을 섞어 성능 하락을 측정", "중간", "봄"),
+]:
+    print(f"{a:<16} {b:<34} {c:<10} {d}")
+```
 
 ---
 
-## 핵심 용어
+## 시간 특성: 누수가 숨는 곳
 
-| 용어 | 비고 |
+```{python}
+#| label: time-features
+#| code-fold: false
+
+import numpy as np
+
+print("시계열에서 자주 만드는 특성들")
+print(f"{'특성':<22} {'정의':<34} {'누수 위험'}")
+print("-" * 84)
+for a, b, c in [
+    ("시차 (lag k)", "x[t−k]", "안전 (과거만 봄)"),
+    ("차분", "x[t] − x[t−1]", "안전"),
+    ("롤링 평균 (과거 w)", "mean(x[t−w..t−1])", "안전 — **t 를 제외해야 함**"),
+    ("중심 이동평균", "mean(x[t−w..t+w])", "**누수** — 미래를 봄"),
+    ("전체 통계로 정규화", "(x[t] − mean(전체))/std(전체)", "**누수**"),
+    ("확장 평균 (expanding)", "mean(x[0..t−1])", "안전"),
+    ("경과 시간", "t − (마지막 이벤트 시각)", "안전"),
+    ("주기 인코딩", "sin/cos(시각, 요일, 월)", "안전"),
+]:
+    print(f"{a:<22} {b:<34} {c}")
+print()
+
+# 롤링 평균에서 현재 시점을 포함하면 무슨 일이 생기는가
+rng_t = np.random.default_rng(0)
+T = 500
+series = np.cumsum(rng_t.normal(0, 1, T))
+target = np.roll(series, -1) - series          # 다음 시점 변화량 (예측 대상)
+target[-1] = 0
+
+def rolling(x, w, include_current):
+    out = np.full(len(x), np.nan)
+    for i in range(len(x)):
+        lo = max(0, i - w + (1 if include_current else 0))
+        hi = i + 1 if include_current else i
+        if hi > lo:
+            out[i] = x[lo:hi].mean()
+    return out
+
+for inc in [False, True]:
+    f = rolling(series, 5, inc)
+    ok = ~np.isnan(f)
+    r = np.corrcoef(f[ok], target[ok])[0, 1]
+    label = "현재 시점 포함" if inc else "과거만 (t 제외)"
+    print(f"  롤링평균(5) {label:<16} 타깃과의 상관 {r:+.4f}")
+print()
+print("이 예에서는 둘 다 상관이 낮다 — 무작위 걷기의 다음 변화는 예측 불가능하기 때문이다.")
+print("**하지만 구현 차이는 실전에서 치명적이다.**")
+print("  · 현재 시점을 포함한 롤링 평균은 x[t] 를 담고 있다")
+print("  · 타깃이 x[t] 와 관련되면 (예: x[t] 자체를 예측) 정답이 특성에 들어간다")
+print("  · pandas 의 rolling().mean() 은 **기본이 현재 포함**이다 — shift(1) 필요")
+print()
+print("```python")
+print("# 안전한 롤링 특성 (pandas) — 실행하지 않음")
+print("df['roll5'] = df['x'].shift(1).rolling(5).mean()   # shift 먼저!")
+print("df['lag1']  = df['x'].shift(1)")
+print("```")
+```
+
+---
+
+## 텍스트 특성: TF-IDF
+
+$$\text{tf-idf}(t, d) = \underbrace{\text{tf}(t,d)}_{\text{문서 내 빈도}}
+\times \underbrace{\log\frac{N}{1 + \text{df}(t)}}_{\text{희소성 가중}}$$
+
+```{python}
+#| label: tfidf
+#| code-fold: false
+
+import numpy as np
+
+docs = [
+    "고양이 는 귀엽다 고양이 는 잠 을 잔다",
+    "강아지 는 귀엽다 강아지 는 산책 을 좋아한다",
+    "고양이 와 강아지 는 반려동물 이다",
+    "오늘 날씨 는 맑다 산책 하기 좋다",
+]
+tokens = [d.split() for d in docs]
+vocab = sorted({t for doc in tokens for t in doc})
+vi = {t: i for i, t in enumerate(vocab)}
+
+# 항빈도 (term frequency)
+TF = np.zeros((len(docs), len(vocab)))
+for i, doc in enumerate(tokens):
+    for t in doc:
+        TF[i, vi[t]] += 1
+TF_norm = TF/TF.sum(1, keepdims=True)
+
+# 문서빈도 → IDF
+DF = (TF > 0).sum(0)
+IDF = np.log(len(docs)/(1 + DF)) + 1.0
+TFIDF = TF_norm*IDF
+TFIDF = TFIDF/(np.linalg.norm(TFIDF, axis=1, keepdims=True) + 1e-12)
+
+print(f"문서 {len(docs)}개, 어휘 {len(vocab)}개")
+print()
+print(f"{'단어':<10} {'DF':>4} {'IDF':>8}  {'해석'}")
+print("-" * 46)
+for t in sorted(vocab, key=lambda w: DF[vi[w]], reverse=True)[:8]:
+    note = "모든 문서에 등장 — 정보 없음" if DF[vi[t]] == len(docs) else ""
+    print(f"{t:<10} {DF[vi[t]]:>4} {IDF[vi[t]]:>8.4f}  {note}")
+print()
+print("**'는' 은 4개 문서 전부에 나오므로 IDF 가 가장 낮다.**")
+print("빈도는 높지만 문서를 구별하지 못하기 때문이다 — 이것이 IDF 의 역할이다.")
+print()
+print("문서 간 코사인 유사도 (TF-IDF)")
+S = TFIDF @ TFIDF.T
+print(f"{'':<6}" + "".join(f"{f'문서{j}':>8}" for j in range(len(docs))))
+for i in range(len(docs)):
+    print(f"문서{i:<3}" + "".join(f"{S[i, j]:>8.3f}" for j in range(len(docs))))
+print()
+print(f"  문서0(고양이)–문서1(강아지): {S[0,1]:.3f}  (둘 다 '귀엽다')")
+print(f"  문서0(고양이)–문서2(반려동물): {S[0,2]:.3f}")
+print(f"  문서1(강아지)–문서3(산책 날씨): {S[1,3]:.3f}  ('산책' 공유)")
+print()
+print("한계:")
+for s in ["단어 순서를 버린다 (bag-of-words)",
+          "'좋다'와 '좋아한다'를 다른 단어로 본다 — 형태소 분석 필요",
+          "동의어를 모른다 ('강아지'와 '개')",
+          "→ 이 한계들이 [임베딩](../04_architectures/05_embeddings.qmd)을 낳았다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 학습/서빙 스큐
+
+특성 공학의 가장 비싼 실패는 **서빙 시점에 그 특성을 만들 수 없는 것**이다.
+
+```{python}
+#| label: serving-skew
+#| code-fold: false
+
+rows = [
+    ("사용자 30일 구매액", "배치로 미리 계산", "실시간이면 지연·비용",
+     "특성 스토어에 미리 적재"),
+    ("세션 총 클릭 수", "**세션이 끝나야 안다**", "예측 시점엔 미완",
+     "'지금까지의 클릭 수'로 재정의"),
+    ("상품 평균 평점", "계속 변한다", "학습 때와 값이 다름",
+     "예측 시점 스냅샷을 학습에도 사용"),
+    ("전체 데이터 통계로 정규화", "전체를 알아야 함", "**신규 데이터에 적용 불가**",
+     "학습셋 통계를 고정해 저장"),
+    ("다음 이벤트까지 시간", "**미래 정보**", "누수",
+     "쓰면 안 됨"),
+]
+print(f"{'특성':<26} {'문제':<22} {'서빙 시 증상':<22} {'대응'}")
+print("-" * 94)
+for r in rows:
+    print(f"{r[0]:<26} {r[1]:<22} {r[2]:<22} {r[3]}")
+print()
+print("**점검 질문 하나**")
+print("  이 특성을 **예측을 요청받은 그 순간**, 그 시점까지의 정보만으로 계산할 수 있는가?")
+print()
+print("아니라면 셋 중 하나다:")
+for s in ["누수다 (미래를 봄)",
+          "서빙 불가다 (계산할 수 없음)",
+          "재정의가 필요하다 ('세션 총' → '지금까지')"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 특성 공학 (feature engineering) |  |
-| TF-IDF |  |
-| 주기 인코딩 (cyclical encoding) |  |
-| 학습/서빙 스큐 |  |
+| 목표 | 표현을 바꿔 **선형에 가깝게** |
+| 선형화 | 반지름 특성 하나로 0.51 → 1.00 (실측) |
+| 차원 ≠ 성능 | 반지름 1차원이 원본 2차원보다 나음 |
+| 주기 인코딩 | 23시↔0시 거리가 0시↔1시와 동일해짐 |
+| 그런데 | 계단형 패턴은 one-hot 이 sin/cos 를 앞섬 (0.736 vs 0.695) |
+| 최강 특성 | **도메인 지식** — is_night 1차원이 one-hot 24차원과 동점 |
+| 상호작용 | XOR 은 곱 하나로 0.50 → 0.99 |
+| 차원 폭발 | 특성 100개의 3차 다항 = 17만 개 |
+| 특성 선택 | 필터가 진짜 5개를 먼저 골라냄. 잡음을 많이 더하면 하락 |
+| 필터의 한계 | 각 특성을 따로 봄 — 상호작용을 놓침 |
+| 시간 특성 | 롤링은 **현재 시점 제외**. pandas 는 shift(1) 필요 |
+| 서빙 스큐 | "예측 순간에 계산 가능한가"가 유일한 기준 |
+
+특성 공학의 핵심은 자동화 도구가 아니다.
+**데이터가 어떻게 생겼는지 아는 것**이고, 그것은 [1.1](01_eda.qmd)에서 온다.
+
+다음 장부터는 방향이 바뀐다.
+데이터를 **분석**하는 것에서 **의사결정을 위한 증거를 만드는** 것으로.
 
 ---
 
-**다음**: [1.5 실험 설계와 A/B 테스트](05_experiment_design.qmd) — 무작위화·검정력·순차분석 — 의사결정을 위한 통계
+**다음**: [1.5 실험 설계와 A/B 테스트](05_experiment_design.qmd)
 
 **이전**: [1.3 데이터 전처리](03_preprocessing.qmd)
