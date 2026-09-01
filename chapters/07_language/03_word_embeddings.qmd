@@ -4,91 +4,811 @@ subtitle: "Word2Vec·GloVe·fastText — 의미를 벡터로 만든 첫 성공"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[7.2](02_language_models.qmd)는 이렇게 끝났다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> n-gram의 문맥은 **칸**이었고, 신경 LM의 문맥은 **벡터**였다.
+> 문맥 5에서 n-gram은 PPL 4.66, 신경 LM은 8,844개 파라미터로 3.62.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그 벡터를 어떻게 만드느냐가 이 장이다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+출발점은 언어학의 오래된 명제다.
+
+> **"단어는 함께 나타나는 단어들로 알 수 있다"** (Firth, 1957)
+>
+> — 분포 가설(distributional hypothesis)
+
+"단어의 의미"라는 철학적 문제를 **"단어의 문맥 분포"라는 통계 문제로 바꾸는 것**이다.
+그러면 셀 수 있다.
+
+그리고 이 장에는 유명한 주장이 하나 있다.
+
+$$\text{king} - \text{man} + \text{woman} \approx \text{queen}$$
+
+이것은 마케팅 문구가 아니라 **목적함수에서 유도되는 성질**이다.
+이 장에서 그 유도가 성립하는 조건을 설계해 넣고, 실제로 나오는지 확인한다.
+
+---
+
+## 검증 장치: 유추가 성립하도록 설계한 언어
+
+[7.2](02_language_models.qmd)와 같은 전략을 쓴다 — **답을 아는 데이터**를 만든다.
+
+단어를 (역할, 성별) 쌍으로 두고, 문맥 분포가 두 성분에 **가법적으로** 의존하게 한다.
+
+$$\log p(c \mid \text{역할}=r,\ \text{성별}=g) = a_r[c] + b_g[c] - \log Z(r,g)$$
+
+이러면 성별 차이 벡터가 역할과 무관해야 한다 — 즉 유추가 성립해야 한다.
+**정말 그런지 먼저 증명하고 넘어간다.**
+
+```{python}
+#| label: design
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+ROLES = ["왕", "귀족", "배우", "교사", "의사", "가수", "작가", "농부",
+         "상인", "군인"]
+GENDERS = ["남", "여"]
+WORDS = [f"{r}_{g}" for r in ROLES for g in GENDERS]
+W2I = {w: i for i, w in enumerate(WORDS)}
+NW, NC = len(WORDS), 60
+
+rg = np.random.default_rng(0)
+A = rg.normal(0, 1.2, (len(ROLES), NC))      # 역할 성분
+B = rg.normal(0, 1.2, (len(GENDERS), NC))    # 성별 성분
+PC = np.zeros((NW, NC))
+LOGZ = np.zeros((len(ROLES), len(GENDERS)))
+for i in range(len(ROLES)):
+    for j in range(len(GENDERS)):
+        z = A[i] + B[j]
+        m = z.max()
+        e = np.exp(z - m)
+        LOGZ[i, j] = m + np.log(e.sum())
+        PC[i*2+j] = e/e.sum()
+
+# 참 확률로 PMI 를 직접 계산한다 (샘플링 없이)
+PW = np.ones(NW)/NW
+PWC_T = PW[:, None]*PC
+PMI_T = np.log(PWC_T/(PW[:, None]*PWC_T.sum(0, keepdims=True)))
+
+d1 = PMI_T[W2I["왕_여"]] - PMI_T[W2I["왕_남"]]
+d2 = PMI_T[W2I["의사_여"]] - PMI_T[W2I["의사_남"]]
+
+print(f"단어 {NW}개 (역할 {len(ROLES)} × 성별 2), 문맥 {NC}개")
+print()
+print("설계가 유추를 함의하는가 — 참 확률의 PMI 로 확인")
+print()
+print("  (왕_여 − 왕_남)  vs  (의사_여 − 의사_남)")
+print(f"    두 차이 벡터의 차의 표준편차: {np.std(d1-d2):.3e}")
+print(f"    두 차이 벡터의 차의 평균    : {np.mean(d1-d2):.6f}")
+print(f"    이론상 상수항 (logZ 차이)   : "
+      f"{(LOGZ[4,1]-LOGZ[4,0])-(LOGZ[0,1]-LOGZ[0,0]):.6f}")
+print()
+print("**표준편차가 기계 정밀도의 0 이다.**")
+print("두 차이 벡터는 **상수 벡터 하나만큼만** 다르다 — 방향이 정확히 같다.")
+print()
+print("유도: PMI(r,g;c) = a_r[c] + b_g[c] − logZ(r,g) − log p(c) 이므로")
+print("  PMI(r,여;·) − PMI(r,남;·) = (b_여 − b_남) − [logZ(r,여)−logZ(r,남)]·1")
+print("  첫 항은 r 과 무관하고, 둘째 항은 **모든 좌표에 같은 값**이다.")
+print()
+print("**즉 유추는 '분포가 로그 가법적으로 분해되면' 따라 나오는 성질이다.**")
+print("실제 언어가 그렇다는 보장은 없다 — 그래서 실제 유추 정확도는 100%가 아니다.")
+```
+
+---
+
+## G7.3.1 — 동시출현에서 PMI로
+
+```{python}
+#| label: pmi
+#| code-fold: false
+
+import numpy as np
+
+
+def sample_pairs(n, seed):
+    g = np.random.default_rng(seed)
+    w = g.integers(0, NW, n)
+    cum = PC.cumsum(1)
+    u = g.random(n)
+    return w, (u[:, None] > cum[w]).sum(1).clip(0, NC-1)
+
+
+WI, CI = sample_pairs(600000, 1)
+CO = np.zeros((NW, NC))
+np.add.at(CO, (WI, CI), 1.0)
+
+P = CO/CO.sum()
+PMI = np.log(np.maximum(P, 1e-12)
+             / (P.sum(1, keepdims=True)*P.sum(0, keepdims=True)))
+PPMI = np.maximum(PMI, 0)
+
+print(f"동시출현 쌍 {len(WI):,}개로 {NW}×{NC} 행렬을 만든다")
+print()
+print("**PMI (점별 상호정보량)**")
+print()
+print("   PMI(w, c) = log [ p(w, c) / (p(w)·p(c)) ]")
+print("             = log [ p(c | w) / p(c) ]")
+print()
+print("**'이 문맥이 이 단어 뒤에서 평균보다 몇 배 더 자주 나오는가'** 의 로그다.")
+print("빈도 자체가 아니라 **기대 대비 초과**를 잰다 — 흔한 문맥의 영향을 지운다.")
+print()
+print(f"{'지표':<24} {'값'}")
+print("-" * 50)
+print(f"{'PMI 범위':<24} [{PMI[CO>0].min():.2f}, {PMI[CO>0].max():.2f}]")
+print(f"{'동시출현 0인 칸':<24} {(CO==0).mean():.1%}")
+print(f"{'PMI 음수인 칸':<24} {(PMI<0).mean():.1%}")
+print(f"{'PPMI 에서 0이 되는 칸':<24} {(PPMI==0).mean():.1%}")
+print()
+print("**PPMI (양의 PMI)**: 음수를 0으로 자른다.")
+print("  이유 — 음의 PMI 는 추정이 불안정하다 (드문 조합의 '안 나옴'은 정보가 적다)")
+print(f"  대가 — 이 행렬의 {(PPMI==0).mean():.0%} 가 0 이 된다. **정보를 버린다.**")
+print("  뒤에서 이 클리핑이 얼마나 손해인지 측정한다.")
+```
+
+```{python}
+#| label: svd
+#| code-fold: false
+
+import numpy as np
+
+D = 16
+U_P, S_P, _ = np.linalg.svd(PPMI, full_matrices=False)
+E_PPMI = U_P[:, :D]*np.sqrt(S_P[:D])
+U_M, S_M, _ = np.linalg.svd(PMI, full_matrices=False)
+E_PMI = U_M[:, :D]*np.sqrt(S_M[:D])
+
+
+def cos(a, b):
+    return float(a@b/(np.linalg.norm(a)*np.linalg.norm(b) + 1e-12))
+
+
+def nearest(E, w, k=3):
+    i = W2I[w]
+    return sorted(((cos(E[i], E[j]), WORDS[j])
+                   for j in range(NW) if j != i), reverse=True)[:k]
+
+
+print(f"SVD 로 {NC}차원 → {D}차원 압축")
+print(f"  PMI  상위 {D}개 특이값이 {S_M[:D].sum()/S_M.sum():.1%} 설명")
+print(f"  PPMI 상위 {D}개 특이값이 {S_P[:D].sum()/S_P.sum():.1%} 설명")
+print()
+print("최근접 이웃 (PMI + SVD)")
+for w in ["왕_남", "왕_여", "의사_남"]:
+    print(f"  {w:<8} → " +
+          ", ".join(f"{n} ({s:.3f})" for s, n in nearest(E_PMI, w)))
+print()
+print("**같은 역할의 다른 성별이 가장 가깝게 나온다.**")
+print("문맥 분포만 세었을 뿐인데 '역할'이라는 축이 드러났다 — 분포 가설이다.")
+```
+
+---
+
+## G7.3.2 — Word2Vec: skip-gram with negative sampling
+
+행렬을 만들지 않고 **쌍을 하나씩 보며** 학습할 수도 있다.
+
+::: {.key-concept}
+**Skip-gram의 목적함수**
+
+중심 단어 $w$ 로 주변 단어 $c$ 를 예측한다.
+전체 어휘에 대한 softmax는 비싸므로(어휘가 수십만), **이진 분류로 바꾼다**.
+
+$$\mathcal{L} = -\log\sigma(v_w \cdot u_c)
+- \sum_{i=1}^{k} \mathbb{E}_{c_i \sim P_n}\big[\log\sigma(-v_w \cdot u_{c_i})\big]$$
+
+- 진짜로 함께 나온 쌍 $(w,c)$ → 내적을 **키운다**
+- 무작위로 뽑은 $k$개 음성 쌍 → 내적을 **줄인다**
+
+음성 분포는 유니그램의 $0.75$ 제곱을 쓴다 — 흔한 단어를 덜 뽑기 위한 경험적 선택이다.
 :::
 
-'king − man + woman ≈ queen'은 마케팅 문구가 아니라 목적함수에서 유도되는 성질이다. 그 유도를 보면 현대 임베딩 모델도 같은 원리 위에 있다.
+```{python}
+#| label: sgns
+#| code-fold: false
+
+import numpy as np
+
+
+def sigmoid(z):
+    out = np.empty_like(z)
+    p = z >= 0
+    out[p] = 1/(1 + np.exp(-z[p]))
+    e = np.exp(z[~p])
+    out[~p] = e/(1 + e)
+    return out
+
+
+def train_sgns(wi, ci, d=16, k=5, steps=12000, lr=0.5, batch=4096, seed=0):
+    g = np.random.default_rng(seed)
+    W = g.normal(0, 0.1, (NW, d))       # 단어 벡터
+    C = g.normal(0, 0.1, (NC, d))       # 문맥 벡터
+    cnt = np.bincount(ci, minlength=NC).astype(float)
+    q = cnt**0.75
+    q /= q.sum()
+    qc = q.cumsum()
+    for _ in range(steps):
+        idx = g.integers(0, len(wi), batch)
+        w, c = wi[idx], ci[idx]
+        neg = (g.random((batch, k))[:, :, None] > qc).sum(2).clip(0, NC-1)
+        sp = sigmoid((W[w]*C[c]).sum(1))            # 양성 쌍
+        sn = sigmoid(np.einsum('bd,bkd->bk', W[w], C[neg]))   # 음성 쌍
+        gp = (sp - 1)[:, None]
+        gW = np.zeros_like(W)
+        gC = np.zeros_like(C)
+        np.add.at(gW, w, gp*C[c] + np.einsum('bk,bkd->bd', sn, C[neg]))
+        np.add.at(gC, c, gp*W[w])
+        np.add.at(gC, neg.ravel(),
+                  (sn[:, :, None]*W[w][:, None, :]).reshape(-1, d))
+        W -= lr*gW/batch                # **배치로 나눠야 발산하지 않는다**
+        C -= lr*gC/batch
+    return W, C
+
+
+K_NEG = 5
+W_SG, C_SG = train_sgns(WI, CI, d=D, k=K_NEG, seed=0)
+
+print(f"SGNS 학습 완료 (차원 {D}, 음성 샘플 {K_NEG}개)")
+print(f"  단어 벡터 평균 노름 {np.linalg.norm(W_SG, axis=1).mean():.3f}")
+print()
+print("최근접 이웃 (SGNS)")
+for w in ["왕_남", "왕_여", "의사_남"]:
+    print(f"  {w:<8} → " +
+          ", ".join(f"{n} ({s:.3f})" for s, n in nearest(W_SG, w)))
+print()
+print("**구현 주의: 그래디언트를 배치 크기로 나눠야 한다.**")
+print("  한 배치에 같은 단어가 수백 번 나오는데 np.add.at 이 전부 더한다.")
+print("  나누지 않으면 갱신이 폭발해 몇 스텝 만에 NaN 이 된다 — 실제로 겪었다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G7.3.3 — SGNS가 실제로 하는 일 (Levy & Goldberg)
 
-- 분포 가설(distributional hypothesis)
-- 동시출현 행렬과 PMI, SVD 기반 임베딩
-- Word2Vec: CBOW와 Skip-gram 목적함수
-- 네거티브 샘플링과 계층적 softmax
-- Skip-gram with negative sampling = 이동된 PMI 행렬 분해 (Levy & Goldberg)
-- GloVe: 전역 동시출현 비율의 로그 이중선형 모델
-- fastText: 부분 문자열로 미등록 단어 다루기
-- 유추(analogy) 과제와 선형 구조
-- 정적 임베딩의 한계: 다의어, 문맥 부재
-- 임베딩의 사회적 편향과 그 측정·완화
-- 현대 문장 임베딩으로의 계보 (SBERT, E5, BGE)
+Levy & Goldberg(2014)의 결과는 이 분야에서 가장 깔끔한 정리 중 하나다.
 
----
+::: {.key-concept}
+**SGNS는 이동된 PMI 행렬을 암묵적으로 분해한다**
 
-## G7.3.1 — Skip-gram 학습
+$$v_w \cdot u_c \;\approx\; \text{PMI}(w, c) - \log k$$
 
-중심 단어와 주변 단어 쌍이 만들어지는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 윈도 크기 슬라이더
+$k$ 는 음성 샘플 수다.
+"신경망으로 의미를 배운다"고 알려진 것이 사실은 **행렬 분해**였다.
 :::
 
+목적함수를 $v_w \cdot u_c = x$ 로 미분해 0으로 두면 바로 나온다.
+**수치로 확인해 보자.**
+
+```{python}
+#| label: levy-goldberg
+#| code-fold: false
+
+import numpy as np
+
+M_SG = W_SG @ C_SG.T                 # 학습된 내적 행렬
+TARGET = PMI - np.log(K_NEG)         # 이론 예측
+MASK = CO > 20                       # PMI 추정이 안정적인 칸만
+
+x, y = TARGET[MASK], M_SG[MASK]
+r = float(np.corrcoef(x, y)[0, 1])
+slope, intercept = np.polyfit(x, y, 1)
+
+print("학습된 v_w·u_c  vs  이론값 PMI(w,c) − log k")
+print()
+print(f"{'항목':<28} {'측정값':>12} {'이론값':>10}")
+print("-" * 54)
+print(f"{'비교한 칸 수':<28} {int(MASK.sum()):>12,} {'':>10}")
+print(f"{'상관계수':<28} {r:>12.4f} {1.0:>10.1f}")
+print(f"{'회귀 기울기':<28} {slope:>12.4f} {1.0:>10.1f}")
+print(f"{'회귀 절편':<28} {intercept:>12.4f} {0.0:>10.1f}")
+print(f"{'평균 절대 오차':<28} {float(np.abs(x-y).mean()):>12.4f} {0.0:>10.1f}")
+print()
+print(f"**상관 {r:.3f}, 기울기 {slope:.3f} — 정리가 성립한다.**")
+print("SGNS 는 PMI 행렬을 명시적으로 만든 적이 없다.")
+print("쌍을 하나씩 보며 확률적 경사하강을 했을 뿐인데, 결과가 PMI 분해다.")
+print()
+print("**남는 오차의 출처:**")
+for s in ["차원 제약 — 16차원으로는 완전한 PMI 행렬을 담을 수 없다",
+          "유한 학습 — 수렴이 완전하지 않다",
+          f"희소한 칸 — 동시출현이 적으면 PMI 추정 자체가 흔들린다 "
+          f"(그래서 20회 이상만 비교했다)"]:
+    print(f"  · {s}")
+print()
+print("**이 정리가 주는 것:**")
+for s in ["Word2Vec 의 '마법'이 사라진다 — 셀 수 있는 통계량의 분해다",
+          "PPMI+SVD 와 SGNS 가 왜 비슷한 성능을 내는지 설명된다",
+          "**하이퍼파라미터의 의미가 드러난다** — k 는 이동량, 차원은 랭크",
+          "Levy et al.(2015)은 '성능 차이의 대부분은 하이퍼파라미터'라고 결론지었다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-levy
+#| fig-cap: "SGNS가 학습한 내적이 이론값 PMI − log k를 그대로 따라갑니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=np.round(x, 3), y=np.round(y, 3), mode="markers",
+                         name="칸 하나",
+                         marker=dict(size=4,
+                                     color=viz.hex_rgba(viz.ACCENT, 0.45))))
+lo, hi = float(min(x.min(), y.min())), float(max(x.max(), y.max()))
+fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines",
+                         name="이론 (기울기 1, 절편 0)",
+                         line=dict(color=viz.GREEN, width=2.5, dash="dash")))
+fig.add_trace(go.Scatter(x=[lo, hi], y=[slope*lo+intercept, slope*hi+intercept],
+                         mode="lines", name=f"회귀 (기울기 {slope:.3f})",
+                         line=dict(color=viz.WARM, width=2)))
+fig.update_layout(xaxis_title="PMI(w, c) − log k  (이론)",
+                  yaxis_title="v_w · u_c  (SGNS 학습 결과)")
+viz.annotate_box(fig, f"상관 {r:.4f}<br>MAE {float(np.abs(x-y).mean()):.4f}")
+viz.fig_defaults(fig, height=420, title="")
+fig.show()
+```
+
 ---
 
-## G7.3.2 — 임베딩 공간 유추
+## G7.3.4 — 유추: 어디서 오고, 무엇이 망치는가
 
-유추 관계가 평행 벡터로 나타나는 2D 사영
+```{python}
+#| label: analogy
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단어 쌍 선택
-:::
+import numpy as np
+
+
+def analogy_top(E, a, b, c, n=3):
+    v = E[W2I[b]] - E[W2I[a]] + E[W2I[c]]
+    ban = {W2I[a], W2I[b], W2I[c]}
+    return sorted(((cos(v, E[j]), WORDS[j])
+                   for j in range(NW) if j not in ban), reverse=True)[:n]
+
+
+def analogy_acc(E):
+    ok = tot = 0
+    for r1 in ROLES:
+        for r2 in ROLES:
+            if r1 == r2:
+                continue
+            got = analogy_top(E, f"{r1}_남", f"{r1}_여", f"{r2}_남", 1)[0][1]
+            ok += (got == f"{r2}_여")
+            tot += 1
+    return ok, tot
+
+
+print("성별 유추 정확도 — 90개 쌍 (역할 10개의 순서쌍)")
+print("  'r1_남 → r1_여' 관계를 'r2_남 → ?' 에 적용해 r2_여 를 맞히는가")
+print()
+print(f"{'방법':<26} {'정확도':>14}")
+print("-" * 44)
+ACC = {}
+for nm, E in [("PMI + SVD", E_PMI), ("PPMI + SVD", E_PPMI), ("SGNS", W_SG)]:
+    ok, tot = analogy_acc(E)
+    ACC[nm] = ok/tot
+    print(f"{nm:<26} {ok:>6}/{tot} = {ok/tot:>5.1%}")
+print()
+print("예시: 왕_남 → 왕_여 :: 의사_남 → ?")
+for nm, E in [("PMI + SVD", E_PMI), ("PPMI + SVD", E_PPMI), ("SGNS", W_SG)]:
+    print(f"  {nm:<14} " +
+          ", ".join(f"{n} ({s:.3f})" for s, n in
+                    analogy_top(E, "왕_남", "왕_여", "의사_남")))
+print()
+print("**PMI 와 SGNS 는 100%, PPMI 는 크게 떨어진다.**")
+print(f"  PMI  {ACC['PMI + SVD']:.1%}  →  PPMI {ACC['PPMI + SVD']:.1%}")
+print()
+print(f"차이는 하나뿐이다 — PPMI 가 음수를 0 으로 자른다.")
+print(f"이 행렬에서는 그것이 **{(PPMI==0).mean():.0%} 의 칸**이다.")
+print()
+print("**음의 PMI 도 정보다.** '이 문맥은 이 단어와 잘 안 붙는다'는 사실이")
+print("가법 구조의 일부인데, 클리핑이 그것을 통째로 지운다.")
+print("그러면 차이 벡터가 더 이상 평행하지 않다.")
+print()
+print("**PPMI 를 쓰는 이유는 성능이 아니라 희소성이다** —")
+print("실제 어휘에서는 행렬이 거대해서 0 을 많이 만들어야 저장·계산이 가능하다.")
+print("여기서는 어휘가 작아 그 이득이 없고 손해만 남았다.")
+print("**기법의 이유를 알아야 언제 쓰지 말아야 할지 안다.**")
+```
+
+```{python}
+#| label: fig-analogy
+#| fig-cap: "성별 차이 벡터가 모든 역할에서 같은 방향을 가리킵니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+# 성별 차이 벡터들이 놓인 평면에 사영한다
+DIFFS = np.array([E_PMI[W2I[f"{r}_여"]] - E_PMI[W2I[f"{r}_남"]] for r in ROLES])
+u_, s_, vt_ = np.linalg.svd(E_PMI - E_PMI.mean(0), full_matrices=False)
+PROJ = (E_PMI - E_PMI.mean(0)) @ vt_[:2].T
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("임베딩 공간 (상위 2개 주성분)",
+                                    "성별 차이 벡터의 방향 일치도"))
+for i, r in enumerate(ROLES):
+    m, f = W2I[f"{r}_남"], W2I[f"{r}_여"]
+    fig.add_trace(go.Scatter(x=[PROJ[m, 0], PROJ[f, 0]],
+                             y=[PROJ[m, 1], PROJ[f, 1]], mode="lines",
+                             showlegend=False,
+                             line=dict(color=viz.hex_rgba(viz.WARM, 0.6),
+                                       width=1.6)), row=1, col=1)
+fig.add_trace(go.Scatter(x=PROJ[0::2, 0], y=PROJ[0::2, 1], mode="markers+text",
+                         name="남", text=ROLES, textposition="bottom center",
+                         textfont=dict(size=9),
+                         marker=dict(size=9, color=viz.ACCENT)), row=1, col=1)
+fig.add_trace(go.Scatter(x=PROJ[1::2, 0], y=PROJ[1::2, 1], mode="markers",
+                         name="여", marker=dict(size=9, color=viz.PINK)),
+              row=1, col=1)
+
+# 차이 벡터끼리의 코사인 유사도 분포
+sims = [cos(DIFFS[i], DIFFS[j]) for i in range(len(ROLES))
+        for j in range(i+1, len(ROLES))]
+edges = np.linspace(min(sims)-0.02, 1.0, 26)
+h_, _ = np.histogram(sims, bins=edges)
+fig.add_trace(go.Bar(x=np.round((edges[:-1]+edges[1:])/2, 3), y=h_,
+                     showlegend=False, marker_color=viz.GREEN),
+              row=1, col=2)
+fig.update_xaxes(title_text="차이 벡터 쌍의 코사인 유사도", row=1, col=2)
+fig.update_yaxes(title_text="쌍의 개수", row=1, col=2)
+viz.fig_defaults(fig, height=410,
+                 title=f"차이 벡터 45쌍의 평균 코사인 유사도 "
+                       f"{np.mean(sims):.3f}")
+fig.show()
+```
 
 ---
 
-## G7.3.3 — 네거티브 샘플링
+## G7.3.5 — GloVe: 전역 통계를 직접 맞춘다
 
-양성 쌍은 끌어당기고 음성 쌍은 밀어내는 힘의 시각화
+Word2Vec은 쌍을 하나씩 본다. GloVe는 **동시출현 행렬 전체**를 한 번에 맞춘다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플 수 슬라이더
-:::
+$$J = \sum_{w,c} f\big(X_{wc}\big)\Big(v_w \cdot u_c + b_w + \tilde b_c - \log X_{wc}\Big)^2$$
+
+- $\log X_{wc}$ 를 목표로 하는 **가중 최소제곱**이다
+- 편향 $b_w, \tilde b_c$ 가 단어·문맥의 전체 빈도를 흡수한다 → 남는 것이 PMI 비슷한 양
+- $f(x) = \min\big((x/x_{\max})^{0.75}, 1\big)$ 로 **드문 조합의 영향을 줄인다**
+
+```{python}
+#| label: glove
+#| code-fold: false
+
+import numpy as np
+
+
+def train_glove(X, d=16, xmax=100, alpha=0.75, steps=3000, lr=0.05, seed=0):
+    g = np.random.default_rng(seed)
+    W = g.normal(0, 0.1, (NW, d))
+    C = g.normal(0, 0.1, (NC, d))
+    bw, bc = np.zeros(NW), np.zeros(NC)
+    mask = X > 0
+    logX = np.zeros_like(X)
+    logX[mask] = np.log(X[mask])
+    f = np.minimum((X/xmax)**alpha, 1.0)*mask
+    n = mask.sum()
+    for _ in range(steps):
+        diff = (W @ C.T + bw[:, None] + bc[None] - logX)*f
+        W -= lr*(diff @ C)/n*NW
+        C -= lr*(diff.T @ W)/n*NW
+        bw -= lr*diff.sum(1)/n*NW
+        bc -= lr*diff.sum(0)/n*NW
+    resid = (f*(W @ C.T + bw[:, None] + bc[None] - logX)**2).sum()
+    return W, C, float(resid)
+
+
+W_GV, C_GV, GV_LOSS = train_glove(CO)
+ok_gv, tot_gv = analogy_acc(W_GV)
+
+print(f"GloVe 학습 완료 (차원 {D})")
+print(f"  최종 가중 제곱 손실 {GV_LOSS:.4f}")
+print(f"  성별 유추 정확도 {ok_gv}/{tot_gv} = {ok_gv/tot_gv:.1%}")
+print()
+print("최근접 이웃 (GloVe)")
+for w in ["왕_남", "의사_남"]:
+    print(f"  {w:<8} → " +
+          ", ".join(f"{n} ({s:.3f})" for s, n in nearest(W_GV, w)))
+print()
+print(f"{'':<16} {'유추 정확도':>12}")
+print("-" * 32)
+for nm, a in [("PMI + SVD", ACC["PMI + SVD"]), ("PPMI + SVD", ACC["PPMI + SVD"]),
+              ("SGNS", ACC["SGNS"]), ("GloVe", ok_gv/tot_gv)]:
+    print(f"{nm:<16} {a:>12.1%}")
+print()
+print("**세 방법이 같은 곳에 도착한다.**")
+print("  SGNS  — 쌍 단위 확률적 갱신, 암묵적 PMI 분해")
+print("  GloVe — 행렬 단위 가중 최소제곱, log X 를 직접 맞춤")
+print("  SVD   — PMI 행렬의 명시적 저랭크 근사")
+print()
+print("**셋 다 '동시출현 통계의 저랭크 구조를 찾는다'는 같은 일을 한다.**")
+print("차이는 손실 함수의 형태와 드문 조합을 어떻게 다루느냐다.")
+print()
+print("실무적 차이:")
+for s in ["SGNS — 스트리밍 학습 가능, 거대 말뭉치에 유리",
+          "GloVe — 행렬을 한 번 만들면 재학습이 빠름, 병렬화 쉬움",
+          "SVD — 결정론적, 하이퍼파라미터가 적음. 큰 어휘에서는 비쌈"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G7.3.4 — 편향 축 측정
+## fastText: 모르는 단어를 다루기
 
-성별 등 편향 방향에 단어들이 투영되는 정도
+```{python}
+#| label: fasttext
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 축 선택
-:::
+print("Word2Vec / GloVe 의 공통 약점: **어휘에 없는 단어는 벡터가 없다.**")
+print()
+print("fastText 의 해법 — 단어를 부분 문자열(character n-gram)의 합으로 본다")
+print()
+print("   v(where) = v(<wh) + v(whe) + v(her) + v(ere) + v(re>) + v(<where>)")
+print()
+
+
+def char_ngrams(w, lo=3, hi=5):
+    s = f"<{w}>"
+    out = []
+    for n in range(lo, hi+1):
+        out += [s[i:i+n] for i in range(len(s)-n+1)]
+    return out
+
+
+for w in ["토크나이저", "토크나이징", "tokenizer"]:
+    g = char_ngrams(w)
+    print(f"  {w:<12} n-gram {len(g):>2}개: {g[:6]} ...")
+print()
+a, b = set(char_ngrams("토크나이저")), set(char_ngrams("토크나이징"))
+print(f"'토크나이저' 와 '토크나이징' 의 n-gram 겹침: "
+      f"{len(a & b)}/{len(a | b)} = {len(a & b)/len(a | b):.1%}")
+print("**학습에 '토크나이징' 이 없어도 조각으로 벡터를 조립할 수 있다.**")
+print()
+print(f"{'상황':<26} {'Word2Vec/GloVe':<18} {'fastText'}")
+print("-" * 74)
+for a_, b_, c_ in [
+    ("미등록 단어", "벡터 없음 (실패)", "**부분 문자열로 조립**"),
+    ("오타 'tokeniser'", "완전히 다른 토큰", "대부분의 n-gram 공유"),
+    ("교착어 활용형", "각각 별도 벡터 필요", "어간 n-gram 공유"),
+    ("모델 크기", "어휘 × 차원", "n-gram 해시 버킷 × 차원"),
+    ("드문 단어 품질", "나쁨 (데이터 부족)", "**조각을 공유해 개선**"),
+]:
+    print(f"{a_:<26} {b_:<18} {c_}")
+print()
+print("**한국어처럼 교착어에서 특히 유효하다** ([7.0](00_text_representation.qmd)) —")
+print("'학교에', '학교에서', '학교에서도' 가 '학교' n-gram 을 공유한다.")
+print()
+print("(오늘날 이 역할은 서브워드 토크나이저가 대신한다 — [7.1](01_tokenization.qmd).")
+print(" 토큰 자체를 조각으로 나누면 임베딩 층에서 따로 처리할 필요가 없다.)")
+```
 
 ---
 
-## 핵심 용어
+## G7.3.6 — 편향은 어디에 있는가
 
-| 용어 | 비고 |
+```{python}
+#| label: bias
+#| code-fold: false
+
+import numpy as np
+
+DIFFS = np.array([E_PMI[W2I[f"{r}_여"]] - E_PMI[W2I[f"{r}_남"]] for r in ROLES])
+# 중심화하지 않는다 — 공통 방향이 바로 우리가 찾는 것이기 때문이다
+u_b, s_b, vt_b = np.linalg.svd(DIFFS, full_matrices=False)
+AXIS = DIFFS.mean(0)
+AXIS /= np.linalg.norm(AXIS)
+
+print("성별 차이 벡터 10개가 한 방향에 모이는가")
+print(f"  차이 벡터들의 1주성분 설명력 {s_b[0]**2/(s_b**2).sum():.1%}")
+print(f"  (중심화하지 않았다 — 중심화하면 찾으려는 공통 방향이 지워진다)")
+sims = [cos(DIFFS[i], DIFFS[j]) for i in range(len(ROLES))
+        for j in range(i+1, len(ROLES))]
+print(f"  차이 벡터 쌍 45개의 평균 코사인 유사도 {np.mean(sims):.3f} "
+      f"(최소 {min(sims):.3f})")
+print()
+print("성별 축에 투영한 값")
+print(f"  {'단어':<10} {'투영':>10}")
+print("  " + "-"*24)
+for w in ["왕_남", "왕_여", "의사_남", "의사_여", "군인_남", "군인_여"]:
+    print(f"  {w:<10} {E_PMI[W2I[w]]@AXIS:>10.4f}")
+male = float(np.mean([E_PMI[W2I[f"{r}_남"]]@AXIS for r in ROLES]))
+fem = float(np.mean([E_PMI[W2I[f"{r}_여"]]@AXIS for r in ROLES]))
+print(f"  {'남성 평균':<10} {male:>10.4f}")
+print(f"  {'여성 평균':<10} {fem:>10.4f}")
+print()
+print("**축 하나가 성별을 깔끔하게 분리한다.**")
+print()
+print("여기서는 우리가 성별을 **설계에 넣었으니** 당연한 결과다.")
+print("실제 임베딩에서 문제가 되는 것은 넣지 않은 것이 나올 때다:")
+print()
+print(f"{'보고된 현상':<40} {'출처'}")
+print("-" * 76)
+for a_, b_ in [
+    ("man:programmer :: woman:homemaker", "Bolukbasi et al. 2016"),
+    ("직업 단어의 성별 축 투영이 실제 성비와 상관", "Garg et al. 2018"),
+    ("인종·민족 이름에 대한 감정가 차이", "Caliskan et al. 2017 (WEAT)"),
+    ("시대별 임베딩이 사회 고정관념의 변화를 추적", "Garg et al. 2018"),
+]:
+    print(f"{a_:<40} {b_}")
+print()
+print("**핵심: 편향은 알고리즘이 아니라 말뭉치에서 온다.**")
+print("  분포 가설을 충실히 따르면 말뭉치의 연관을 그대로 학습한다.")
+print("  '편향 없는 임베딩'은 '편향 없는 말뭉치'와 같은 문제다.")
+print()
+print("완화 기법과 그 한계:")
+for s in ["**하드 디바이싱** — 성별 축 성분을 제거 (Bolukbasi 2016)",
+          "  → Gonen & Goldberg(2019): 축만 지웠을 뿐 군집 구조는 그대로 남는다",
+          "데이터 증강 — 성별을 바꾼 문장을 추가",
+          "다운스트림 제약 — 최종 과제에서 공정성 제약을 건다",
+          "**측정 먼저** — WEAT, SEAT 등으로 재지 않으면 고쳤는지 알 수 없다"]:
+    print(f"  · {s}")
+print()
+print("Part 12 (신뢰성) 에서 다시 다룬다.")
+```
+
+---
+
+## G7.3.7 — 정적 임베딩의 벽: 다의어
+
+```{python}
+#| label: polysemy
+#| code-fold: false
+
+import numpy as np
+
+NC2 = 40
+rp = np.random.default_rng(7)
+Z_FRUIT = rp.normal(0, 1.5, NC2)
+Z_SHIP = rp.normal(0, 1.5, NC2)
+
+
+def sm(z):
+    e = np.exp(z - z.max())
+    return e/e.sum()
+
+
+P_FRUIT, P_SHIP = sm(Z_FRUIT), sm(Z_SHIP)
+NAMES = ["사과", "포도", "선박", "요트", "항구", "배"]
+
+
+def build_embed(ratio, seed=7):
+    q = np.random.default_rng(seed)
+    P = {"사과": sm(Z_FRUIT + q.normal(0, .3, NC2)),
+         "포도": sm(Z_FRUIT + q.normal(0, .3, NC2)),
+         "선박": sm(Z_SHIP + q.normal(0, .3, NC2)),
+         "요트": sm(Z_SHIP + q.normal(0, .3, NC2)),
+         "항구": sm(Z_SHIP + q.normal(0, .3, NC2)),
+         "배": ratio*P_FRUIT + (1-ratio)*P_SHIP}
+    X = np.array([P[w]*10000 for w in NAMES])
+    Q = X/X.sum()
+    PM = np.log(np.maximum(Q, 1e-12)
+                / (Q.sum(1, keepdims=True)*Q.sum(0, keepdims=True)))
+    Uq, Sq, _ = np.linalg.svd(PM, full_matrices=False)
+    return Uq[:, :5]*np.sqrt(Sq[:5])
+
+
+print("'배' 는 과일이기도 하고 선박이기도 하다.")
+print("정적 임베딩은 **벡터를 하나만** 준다. 어디에 놓이는가?")
+print()
+print(f"{'과일 뜻 비율':>12} {'배 ↔ 과일류':>13} {'배 ↔ 선박류':>13} "
+      f"{'둘 중 나쁜 쪽':>14}")
+print("-" * 58)
+POLY = []
+for ratio in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]:
+    E2 = build_embed(ratio)
+    i = NAMES.index("배")
+    fr = float(np.mean([cos(E2[i], E2[NAMES.index(x)])
+                        for x in ["사과", "포도"]]))
+    sh = float(np.mean([cos(E2[i], E2[NAMES.index(x)])
+                        for x in ["선박", "요트", "항구"]]))
+    POLY.append((ratio, fr, sh, min(fr, sh)))
+    print(f"{ratio:>12.1f} {fr:>13.3f} {sh:>13.3f} {min(fr, sh):>14.3f}")
+
+E2 = build_embed(0.5)
+ff = cos(E2[0], E2[1])
+ss = float(np.mean([cos(E2[2], E2[3]), cos(E2[2], E2[4])]))
+best = max(p[3] for p in POLY)
+print("-" * 58)
+print(f"{'참고: 같은 뜻끼리':>12} {ff:>13.3f} {ss:>13.3f}")
+print()
+print(f"**어떤 비율에서도 두 뜻 모두에 가까울 수 없다.**")
+print(f"  '둘 중 나쁜 쪽'의 최댓값이 {best:.3f} 다 — 같은 뜻끼리의 "
+      f"{min(ff, ss):.3f} 에 한참 못 미친다.")
+print()
+print(f"두 뜻 중심 사이의 코사인 유사도: "
+      f"{cos(E2[0]+E2[1], E2[2]+E2[3]+E2[4]):.3f}")
+print("**두 뜻이 서로 반대 방향이라, 한 점이 둘 다 가까울 방법이 없다.**")
+print("기하학적으로 불가능한 것이지 학습이 부족한 것이 아니다.")
+print()
+print("정적 임베딩의 한계 정리:")
+for s in ["**다의어** — 한 벡터가 여러 뜻을 담을 수 없다 (위 실험)",
+          "**문맥 부재** — '배가 아프다' 와 '배가 출항했다' 가 같은 벡터",
+          "**어순 무시** — 동시출현만 세므로 문법을 모른다",
+          "**합성 불가** — '뜨거운 감자' 의 관용적 의미를 못 만든다"]:
+    print(f"  · {s}")
+print()
+print("**해결책은 '문맥에 따라 벡터를 만드는 것'이다.**")
+print("  ELMo(2018) — 양방향 LSTM 의 은닉 상태를 벡터로")
+print("  BERT(2018)  — Transformer 인코더, 문맥별 표현")
+print("  → 같은 '배' 라도 문장마다 다른 벡터가 나온다")
+print()
+print("Part 5 의 어텐션이 정확히 이 문제를 푼 도구다.")
+```
+
+---
+
+## 계보: 정적 임베딩에서 문장 임베딩으로
+
+```{python}
+#| label: lineage
+#| code-fold: false
+
+rows = [
+    ("LSA / PPMI+SVD", "1990s~", "동시출현 행렬 분해", "정적 · 단어"),
+    ("Word2Vec", "2013", "SGNS / CBOW", "정적 · 단어"),
+    ("GloVe", "2014", "전역 가중 최소제곱", "정적 · 단어"),
+    ("fastText", "2016", "부분 문자열 합", "정적 · 미등록어 대응"),
+    ("ELMo", "2018", "양방향 LSTM 은닉 상태", "**문맥적** · 토큰"),
+    ("BERT", "2018", "Transformer 인코더 + MLM", "문맥적 · 토큰"),
+    ("SBERT", "2019", "샴 구조 + 문장쌍 학습", "**문장** 임베딩"),
+    ("E5 / BGE / GTE", "2022~", "대조학습 + 대규모 쌍 데이터", "문장 · 검색용"),
+    ("임베딩 API", "2022~", "LLM 백본에서 추출", "문장 · 다국어"),
+]
+print(f"{'모델':<20} {'연도':<10} {'방법':<28} {'단위'}")
+print("-" * 82)
+for r_ in rows:
+    print(f"{r_[0]:<20} {r_[1]:<10} {r_[2]:<28} {r_[3]}")
+print()
+print("**분포 가설은 계속 살아 있다.**")
+print("  Word2Vec  — 주변 단어로 중심 단어를 예측")
+print("  BERT      — 가려진 토큰을 문맥으로 예측")
+print("  E5/BGE    — 관련 있는 문장 쌍을 가깝게, 아닌 쌍을 멀게")
+print()
+print("**전부 '함께 나타나는 것은 비슷하다'의 변주다.**")
+print("바뀐 것은 '문맥'의 정의와 규모지, 원리가 아니다.")
+print()
+print("그리고 [6.3](../06_generative/03_gan.qmd)의 대조 손실과도 같은 구조다 —")
+print("SGNS 의 '양성 쌍은 끌어당기고 음성 쌍은 밀어낸다'가")
+print("현대 대조학습(InfoNCE)의 원형이다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 분포 가설 |  |
-| Word2Vec |  |
-| 네거티브 샘플링 |  |
-| GloVe |  |
-| fastText |  |
-| 임베딩 편향 |  |
+| 분포 가설 | "단어는 함께 나타나는 단어들로 알 수 있다" (Firth 1957) |
+| PMI | $\log \frac{p(c\mid w)}{p(c)}$ — 빈도가 아니라 **기대 대비 초과** |
+| 검증 장치 | 로그 가법 분해를 설계에 넣은 합성 언어 |
+| 유추의 근거 | 참 확률의 PMI 차이 벡터가 **상수 벡터만큼만** 다름 (std 5.9e-16) |
+| 함의 | 유추는 "분포가 로그 가법적이면" 따라 나온다 — 언어가 그렇다는 보장은 없다 |
+| SGNS | 양성 쌍은 당기고 $k$개 음성 쌍은 민다 |
+| 구현 주의 | 그래디언트를 배치로 나누지 않으면 **NaN 으로 발산** |
+| **Levy & Goldberg** | $v_w \cdot u_c \approx \text{PMI} - \log k$ |
+| 검증 결과 | 상관 **0.981**, 회귀 기울기 0.967 (이론 1), MAE 0.229 |
+| 의미 | Word2Vec 의 '마법'은 행렬 분해였다 |
+| 유추 정확도 | PMI+SVD 100%, SGNS 100%, GloVe 100% |
+| **PPMI 의 대가** | 65.6% — 음수 클리핑이 71% 칸을 지워 가법 구조를 깬다 |
+| 교훈 | PPMI 는 성능이 아니라 **희소성**을 위한 것 |
+| GloVe | $\log X_{wc}$ 에 대한 가중 최소제곱, 편향이 빈도를 흡수 |
+| 세 방법의 관계 | 전부 동시출현의 저랭크 구조를 찾는 같은 일 |
+| fastText | 부분 문자열의 합 → 미등록어·오타·교착어 대응 |
+| 편향 | 알고리즘이 아니라 **말뭉치**에서 온다 |
+| 디바이싱의 한계 | 축을 지워도 군집은 남는다 (Gonen & Goldberg 2019) |
+| **다의어의 벽** | 어떤 비율에서도 두 뜻 모두에 가까울 수 없다 (최선 −0.073) |
+| 이유 | 두 뜻 중심의 코사인이 음수 — **기하학적으로 불가능** |
+| 해결 | 문맥에 따라 벡터를 만든다 → ELMo, BERT, Transformer |
+
+정적 임베딩은 "단어 하나에 벡터 하나"라는 전제 위에 있었다.
+그 전제를 깨는 것이 다음 단계다.
 
 ---
 
-**다음**: [7.4 사전학습 패러다임](04_pretraining_paradigms.qmd) — ELMo·BERT·GPT·T5 — 자기지도 목표의 설계
+**다음**: [7.4 사전학습 패러다임](04_pretraining_paradigms.qmd)
 
 **이전**: [7.2 언어모델의 기초](02_language_models.qmd)
