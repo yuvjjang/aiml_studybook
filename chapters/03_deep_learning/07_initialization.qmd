@@ -4,77 +4,554 @@ subtitle: "Xavier·He·잔차 연결 — 깊은 망이 학습되기 위한 조�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+2012년 이전에 깊은 망이 학습되지 않았던 이유와,
+그 이후 갑자기 가능해진 이유는 **같은 하나의 분석**으로 설명된다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+신호와 그래디언트의 **분산이 층을 지나며 어떻게 변하는가**.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+층마다 분산이 0.8배씩 줄면 50층 뒤에는 $0.8^{50} = 1.4\times10^{-5}$ 배다.
+1.2배씩 커지면 $9100$ 배다. 둘 다 학습 불가능이다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-ResNet 이전에 깊은 망이 학습되지 않았던 이유와 이후 가능해진 이유는 모두 신호와 그래디언트의 분산 전파로 설명된다.
+[3.5](05_normalization.qmd)의 정규화가 **학습 중** 스케일을 다스린다면,
+초기화는 **학습이 시작되기 전** 스케일을 정한다.
 
 ---
 
-## 이 장에서 다루는 것
+## 왜 0으로 초기화하면 안 되는가
 
-- 왜 0 초기화가 실패하는가 (대칭성 깨기)
-- 분산 전파 분석: 순전파 활성화 분산, 역전파 그래디언트 분산
-- Xavier/Glorot 초기화 유도 (tanh 가정)
-- He 초기화 유도 (ReLU 가정)
-- 직교 초기화와 동적 등거리성(dynamical isometry)
-- 잔차 연결(residual)이 그래디언트 고속도로를 만드는 원리
-- 깊이에 따른 잔차 분기 스케일링(1/√L 등)
-- 임베딩·출력층의 특수한 초기화 관례
-- LLM 학습에서의 초기화 표준(정규분포 σ=0.02, 층 스케일링 등)
+```{python}
+#| label: symmetry-breaking
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn, datasets
+
+X, y = datasets.two_moons(n=200, noise=0.2, seed=0)
+
+for scheme in ["zeros", "small", "he"]:
+    m = nn.MLP([2, 8, 8, 2], activation="relu", init=scheme, seed=0)
+    _, g = m.loss_and_grads(X, y, loss="softmax_ce")
+    # 첫 은닉층 유닛들의 그래디언트가 서로 다른가?
+    gw = g["W1"]                                    # (8, 8) — 두 번째 층
+    uniq = np.unique(np.round(gw, 12), axis=1).shape[1]   # 서로 다른 '열'의 개수
+    nn.train(m, X, y, loss="softmax_ce", opt=nn.Optimizer("adam", lr=0.01),
+             steps=800, batch_size=32, seed=1)
+    acc = float((m.predict(X).argmax(1) == y).mean())
+    print(f"{scheme:<8} 2층 그래디언트의 서로 다른 열 수: {uniq}/8   "
+          f"학습 후 정확도 {acc:.3f}")
+print()
+print("0 초기화에서는 같은 층의 모든 유닛이 **똑같은 그래디언트**를 받는다.")
+print("영원히 같은 값을 유지하므로, 너비가 아무리 넓어도 유닛 1개짜리 망과 같다.")
+print("이것이 '대칭성 깨기(symmetry breaking)'가 필요한 이유다.")
+print()
+print("bias 는 0 으로 초기화해도 된다. W 가 이미 대칭을 깨기 때문이다.")
+```
+
+---
+
+## 분산 전파 분석
+
+선형층 $z = Wh$ 에서, $W_{ij}$ 가 평균 0 · 분산 $\sigma_w^2$ 이고
+$h$ 의 원소들이 독립이라면
+
+$$\operatorname{Var}[z_j] = n_{\text{in}}\,\sigma_w^2\,\operatorname{Var}[h]$$
+
+층을 지나도 분산이 유지되려면 $n_{\text{in}}\sigma_w^2 = 1$ 이어야 한다.
+
+활성화가 들어가면 이야기가 달라진다.
+
+- **tanh** (원점 근처에서 $\approx$ 항등) → 그대로 $\sigma_w^2 = 1/n_{\text{in}}$
+- **ReLU** (절반을 0으로 죽임 → 분산 절반) → $\sigma_w^2 = 2/n_{\text{in}}$
+
+이것이 각각 **LeCun/Xavier**와 **He** 초기화다.
+
+```{python}
+#| label: init-formulas
+#| code-fold: false
+
+import numpy as np
+
+rows = [
+    ("zeros",      "0",                        "대칭성 못 깸 — 절대 금지"),
+    ("작은 상수",   "N(0, 0.01²)",              "깊으면 신호가 소실"),
+    ("LeCun",      "√(1/n_in)",                "SELU, 선형층"),
+    ("Xavier/Glorot", "√(2/(n_in+n_out))",     "tanh, sigmoid"),
+    ("He/Kaiming", "√(2/n_in)",                "ReLU 계열 — 현재 기본값"),
+    ("직교",        "직교행렬 × gain",           "RNN, 동적 등거리성"),
+    ("LLM 관례",    "N(0, 0.02²) + 층 스케일링", "GPT 계열"),
+]
+print(f"{'방법':<16} {'표준편차':<26} {'용도'}")
+print("-" * 68)
+for r in rows:
+    print(f"{r[0]:<16} {r[1]:<26} {r[2]}")
+print()
+n_in = 512
+print(f"n_in = {n_in} 일 때 실제 값:")
+print(f"  LeCun  σ = {np.sqrt(1/n_in):.5f}")
+print(f"  Xavier σ = {np.sqrt(2/(n_in+n_in)):.5f}   (n_out = n_in 가정)")
+print(f"  He     σ = {np.sqrt(2/n_in):.5f}")
+print(f"  GPT 관례 σ = 0.02  → He 대비 {0.02/np.sqrt(2/n_in):.2f}배")
+```
 
 ---
 
 ## G3.7.1 — 초기화별 활성화 분포
 
-층이 깊어질수록 분포가 붕괴/폭발하거나 유지되는 비교
+```{python}
+#| label: fig-activation-propagation
+#| fig-cap: "초기화 방식에 따라 층 깊이별 활성화 분포가 어떻게 변하는가"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 초기화 방법 전환
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import nn, viz
+
+DEPTH, WIDTH, N = 30, 128, 512
+rng0 = np.random.default_rng(0)
+x0 = rng0.normal(0, 1, (N, WIDTH))
+
+def propagate(scheme, act="relu", gain=1.0):
+    r = np.random.default_rng(1)
+    h = x0.copy()
+    stds = [float(h.std())]
+    f, _ = nn.ACTIVATIONS[act]
+    for _ in range(DEPTH):
+        W = nn.init_weights(WIDTH, WIDTH, scheme, r, gain=gain)
+        h = f(h @ W)
+        stds.append(float(h.std()))
+    return np.array(stds)
+
+schemes = {
+    "small (σ=0.01)":  ("small", "relu", 1.0),
+    "LeCun":           ("lecun", "relu", 1.0),
+    "Xavier":          ("xavier", "relu", 1.0),
+    "He":              ("he", "relu", 1.0),
+    "He × 1.3 (과대)":  ("he", "relu", 1.3),
+    "직교 × √2":        ("orthogonal", "relu", np.sqrt(2)),
+}
+curves = {k: propagate(*v) for k, v in schemes.items()}
+
+fig = go.Figure()
+for i, (k, v) in enumerate(curves.items()):
+    fig.add_trace(go.Scatter(x=np.arange(DEPTH+1), y=np.maximum(v, 1e-30), mode="lines",
+                             name=k, line=dict(color=viz.color(i), width=2.5)))
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="입력 스케일 유지")
+fig.update_layout(xaxis_title="층 깊이", yaxis_title="활성화의 표준편차",
+                  yaxis_type="log", legend=dict(x=0.02, y=0.35, font=dict(size=11)))
+viz.fig_defaults(fig, height=440,
+                 title=f"ReLU {DEPTH}층 순전파 (너비 {WIDTH})")
+fig.show()
+```
+
+```{python}
+#| label: propagation-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'초기화':<18} {'1층 후':>12} {'10층 후':>12} {'30층 후':>13} {'층당 배율':>11}")
+print("-" * 72)
+for k, v in curves.items():
+    ratio = (v[-1]/v[0])**(1/DEPTH) if v[-1] > 0 else 0.0
+    print(f"{k:<18} {v[1]:>12.4f} {v[10]:>12.3e} {v[-1]:>13.3e} {ratio:>11.4f}")
+print()
+print("층당 배율이 1.0 에 가까워야 깊이를 늘릴 수 있다.")
+print(f"  He 는 {(curves['He'][-1]/curves['He'][0])**(1/DEPTH):.4f} — 이론값 1.0 에 근접")
+print(f"  σ=0.01 은 {(curves['small (σ=0.01)'][-1]/curves['small (σ=0.01)'][0])**(1/DEPTH):.4f} "
+      f"— 30층 만에 {curves['small (σ=0.01)'][-1]/curves['small (σ=0.01)'][0]:.1e} 배로 소멸")
+over = curves["He × 1.3 (과대)"]
+print(f"  He 를 1.3배만 키워도 {(over[-1]/over[0])**(1/DEPTH):.4f} → "
+      f"30층 후 {over[-1]/over[0]:.2e} 배로 폭발")
+print()
+print("**1.3배가 30층에서 수천 배가 된다.** 초기화가 예민한 이유가 이것이다.")
+```
+
+::: {.key-concept}
+**He 초기화의 유도**
+
+ReLU는 입력의 절반을 0으로 만든다. 입력이 평균 0 대칭이라면
+
+$$\operatorname{Var}[\text{ReLU}(z)] = \tfrac{1}{2}\operatorname{Var}[z]$$
+
+층 하나를 지나면 $\operatorname{Var} \to n_{\text{in}}\sigma_w^2 \cdot \tfrac{1}{2}\operatorname{Var}$
+이므로, 유지하려면
+
+$$n_{\text{in}}\sigma_w^2 \cdot \tfrac{1}{2} = 1
+\quad\Longrightarrow\quad
+\sigma_w = \sqrt{\frac{2}{n_{\text{in}}}}$$
+
+Xavier는 순전파($n_{\text{in}}$)와 역전파($n_{\text{out}}$)를 절충해
+$2/(n_{\text{in}}+n_{\text{out}})$ 를 쓴다.
+ReLU의 1/2 손실을 고려하지 않았으므로 **ReLU 망에서는 신호가 서서히 준다.**
 :::
 
 ---
 
-## G3.7.2 — 잔차 연결의 효과
+## 역전파 쪽도 봐야 한다
 
-잔차 유무에 따른 층별 그래디언트 노름 감쇠 비교
+순전파 분산이 유지되어도 역전파가 무너지면 소용없다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 깊이 슬라이더
+```{python}
+#| label: fig-backward-variance
+#| fig-cap: "층별 그래디언트 노름 — 초기화가 역전파에 미치는 영향"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import nn, viz
+
+DEPTH_B, WIDTH_B, N_B = 24, 96, 256
+
+def grad_profile(scheme, gain=1.0, residual=False, alpha=1.0):
+    """순전파 후 역전파하며 층별 그래디언트 노름을 기록."""
+    r = np.random.default_rng(1)
+    Ws = [nn.init_weights(WIDTH_B, WIDTH_B, scheme, r, gain=gain) for _ in range(DEPTH_B)]
+    x = np.random.default_rng(0).normal(0, 1, (N_B, WIDTH_B))
+    hs, zs = [x], []
+    h = x
+    for W in Ws:
+        z = h @ W
+        a = np.maximum(z, 0)
+        h = h + alpha*a if residual else a
+        zs.append(z); hs.append(h)
+    g = np.random.default_rng(2).normal(0, 1, h.shape) / np.sqrt(N_B*WIDTH_B)
+    norms = [float(np.linalg.norm(g))]
+    for i in range(DEPTH_B-1, -1, -1):
+        dz = (g*alpha if residual else g) * (zs[i] > 0)
+        gprev = dz @ Ws[i].T
+        g = g + gprev if residual else gprev
+        norms.append(float(np.linalg.norm(g)))
+    return np.array(norms[::-1])
+
+profiles = {
+    "Xavier (ReLU에 부족)": grad_profile("xavier"),
+    "He":                  grad_profile("he"),
+    "He × 1.15":           grad_profile("he", gain=1.15),
+    "He + 잔차":            grad_profile("he", residual=True),
+    "He + 잔차 (α=1/√L)":   grad_profile("he", residual=True, alpha=1/np.sqrt(DEPTH_B)),
+}
+
+fig = go.Figure()
+for i, (k, v) in enumerate(profiles.items()):
+    fig.add_trace(go.Scatter(x=np.arange(len(v)), y=np.maximum(v, 1e-30), mode="lines",
+                             name=k, line=dict(color=viz.color(i), width=2.5)))
+fig.update_layout(xaxis_title="층 번호 (0 = 입력 쪽)", yaxis_title="‖g‖",
+                  yaxis_type="log", legend=dict(x=0.02, y=0.98, font=dict(size=11)))
+viz.fig_defaults(fig, height=430, title=f"{DEPTH_B}층 역전파 그래디언트 노름")
+fig.show()
+```
+
+```{python}
+#| label: backward-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'설정':<22} {'입력층 ‖g‖':>13} {'출력층 ‖g‖':>13} {'비 (입력/출력)':>16}")
+print("-" * 70)
+for k, v in profiles.items():
+    print(f"{k:<22} {v[0]:>13.3e} {v[-1]:>13.3e} {v[0]/v[-1]:>16.3e}")
+print()
+print("비가 1 에서 멀수록 층마다 학습 속도가 달라진다는 뜻이다.")
+best = min(profiles, key=lambda k: abs(np.log10(profiles[k][0]/profiles[k][-1])))
+print(f"→ 비가 1 에 가장 가까운 것: {best} "
+      f"({profiles[best][0]/profiles[best][-1]:.3f})")
+print()
+xv = profiles["Xavier (ReLU에 부족)"]
+print(f"Xavier 는 {DEPTH_B}층에서 {xv[0]/xv[-1]:.3e} 배 — ReLU 의 1/2 손실이 누적된 결과다.")
+```
+
+---
+
+## 잔차 연결이 만드는 고속도로
+
+$$h_{l+1} = h_l + F(h_l)
+\quad\Longrightarrow\quad
+\frac{\partial h_{l+1}}{\partial h_l} = I + \frac{\partial F}{\partial h_l}$$
+
+역전파에서 **항등 행렬 $I$ 가 항상 더해진다.**
+$\partial F/\partial h$ 가 아무리 작아져도 그래디언트가 1배로는 통과한다.
+
+이것이 ResNet이 1000층을 학습시킨 원리로 흔히 설명된다.
+그런데 **He 초기화만으로도 그래디언트가 유지된다면** 잔차는 무엇을 더하는가?
+초기화와 활성화 조합을 바꿔가며 직접 재보자.
+
+```{python}
+#| label: fig-residual-depth
+#| fig-cap: "깊이를 늘려가며 본 잔차 유무의 차이 (활성화·초기화 조합별)"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+depths = [4, 8, 16, 32, 64, 128]
+W_D, N_D = 64, 128
+
+def depth_probe(depth, residual, scheme, act, alpha=1.0):
+    """순전파 후 역전파. (입력층/출력층 그래디언트 비, 출력 활성화 std) 반환."""
+    r = np.random.default_rng(1)
+    Ws = [nn.init_weights(W_D, W_D, scheme, r) for _ in range(depth)]
+    f, df = nn.ACTIVATIONS[act]
+    h = np.random.default_rng(0).normal(0, 1, (N_D, W_D))
+    zs, as_ = [], []
+    for W in Ws:
+        z = h @ W
+        a = f(z)
+        h = h + alpha*a if residual else a
+        zs.append(z); as_.append(a)
+    g = np.random.default_rng(2).normal(0, 1, h.shape) / np.sqrt(N_D*W_D)
+    out_norm = float(np.linalg.norm(g))
+    for i in range(depth-1, -1, -1):
+        dz = (g*alpha if residual else g) * df(zs[i], as_[i])
+        gp = dz @ Ws[i].T
+        g = g + gp if residual else gp
+    return float(np.linalg.norm(g))/out_norm, float(h.std())
+
+combos = [
+    ("sigmoid + Xavier, 잔차 없음", dict(residual=False, scheme="xavier", act="sigmoid")),
+    ("sigmoid + Xavier, 잔차 1/√L", dict(residual=True,  scheme="xavier", act="sigmoid")),
+    ("ReLU + He, 잔차 없음",        dict(residual=False, scheme="he", act="relu")),
+    ("ReLU + He, 잔차 α=1",        dict(residual=True,  scheme="he", act="relu")),
+    ("ReLU + He, 잔차 1/√L",       dict(residual=True,  scheme="he", act="relu")),
+]
+runs = {}
+for name, cfg in combos:
+    alpha_fn = (lambda d: 1/np.sqrt(d)) if "1/√L" in name else (lambda d: 1.0)
+    runs[name] = [depth_probe(d, cfg["residual"], cfg["scheme"], cfg["act"],
+                              alpha=alpha_fn(d)) for d in depths]
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("그래디언트 비 (입력/출력)", "출력 활성화의 표준편차"))
+for i, (name, dat) in enumerate(runs.items()):
+    fig.add_trace(go.Scatter(x=depths, y=[max(d[0], 1e-90) for d in dat],
+                             mode="lines+markers", name=name,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=depths, y=[max(d[1], 1e-90) for d in dat],
+                             mode="lines+markers", showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"), row=1, col=1)
+fig.update_xaxes(title_text="깊이 L", type="log")
+fig.update_yaxes(title_text="비", type="log", row=1, col=1)
+fig.update_yaxes(title_text="std", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=440, title="초기화·활성화·잔차 조합별 깊이 확장성")
+fig.update_layout(legend=dict(x=0.02, y=0.4, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: residual-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("그래디언트 비 (입력층 ‖g‖ / 출력층 ‖g‖) — 1 에 가까울수록 좋다")
+print(f"{'설정':<26} " + " ".join(f"{d:>10}" for d in depths))
+print("-" * 92)
+for name, dat in runs.items():
+    print(f"{name:<26} " + " ".join(f"{d[0]:>10.2e}" for d in dat))
+print()
+print("출력 활성화의 표준편차")
+print(f"{'설정':<26} " + " ".join(f"{d:>10}" for d in depths))
+print("-" * 92)
+for name, dat in runs.items():
+    print(f"{name:<26} " + " ".join(f"{d[1]:>10.2e}" for d in dat))
+print()
+
+sig_plain = runs["sigmoid + Xavier, 잔차 없음"][-1][0]
+sig_res   = runs["sigmoid + Xavier, 잔차 1/√L"][-1][0]
+he_plain  = runs["ReLU + He, 잔차 없음"][-1][0]
+he_res1   = runs["ReLU + He, 잔차 α=1"][-1][0]
+he_resL   = runs["ReLU + He, 잔차 1/√L"][-1][0]
+
+print("읽어야 할 세 가지:")
+print()
+print(f"① 옛날 조합(sigmoid + Xavier)은 깊이 128 에서 그래디언트가 {sig_plain:.1e} 배 —")
+print( "   완전한 소실이다. 잔차를 붙이면 "
+      f"{sig_res:.3f} 로 **되살아난다.** 이것이 ResNet 이 푼 문제다.")
+print()
+print(f"② 그런데 ReLU + He 는 **잔차 없이도** 깊이 128 에서 {he_plain:.3f} 다.")
+print( "   초기화만 제대로 해도 그래디언트 소실은 거의 해결된다.")
+print( "   즉 잔차 연결의 가치는 '그래디언트 소실 방지'만이 아니다 —")
+print( "   최적화 지형, 특징 재사용, 층 삭제에 대한 강건성 쪽이 더 크다.")
+print()
+print(f"③ ReLU + He 에 α=1 잔차를 붙이면 오히려 {he_res1:.1e} 배로 **폭발**한다.")
+print(f"   α=1/√L 로 줄이면 {he_resL:.1f} 로 — 여전히 1 은 아니지만 "
+      f"{he_res1/he_resL:.0e} 배 개선이다.")
+print( "   잔차는 공짜가 아니라 스케일을 다시 맞춰야 하는 장치이고,")
+print( "   실전에서는 여기에 정규화 층까지 얹어서 남은 차이를 흡수한다.")
+```
+
+::: {.key-concept}
+**잔차는 만능이 아니다**
+
+잔차 연결은 그래디언트를 살리지만 **활성화 폭발**이라는 새 문제를 만든다.
+$h_{l+1} = h_l + F(h_l)$ 에서 각 항의 분산이 독립적으로 더해지므로
+$\operatorname{Var}[h_L] \propto L$ 이다.
+
+실전의 해법은 셋 중 하나(또는 조합)다.
+
+1. **정규화 층** — 매 블록에서 다시 스케일을 맞춘다 ([3.5](05_normalization.qmd))
+2. **분기 스케일링** — $\alpha = 1/\sqrt{L}$ 을 곱한다 (DeepNorm, Fixup)
+3. **0에서 시작** — 잔차 분기의 마지막 층을 0으로 초기화 (ReZero, GPT-2의 출력 투영)
+
+GPT-2가 잔차 출력 투영을 $1/\sqrt{2L}$ 로 스케일하는 것이 정확히 2번이다.
 :::
 
 ---
 
-## G3.7.3 — 스케일 하나가 만드는 차이
+## G3.7.2 — 스케일 하나가 만드는 차이
 
-σ 값에 따라 학습이 되는 구간과 발산 구간
+이론이 아니라, **실제로 학습이 되는 구간**을 재보자.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 초기화 σ 슬라이더
+```{python}
+#| label: fig-sigma-sweep
+#| fig-cap: "초기화 스케일에 따른 학습 성공/실패"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=800, noise=0.2, seed=0)
+gains = np.logspace(-1.0, 0.6, 17)                # He 대비 배율
+depth_list = [3, 8, 16]
+
+results = {}
+for dep in depth_list:
+    row = []
+    for g_ in gains:
+        m = nn.MLP([2] + [48]*dep + [2], activation="relu", init="he", seed=0)
+        for i in range(len(m.W)):
+            m.W[i] *= g_                            # He 에 배율만 곱함
+        h = nn.train(m, X, y, loss="softmax_ce",
+                     opt=nn.Optimizer("adam", lr=0.003), steps=500,
+                     batch_size=64, seed=1)
+        tail = np.array(h["loss"][-30:])
+        row.append(float(tail.mean()) if np.all(np.isfinite(tail)) else np.nan)
+    results[dep] = row
+
+fig = go.Figure()
+for i, dep in enumerate(depth_list):
+    fig.add_trace(go.Scatter(x=gains, y=results[dep], mode="lines+markers",
+                             name=f"{dep}층",
+                             line=dict(color=viz.color(i), width=2.5)))
+fig.add_vline(x=1.0, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="He 초기화")
+fig.add_hline(y=np.log(2), line=dict(color=viz.PINK, dash="dot"),
+              annotation_text="무작위 수준")
+fig.update_layout(xaxis_title="He 대비 초기화 배율", yaxis_title="500스텝 후 훈련 손실",
+                  xaxis_type="log", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=430, title="초기화 스케일 민감도 (Adam, η=0.003)")
+fig.show()
+```
+
+```{python}
+#| label: sigma-sweep-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'깊이':>6} {'최적 배율':>11} {'그때 손실':>11} {'학습 성공 배율 범위':>24} {'폭 (배)':>10}")
+print("-" * 70)
+for dep in depth_list:
+    arr = np.nan_to_num(np.array(results[dep], dtype=float), nan=9e9)
+    ok = np.where(arr < np.log(2))[0]
+    k = int(np.argmin(arr))
+    if len(ok):
+        span = f"{gains[ok[0]]:.3f} ~ {gains[ok[-1]]:.3f}"
+        width = gains[ok[-1]]/gains[ok[0]]
+    else:
+        span, width = "없음", 0.0
+    print(f"{dep:>6} {gains[k]:>11.3f} {arr[k]:>11.4f} {span:>24} {width:>10.1f}")
+print()
+print("깊어질수록 허용 범위가 좁아진다. 이것이 '깊은 망은 초기화에 예민하다'의 실체다.")
+print(f"(3층은 탐색한 배율 {gains[0]:.2f}~{gains[-1]:.2f} 전부에서 학습됐다 —")
+print(" 실제 허용 폭은 이 격자보다 넓다. 표의 값은 하한이다.)")
+for dep in depth_list:
+    arr = np.nan_to_num(np.array(results[dep], dtype=float), nan=9e9)
+    ok = np.where(arr < np.log(2))[0]
+    print(f"  {dep}층: 성공 배율 {len(ok)}/{len(gains)} 개")
+```
+
+---
+
+## 실전 초기화 관례
+
+```{python}
+#| label: llm-init-practice
+#| code-fold: false
+
+import numpy as np
+
+print("GPT 계열의 초기화 규약")
+print()
+d_model, n_layer = 768, 12
+rows = [
+    ("임베딩",              "N(0, 0.02²)",            "어휘 크기와 무관하게 고정"),
+    ("어텐션 Q,K,V",        "N(0, 0.02²)",            ""),
+    ("어텐션 출력 투영",      "N(0, 0.02²) / √(2L)",   "잔차 누적 상쇄"),
+    ("FFN 첫 층",           "N(0, 0.02²)",            ""),
+    ("FFN 출력 투영",        "N(0, 0.02²) / √(2L)",   "잔차 누적 상쇄"),
+    ("LayerNorm γ, β",     "1, 0",                   "항등에서 시작"),
+    ("모든 bias",           "0",                      ""),
+]
+print(f"{'파라미터':<20} {'초기화':<24} {'이유'}")
+print("-" * 68)
+for r in rows:
+    print(f"{r[0]:<20} {r[1]:<24} {r[2]}")
+print()
+he = np.sqrt(2/d_model)
+print(f"d_model={d_model}, L={n_layer} 일 때")
+print(f"  He 표준편차          : {he:.5f}")
+print(f"  GPT 관례 0.02        : {0.02:.5f}  (He 의 {0.02/he:.2f}배)")
+print(f"  출력 투영 0.02/√(2L) : {0.02/np.sqrt(2*n_layer):.5f}  "
+      f"(He 의 {0.02/np.sqrt(2*n_layer)/he:.2f}배)")
+print()
+print(f"잔차 블록이 2L={2*n_layer} 개 더해지므로 분산이 {2*n_layer}배가 된다.")
+print(f"각 분기를 1/√(2L) = {1/np.sqrt(2*n_layer):.4f} 로 줄이면 정확히 상쇄된다.")
+print()
+print("주의: 0.02 는 d_model 에 의존하지 않는 **관례적 상수**다.")
+print("d_model 이 커지면 He 와 어긋난다 — 그래서 muP 같은 스케일링 규칙이 나왔다.")
+```
+
+::: {.callout-warning}
+**초기화는 정규화·옵티마이저와 함께 봐야 한다**
+
+- **BatchNorm/LayerNorm이 있으면** 초기화의 영향이 크게 줄어든다.
+  정규화가 매 층에서 스케일을 다시 맞추기 때문이다
+- **Adam은 그래디언트 크기를 정규화**하므로 SGD보다 초기화에 덜 예민하다
+- **warmup**이 초기 몇 스텝의 위험을 덮어준다 ([3.4](04_optimizers.qmd))
+
+위 실험들이 Adam을 썼는데도 깊이 16에서 허용 범위가 좁아진 것에 주목할 만하다.
+**세 장치를 다 써도 초기화는 여전히 중요하다.**
 :::
 
 ---
 
-## 핵심 용어
+## 요약
 
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| Xavier 초기화 |  |
-| He 초기화 |  |
-| 잔차 연결 (residual) |  |
-| 동적 등거리성 |  |
+| 0 초기화 | 대칭성을 못 깸 — 너비가 무의미해짐 |
+| 분산 유지 조건 | $n_{\text{in}}\sigma_w^2 = 1$ (선형) |
+| Xavier | $\sqrt{2/(n_{in}+n_{out})}$ — tanh 가정 |
+| He | $\sqrt{2/n_{in}}$ — ReLU의 절반 손실 보상 |
+| 배율 민감도 | 1.3배가 30층에서 수천 배 차이 |
+| 잔차 연결 | sigmoid+Xavier 를 되살림. 단 ReLU+He 는 잔차 없이도 견딤 |
+| 잔차의 대가 | 활성화 분산이 $\propto L$ 로 누적 |
+| 분기 스케일링 | $1/\sqrt{2L}$ — GPT 계열의 표준 |
+| 깊이와 허용 범위 | 깊어질수록 초기화 허용 폭이 좁아짐 |
+
+여기까지가 **딥러닝을 돌리기 위해 알아야 할 것들**이다.
+다음 장은 그것을 떠받치는 기계를 직접 만든다 — 자동미분.
 
 ---
 
-**다음**: [3.8 자동미분 직접 만들기](08_autograd_from_scratch.qmd) — 100줄짜리 autograd — 프레임워크의 내부
+**다음**: [3.8 자동미분 직접 만들기](08_autograd_from_scratch.qmd)
 
 **이전**: [3.6 딥러닝의 정규화](06_regularization_dl.qmd)
