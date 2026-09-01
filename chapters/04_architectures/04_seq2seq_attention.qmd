@@ -4,87 +4,563 @@ subtitle: "문맥 벡터 병목에서 정렬(alignment)로 — 어텐션 이전�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+어텐션은 Transformer에서 튀어나온 것이 아니다.
+**기계 번역의 아주 구체적인 병목을 푸는 처방**으로 태어났다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+[4.3](03_lstm_gru.qmd) 끝에서 그 병목을 봤다.
+인코더가 문장 전체를 상태 벡터 **하나**로 압축하고, 디코더는 그것만 보고 번역한다.
+문장이 길어지면 벡터 하나에 담을 수 있는 몫이 반비례로 줄어든다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+Bahdanau et al.(2014)의 답은 단순하다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+> **압축하지 말자. 인코더의 모든 시점을 그대로 두고, 필요할 때 찾아보자.**
+
+이 장에서 그것이 실제로 작동하는지 직접 재보고,
+동시에 **어텐션만으로는 부족한 지점**도 찾아낸다.
+그 지점이 [Part 5](../05_transformer/00_attention_mechanism.qmd)의 위치 인코딩으로 이어진다.
+
+---
+
+## 병목을 수치로
+
+인코더 상태의 차원 $d$ 는 **문장 길이와 무관하게 고정**이다.
+정보 이론적으로 얼마나 담을 수 있는가?
+
+```{python}
+#| label: bottleneck-capacity
+#| code-fold: false
+
+import numpy as np
+
+print("고정 차원 문맥 벡터가 담아야 하는 것")
+print()
+V = 32000          # 어휘 크기
+print(f"{'문장 길이 T':>12} {'표현해야 할 문장 수':>22} {'필요 비트':>12} "
+      f"{'d=512, fp32 의 비트':>20}")
+print("-" * 72)
+for T in [5, 10, 20, 50, 100]:
+    bits_needed = T * np.log2(V)
+    print(f"{T:>12} {f'{V}^{T}':>22} {bits_needed:>12.0f} {512*32:>20,}")
+print()
+print(f"비트 수만 보면 512차원 fp32({512*32:,}비트)로 "
+      f"길이 100 문장({100*np.log2(V):.0f}비트)도 충분해 보인다.")
+print("**하지만 이것은 잘못된 계산이다.**")
+print()
+print("신경망의 표현은 부동소수점 비트를 자유롭게 쓰는 것이 아니다.")
+print("의미가 가까운 것을 가까운 벡터로 놓아야 하고(연속성), 학습으로 도달 가능해야 하며,")
+print("디코더가 선형 변환 몇 번으로 꺼낼 수 있는 형태여야 한다.")
+print("실제 용량은 이 제약들 때문에 훨씬 작다.")
+print()
+print("그래서 이론적 한계가 아니라 **실측**이 필요하다. 아래에서 직접 잰다.")
+```
+
+---
+
+## 어텐션: 미분 가능한 소프트 검색
+
+파이썬 딕셔너리 조회를 생각해 보자.
+
+```python
+# 딱딱한 조회 — 미분 불가능
+value = memory[query]
+```
+
+키가 정확히 맞아야 하고, 인덱싱은 미분되지 않는다.
+어텐션은 이것을 **부드럽게** 만든다.
+
+$$\alpha_t = \frac{\exp(\text{score}(q, k_t))}{\sum_{t'}\exp(\text{score}(q, k_{t'}))},
+\qquad
+\text{출력} = \sum_t \alpha_t v_t$$
+
+"모든 항목을 조금씩 꺼내되, 질의와 잘 맞는 것을 많이 꺼낸다."
+가중치가 softmax라 **미분 가능**하고, 따라서 **무엇을 볼지 학습된다.**
+
+```{python}
+#| label: score-functions
+#| code-fold: false
+
+import numpy as np
+
+rows = [
+    ("Bahdanau (additive)", "vᵀ tanh(W_h h + W_q q)", "d(2d+1)",
+     "차원이 달라도 됨, 표현력 ↑"),
+    ("Luong dot",           "hᵀq",                    "0",
+     "파라미터 0, 차원이 같아야 함"),
+    ("Luong general",       "hᵀ W q",                 "d²",
+     "dot 의 일반화"),
+    ("Luong concat",        "vᵀ tanh(W[h;q])",        "d(2d+1)",
+     "Bahdanau 와 사실상 동일"),
+    ("Scaled dot-product",  "hᵀq / √d",               "0",
+     "Transformer 가 쓰는 것"),
+]
+print(f"{'이름':<22} {'점수 함수':<26} {'파라미터':>10} {'특징'}")
+print("-" * 92)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<26} {r[2]:>10} {r[3]}")
+print()
+d = 512
+print(f"d={d} 일 때 추가 파라미터")
+print(f"  Bahdanau : {d*(2*d+1):>10,}")
+print(f"  general  : {d*d:>10,}")
+print(f"  dot      : {0:>10,}")
+print()
+print("**Transformer 가 scaled dot-product 를 고른 이유는 파라미터가 0이고**")
+print("**행렬곱 하나로 모든 쌍을 한 번에 계산할 수 있기 때문이다.**")
+print("Q, K, V 를 만드는 투영 행렬이 있으므로 표현력은 거기서 확보한다.")
+print(f"√d 로 나누는 이유는 [5.0](../05_transformer/00_attention_mechanism.qmd)에서 다룬다.")
+```
+
+---
+
+## 실험 설계: 위치 회상 과제
+
+번역 데이터 없이 병목을 정확히 재기 위해, 문제를 최소 형태로 줄인다.
+
+**과제**: 길이 $T$ 인 심볼 시퀀스를 인코더가 읽는다.
+그 다음 "**$p$ 번째 심볼이 무엇이었나?**" 라는 질의가 온다.
+
+이것은 번역의 핵심 요구를 그대로 담고 있다 —
+디코더가 출력 위치마다 **소스의 특정 위치**를 참조해야 한다는 것.
+
+```{python}
+#| label: recall-setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import sequence as sq, attention as at, nn
+
+K, H, DQ, B = 8, 32, 16, 64      # 어휘, 은닉, 질의 차원, 배치
+
+def make_batch(T, rng):
+    toks = rng.integers(0, K, (B, T))
+    x = np.eye(K)[toks]                          # (B, T, K) 원핫
+    p = rng.integers(0, T, B)                    # 질의 위치
+    return x, p, toks[np.arange(B), p]
+
+def build_input(x, T, pos_enc):
+    """pos_enc=True 면 입력 토큰에 위치 인코딩을 이어붙인다."""
+    if not pos_enc:
+        return x
+    pe = at.sinusoidal_encoding(T, DQ)
+    return np.concatenate([x, np.broadcast_to(pe, (x.shape[0], T, DQ))], axis=2)
+
+rng0 = np.random.default_rng(0)
+x0, p0, y0 = make_batch(6, rng0)
+print(f"배치 하나의 예 (길이 6, 어휘 {K})")
+print(f"  입력 심볼 (샘플 0): {x0[0].argmax(1).tolist()}")
+print(f"  질의 위치 p        : {int(p0[0])}")
+print(f"  정답               : {int(y0[0])}")
+print(f"  확인               : {x0[0].argmax(1)[p0[0]]}")
+print()
+print(f"무작위 추측의 손실 = log {K} = {np.log(K):.4f}, 정확도 = {1/K:.3f}")
+print()
+print("세 가지 모델을 같은 과제에 돌린다:")
+print("  ① 어텐션 없음   — 인코더 마지막 상태 h_T 하나만 보고 답한다")
+print("  ② 어텐션        — 모든 h_t 를 두고 질의로 가중합한다")
+print("  ③ 어텐션 + 위치 — 인코더 입력에 위치 인코딩을 더해 준다")
+```
+
+세 모델을 구현한다. 인코더는 [4.3](03_lstm_gru.qmd)에서 검증한 `src/sequence.py` 의 LSTM이다.
+
+```{python}
+#| label: recall-models
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import sequence as sq, attention as at, nn
+
+def init(seed, use_attn, pos_enc):
+    r = np.random.default_rng(seed)
+    d_in = K + (DQ if pos_enc else 0)
+    cell = sq.LSTM(d_in, H, seed=seed, forget_bias=1.0, in_scale=0.5)
+    P = dict(cell.p)
+    P["Wout"] = r.normal(0, 1/np.sqrt(H+DQ), (H+DQ, K))
+    P["bout"] = np.zeros(K)
+    if use_attn:                                    # Bahdanau 점수 함수
+        P["Wa_h"] = r.normal(0, 1/np.sqrt(H), (H, DQ))
+        P["Wa_q"] = r.normal(0, 1/np.sqrt(DQ), (DQ, DQ))
+        P["va"] = r.normal(0, 1/np.sqrt(DQ), (DQ,))
+    return cell, P
+
+def step(cell, P, x, p, y, T, use_attn, pos_enc, want_alpha=False):
+    q = at.sinusoidal_encoding(T, DQ)[p]            # 질의 = 위치 인코딩
+    hT, cache = cell.forward(build_input(x, T, pos_enc))
+    Hs = np.stack(cache["outs"], axis=1)            # (B, T, H) 모든 시점
+
+    if use_attn:
+        u = np.tanh(Hs @ P["Wa_h"] + (q @ P["Wa_q"])[:, None, :])
+        alpha = at.softmax(u @ P["va"], axis=-1)    # 정렬 가중치
+        ctx = np.einsum("bt,bth->bh", alpha, Hs)    # 가중합
+    else:
+        alpha, ctx = None, hT                       # 마지막 상태만
+
+    feat = np.concatenate([ctx, q], axis=1)
+    logits = feat @ P["Wout"] + P["bout"]
+    L, dlog = nn.softmax_ce_loss(logits, y)
+
+    # ── 역전파 ──
+    g = {"Wout": feat.T @ dlog, "bout": dlog.sum(0)}
+    dctx = (dlog @ P["Wout"].T)[:, :H]
+    if use_attn:
+        dalpha = np.einsum("bh,bth->bt", dctx, Hs)
+        dHs = alpha[:, :, None] * dctx[:, None, :]
+        dscores = alpha * (dalpha - (dalpha*alpha).sum(1, keepdims=True))
+        dpre = (dscores[:, :, None] * P["va"]) * (1 - u**2)
+        g["va"] = np.einsum("bt,btd->d", dscores, u)
+        g["Wa_h"] = np.einsum("bth,btd->hd", Hs, dpre)
+        g["Wa_q"] = q.T @ dpre.sum(1)
+        dHs = dHs + dpre @ P["Wa_h"].T
+        g.update(cell.backward(cache, dh_seq=dHs))  # ← 모든 시점에 그래디언트
+    else:
+        g.update(cell.backward(cache, dh=dctx))     # ← 마지막 시점에만
+    if want_alpha:
+        return L, g, alpha, logits
+    return L, g
+
+def train(T, use_attn, pos_enc, seed=0, steps=1500, lr=0.01):
+    cell, P = init(seed, use_attn, pos_enc)
+    opt = nn.Optimizer("adam", lr=lr)
+    rng = np.random.default_rng(seed + 50)
+    losses = []
+    for _ in range(steps):
+        x, p, y = make_batch(T, rng)
+        L, g = step(cell, P, x, p, y, T, use_attn, pos_enc)
+        if not np.isfinite(L):
+            return np.nan, np.nan, None
+        nn.clip_grads(g, 1.0)
+        opt.step(P, g)
+        losses.append(L)
+    x, p, y = make_batch(T, rng)
+    _, _, alpha, logits = step(cell, P, x, p, y, T, use_attn, pos_enc, want_alpha=True)
+    acc = float((logits.argmax(1) == y).mean())
+    return float(np.mean(losses[-50:])), acc, (alpha, p)
+
+print("모델 정의 완료. 어텐션 모델은 인코더의 모든 시점에 그래디언트를 흘린다")
+print("(4.3 에서 grad_check 로 검증한 dh_seq 경로).")
+```
+
+---
+
+## G4.4.1 — 결정적 실험
+
+```{python}
+#| label: fig-attention-effect
+#| fig-cap: "문장 길이에 따른 세 모델의 회상 정확도"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+LENGTHS = [8, 16, 32, 64]
+CONFIGS = [("어텐션 없음", False, False),
+           ("어텐션", True, False),
+           ("어텐션 + 위치 인코딩", True, True)]
+
+res = {}
+alphas = {}
+for lbl, ua, pe in CONFIGS:
+    for T in LENGTHS:
+        loss, acc, extra = train(T, ua, pe)
+        res[(lbl, T)] = (loss, acc)
+        if ua:
+            alphas[(lbl, T)] = extra
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("회상 정확도", "훈련 손실"))
+for i, (lbl, _, _) in enumerate(CONFIGS):
+    fig.add_trace(go.Scatter(x=LENGTHS, y=[res[(lbl, T)][1] for T in LENGTHS],
+                             mode="lines+markers", name=lbl,
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=10)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=LENGTHS, y=[res[(lbl, T)][0] for T in LENGTHS],
+                             mode="lines+markers", showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=10)), row=1, col=2)
+fig.add_hline(y=1/K, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="무작위 추측", row=1, col=1)
+fig.add_hline(y=np.log(K), line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="무작위 수준", row=1, col=2)
+fig.update_xaxes(title_text="시퀀스 길이 T", type="log")
+fig.update_yaxes(title_text="정확도", range=[0, 1.05], row=1, col=1)
+fig.update_yaxes(title_text="손실", row=1, col=2)
+viz.fig_defaults(fig, height=420,
+                 title=f"위치 회상 과제 · 어휘 {K} · 은닉 {H} · Adam 1500 스텝")
+fig.update_layout(legend=dict(x=0.02, y=0.35, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: attention-effect-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'길이 T':>7} " + " ".join(f"{lbl:>22}" for lbl, _, _ in CONFIGS))
+print("-" * 78)
+for T in LENGTHS:
+    print(f"{T:>7} " + " ".join(
+        f"{res[(lbl, T)][0]:>10.4f} acc {res[(lbl, T)][1]:>5.3f}"
+        for lbl, _, _ in CONFIGS))
+print()
+
+CHANCE = 1/K
+def limit(lbl):
+    ok = [T for T in LENGTHS if res[(lbl, T)][1] > 0.9]
+    return max(ok) if ok else 0
+
+print("정확도 0.9 를 넘긴 최대 길이")
+for lbl, _, _ in CONFIGS:
+    v = limit(lbl)
+    print(f"  {lbl:<22} {v if v else '없음'}")
+print()
+
+no_att = [res[("어텐션 없음", T)][1] for T in LENGTHS]
+print(f"① **어텐션 없는 모델은 어떤 길이에서도 실패한다.** "
+      f"정확도 {min(no_att):.3f}~{max(no_att):.3f},")
+print(f"   무작위 추측 {CHANCE:.3f} 보다는 낫지만 과제를 푼 것이 아니다.")
+print("   상태 벡터 하나에 시퀀스 전체를 담고, 거기서 임의 위치를 꺼내야 하는데")
+print("   그 둘을 동시에 하지 못한다. **이것이 문맥 벡터 병목이다.**")
+print()
+a16 = res[("어텐션", 16)][1]
+a32 = res[("어텐션", 32)][1]
+print(f"② **어텐션을 붙이면 길이 16 까지 완벽해진다** (정확도 {a16:.3f}).")
+print(f"   그런데 길이 32 에서 {a32:.3f} 로 무너진다. 왜인가?")
+print()
+p32 = res[("어텐션 + 위치 인코딩", 32)][1]
+p64 = res[("어텐션 + 위치 인코딩", 64)][1]
+print(f"③ **인코더 입력에 위치 인코딩만 더해 주면 길이 64 에서도 {p64:.3f} 다.**")
+print("   어텐션 구조는 그대로다. 바뀐 것은 입력에 붙인 위치 정보뿐이다.")
+```
+
+::: {.key-concept}
+**어텐션은 "어디를 볼지" 를 알아야 볼 수 있다**
+
+②와 ③의 차이가 이 장에서 가장 중요한 발견이다.
+
+어텐션이 위치 $p$ 를 고르려면 **인코더 상태 $h_t$ 가 "나는 $t$ 번째다"를 담고 있어야** 한다.
+그런데 LSTM의 $h_t$ 는 토큰 $0..t$ 를 누적한 것이지 위치 표식이 아니다.
+짧은 시퀀스에서는 누적 상태가 우연히 위치를 구분해 주지만,
+길어지면 그 구분이 흐려진다.
+
+위치 인코딩을 **입력에** 더하면 $h_t$ 가 명시적인 위치 서명을 갖게 되고,
+질의가 그것과 직접 매칭된다.
+
+**이것이 Transformer가 위치 인코딩을 반드시 넣는 이유다.**
+셀프 어텐션은 순환조차 없어서 위치 정보가 아예 0이므로,
+[Part 5](../05_transformer/02_positional_encoding.qmd)에서는 선택이 아니라 필수가 된다.
 :::
 
-어텐션은 Transformer에서 튀어나온 게 아니라 번역 모델의 구체적 병목을 푸는 처방으로 태어났다. 그 문제의식을 알면 QKV가 임의의 기호로 보이지 않는다.
+---
+
+## G4.4.2 — 정렬 행렬 들여다보기
+
+학습된 어텐션이 실제로 질의 위치를 고르는지 확인한다.
+
+```{python}
+#| label: fig-alignment
+#| fig-cap: "질의 위치와 어텐션이 실제로 본 위치"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+T_A = 16
+views = {}
+for lbl in ["어텐션", "어텐션 + 위치 인코딩"]:
+    alpha, pquery = alphas[(lbl, T_A)]
+    order = np.argsort(pquery)                    # 질의 위치 순으로 정렬
+    views[lbl] = (np.round(alpha[order][:40], 4), pquery[order][:40])
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=tuple(views.keys()))
+for ci, (lbl, (A, pq)) in enumerate(views.items(), start=1):
+    fig.add_trace(go.Heatmap(z=A, colorscale="Viridis", zmin=0, zmax=float(A.max()),
+                             showscale=(ci == 2),
+                             colorbar=dict(thickness=10)), row=1, col=ci)
+    fig.add_trace(go.Scatter(x=pq, y=np.arange(len(pq)), mode="markers",
+                             showlegend=(ci == 1), name="질의 위치 p",
+                             marker=dict(size=6, color=viz.WARM, symbol="x")),
+                  row=1, col=ci)
+    fig.update_xaxes(title_text="인코더 시점 t", row=1, col=ci)
+fig.update_yaxes(title_text="샘플 (질의 위치 순 정렬)", row=1, col=1)
+viz.fig_defaults(fig, height=430,
+                 title=f"정렬 가중치 α (길이 {T_A}) — 주황 ×가 정답 위치")
+fig.update_layout(legend=dict(x=0.02, y=1.12, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: alignment-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"어텐션이 질의 위치를 얼마나 정확히 고르는가 (길이 {T_A}, 배치 {B})")
+print()
+print(f"{'모델':<24} {'argmax=p 비율':>14} {'|argmax−p| 평균':>17} "
+      f"{'p 에 준 가중치':>16} {'엔트로피':>10}")
+print("-" * 88)
+for lbl in ["어텐션", "어텐션 + 위치 인코딩"]:
+    alpha, pq = alphas[(lbl, T_A)]
+    am = alpha.argmax(1)
+    hit = float((am == pq).mean())
+    dist = float(np.abs(am - pq).mean())
+    w_at_p = float(alpha[np.arange(len(pq)), pq].mean())
+    ent = float(-(alpha*np.log(alpha+1e-12)).sum(1).mean())
+    print(f"{lbl:<24} {hit:>14.3f} {dist:>17.2f} {w_at_p:>16.4f} {ent:>10.3f}")
+print()
+print(f"참고: 균등 분포의 엔트로피 = log {T_A} = {np.log(T_A):.3f} "
+      f"(아무 곳도 안 고른 상태)")
+print(f"      완벽히 한 곳만 고르면 엔트로피 0")
+print()
+a_ent = -(alphas[("어텐션", T_A)][0]*np.log(alphas[("어텐션", T_A)][0]+1e-12)).sum(1).mean()
+p_ent = -(alphas[("어텐션 + 위치 인코딩", T_A)][0]
+          * np.log(alphas[("어텐션 + 위치 인코딩", T_A)][0]+1e-12)).sum(1).mean()
+print(f"둘 다 길이 16 에서는 과제를 풀었지만, 정렬의 선명도가 다르다.")
+print(f"  엔트로피 {a_ent:.3f} vs {p_ent:.3f}")
+print()
+print("**정렬 행렬이 해석 가능하다는 것이 어텐션의 큰 부수 효과였다.**")
+print("번역 모델에서 이 행렬을 그려 보면 소스 단어와 타깃 단어의 대응이 드러났고,")
+print("사람이 만든 정렬 사전과 상당히 일치했다. 신경망이 '무엇을 보는지'를")
+print("처음으로 들여다볼 수 있게 된 사례다.")
+print()
+print("다만 주의: **어텐션 가중치는 설명이 아니다.**")
+print("Jain & Wallace(2019), Wiegreffe & Pinter(2019) 이후 이 문제는 논쟁적이다.")
+print("가중치를 바꿔도 예측이 그대로인 경우가 있어, 인과적 설명으로 읽으면 안 된다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 어텐션이 바꾼 계산 구조
 
-- seq2seq 인코더-디코더 구조와 고정 길이 문맥 벡터
-- 문맥 벡터 병목: 긴 문장에서 성능이 무너지는 실증
-- Bahdanau 어텐션(additive): 정렬 점수와 가중합
-- Luong 어텐션(multiplicative)과 변형들
-- 어텐션을 미분 가능한 소프트 검색으로 읽기
-- 정렬 행렬의 해석 가능성 — 번역 정렬과의 대응
-- 커버리지, 입력 복사(copy), 포인터 네트워크
-- 'Attention is all you need' 로 가는 마지막 한 걸음: 순환을 없앨 수 있는가
+```{python}
+#| label: complexity-shift
+#| code-fold: false
+
+import numpy as np
+
+print("인코더 상태를 디코더가 쓰는 방식")
+print()
+print(f"{'구조':<26} {'디코더가 보는 것':<24} {'경로 길이':<14} {'메모리'}")
+print("-" * 86)
+rows = [
+    ("seq2seq (문맥 벡터)",  "h_T 하나",            "O(T)",        "O(d)"),
+    ("seq2seq + 어텐션",     "h_1..h_T 전부",       "O(1)",        "O(T·d)"),
+    ("셀프 어텐션",           "모든 위치가 서로",      "O(1)",        "O(T·d)"),
+]
+for r in rows:
+    print(f"{r[0]:<26} {r[1]:<24} {r[2]:<14} {r[3]}")
+print()
+print("**경로 길이**가 핵심이다 — 정보가 출발지에서 목적지까지 거쳐야 하는 단계 수.")
+print()
+d = 512
+print(f"d={d} 일 때 인코더 상태 저장 비용 (fp32)")
+print(f"{'길이 T':>8} {'문맥 벡터':>14} {'전체 상태':>14} {'배수':>8}")
+print("-" * 48)
+for T in [10, 50, 100, 500]:
+    a, b_ = d*4, T*d*4
+    print(f"{T:>8} {a:>12,}B {b_:>12,}B {b_/a:>8.0f}")
+print()
+print("어텐션은 **메모리를 써서 경로 길이를 샀다.**")
+print(f"길이 100 문장이면 상태 저장이 100배가 되지만, 그래봐야 {100*d*4/1024:.0f}KB 다.")
+print()
+print("[4.2](02_rnn.qmd)에서 본 그래디언트 소실을 다시 생각해 보라.")
+print("경로 길이 O(T) 는 그래디언트가 T 번 곱해진다는 뜻이고, 그래서 죽었다.")
+print("**경로 길이가 O(1) 이면 소실 자체가 없다.** 어텐션이 푼 것이 이것이다.")
+```
 
 ---
 
-## G4.4.1 — 문맥 벡터 병목
+## 확장들
 
-길이가 늘수록 고정 벡터로 압축된 정보가 손실되는 성능 곡선
+```{python}
+#| label: attention-variants
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 문장 길이 슬라이더
+rows = [
+    ("커버리지 (coverage)",
+     "지금까지의 α 누적을 점수에 넣기",
+     "같은 단어를 반복 번역하거나 빠뜨리는 문제"),
+    ("입력 복사 (copy)",
+     "어휘 분포와 α 를 섞어 소스 토큰을 직접 복사",
+     "고유명사·숫자·미등록 단어(OOV)"),
+    ("포인터 네트워크",
+     "출력이 어휘가 아니라 **입력 위치 인덱스**",
+     "정렬·요약·조합 최적화(TSP)"),
+    ("지역 어텐션 (local)",
+     "전체가 아니라 창 안에서만",
+     "긴 시퀀스의 계산량"),
+    ("다중 홉 (multi-hop)",
+     "어텐션을 여러 번 반복 적용",
+     "다단계 추론"),
+]
+print(f"{'기법':<22} {'핵심 변경':<38} {'푸는 문제'}")
+print("-" * 96)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<38} {r[2]}")
+print()
+print("포인터 네트워크(Vinyals et al. 2015)가 특히 흥미롭다.")
+print("어텐션 가중치를 **문맥 계산에 쓰지 않고 출력 확률 그 자체로** 쓴다:")
+print("  p(출력 = 위치 t) = α_t")
+print("입력 길이가 달라져도 되는 조합 문제를 신경망으로 푸는 길을 열었고,")
+print("지금의 검색 증강·인용 생성에도 같은 발상이 들어 있다.")
+```
+
+---
+
+## 마지막 한 걸음
+
+::: {.key-concept}
+**순환이 아직도 필요한가?**
+
+2014–2017년의 구조는 **RNN + 어텐션**이었다.
+그런데 어텐션이 하는 일을 다시 보자.
+
+- 모든 시점을 저장한다 → 순환이 하던 "기억"을 대신한다
+- 경로 길이 $O(1)$ → 순환이 못 하던 장거리 연결을 해낸다
+- 위치 인코딩을 넣으면 순서 정보도 확보된다 (위에서 실측했다)
+
+그렇다면 **RNN은 무엇을 위해 남아 있는가?**
+
+[4.2](02_rnn.qmd)에서 잰 것을 떠올려 보라. RNN의 결정적 약점은
+순차 계산 $T$ 단계였고, 그것이 GPU와 맞지 않았다.
+어텐션은 순차 단계가 1이다.
+
+Vaswani et al.(2017)의 답은 제목 그대로였다 —
+**"Attention Is All You Need."**
+
+순환을 **빼고** 어텐션만 남기면, 성능은 유지되면서 학습이 완전히 병렬화된다.
+그것이 다음 파트의 주제다.
 :::
 
 ---
 
-## G4.4.2 — 어텐션 정렬 행렬
+## 요약
 
-번역 시 소스-타깃 단어가 대응되는 히트맵
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 문장 쌍 선택
-:::
-
----
-
-## G4.4.3 — 어텐션 가중치 계산
-
-점수 → softmax → 가중합의 3단계를 값으로 따라가기
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 쿼리 위치 슬라이더
-:::
-
----
-
-## G4.4.4 — RNN+어텐션 vs 순수 RNN
-
-긴 시퀀스에서 벌어지는 성능 격차
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 길이 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| seq2seq |  |
-| 문맥 벡터 |  |
-| Bahdanau 어텐션 |  |
-| 정렬 (alignment) |  |
-| 포인터 네트워크 |  |
+| 문맥 벡터 병목 | 고정 차원에 문장 전체를 압축 — 길이에 반비례 |
+| 어텐션 | 미분 가능한 소프트 검색: $\sum_t \alpha_t v_t$ |
+| 점수 함수 | Bahdanau(additive) / Luong(dot, general) / scaled dot |
+| 실측 ① | 어텐션 없으면 길이 8 에서도 실패 |
+| 실측 ② | 어텐션은 길이 16 까지, 32 에서 무너짐 |
+| 실측 ③ | **위치 인코딩을 더하면 64 에서도 완벽** |
+| 경로 길이 | $O(T) \to O(1)$ — 그래디언트 소실이 사라지는 진짜 이유 |
+| 정렬 행렬 | 해석의 실마리. 단, **설명은 아니다** |
+| 포인터 네트워크 | α 를 출력 분포로 — 입력 위치를 직접 가리킴 |
+
+어텐션은 순환의 **보조 장치**로 태어났다.
+그런데 재보니 순환이 하던 일을 대부분 대신하고 있었다.
+
+다음 파트는 그 관찰을 끝까지 밀어붙인다.
 
 ---
 
-**다음**: [4.5 임베딩](05_embeddings.qmd) — 이산 기호를 벡터로 — 표현 공간의 기하학
+**다음**: [4.5 임베딩](05_embeddings.qmd) — 이산 기호를 벡터로
 
 **이전**: [4.3 LSTM과 GRU](03_lstm_gru.qmd)

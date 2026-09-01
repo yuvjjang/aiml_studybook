@@ -40,7 +40,7 @@ class VanillaRNN:
         }
 
     def forward(self, x):
-        """x: (B, T, d_in) → (h_T, cache)"""
+        """x: (B, T, d_in) → (h_T, cache). cache["outs"] 에 매 시점 h_t 가 쌓인다."""
         B, T, _ = x.shape
         h = np.zeros((B, self.d_hid))
         hs, pres = [], []
@@ -48,18 +48,25 @@ class VanillaRNN:
             pre = x[:, t] @ self.p["Wx"] + h @ self.p["Wh"] + self.p["b"]
             h = np.tanh(pre)
             hs.append(h); pres.append(pre)
-        return h, dict(x=x, hs=hs, pres=pres, T=T, B=B)
+        return h, dict(x=x, hs=hs, outs=hs, pres=pres, T=T, B=B)
 
-    def backward(self, cache, dh):
+    def backward(self, cache, dh=None, dh_seq=None):
+        """dh: 마지막 시점 그래디언트. dh_seq: (B, T, H) 매 시점 그래디언트.
+
+        어텐션처럼 모든 시점의 은닉 상태를 쓰는 구조는 dh_seq 가 필요하다.
+        """
         x, hs, T, B = cache["x"], cache["hs"], cache["T"], cache["B"]
         g = {k: np.zeros_like(v) for k, v in self.p.items()}
+        acc = np.zeros((B, self.d_hid)) if dh is None else dh
         for t in range(T - 1, -1, -1):
-            dpre = dh * (1 - hs[t] ** 2)
+            if dh_seq is not None:
+                acc = acc + dh_seq[:, t]
+            dpre = acc * (1 - hs[t] ** 2)
             hprev = hs[t - 1] if t > 0 else np.zeros((B, self.d_hid))
             g["Wx"] += x[:, t].T @ dpre
             g["Wh"] += hprev.T @ dpre
             g["b"] += dpre.sum(0)
-            dh = dpre @ self.p["Wh"].T
+            acc = dpre @ self.p["Wh"].T
         return g
 
 
@@ -96,7 +103,7 @@ class LSTM:
         H = self.d_hid
         h = np.zeros((B, H))
         c = np.zeros((B, H))
-        cache = dict(x=x, T=T, B=B, hs=[], cs=[], gates=[], tc=[])
+        cache = dict(x=x, T=T, B=B, hs=[], cs=[], gates=[], tc=[], outs=[])
         for t in range(T):
             z = x[:, t] @ self.p["Wx"] + h @ self.p["Wh"] + self.p["b"]
             i = sigmoid(z[:, 0:H])
@@ -110,14 +117,18 @@ class LSTM:
             h = o * tc
             cache["gates"].append((i, f, o, gg))
             cache["tc"].append(tc)
+            cache["outs"].append(h)                     # h_t
         cache["c_final"], cache["h_final"] = c, h
         return h, cache
 
-    def backward(self, cache, dh):
+    def backward(self, cache, dh=None, dh_seq=None):
         x, T, B, H = cache["x"], cache["T"], cache["B"], self.d_hid
         g = {k: np.zeros_like(v) for k, v in self.p.items()}
         dc = np.zeros((B, H))
+        dh = np.zeros((B, H)) if dh is None else dh
         for t in range(T - 1, -1, -1):
+            if dh_seq is not None:
+                dh = dh + dh_seq[:, t]
             i, f, o, gg = cache["gates"][t]
             tc = cache["tc"][t]
             c_prev = cache["cs"][t]
@@ -170,7 +181,7 @@ class GRU:
         B, T, _ = x.shape
         H = self.d_hid
         h = np.zeros((B, H))
-        cache = dict(x=x, T=T, B=B, hs=[], parts=[])
+        cache = dict(x=x, T=T, B=B, hs=[], parts=[], outs=[])
         for t in range(T):
             zr = sigmoid(x[:, t] @ self.p["Wxrz"] + h @ self.p["Whrz"] + self.p["brz"])
             r, z = zr[:, :H], zr[:, H:]
@@ -179,12 +190,16 @@ class GRU:
             cache["hs"].append(h)
             cache["parts"].append((r, z, n, hr))
             h = (1 - z) * h + z * n
+            cache["outs"].append(h)
         return h, cache
 
-    def backward(self, cache, dh):
+    def backward(self, cache, dh=None, dh_seq=None):
         x, T, B, H = cache["x"], cache["T"], cache["B"], self.d_hid
         g = {k: np.zeros_like(v) for k, v in self.p.items()}
+        dh = np.zeros((B, H)) if dh is None else dh
         for t in range(T - 1, -1, -1):
+            if dh_seq is not None:
+                dh = dh + dh_seq[:, t]
             r, z, n, hr = cache["parts"][t]
             h_prev = cache["hs"][t]
 
@@ -251,6 +266,37 @@ def grad_check(cell, x, seed=0, n_sample=6, eps=1e-6):
         detail[k] = max(errs)
         worst = max(worst, detail[k])
     return worst, detail
+
+
+def grad_check_seq(cell, x, seed=0, n_sample=6, eps=1e-6):
+    """모든 시점의 출력을 쓰는 손실로 검증한다 (어텐션이 쓰는 경로).
+
+    L = sum_t (h_t * s_t) — dh_seq 경로가 맞는지 확인한다.
+    """
+    rng = np.random.default_rng(seed)
+    _, cache = cell.forward(x)
+    T = cache["T"]
+    s = rng.normal(size=(x.shape[0], T, cell.d_hid))
+
+    def loss_of():
+        _, c = cell.forward(x)
+        return float(sum((c["outs"][t] * s[:, t]).sum() for t in range(T)))
+
+    ga = cell.backward(cache, dh_seq=s)
+    worst = 0.0
+    for k, P in cell.p.items():
+        flat = P.ravel()
+        gf = ga[k].ravel()
+        for idx in rng.choice(flat.size, min(n_sample, flat.size), replace=False):
+            old = flat[idx]
+            flat[idx] = old + eps; lp = loss_of()
+            flat[idx] = old - eps; lm = loss_of()
+            flat[idx] = old
+            num = (lp - lm) / (2 * eps)
+            den = abs(num) + abs(gf[idx])
+            if den >= 1e-9:
+                worst = max(worst, abs(num - gf[idx]) / den)
+    return worst
 
 
 def cell_grad_norms(cell, x, seed=0):
