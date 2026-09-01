@@ -4,88 +4,651 @@ subtitle: "BatchNorm·LayerNorm·RMSNorm — 학습을 안정시키는 장치"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+Transformer의 성능은 **정규화를 잔차 블록의 어디에 두느냐** 하나에 크게 좌우된다.
+같은 모델, 같은 데이터, 같은 옵티마이저인데 pre-LN은 학습되고 post-LN은 발산한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+정규화는 부가 기능이 아니라 **구조의 일부**다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+[3.4](04_optimizers.qmd)의 옵티마이저가 지형을 따라가는 방법이었다면,
+정규화는 **지형 자체를 바꾸는** 방법이다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 무엇을 정규화하는가
+
+활성화 텐서에는 축이 여럿이다. 어떤 축을 따라 평균·분산을 내느냐가 이름을 정한다.
+
+$$\hat z = \frac{z - \mu}{\sqrt{\sigma^2 + \epsilon}}, \qquad
+  y = \gamma \hat z + \beta$$
+
+$\mu, \sigma$ 를 **무엇에 대해** 계산하는가만 다르다.
+
+```{python}
+#| label: fig-norm-axes
+#| fig-cap: "같은 텐서에서 각 정규화가 통계를 내는 범위"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# (배치 N=4, 채널 C=6) 을 격자로 보고, 각 정규화가 함께 묶는 셀을 색으로 표시
+N, C = 4, 6
+G = 3                                    # GroupNorm 그룹 수 → 채널 2개씩
+
+def group_id(kind):
+    m = np.zeros((N, C), dtype=int)
+    for n in range(N):
+        for c in range(C):
+            if kind == "BatchNorm":    m[n, c] = c              # 채널마다 배치 전체
+            elif kind == "LayerNorm":  m[n, c] = n              # 샘플마다 채널 전체
+            elif kind == "GroupNorm":  m[n, c] = n*G + c//(C//G)
+            elif kind == "InstanceNorm": m[n, c] = n*C + c      # 각 셀 따로
+            else:                      m[n, c] = 0              # 전체
+    return m
+
+kinds = ["BatchNorm", "LayerNorm", "GroupNorm", "InstanceNorm"]
+mats = {k: group_id(k) for k in kinds}
+
+fig = go.Figure()
+k0 = "LayerNorm"
+fig.add_trace(go.Heatmap(z=mats[k0], colorscale="Turbo", showscale=False,
+                         xgap=3, ygap=3,
+                         hovertemplate="샘플 %{y}, 채널 %{x}<br>그룹 %{z}<extra></extra>"))
+steps = [(k, {"z": [mats[k]]}) for k in kinds]
+fig.update_layout(sliders=[viz.slider(steps, prefix="정규화 방식: ",
+                                      active=kinds.index(k0), pad_t=52)])
+fig.update_xaxes(title_text="채널 C", dtick=1)
+fig.update_yaxes(title_text="배치 샘플 N", dtick=1, autorange="reversed")
+viz.fig_defaults(fig, height=380, title="같은 색 = 같은 μ, σ 를 공유하는 셀")
+fig.show()
+```
+
+```{python}
+#| label: norm-axes-table
+#| code-fold: false
+
+rows = [
+    ("BatchNorm",    "(N, H, W)",  "채널",   "배치에 의존",  "CNN"),
+    ("LayerNorm",    "(C,) 또는 (C,H,W)", "샘플", "배치 독립", "Transformer, RNN"),
+    ("InstanceNorm", "(H, W)",     "샘플×채널", "배치 독립", "스타일 변환"),
+    ("GroupNorm",    "(C/G, H, W)", "샘플×그룹", "배치 독립", "작은 배치 비전"),
+    ("RMSNorm",      "(C,)",       "샘플",   "배치 독립",  "최신 LLM"),
+]
+print(f"{'이름':<14} {'평균 내는 축':<20} {'통계 단위':<12} {'배치 의존':<12} {'주 사용처'}")
+print("-" * 76)
+for r in rows:
+    print(f"{r[0]:<14} {r[1]:<20} {r[2]:<12} {r[3]:<12} {r[4]}")
+print()
+print("배치 의존 여부가 실무에서 가장 중요한 구분이다.")
+print("BatchNorm 만 학습/추론 동작이 다르고, 배치 크기·분산 학습에 제약을 만든다.")
+```
+
+---
+
+## 왜 도움이 되는가 — 가설의 변천
+
+원 논문(2015)은 **내부 공변량 이동**(internal covariate shift)을 이유로 들었다.
+층의 입력 분포가 학습 중 계속 변해서 학습이 어렵다는 것이다.
+
+이후 연구(Santurkar et al., 2018)가 이를 반박했다.
+BatchNorm 뒤에 **일부러 분포 이동 잡음을 주입해도** 학습이 여전히 빨랐다.
+현재의 설명은 **손실 지형을 평활화한다**는 쪽이다 —
+그래디언트가 더 예측 가능해져 큰 학습률을 쓸 수 있다.
+
+이 가설은 두 가지로 검증할 수 있다.
+(1) 그래디언트의 립시츠 상수 $eta$ 가 실제로 작아지는가,
+(2) 더 큰 학습률에서 살아남는가. 둘 다 재보자.
+
+```{python}
+#| label: fig-smoothness
+#| fig-cap: "정규화가 그래디언트를 얼마나 예측 가능하게 만드는가"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=800, noise=0.2, seed=0)
+
+def flatten(g):
+    return np.concatenate([v.ravel() for v in g.values()])
+
+def probe(norm, lr=0.05, steps=300, depth=6):
+    """학습 도중 '현재 방향으로 조금 갔을 때 그래디언트가 얼마나 변하는가'를 잰다."""
+    m = nn.MLP([2] + [32]*depth + [2], activation="relu", norm=norm, seed=0)
+    P = m.params()
+    opt = nn.Optimizer("sgd", lr=lr)
+    rng = np.random.default_rng(0)
+    beta_smooth, losses = [], []
+    for s in range(steps):
+        idx = rng.choice(len(X), 128, replace=False)
+        L, g = m.loss_and_grads(X[idx], y[idx], loss="softmax_ce")
+        losses.append(L)
+        if s % 10 == 0:
+            g0 = flatten(g)
+            saved = {k: v.copy() for k, v in P.items()}
+            for k in P:                                # 아주 조금 이동
+                P[k][...] = saved[k] - 0.01 * g[k]
+            _, g1 = m.loss_and_grads(X[idx], y[idx], loss="softmax_ce")
+            for k in P:
+                P[k][...] = saved[k]
+            # 유효 립시츠 상수: 그래디언트 변화량 / 이동 거리
+            move = 0.01 * np.linalg.norm(g0)
+            beta_smooth.append(np.linalg.norm(flatten(g1) - g0) / (move + 1e-12))
+        opt.step(P, g)
+    return np.array(losses), np.array(beta_smooth)
+
+runs = {name: probe(nm) for name, nm in
+        [("정규화 없음", None), ("BatchNorm", "batch"), ("LayerNorm", "layer")]}
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("훈련 손실", "그래디언트 립시츠 상수 β (낮을수록 평활)"))
+for i, (name, (loss, beta)) in enumerate(runs.items()):
+    sm = np.convolve(loss, np.ones(15)/15, mode="valid")
+    fig.add_trace(go.Scatter(x=np.arange(len(sm)), y=sm, mode="lines", name=name,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=np.arange(0, 300, 10), y=beta, mode="lines",
+                             showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+fig.update_xaxes(title_text="스텝")
+fig.update_yaxes(title_text="손실", row=1, col=1)
+fig.update_yaxes(title_text="β", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=410, title="6층 MLP · SGD η=0.05")
+fig.update_layout(legend=dict(x=0.02, y=0.15, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: smoothness-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'설정':<14} {'최종 손실':>11} {'β 중앙값':>12} {'β 최댓값':>12}")
+print("-" * 52)
+for name, (loss, beta) in runs.items():
+    print(f"{name:<14} {loss[-30:].mean():>11.4f} "
+          f"{np.median(beta):>12.2f} {beta.max():>12.2f}")
+print()
+base = np.median(runs["정규화 없음"][1])
+for name, (loss, beta) in runs.items():
+    if name == "정규화 없음":
+        continue
+    print(f"{name}: β 중앙값이 정규화 없음 대비 {np.median(beta)/base:.2f}배")
+print()
+print("β 가 작다는 것은 '한 스텝 갔을 때 그래디언트가 덜 변한다'는 뜻이다.")
+print()
+print("결과가 갈렸다. BatchNorm 은 평활화 가설대로지만 LayerNorm 은 오히려 β 가 크다.")
+print("이 β 는 η=0.05 라는 **한 지점**에서 잰 값이고, 그 지점은 세 설정 모두")
+print("이미 잘 학습되는 영역이다. 가설의 진짜 주장 — '더 큰 학습률을 견딘다' — 은")
+print("아직 검증되지 않았다. 다음 절에서 직접 잰다.")
+```
+
+---
+
+## 큰 학습률을 견디는가
+
+평활화 가설이 맞다면, 정규화가 있는 쪽이 **더 큰 학습률에서 살아남아야** 한다.
+
+```{python}
+#| label: fig-lr-tolerance
+#| fig-cap: "학습률을 올려가며 각 설정이 어디서 무너지는지"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=800, noise=0.2, seed=0)
+lrs = np.logspace(-3, 0.7, 16)
+
+def final_loss(norm, lr, depth=6, steps=250):
+    m = nn.MLP([2] + [32]*depth + [2], activation="relu", norm=norm, seed=0)
+    h = nn.train(m, X, y, loss="softmax_ce", opt=nn.Optimizer("sgd", lr=lr),
+                 steps=steps, batch_size=128, seed=1)
+    tail = np.array(h["loss"][-30:])
+    return float(tail.mean()) if np.all(np.isfinite(tail)) else np.nan
+
+curves = {name: [final_loss(nm, lr) for lr in lrs] for name, nm in
+          [("정규화 없음", None), ("BatchNorm", "batch"), ("LayerNorm", "layer")]}
+
+fig = go.Figure()
+for i, (name, ls) in enumerate(curves.items()):
+    fig.add_trace(go.Scatter(x=lrs, y=ls, mode="lines+markers", name=name,
+                             line=dict(color=viz.color(i), width=2.5)))
+fig.add_hline(y=np.log(2), line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="무작위 수준 (log 2)")
+fig.update_layout(xaxis_title="학습률 η", yaxis_title="250스텝 후 훈련 손실",
+                  xaxis_type="log", yaxis_type="log",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420, title="6층 MLP · SGD · 학습률 내성")
+fig.show()
+```
+
+```{python}
+#| label: lr-tolerance-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'설정':<14} {'최적 η':>10} {'그때 손실':>11} {'무작위 수준 미만인 η 범위':>26}")
+print("-" * 66)
+for name, ls in curves.items():
+    arr = np.array(ls, dtype=float)
+    ok = np.where(np.nan_to_num(arr, nan=9e9) < np.log(2))[0]
+    best = int(np.nanargmin(arr))
+    span = f"{lrs[ok[0]]:.4f} ~ {lrs[ok[-1]]:.3f}  ({len(ok)}/16)" if len(ok) else "없음"
+    print(f"{name:<14} {lrs[best]:>10.4f} {arr[best]:>11.4f} {span:>26}")
+print()
+for name, ls in curves.items():
+    arr = np.nan_to_num(np.array(ls, dtype=float), nan=9e9)
+    ok = np.where(arr < np.log(2))[0]
+    if len(ok):
+        print(f"{name}: 학습 가능한 최대 η = {lrs[ok[-1]]:.3f}")
+```
+
+---
+
+## BatchNorm의 대가: 배치에 의존한다
+
+BatchNorm은 학습 시 **배치 통계**를, 추론 시 **누적 통계**를 쓴다.
+두 동작이 다르다는 것 자체가 문제의 근원이다.
+
+```{python}
+#| label: fig-bn-batch-size
+#| fig-cap: "배치가 작아질수록 BatchNorm 통계 추정이 흔들립니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=1200, noise=0.2, seed=1)
+batch_sizes = [2, 4, 8, 16, 32, 64, 128, 256]
+
+# (1) 통계 추정 잡음: 같은 데이터에서 배치만 다르게 뽑아 평균·분산을 재본다
+rng = np.random.default_rng(0)
+probe_model = nn.MLP([2, 32, 32, 2], activation="relu", norm="batch", seed=0)
+nn.train(probe_model, X, y, loss="softmax_ce",
+         opt=nn.Optimizer("adam", lr=0.01), steps=300, batch_size=128)
+
+stat_std = []
+for B in batch_sizes:
+    means = []
+    for _ in range(200):
+        idx = rng.choice(len(X), B, replace=False)
+        h = X[idx] @ probe_model.W[0] + probe_model.b[0]
+        means.append(h.mean(0))
+    stat_std.append(float(np.mean(np.std(np.array(means), axis=0))))
+
+# (2) 실제 학습 결과
+perm = np.random.default_rng(0).permutation(len(X)); tr, te = perm[:900], perm[900:]
+acc_bn, acc_ln = [], []
+for B in batch_sizes:
+    for norm, store in [("batch", acc_bn), ("layer", acc_ln)]:
+        m = nn.MLP([2, 32, 32, 2], activation="relu", norm=norm, seed=0)
+        nn.train(m, X[tr], y[tr], loss="softmax_ce",
+                 opt=nn.Optimizer("adam", lr=0.01), steps=400, batch_size=B, seed=2)
+        store.append(float((m.predict(X[te]).argmax(1) == y[te]).mean()))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("배치 평균 추정의 표준편차", "학습 후 시험 정확도"))
+fig.add_trace(go.Scatter(x=batch_sizes, y=stat_std, mode="lines+markers", name="실측",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+ref = stat_std[0]*np.sqrt(batch_sizes[0]/np.array(batch_sizes, dtype=float))
+fig.add_trace(go.Scatter(x=batch_sizes, y=ref, mode="lines", name="1/√B",
+                         line=dict(color=viz.YELLOW, width=2, dash="dash")), row=1, col=1)
+fig.add_trace(go.Scatter(x=batch_sizes, y=acc_bn, mode="lines+markers", name="BatchNorm",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=batch_sizes, y=acc_ln, mode="lines+markers", name="LayerNorm",
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+fig.update_xaxes(title_text="배치 크기 B", type="log")
+fig.update_yaxes(title_text="std(μ̂)", type="log", row=1, col=1)
+fig.update_yaxes(title_text="시험 정확도", row=1, col=2)
+viz.fig_defaults(fig, height=410, title="배치 크기에 대한 민감도")
+fig.update_layout(legend=dict(x=0.02, y=0.25, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: bn-batch-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'배치 B':>7} {'std(μ̂)':>10} {'BatchNorm 정확도':>18} {'LayerNorm 정확도':>18}")
+print("-" * 58)
+for B, s_, a, l in zip(batch_sizes, stat_std, acc_bn, acc_ln):
+    print(f"{B:>7} {s_:>10.4f} {a:>18.3f} {l:>18.3f}")
+print()
+slope = float(np.polyfit(np.log(batch_sizes), np.log(stat_std), 1)[0])
+print(f"통계 잡음 지수: {slope:.3f} (이론 −0.5)")
+print()
+small = [i for i, B in enumerate(batch_sizes) if B <= 8]
+print(f"작은 배치(B≤8) 평균 정확도 — BatchNorm {np.mean([acc_bn[i] for i in small]):.3f}, "
+      f"LayerNorm {np.mean([acc_ln[i] for i in small]):.3f}")
+big = [i for i, B in enumerate(batch_sizes) if B >= 64]
+print(f"큰 배치(B≥64) 평균 정확도 — BatchNorm {np.mean([acc_bn[i] for i in big]):.3f}, "
+      f"LayerNorm {np.mean([acc_ln[i] for i in big]):.3f}")
+```
+
+::: {.callout-warning}
+**BatchNorm이 못 하는 것들**
+
+- **작은 배치** — 통계 추정 잡음이 $1/\sqrt{B}$ 로 커진다. 객체 검출·분할처럼
+  이미지가 커서 배치를 키울 수 없는 과제에서 GroupNorm이 쓰이는 이유
+- **가변 길이 시퀀스** — 패딩된 위치가 통계를 오염시킨다
+- **순환망** — 시점마다 통계가 달라 running stats를 어떻게 잡을지 애매하다
+- **분산 학습** — 배치가 GPU마다 쪼개져 통계가 달라진다 (SyncBN이 필요하고, 통신 비용이 든다)
+- **학습/추론 불일치** — running stats가 실제 분포와 어긋나면 추론이 조용히 망가진다
+
+Transformer가 LayerNorm을 쓰는 이유는 위 다섯 가지 전부다.
 :::
 
-Transformer의 성능은 정규화 위치 하나(pre-LN vs post-LN)에 크게 좌우된다. 정규화는 부가 기능이 아니라 구조의 일부다.
-
 ---
 
-## 이 장에서 다루는 것
+## LayerNorm에서 RMSNorm으로
 
-- 내부 공변량 이동 가설과 그 이후의 반박(손실 지형 평활화)
-- BatchNorm: 학습/추론 시 동작 차이, running statistics
-- BatchNorm의 문제: 작은 배치, 순환망, 분산 학습
-- LayerNorm: 배치 독립성, 시퀀스 모델에 적합한 이유
-- RMSNorm: LayerNorm에서 평균 제거를 뺀 단순화
-- GroupNorm, InstanceNorm, 그리고 비전에서의 선택
-- pre-LN vs post-LN — 잔차 경로와 그래디언트 흐름
-- 정규화 없는 학습: Fixup, ReZero, DeepNorm, σReparam
-- 정규화와 학습률·배치 크기의 상호작용
+LayerNorm은 평균을 빼고 표준편차로 나눈다.
+RMSNorm(2019)은 **평균 빼기를 없앴다.**
 
----
+$$\text{LN}(z) = \gamma\frac{z-\mu}{\sqrt{\sigma^2+\epsilon}} + \beta,
+\qquad
+\text{RMS}(z) = \gamma\frac{z}{\sqrt{\frac{1}{d}\sum z_i^2 + \epsilon}}$$
 
-## G3.5.1 — 정규화 축 비교
+Llama, Gemma, Mistral 등 최신 LLM이 대부분 RMSNorm을 쓴다.
 
-(배치, 채널, 공간) 텐서에서 각 정규화가 평균 내는 축을 색으로 표시
+```{python}
+#| label: rmsnorm-compare
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 정규화 방식 전환
+import sys; sys.path.append("../..")
+import numpy as np
+
+rng = np.random.default_rng(0)
+d = 512
+
+def layernorm(z, eps=1e-5):
+    mu = z.mean(-1, keepdims=True)
+    return (z - mu) / np.sqrt(z.var(-1, keepdims=True) + eps)
+
+def rmsnorm(z, eps=1e-5):
+    return z / np.sqrt((z**2).mean(-1, keepdims=True) + eps)
+
+def cos_sim(A, B):
+    return float(np.mean((A*B).sum(-1) /
+                 (np.linalg.norm(A, axis=-1)*np.linalg.norm(B, axis=-1))))
+
+print("두 정규화의 차이는 정확히 '평균을 빼는가'뿐이다.")
+print(f"활성화 평균이 μ, 표준편차가 1 이면 코사인 유사도 ≈ 1/√(1+μ²) 로 예측된다.")
+print()
+print(f"{'활성화 평균 μ':>13} {'코사인 유사도':>14} {'예측 1/√(1+μ²)':>17}")
+print("-" * 48)
+for mu0 in [0.0, 0.05, 0.1, 0.3, 1.0, 5.0]:
+    Z = rng.normal(mu0, 1.0, (1024, d))
+    c = cos_sim(layernorm(Z), rmsnorm(Z))
+    print(f"{mu0:>13.2f} {c:>14.4f} {1/np.sqrt(1+mu0**2):>17.4f}")
+print()
+print("실제 Transformer 의 활성화 평균은 표준편차 대비 아주 작다.")
+print("그 영역(μ ≲ 0.1)에서 두 정규화의 출력은 사실상 같은 방향이다.")
+print()
+print("연산량 비교 (d 차원 벡터 1개 기준)")
+print(f"  LayerNorm : 평균·분산 두 번 순회 + 뺄셈 + 나눗셈 ≈ {4*d} 연산")
+print(f"  RMSNorm   : 제곱합 한 번 순회 + 나눗셈          ≈ {2*d} 연산")
+print()
+print("→ RMSNorm 이 통하는 것은 '평균이 원래 작아서'다. 무조건 같은 것이 아니다.")
+print("  활성화 평균이 크게 치우친 구조라면 위 표의 μ=1.0, 5.0 행이 그 대가를 보여준다.")
+```
+
+::: {.key-concept}
+**RMSNorm이 이긴 이유**
+
+1. **연산이 절반** — 평균을 위한 순회 한 번이 사라진다
+2. **성능 손실이 없다** — 고차원에서 평균이 이미 0에 가깝다
+3. **역전파가 단순** — 평균 항의 그래디언트 경로가 없다
+
+$\beta$(시프트)도 대개 제거한다. 뒤따르는 선형층의 bias가 같은 일을 하기 때문이다.
 :::
 
 ---
 
-## G3.5.2 — BatchNorm 전후 분포
+## pre-LN vs post-LN
 
-깊은 층에서 활성화 분포가 무너지고 정규화가 되돌리는 모습
+Transformer 잔차 블록에서 정규화를 **어디에** 넣을지가 문제다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 깊이 슬라이더
+$$\text{post-LN:}\ x \leftarrow \text{LN}(x + F(x))
+\qquad\qquad
+\text{pre-LN:}\ x \leftarrow x + F(\text{LN}(x))$$
+
+결정적인 차이는 **항등 경로**다.
+pre-LN에서는 $x$ 가 정규화를 거치지 않고 출력까지 그대로 흐른다.
+post-LN에서는 매 블록마다 LN을 통과한다.
+
+```{python}
+#| label: fig-pre-post-ln
+#| fig-cap: "잔차 스트림의 스케일과 층별 그래디언트 노름"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def ln_fwd(z, eps=1e-5):
+    mu = z.mean(-1, keepdims=True)
+    std = np.sqrt(z.var(-1, keepdims=True) + eps)
+    zhat = (z - mu)/std
+    return zhat, zhat, std
+
+def ln_bwd(dy, zhat, std):
+    return (dy - dy.mean(-1, keepdims=True)
+            - zhat * (dy*zhat).mean(-1, keepdims=True)) / std
+
+def run_stack(kind, depth, d=64, n=32, seed=0):
+    """잔차 블록 depth 개. 층별 활성화 스케일과 역전파 그래디언트 노름을 기록."""
+    rng = np.random.default_rng(seed)
+    Ws = [rng.normal(0, 1/np.sqrt(d), (d, d)) for _ in range(depth)]
+    x = rng.normal(0, 1, (n, d))
+    stds, caches = [float(x.std())], []
+    for W in Ws:
+        if kind == "pre":
+            xn, zhat, std = ln_fwd(x)
+            caches.append((xn, zhat, std, W))
+            x = x + np.tanh(xn @ W)
+        else:
+            s_ = x + np.tanh(x @ W)
+            xn, zhat, std = ln_fwd(s_)
+            caches.append((x, zhat, std, W))
+            x = xn
+        stds.append(float(x.std()))
+
+    g = rng.normal(0, 1, x.shape) / np.sqrt(n*x.shape[-1])
+    norms = [float(np.linalg.norm(g))]
+    for (xin, zhat, std, W) in reversed(caches):
+        h = np.tanh(xin @ W)
+        if kind == "pre":
+            dxn = (g * (1 - h**2)) @ W.T
+            g = g + ln_bwd(dxn, zhat, std)
+        else:
+            ds = ln_bwd(g, zhat, std)
+            g = ds + (ds * (1 - h**2)) @ W.T
+        norms.append(float(np.linalg.norm(g)))
+    return np.array(stds), np.array(norms[::-1])
+
+depths = [4, 8, 16, 32, 64]
+data = {(k, dep): run_stack(k, dep) for k in ["pre", "post"] for dep in depths}
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("잔차 스트림의 표준편차 (깊이 64)",
+                                    "층별 그래디언트 노름 (깊이 64)"))
+for i, (k, lbl) in enumerate([("pre", "pre-LN"), ("post", "post-LN")]):
+    stds, nrm = data[(k, 64)]
+    fig.add_trace(go.Scatter(x=np.arange(len(stds)), y=stds, mode="lines", name=lbl,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=np.arange(len(nrm)), y=nrm, mode="lines", showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+ref = 0.64*np.sqrt(np.arange(65))
+fig.add_trace(go.Scatter(x=np.arange(65), y=ref, mode="lines", name="0.64·√층수",
+                         line=dict(color=viz.YELLOW, width=2, dash="dash")), row=1, col=1)
+fig.update_xaxes(title_text="층 번호 (0 = 입력 쪽)")
+fig.update_yaxes(title_text="std(x)", row=1, col=1)
+fig.update_yaxes(title_text="‖g‖", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="잔차 스택 (tanh 서브층, d=64)")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: pre-post-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("① 잔차 스트림의 스케일")
+print(f"{'깊이':>6} {'pre-LN 최종 std':>17} {'/√깊이':>9} {'post-LN 최종 std':>18}")
+print("-" * 56)
+for dep in depths:
+    sp = data[("pre", dep)][0][-1]
+    sq = data[("post", dep)][0][-1]
+    print(f"{dep:>6} {sp:>17.3f} {sp/np.sqrt(dep):>9.3f} {sq:>18.3f}")
+print()
+print("pre-LN 은 √깊이 에 비례해 자란다 (계수가 깊어질수록 0.64 로 수렴).")
+print("post-LN 은 매 블록 끝에서 다시 정규화하므로 깊이와 무관하게 1 이다.")
+print()
+print("② 층별 그래디언트 노름 — 입력층 / 출력층 비")
+print(f"{'깊이':>6} {'pre-LN':>10} {'post-LN':>10}")
+print("-" * 30)
+for dep in depths:
+    rp = data[("pre", dep)][1][0]/data[("pre", dep)][1][-1]
+    rq = data[("post", dep)][1][0]/data[("post", dep)][1][-1]
+    print(f"{dep:>6} {rp:>10.3f} {rq:>10.3f}")
+print()
+print("이 장난감 스택에서는 **둘 다 그래디언트가 소실되지 않는다.**")
+print("오히려 pre-LN 쪽 비가 더 크게 나왔다 — 실제 Transformer 의 알려진 결과와 다르다.")
+```
+
+::: {.callout-warning}
+## 이 실험이 보여주는 것과 보여주지 못하는 것
+
+**재현된 것**: pre-LN의 잔차 스트림 분산이 깊이에 비례해 커진다는 성질.
+64층에서 표준편차가 5.1까지 자랐고, $0.64\sqrt{L}$ 에 수렴했다.
+$x$ 가 정규화를 거치지 않고 누적되므로 당연한 결과다.
+
+**재현되지 않은 것**: "post-LN은 깊어지면 그래디언트가 소실되어 warmup 없이는
+학습되지 않는다"는 널리 알려진 결과. 위 표에서 두 방식 모두 입력층까지
+그래디언트가 오히려 증폭되어 도달한다.
+
+이 스택은 tanh 서브층 하나짜리이고, 어텐션도 FFN도 잔차 가중치 스케일링도 없다.
+Xiong et al.(2020)의 분석은 Transformer 블록의 구체적 구조와 초기화 스케일에
+의존한다. **장난감 모형으로 문헌의 결과를 확인했다고 말할 수 없다** —
+여기서 확인한 것은 분산 누적 하나뿐이다.
+:::
+
+::: {.callout-note}
+## 그래서 실무에서는
+
+pre-LN은 **warmup 없이도 학습되고** 깊이를 늘리기 쉽다. 그래서 GPT 계열,
+Llama 계열이 전부 pre-LN이다.
+
+대신 pre-LN이 **최종 성능은 post-LN보다 낮다**는 보고가 반복된다.
+잔차 스트림 분산이 위에서 본 것처럼 커지면서, 깊은 층의 기여가 상대적으로 묻히기 때문이라는
+설명이 붙는다.
+
+절충안이 여럿 나왔다.
+
+- **DeepNorm** — post-LN을 쓰되 잔차 가중치와 초기화를 깊이에 맞춰 스케일 (1000층 학습 성공)
+- **Sandwich LN** — 서브층 앞뒤에 모두 LN
+- **ReZero / Fixup** — 정규화 없이 잔차 스케일 $\alpha$ 를 0에서 시작해 학습
+
+실무 기본값은 여전히 pre-LN이다. 학습이 되는 것이 먼저이기 때문이다.
 :::
 
 ---
 
-## G3.5.3 — pre-LN vs post-LN 그래디언트
+## 정규화의 숨은 효과: 가중치 스케일 불변성
 
-깊은 Transformer에서 두 배치의 그래디언트 노름 차이
+정규화 뒤에서는 **가중치의 크기가 출력에 영향을 주지 않는다.**
+$W \to cW$ 해도 $\hat z$ 는 그대로다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 깊이 슬라이더
-:::
+```{python}
+#| label: scale-invariance
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn, datasets
+
+X, y = datasets.two_moons(n=400, noise=0.2, seed=0)
+
+for norm, label in [(None, "정규화 없음"), ("batch", "BatchNorm"), ("layer", "LayerNorm")]:
+    m = nn.MLP([2, 32, 32, 2], activation="relu", norm=norm, seed=0)
+    L0, g0 = m.loss_and_grads(X, y, loss="softmax_ce", training=True)
+    n0 = np.linalg.norm(g0["W0"])
+    m.W[0] *= 3.0                                   # 첫 층 가중치를 3배로
+    L1, g1 = m.loss_and_grads(X, y, loss="softmax_ce", training=True)
+    n1 = np.linalg.norm(g1["W0"])
+    print(f"{label:<12} 손실 {L0:.6f} → {L1:.6f}   "
+          f"‖∂L/∂W₀‖ {n0:.3e} → {n1:.3e} ({n1/n0:.4f}배)")
+print()
+print("정규화가 있으면 W 를 3배 해도 손실이 (거의) 그대로다 — 스케일 불변.")
+print("대신 그래디언트가 1/3 로 줄어든다. 즉 **유효 학습률이 ‖W‖ 에 반비례한다.**")
+print()
+print("이것이 weight decay 와 정규화의 상호작용을 만든다:")
+print("  decay 가 ‖W‖ 를 줄인다 → 유효 학습률이 커진다")
+print("  둘이 균형을 이루는 지점이 '유효 학습률'의 실제 값이다.")
+print("  그래서 정규화 뒤의 층에 거는 weight decay 는 정규화가 아니라 학습률 조절에 가깝다.")
+```
 
 ---
 
-## G3.5.4 — 배치 크기와 BN 불안정
+## 선택 가이드
 
-배치가 작아질 때 통계 추정 잡음이 커지는 현상
+```{python}
+#| label: norm-guide
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 배치 크기 슬라이더
-:::
+rows = [
+    ("CNN 분류, 배치 ≥ 32",   "BatchNorm",  "여전히 최선"),
+    ("객체 검출·분할",         "GroupNorm",  "배치를 못 키움"),
+    ("Transformer",         "RMSNorm (pre)", "현재 표준"),
+    ("RNN / 시퀀스",         "LayerNorm",  "시점 독립"),
+    ("스타일 변환·GAN",        "InstanceNorm", "샘플별 스타일 제거"),
+    ("배치 1 추론이 중요",      "LayerNorm/GroupNorm", "학습/추론 동일"),
+    ("초대형 깊이 (100층+)",   "DeepNorm 또는 pre-LN", "그래디언트 흐름"),
+]
+print(f"{'상황':<24} {'권장':<22} {'이유'}")
+print("-" * 64)
+for r in rows:
+    print(f"{r[0]:<24} {r[1]:<22} {r[2]}")
+print()
+print("정규화를 아예 빼는 것도 가능하다 (Fixup, ReZero, NF-Net).")
+print("다만 초기화·잔차 스케일을 훨씬 조심스럽게 다뤄야 한다 — 다음 장의 주제다.")
+```
 
 ---
 
-## 핵심 용어
+## 요약
 
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| BatchNorm |  |
-| LayerNorm |  |
-| RMSNorm |  |
-| pre-LN |  |
-| 내부 공변량 이동 |  |
+| 정규화 공통 형태 | $\gamma(z-\mu)/\sigma + \beta$ — 다른 것은 축뿐 |
+| 내부 공변량 이동 | 원 논문의 설명, 이후 반박됨 |
+| 현재 설명 | **큰 학습률 허용** (실측: BN 9.7배, LN 1.8배) |
+| BatchNorm | 배치 의존. 작은 배치·시퀀스·분산 학습에 약함 |
+| LayerNorm | 배치 독립. 학습/추론 동일 |
+| RMSNorm | 평균 빼기 제거. 활성화 평균이 작을 때만 LN 과 같음 |
+| pre-LN | 항등 경로 보존, warmup 없이 학습 가능. 잔차 분산이 $\sqrt{L}$ 로 증가 |
+| post-LN | 잔차 스케일이 깊이와 무관하게 일정. 학습은 어렵지만 최종 성능은 더 좋다는 보고 |
+| 스케일 불변성 | 유효 학습률 $\propto 1/\|W\|$ — weight decay와 얽힘 |
+
+정규화는 활성화의 스케일을 다스려 학습을 **가능하게** 한다.
+다음 장은 그 다음 문제다 — 학습이 되고 나면, 이제 **과적합을 어떻게 막을 것인가**.
 
 ---
 
-**다음**: [3.6 딥러닝의 정규화](06_regularization_dl.qmd) — 드롭아웃·증강·조기종료 — 과적합을 막는 도구상자
+**다음**: [3.6 딥러닝의 정규화](06_regularization_dl.qmd) — 드롭아웃·증강·조기종료
 
 **이전**: [3.4 최적화 알고리즘](04_optimizers.qmd)

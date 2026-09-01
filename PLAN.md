@@ -13,7 +13,7 @@
 - **계산·그래픽**: NumPy / SciPy / Plotly (렌더 타임 의존성은 이 셋으로 제한)
 - **딥러닝 프레임워크 코드**: 실행하지 않는 예시 블록으로 제시 (빌드 재현성 우선)
 
-- **집필 완료** 37 / 123 챕터
+- **집필 완료** 38 / 123 챕터
 
 ## 전체 구성
 
@@ -22,7 +22,7 @@
 | `00_foundations` | Part 0: 수학·컴퓨팅 기초 | 6 | 6 | 머신러닝 논문의 수식을 읽고, 그 수식이 코드에서 어떤 배열 연산으로 바뀌는지 옮길 수 있다. |
 | `01_data_science` | Part 1: 데이터 사이언스 | 8 | 0 | 원시 데이터를 받아 정제·탐색하고, 통계적으로 방어 가능한 결론과 실험 설계를 내놓을 수 있다. |
 | `02_classical_ml` | Part 2: 고전 머신러닝 | 13 | 13 | 정형 데이터 문제에 알고리즘을 고르고, 왜 그 알고리즘이 그렇게 동작하는지 수식과 그림으로 설명할 수 있다. |
-| `03_deep_learning` | Part 3: 딥러닝 기초 | 10 | 5 | 신경망의 순전파·역전파·최적화를 NumPy로 처음부터 구현하고, 학습이 안 될 때 원인을 진단할 수 있다. |
+| `03_deep_learning` | Part 3: 딥러닝 기초 | 10 | 6 | 신경망의 순전파·역전파·최적화를 NumPy로 처음부터 구현하고, 학습이 안 될 때 원인을 진단할 수 있다. |
 | `04_architectures` | Part 4: 신경망 아키텍처 | 7 | 0 | CNN·RNN 계열의 귀납 편향을 설명하고, 어텐션이 왜 등장할 수밖에 없었는지 역사적·수학적으로 서술할 수 있다. |
 | `05_transformer` | Part 5: 트랜스포머 | 11 | 11 | Transformer를 NumPy로 처음부터 구현하고, 최신 LLM이 원 논문에서 무엇을 바꿨는지 항목별로 설명할 수 있다. |
 | `06_generative` | Part 6: 생성 모델 | 9 | 0 | VAE·GAN·확산 모델의 목적함수를 각각 유도하고, 어떤 상황에서 어떤 계열을 선택할지 판단할 수 있다. |
@@ -60,6 +60,7 @@
 - ✅ **3.2 활성화 함수** — `chapters/03_deep_learning/02_activations.qmd`
 - ✅ **3.3 손실함수** — `chapters/03_deep_learning/03_losses.qmd`
 - ✅ **3.4 최적화 알고리즘** — `chapters/03_deep_learning/04_optimizers.qmd`
+- ✅ **3.5 정규화 층** — `chapters/03_deep_learning/05_normalization.qmd`
 - ✅ **5.0 어텐션 메커니즘** — `chapters/05_transformer/00_attention_mechanism.qmd`
 - ✅ **5.1 셀프 어텐션과 마스킹** — `chapters/05_transformer/01_self_attention.qmd`
 - ✅ **5.2 멀티헤드 어텐션** — `chapters/05_transformer/02_multi_head.qmd`
@@ -1108,7 +1109,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 3.5 정규화 층
+### 3.5 정규화 층 ✅
 
 `chapters/03_deep_learning/05_normalization.qmd` — *BatchNorm·LayerNorm·RMSNorm — 학습을 안정시키는 장치*
 
