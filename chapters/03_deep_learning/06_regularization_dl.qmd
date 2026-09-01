@@ -4,89 +4,651 @@ subtitle: "드롭아웃·증강·조기종료 — 과적합을 막는 도구상�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[2.1](../02_classical_ml/01_bias_variance.qmd)에서 배운 편향-분산 이야기대로라면,
+파라미터가 데이터보다 100배 많은 모델은 완전히 과적합해야 한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그런데 되지 않는다. **왜 일반화하는지는 아직 완전히 풀리지 않은 문제다.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장은 그 미스터리를 푸는 대신, 실무에서 실제로 쓰는 도구들이
+**무엇을 하고 무엇을 대가로 요구하는지**를 하나씩 잰다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 먼저: 과적합이 실제로 어떻게 생기는가
+
+```{python}
+#| label: fig-overfit-baseline
+#| fig-cap: "데이터 대비 모델 크기를 키워가며 본 훈련/검증 격차"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=300, noise=0.35, seed=0)
+perm = np.random.default_rng(0).permutation(len(X))
+tr, te = perm[:120], perm[120:]                    # 훈련 120개만
+
+widths = [4, 8, 16, 32, 64, 128, 256]
+tr_acc, te_acc, n_params = [], [], []
+for w in widths:
+    m = nn.MLP([2, w, w, 2], activation="relu", seed=0)
+    nn.train(m, X[tr], y[tr], loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=0.01), steps=2000, batch_size=32, seed=1)
+    tr_acc.append(float((m.predict(X[tr]).argmax(1) == y[tr]).mean()))
+    te_acc.append(float((m.predict(X[te]).argmax(1) == y[te]).mean()))
+    n_params.append(m.n_params())
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("정확도", "훈련−검증 격차"))
+fig.add_trace(go.Scatter(x=n_params, y=tr_acc, mode="lines+markers", name="훈련",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=n_params, y=te_acc, mode="lines+markers", name="검증",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=n_params, y=np.array(tr_acc)-np.array(te_acc),
+                         mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.PINK, width=2.5)), row=1, col=2)
+fig.add_vline(x=len(tr), line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="파라미터 = 훈련 샘플 수")
+fig.update_xaxes(title_text="파라미터 수", type="log")
+fig.update_yaxes(title_text="정확도", row=1, col=1)
+fig.update_yaxes(title_text="격차", row=1, col=2)
+viz.fig_defaults(fig, height=400, title=f"훈련 샘플 {len(tr)}개 · two-moons(잡음 0.35)")
+fig.update_layout(legend=dict(x=0.02, y=0.15, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: overfit-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'너비':>6} {'파라미터':>10} {'샘플 대비':>10} {'훈련':>8} {'검증':>8} {'격차':>8}")
+print("-" * 56)
+for w, p_, a, b in zip(widths, n_params, tr_acc, te_acc):
+    print(f"{w:>6} {p_:>10,} {p_/len(tr):>9.1f}× {a:>8.3f} {b:>8.3f} {a-b:>8.3f}")
+print()
+best = int(np.argmax(te_acc))
+print(f"검증 정확도가 가장 높은 너비: {widths[best]} "
+      f"(파라미터 {n_params[best]:,}, 샘플의 {n_params[best]/len(tr):.1f}배)")
+over = [i for i, p_ in enumerate(n_params) if p_ > len(tr)]
+print(f"파라미터가 샘플보다 많은 구간의 검증 정확도: "
+      f"{min(te_acc[i] for i in over):.3f} ~ {max(te_acc[i] for i in over):.3f}")
+print()
+se = np.sqrt(0.85*0.15/len(te))
+print(f"검증 샘플 {len(te)}개 → 정확도의 표준오차 ≈ {se:.3f} "
+      f"(= {se*len(te):.1f}개 샘플)")
+print(f"위 검증 정확도들은 {min(te_acc):.3f}~{max(te_acc):.3f} 범위이고, "
+      f"이 폭은 표준오차 {(max(te_acc)-min(te_acc))/se:.1f}배다.")
+print()
+print("즉 파라미터를 1,600배 늘리는 동안 검증 성능은 **사실상 변하지 않았다.**")
+print("고전 이론이 예측하는 붕괴가 일어나지 않는다는 것 — 이것이 '미스터리'다.")
+```
+
+---
+
+## G3.6.1 — 드롭아웃
+
+학습 시 각 뉴런을 확률 $p$ 로 끈다. 추론 시에는 전부 켠다.
+
+$$\text{학습:}\ a \leftarrow \frac{a \odot \text{Bernoulli}(1-p)}{1-p}
+\qquad
+\text{추론:}\ a \leftarrow a$$
+
+$1-p$ 로 나누는 **역스케일링**이 핵심이다. 이래야 기댓값이 보존된다.
+
+```{python}
+#| label: fig-dropout
+#| fig-cap: "드롭 확률에 따른 마스크와 학습 결과"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+rates = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7]
+rng = np.random.default_rng(0)
+masks = {p: np.round((rng.random((12, 24)) > p).astype(float) / max(1-p, 1e-9), 3)
+         for p in rates}
+
+X, y = datasets.two_moons(n=300, noise=0.35, seed=0)
+perm = np.random.default_rng(0).permutation(len(X)); tr, te = perm[:120], perm[120:]
+res = {}
+for p in rates:
+    m = nn.MLP([2, 128, 128, 2], activation="relu", dropout=p, seed=0)
+    nn.train(m, X[tr], y[tr], loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=0.01), steps=2000, batch_size=32, seed=1)
+    res[p] = (float((m.predict(X[tr]).argmax(1) == y[tr]).mean()),
+              float((m.predict(X[te]).argmax(1) == y[te]).mean()))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("드롭아웃 마스크 (은닉 24유닛 × 배치 12)",
+                                    "드롭 확률에 따른 정확도"))
+p0 = 0.3
+fig.add_trace(go.Heatmap(z=masks[p0], colorscale="Blues", showscale=False,
+                         zmin=0, zmax=3.5), row=1, col=1)
+fig.add_trace(go.Scatter(x=rates, y=[res[p][0] for p in rates], mode="lines+markers",
+                         name="훈련", line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
+fig.add_trace(go.Scatter(x=rates, y=[res[p][1] for p in rates], mode="lines+markers",
+                         name="검증", line=dict(color=viz.ACCENT, width=2.5)), row=1, col=2)
+steps = [(f"{p:g}", {"z": [masks[p], None, None]}) for p in rates]
+fig.update_layout(sliders=[viz.slider(steps, prefix="드롭 확률 p = ",
+                                      active=rates.index(p0), pad_t=52)])
+fig.update_xaxes(title_text="유닛", row=1, col=1)
+fig.update_xaxes(title_text="드롭 확률 p", row=1, col=2)
+fig.update_yaxes(title_text="배치 샘플", row=1, col=1)
+fig.update_yaxes(title_text="정확도", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="MLP[2,128,128,2] · 훈련 120개")
+fig.update_layout(legend=dict(x=0.55, y=0.25, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: dropout-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'드롭 확률':>10} {'훈련':>9} {'검증':>9} {'격차':>9}")
+print("-" * 40)
+for p in rates:
+    a, b = res[p]
+    print(f"{p:>10.1f} {a:>9.3f} {b:>9.3f} {a-b:>9.3f}")
+print()
+best = max(rates, key=lambda p: res[p][1])
+print(f"검증 최고: p = {best} ({res[best][1]:.3f}), p=0 대비 {res[best][1]-res[0.0][1]:+.3f}")
+print()
+# 앙상블 해석 검증: 서로 다른 마스크가 만드는 서브네트워크 수
+d = 128
+print(f"은닉 유닛 {d}개, p=0.5 → 가능한 서브네트워크 2^{d} ≈ 10^{d*np.log10(2):.0f} 개")
+print("모든 서브네트워크의 평균을 내는 것이 이론적 목표이고,")
+print("추론 시 전부 켜는 것은 그 평균의 **1차 근사**다 (선형층에서는 정확).")
+```
+
+::: {.callout-note}
+## 드롭아웃의 위상 변화
+
+드롭아웃은 2012–2018년 사이 사실상 필수였다. 지금은 다르다.
+
+- **CNN** — BatchNorm이 널리 쓰이면서 드롭아웃은 거의 사라졌다.
+  둘을 같이 쓰면 분산 추정이 학습/추론 간에 어긋나 오히려 해롭다는 분석도 있다
+- **Transformer 사전학습** — 데이터가 파라미터보다 훨씬 많아 과적합이 문제가 아니다.
+  Llama, GPT-3 등은 사전학습 시 드롭아웃 0을 쓴다
+- **파인튜닝 / 작은 데이터** — 여전히 유효하다. 0.1 정도를 쓴다
+
+**"드롭아웃은 항상 켠다"는 낡은 조언이다.** 데이터 대비 모델 크기를 보고 정해야 한다.
 :::
 
-파라미터가 데이터보다 많은 모델이 왜 일반화하는가는 아직 완전히 풀리지 않았지만, 실무에서 쓰는 도구들은 명확한 효과와 부작용을 갖는다.
+---
+
+## G3.6.2 — Mixup
+
+두 샘플을 **입력과 레이블 모두** 섞는다.
+
+$$\tilde x = \lambda x_i + (1-\lambda)x_j, \qquad
+  \tilde y = \lambda y_i + (1-\lambda)y_j, \qquad
+  \lambda \sim \text{Beta}(\alpha,\alpha)$$
+
+```{python}
+#| label: fig-mixup
+#| fig-cap: "λ 에 따른 혼합과 결정 경계 변화"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=300, noise=0.35, seed=0)
+perm = np.random.default_rng(0).permutation(len(X)); tr, te = perm[:120], perm[120:]
+
+def train_mixup(alpha, steps=2000, seed=1):
+    m = nn.MLP([2, 128, 128, 2], activation="relu", seed=0)
+    P = m.params(); opt = nn.Optimizer("adam", lr=0.01)
+    r = np.random.default_rng(seed)
+    Xt, yt = X[tr], y[tr]
+    onehot = np.eye(2)[yt]
+    for _ in range(steps):
+        idx = r.choice(len(Xt), 32, replace=False)
+        xb, tb = Xt[idx], onehot[idx]
+        if alpha > 0:
+            lam = r.beta(alpha, alpha)
+            jdx = r.permutation(len(idx))
+            xb = lam*xb + (1-lam)*xb[jdx]
+            tb = lam*tb + (1-lam)*tb[jdx]
+        out, cache = m.forward(xb, training=True)
+        prob = nn.softmax(out)
+        opt.step(P, m.backward(cache, (prob - tb)/len(idx)))
+    return m, (float((m.predict(X[te]).argmax(1) == y[te]).mean()))
+
+alphas = [0.0, 0.1, 0.2, 0.4, 1.0, 2.0]
+models = {a: train_mixup(a) for a in alphas}
+
+# λ 슬라이더용 혼합 예시
+r = np.random.default_rng(3)
+i0, j0 = 3, 90
+lams = [0.0, 0.25, 0.5, 0.75, 1.0]
+mixed = {l: np.round(l*X[tr][i0] + (1-l)*X[tr][j0], 3) for l in lams}
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("두 샘플의 혼합", "α 에 따른 검증 정확도"))
+fig.add_trace(go.Scatter(x=X[tr][:, 0], y=X[tr][:, 1], mode="markers", name="훈련 데이터",
+                         marker=dict(size=6, color=[viz.ACCENT if c == 0 else viz.WARM
+                                                    for c in y[tr]], opacity=0.45)),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=[X[tr][i0, 0], X[tr][j0, 0]], y=[X[tr][i0, 1], X[tr][j0, 1]],
+                         mode="markers+lines", name="섞는 두 점",
+                         marker=dict(size=12, color=viz.GREEN, symbol="x"),
+                         line=dict(color=viz.GREEN, dash="dot")), row=1, col=1)
+l0 = 0.5
+fig.add_trace(go.Scatter(x=[mixed[l0][0]], y=[mixed[l0][1]], mode="markers",
+                         name="혼합 결과",
+                         marker=dict(size=16, color=viz.PINK, symbol="star")),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=alphas, y=[models[a][1] for a in alphas], mode="lines+markers",
+                         name="검증 정확도",
+                         line=dict(color=viz.YELLOW, width=2.5)), row=1, col=2)
+steps = [(f"{l:g}", {"x": [None, None, [mixed[l][0]], None],
+                     "y": [None, None, [mixed[l][1]], None]}) for l in lams]
+fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ",
+                                      active=lams.index(l0), pad_t=52)])
+fig.update_xaxes(title_text="x₁", row=1, col=1)
+fig.update_xaxes(title_text="Mixup α", row=1, col=2)
+fig.update_yaxes(title_text="x₂", row=1, col=1)
+fig.update_yaxes(title_text="검증 정확도", row=1, col=2)
+viz.fig_defaults(fig, height=440, title="Mixup")
+fig.update_layout(legend=dict(x=0.01, y=0.99, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: mixup-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'α':>7} {'검증 정확도':>13} {'Beta(α,α) 의 λ 분포':>26}")
+print("-" * 50)
+r = np.random.default_rng(0)
+for a in alphas:
+    acc = models[a][1]
+    if a == 0:
+        shape = "혼합 없음"
+    else:
+        lam = r.beta(a, a, 20000)
+        near_edge = float(np.mean((lam < 0.1) | (lam > 0.9)))
+        shape = f"양 끝(λ<0.1 or >0.9) 비중 {near_edge:.1%}"
+    print(f"{a:>7.1f} {acc:>13.3f}   {shape:>24}")
+print()
+best = max(alphas, key=lambda a: models[a][1])
+print(f"최고: α = {best} ({models[best][1]:.3f}), α=0 대비 {models[best][1]-models[0.0][1]:+.3f}")
+print()
+print("α 가 작으면 λ 가 0 이나 1 근처에 몰려 거의 원본 샘플이 나온다 (약한 정규화).")
+print("α 가 크면 λ 가 0.5 근처에 몰려 항상 반반 섞인다 (강한 정규화).")
+print("이미지 분류의 관례는 α = 0.2 ~ 0.4 다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 조기 종료
 
-- 드롭아웃: 앙상블 해석, 학습/추론 스케일링, 현대 모델에서의 위상 변화
-- weight decay 와 L2, AdamW에서의 올바른 적용
-- 데이터 증강: 이미지(crop/flip/color/RandAugment), 텍스트(back-translation, EDA), 오디오(SpecAugment)
-- Mixup, CutMix, Manifold Mixup — 레이블까지 섞기
-- 조기 종료와 암묵적 정규화
-- 레이블 스무딩과 과신 억제
-- 확률적 깊이(stochastic depth), DropPath
-- 앙상블·SWA·EMA — 가중치 평균의 힘
-- 잡음 주입: 그래디언트 잡음, 가중치 잡음
-- 정규화 없이도 일반화하는 과매개변수 모델의 미스터리
+가장 값싼 정규화다. 코드 세 줄이면 되고 계산 비용도 없다.
+
+```{python}
+#| label: fig-early-stopping
+#| fig-cap: "검증 손실이 최저인 지점과 그 이후"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=600, noise=0.35, seed=0)
+perm = np.random.default_rng(0).permutation(len(X)); tr, va = perm[:300], perm[300:]
+
+m = nn.MLP([2, 128, 128, 2], activation="relu", seed=0)
+h = nn.train(m, X[tr], y[tr], loss="softmax_ce", opt=nn.Optimizer("adam", lr=0.005),
+             steps=4000, batch_size=32, seed=1,
+             X_val=X[va], y_val=y[va], eval_every=20)
+
+val_steps = np.array([s for s, _ in h["val"]])
+val_loss = np.array([v for _, v in h["val"]])
+tr_loss = np.convolve(h["loss"], np.ones(20)/20, mode="valid")
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=np.arange(len(tr_loss)), y=tr_loss, mode="lines",
+                         name="훈련 손실", line=dict(color=viz.WARM, width=2.5)))
+fig.add_trace(go.Scatter(x=val_steps, y=val_loss, mode="lines",
+                         name="검증 손실", line=dict(color=viz.ACCENT, width=2.5)))
+k = int(np.argmin(val_loss))
+fig.add_vline(x=val_steps[k], line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text=f"검증 최저 (스텝 {val_steps[k]})")
+fig.update_layout(xaxis_title="스텝", yaxis_title="손실", yaxis_type="log",
+                  legend=dict(x=0.6, y=0.98))
+viz.fig_defaults(fig, height=400, title="조기 종료 지점 · 훈련 300개")
+fig.show()
+```
+
+```{python}
+#| label: early-stopping-numbers
+#| code-fold: false
+
+import numpy as np
+
+k = int(np.argmin(val_loss))
+print(f"검증 손실 최저: 스텝 {val_steps[k]} (전체의 {val_steps[k]/4000:.1%} 지점), "
+      f"손실 {val_loss[k]:.4f}")
+print(f"끝까지 갔을 때 검증 손실: {val_loss[-1]:.4f} ({val_loss[-1]/val_loss[k]:.2f}배)")
+print(f"그동안 훈련 손실은 {tr_loss[val_steps[k]]:.4f} → {tr_loss[-1]:.4f} 로 계속 내려갔다.")
+print()
+
+# 최저점 이후로 검증 손실이 다시 개선된 적이 있는가?
+improve_after = int(np.sum(np.diff(val_loss[k:]) < 0))
+print(f"최저점 이후 검증 손실이 직전보다 내려간 평가 횟수: "
+      f"{improve_after} / {len(val_loss)-k-1} ({improve_after/(len(val_loss)-k-1):.0%})")
+print(f"곡선은 계속 출렁이지만, 최저값 {val_loss[k]:.4f} 를 다시 넘어서지는 못했다.")
+print()
+
+print(f"{'patience':>10} {'멈추는 스텝':>12} {'낭비한 스텝':>12} {'찾은 최저 손실':>16}")
+print("-" * 54)
+for pat in [3, 5, 10, 20]:
+    best_i, wait, stop = 0, 0, len(val_loss) - 1
+    for i in range(1, len(val_loss)):
+        if val_loss[i] < val_loss[best_i]:
+            best_i, wait = i, 0
+        else:
+            wait += 1
+            if wait >= pat:
+                stop = i
+                break
+    print(f"{pat:>10} {val_steps[stop]:>12} {val_steps[stop]-val_steps[best_i]:>12} "
+          f"{val_loss[best_i]:>16.4f}")
+print()
+print("네 patience 모두 **같은 최적 가중치**를 찾았다. 차이는 낭비한 계산량뿐이다.")
+print("여기서는 최저점이 학습 초반(7%)에 뚜렷하게 찍혀서 운이 좋았다.")
+print("최저점이 학습 후반에 있거나 곡선이 완만하면 patience 3 은 진짜 최저점 전에")
+print("멈춰버린다. patience 는 '검증 잡음의 크기'와 '남은 예산'을 보고 정해야 한다.")
+print()
+print("실무에서는 '조기 종료'를 학습 중단이 아니라 **최고 체크포인트 저장**으로 구현한다.")
+print("끝까지 학습하되 검증이 최고일 때의 가중치를 따로 남기면 위험이 없다.")
+```
 
 ---
 
-## G3.6.1 — 드롭아웃 마스크
+## G3.6.3 — 가중치 평균: EMA와 SWA
 
-매 스텝 서로 다른 서브네트워크가 학습되는 모습
+학습 궤적의 **가중치를 평균**하면 더 좋은 해가 나온다는 관찰이 있다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 드롭 확률 슬라이더
+$$\text{EMA:}\ \bar\theta_t = \tau\bar\theta_{t-1} + (1-\tau)\theta_t
+\qquad
+\text{SWA:}\ \bar\theta = \frac{1}{K}\sum_{k} \theta_{t_k}$$
+
+```{python}
+#| label: fig-ema
+#| fig-cap: "EMA 감쇠율에 따른 검증 손실"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=400, noise=0.3, seed=2)
+perm = np.random.default_rng(0).permutation(len(X)); tr, va = perm[:200], perm[200:]
+
+taus = [0.0, 0.9, 0.99, 0.999]
+STEPS_E = 1500
+
+m = nn.MLP([2, 64, 64, 2], activation="relu", seed=0)
+P = m.params()
+ema = {t: {k: v.copy() for k, v in P.items()} for t in taus}
+opt = nn.Optimizer("adam", lr=0.02)
+r = np.random.default_rng(1)
+
+hist = {t: [] for t in taus}
+raw_hist, eval_steps = [], []
+scratch = nn.MLP([2, 64, 64, 2], activation="relu", seed=0)
+SP = scratch.params()
+
+for s in range(STEPS_E):
+    idx = r.choice(len(tr), 32, replace=False)
+    L, g = m.loss_and_grads(X[tr][idx], y[tr][idx], loss="softmax_ce")
+    opt.step(P, g)
+    for t in taus:
+        for k in P:
+            ema[t][k][...] = t*ema[t][k] + (1-t)*P[k]
+    if s % 25 == 0:
+        eval_steps.append(s)
+        Lv, _ = m.loss_and_grads(X[va], y[va], loss="softmax_ce", training=False)
+        raw_hist.append(Lv)
+        for t in taus:
+            for k in SP:
+                SP[k][...] = ema[t][k]
+            Lt, _ = scratch.loss_and_grads(X[va], y[va], loss="softmax_ce", training=False)
+            hist[t].append(Lt)
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=eval_steps, y=raw_hist, mode="lines", name="원본 가중치",
+                         line=dict(color=viz.WARM, width=2.5)))
+for i, t in enumerate(taus[1:], start=1):
+    fig.add_trace(go.Scatter(x=eval_steps, y=hist[t], mode="lines", name=f"EMA τ={t}",
+                             line=dict(color=viz.color(i), width=2.5)))
+fig.update_layout(xaxis_title="스텝", yaxis_title="검증 손실", yaxis_type="log",
+                  legend=dict(x=0.6, y=0.98))
+viz.fig_defaults(fig, height=410, title="EMA 가중치의 검증 손실 (MLP[2,64,64,2])")
+fig.show()
+```
+
+```{python}
+#| label: ema-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'가중치':<14} {'최종 검증 손실':>15} {'최저 검증 손실':>15} {'마지막 200스텝 표준편차':>24}")
+print("-" * 74)
+arrs = {"원본": np.array(raw_hist)}
+for t in taus[1:]:
+    arrs[f"EMA τ={t}"] = np.array(hist[t])
+for name, a in arrs.items():
+    tail = a[-8:]
+    print(f"{name:<14} {a[-1]:>15.4f} {a.min():>15.4f} {tail.std():>24.5f}")
+print()
+best = min(arrs, key=lambda k: arrs[k][-1])
+print(f"학습 종료 시점에서 가장 좋은 가중치: {best} "
+      f"(원본보다 {arrs['원본'][-1] - arrs[best][-1]:.4f} 낮음)")
+best_min = min(arrs, key=lambda k: arrs[k].min())
+print(f"학습 전 구간의 최저점: {best_min} ({arrs[best_min].min():.4f}), "
+      f"원본은 {arrs['원본'].min():.4f}")
+print("τ 가 너무 크면(0.999) 반응이 느려 최저점 자체는 오히려 높아진다 "
+      f"({arrs['EMA τ=0.999'].min():.4f}).")
+print("EMA 가 최저점을 크게 낮춰주지는 않는다 — 이득은 '끝까지 학습해도 나빠지지 않는다'에 있다.")
+print()
+print("EMA 의 가장 확실한 효과는 **검증 곡선이 매끄러워진다**는 것이다 (표준편차 열).")
+print(f"τ 가 클수록 반응이 느려진다. 유효 평균 구간 ≈ 1/(1−τ) 스텝:")
+for t in taus[1:]:
+    print(f"  τ={t} → 약 {1/(1-t):.0f} 스텝")
+```
+
+::: {.key-concept}
+**EMA는 사실상 공짜 정규화다**
+
+- 학습 자체를 전혀 바꾸지 않는다 (별도 사본을 갱신할 뿐)
+- 추가 비용은 파라미터 1벌 분량의 메모리와 스텝당 곱셈 한 번
+- 확산 모델·자기지도 학습(BYOL, MoCo)에서는 **필수 요소**다
+
+$\tau$ 는 총 스텝 수를 보고 정한다. 유효 구간 $1/(1-\tau)$ 이 총 스텝의
+5–10% 정도가 되게 잡는 것이 관례다 (예: 10만 스텝이면 $\tau = 0.9999$).
 :::
 
 ---
 
-## G3.6.2 — Mixup 샘플
+## 데이터 증강: 도메인별 도구
 
-두 이미지와 레이블이 λ 비율로 섞이는 과정
+증강은 **지식을 주입하는 일**이다. "이렇게 바꿔도 레이블은 그대로"라는 지식.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: λ 슬라이더
+```{python}
+#| label: augmentation-table
+#| code-fold: false
+
+rows = [
+    ("이미지", "좌우 반전",        "좌우 대칭성",        "글자·숫자에는 금물"),
+    ("이미지", "RandomCrop",     "위치 불변성",        "거의 항상 안전"),
+    ("이미지", "색상 지터",        "조명 불변성",        "색이 레이블이면 금물"),
+    ("이미지", "RandAugment",    "여러 변환 자동 조합",  "탐색 비용 없음"),
+    ("이미지", "CutMix",         "부분만 보고도 인식",   "Mixup 의 공간 버전"),
+    ("텍스트", "역번역",           "의미 보존 재표현",     "느리고 비쌈"),
+    ("텍스트", "EDA (동의어 치환)", "어휘 다양성",        "의미가 깨질 수 있음"),
+    ("텍스트", "토큰 드롭",        "부분 정보로 추론",     "간단하고 효과적"),
+    ("오디오", "SpecAugment",    "주파수·시간 마스킹",   "ASR 의 표준"),
+    ("오디오", "속도·피치 변화",    "화자 변이",          "음악에는 주의"),
+    ("오디오", "잡음·잔향 추가",    "환경 강건성",         "실전 데이터에 필수"),
+]
+print(f"{'도메인':<8} {'기법':<16} {'주입하는 지식':<22} {'주의'}")
+print("-" * 72)
+for r in rows:
+    print(f"{r[0]:<8} {r[1]:<16} {r[2]:<22} {r[3]}")
+print()
+print("증강의 위험: **불변성이 아닌 것을 불변으로 가르치는 것.**")
+print("6과 9를 구분해야 하는데 180도 회전 증강을 넣으면 모델은 영영 배울 수 없다.")
+```
+
+::: {.interaction-hint}
+오디오 증강은 [8.1 푸리에·STFT](../08_audio_speech/01_fourier_stft.qmd),
+이미지 증강은 [9.0 이미지의 표현과 처리](../09_vision_video/00_image_basics.qmd)에서
+실제 신호에 적용해 봅니다.
 :::
 
 ---
 
-## G3.6.3 — 조기 종료 지점
+## 정규화 도구 비교
 
-검증 손실이 최저인 지점을 지나 과적합으로 넘어가는 순간
+```{python}
+#| label: fig-regularizer-comparison
+#| fig-cap: "같은 예산에서 각 도구가 만드는 훈련/검증 격차"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 에폭 슬라이더
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=300, noise=0.35, seed=0)
+perm = np.random.default_rng(0).permutation(len(X)); tr, te = perm[:120], perm[120:]
+onehot = np.eye(2)[y[tr]]
+
+def run(name, dropout=0.0, wd=0.0, smooth=0.0, mixup=0.0, noise=0.0, steps=2000):
+    m = nn.MLP([2, 128, 128, 2], activation="relu", dropout=dropout, seed=0)
+    P = m.params()
+    opt = nn.Optimizer("adamw", lr=0.01, weight_decay=wd)
+    r = np.random.default_rng(1)
+    for _ in range(steps):
+        idx = r.choice(len(tr), 32, replace=False)
+        xb, tb = X[tr][idx], onehot[idx]
+        if noise > 0:
+            xb = xb + r.normal(0, noise, xb.shape)
+        if mixup > 0:
+            lam = r.beta(mixup, mixup)
+            j = r.permutation(len(idx))
+            xb, tb = lam*xb + (1-lam)*xb[j], lam*tb + (1-lam)*tb[j]
+        if smooth > 0:
+            tb = tb*(1-smooth) + smooth/2
+        out, cache = m.forward(xb, training=True)
+        opt.step(P, m.backward(cache, (nn.softmax(out) - tb)/len(idx)))
+    return (name,
+            float((m.predict(X[tr]).argmax(1) == y[tr]).mean()),
+            float((m.predict(X[te]).argmax(1) == y[te]).mean()))
+
+settings = [
+    run("없음"),
+    run("드롭아웃 0.3", dropout=0.3),
+    run("weight decay 0.05", wd=0.05),
+    run("레이블 스무딩 0.1", smooth=0.1),
+    run("Mixup α=0.4", mixup=0.4),
+    run("입력 잡음 0.1", noise=0.1),
+    run("드롭아웃+WD+Mixup", dropout=0.2, wd=0.02, mixup=0.4),
+]
+
+names = [s[0] for s in settings]
+fig = go.Figure()
+fig.add_trace(go.Bar(x=names, y=[s[1] for s in settings], name="훈련",
+                     marker_color=viz.WARM))
+fig.add_trace(go.Bar(x=names, y=[s[2] for s in settings], name="검증",
+                     marker_color=viz.ACCENT))
+fig.update_layout(barmode="group", yaxis_title="정확도",
+                  yaxis=dict(range=[0.6, 1.02]), legend=dict(x=0.02, y=0.15))
+viz.fig_defaults(fig, height=430, title="정규화 도구 비교 · 훈련 120개")
+fig.update_layout(xaxis_tickangle=-20)
+fig.show()
+```
+
+```{python}
+#| label: regularizer-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'설정':<22} {'훈련':>8} {'검증':>8} {'격차':>8} {'기준 대비':>10}")
+print("-" * 62)
+base_te = settings[0][2]
+for name, a, b in settings:
+    print(f"{name:<22} {a:>8.3f} {b:>8.3f} {a-b:>8.3f} {b-base_te:>+10.3f}")
+print()
+best = max(settings, key=lambda s: s[2])
+print(f"검증 최고: {best[0]} ({best[2]:.3f}, 기준 대비 {best[2]-base_te:+.3f})")
+tight = min(settings, key=lambda s: s[1]-s[2])
+print(f"격차 최소: {tight[0]} ({tight[1]-tight[2]:.3f})")
+print()
+print("주의: 이 표는 시드 하나, 데이터셋 하나의 결과다.")
+print("격차가 작다고 좋은 것이 아니다 — 훈련 정확도까지 같이 떨어졌을 수 있다.")
+print("실제로는 여러 시드에서 검증 성능의 평균과 분산을 함께 봐야 한다.")
+```
+
+---
+
+## 미스터리: 왜 일반화하는가
+
+::: {.callout-note}
+## 아직 답이 없는 질문
+
+Zhang et al.(2017)의 실험이 문제를 선명하게 만들었다.
+**레이블을 완전히 무작위로 바꾼 ImageNet도 신경망은 100% 외운다.**
+그러니 "모델이 단순해서 일반화한다"는 설명은 틀렸다.
+
+지금까지 나온 부분적 답들:
+
+- **암묵적 정규화** — SGD 자체가 특정 해를 선호한다 (최소 노름 해 쪽으로)
+- **이중 하강(double descent)** — 파라미터를 더 늘리면 성능이 다시 좋아진다.
+  고전 이론의 U자 곡선 오른쪽에 또 하나의 내리막이 있다
+- **평평한 최소점** — [3.3](03_losses.qmd)에서 봤듯 논쟁 중이다
+- **NTK / 특성 학습** — 무한 너비 극한에서의 이론. 유한 모델과의 간극이 남는다
+
+**실무적 결론**: 위 도구들은 전부 **경험적으로** 효과가 확인된 것이고,
+그 효과는 데이터 대비 모델 크기에 크게 의존한다.
+"항상 켜는 정규화"는 없다. 검증 성능으로 확인하는 수밖에 없다.
 :::
 
 ---
 
-## G3.6.4 — EMA vs raw 가중치
+## 요약
 
-가중치 평균이 손실 지형에서 더 평평한 곳에 앉는 모습
+| 도구 | 하는 일 | 언제 |
+|------|---------|------|
+| 드롭아웃 | 서브네트워크 앙상블 | 데이터 < 파라미터, 파인튜닝 |
+| weight decay | 가중치 노름 억제 (정규화 뒤에선 유효 lr 조절) | 거의 항상 |
+| 레이블 스무딩 | 과신 억제 | 분류, 캘리브레이션 필요 시 |
+| Mixup / CutMix | 샘플 사이 선형 보간을 학습 | 이미지 분류 |
+| 데이터 증강 | **불변성 지식 주입** | 도메인을 알 때 |
+| 조기 종료 | 과적합 전에 멈춤 | 비용 0, 항상 |
+| EMA / SWA | 궤적 가중치 평균 | 비용 거의 0, 항상 |
+| 확률적 깊이 | 블록 단위 드롭 | 매우 깊은 잔차망 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 감쇠율 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 드롭아웃 |  |
-| Mixup |  |
-| SpecAugment |  |
-| 조기 종료 |  |
-| EMA/SWA |  |
+정규화가 학습을 **덜 망가뜨리는** 방법이었다면,
+다음 장은 학습을 **시작할 수 있게** 하는 방법이다 — 초기화.
 
 ---
 
-**다음**: [3.7 초기화와 그래디언트 흐름](07_initialization.qmd) — Xavier·He·잔차 연결 — 깊은 망이 학습되기 위한 조건
+**다음**: [3.7 초기화와 그래디언트 흐름](07_initialization.qmd)
 
 **이전**: [3.5 정규화 층](05_normalization.qmd)
