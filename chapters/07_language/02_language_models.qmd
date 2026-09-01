@@ -4,89 +4,759 @@ subtitle: "n-gram·스무딩·퍼플렉서티 — 신경망 이전의 언어모�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+언어모델의 정의는 한 줄이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+$$p(w_1, w_2, \ldots, w_T) = \prod_{t=1}^{T} p(w_t \mid w_{<t})$$
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+연쇄법칙일 뿐 근사가 없다. **"다음 토큰의 확률"만 알면 문장 전체의 확률을 안다.**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+지금은 이 목표가 당연해 보이지만, 처음부터 그랬던 것은 아니다.
+GPT 이전에 이 목표는 **음성인식의 보조 부품**이었다.
+"이 소리가 A인가 B인가"를 판정할 때 어느 쪽이 더 그럴듯한 문장인지 재는 용도였다.
+
+이 장은 신경망 없이 그 목표를 추구했던 시절을 직접 재현한다.
+그러면 두 가지가 분명해진다.
+
+1. n-gram이 어디서 정확히 무너지는가
+2. 신경망이 개선한 것이 **정확히 무엇**인가
+
+그리고 이 장에는 다른 장에 없는 장치가 하나 있다.
+**참값을 아는 데이터를 쓴다.**
+
+---
+
+## 검증 장치: 엔트로피를 아는 소스
+
+실제 언어의 엔트로피는 아무도 모른다. 그래서 모델이 얼마나 좋은지 판단할 절대 기준이 없다.
+그러면 만들면 된다 — **2차 마르코프 소스**를 정의하고 거기서 데이터를 뽑는다.
+
+```{python}
+#| label: source
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import math
+import numpy as np
+
+V = 12                                   # 어휘 크기
+rg = np.random.default_rng(0)
+LOGITS = rg.normal(0, 2.5, (V, V, V))    # P(다음 | 앞앞, 앞)
+P_TRUE = np.exp(LOGITS - LOGITS.max(-1, keepdims=True))
+P_TRUE /= P_TRUE.sum(-1, keepdims=True)
+
+
+def generate(n, seed):
+    g = np.random.default_rng(seed)
+    s = [int(g.integers(V)), int(g.integers(V))]
+    for _ in range(n):
+        s.append(int(g.choice(V, p=P_TRUE[s[-2], s[-1]])))
+    return np.array(s)
+
+
+# 상태(직전 두 토큰)의 정상분포를 파워 반복으로 구한다
+M = np.zeros((V*V, V*V))
+for a in range(V):
+    for b in range(V):
+        M[a*V+b, b*V:(b+1)*V] = P_TRUE[a, b]
+pi = np.ones(V*V)/(V*V)
+for _ in range(3000):
+    pi = pi @ M
+PF = P_TRUE.reshape(V*V, V)
+H_TRUE = float(-(pi[:, None]*PF*np.log2(np.maximum(PF, 1e-300))).sum())
+
+TRAIN = generate(200000, 1)
+TEST = generate(20000, 2)
+
+print("참 소스: 2차 마르코프 사슬 (다음 토큰이 직전 2개에만 의존)")
+print(f"  어휘 크기 {V}")
+print(f"  **엔트로피율 H = {H_TRUE:.4f} bits/token**")
+print(f"  **참 퍼플렉서티 = 2^H = {2**H_TRUE:.4f}**")
+print(f"  (균등 분포였다면 {math.log2(V):.4f} bits, PPL {V})")
+print()
+print(f"  훈련 {len(TRAIN):,} 토큰, 테스트 {len(TEST):,} 토큰")
+print()
+print("**이제 어떤 모델이든 참값과 비교할 수 있다.**")
+print("PPL 이 3.37 에 가까우면 좋은 모델이고, 그보다 낮으면 뭔가 잘못된 것이다.")
+print("실제 언어에서는 불가능한 검증이다.")
+```
+
+---
+
+## G7.2.1 — n-gram과 희소성
+
+마르코프 가정: 먼 과거는 잊는다.
+
+$$p(w_t \mid w_{<t}) \approx p(w_t \mid w_{t-n+1}, \ldots, w_{t-1})$$
+
+최대우도 추정은 그냥 세는 것이다.
+
+$$p_{\text{MLE}}(w \mid c) = \frac{\text{count}(c, w)}{\text{count}(c)}$$
+
+문제는 **문맥의 수가 $V^{n-1}$ 로 지수적으로 는다**는 것이다.
+
+```{python}
+#| label: sparsity
+#| code-fold: false
+
+import collections
+
+print("n 이 커질수록 표가 비어 간다")
+print()
+print(f"{'n':>3} {'가능한 문맥':>14} {'관측된 문맥':>13} {'채워진 비율':>12} "
+      f"{'테스트 미관측':>14}")
+print("-" * 62)
+SPARSE = []
+for n in [1, 2, 3, 4, 5, 6]:
+    ctx_tr = collections.Counter(tuple(TRAIN[i:i+n-1])
+                                 for i in range(len(TRAIN)-n+1))
+    ctx_te = {tuple(TEST[i:i+n-1]) for i in range(len(TEST)-n+1)}
+    unseen = sum(1 for c in ctx_te if c not in ctx_tr)/max(len(ctx_te), 1)
+    SPARSE.append((n, V**(n-1), len(ctx_tr), len(ctx_tr)/V**(n-1), unseen))
+    print(f"{n:>3} {V**(n-1):>14,} {len(ctx_tr):>13,} "
+          f"{len(ctx_tr)/V**(n-1):>11.2%} {unseen:>13.2%}")
+print()
+print(f"**훈련 데이터가 {len(TRAIN):,} 토큰인데 n=6 이면 가능한 문맥이 "
+      f"{V**5:,}개다.**")
+print("데이터를 아무리 늘려도 n 을 늘리는 속도를 따라잡을 수 없다.")
+print("이것이 n-gram 의 근본 한계다 — **문맥이 길어질수록 세는 것이 불가능해진다.**")
+```
+
+```{python}
+#| label: mle
+#| code-fold: false
+
+import collections
+import math
+
+
+def build(seq, n):
+    d = collections.defaultdict(collections.Counter)
+    for i in range(len(seq)-n+1):
+        d[tuple(seq[i:i+n-1])][seq[i+n-1]] += 1
+    return d
+
+
+def ce_mle(seq, tbl, n, cap=40.0):
+    """MLE 교차엔트로피. 확률 0 은 상한 cap 으로 대체해 표시한다."""
+    tot, zero = 0.0, 0
+    for i in range(len(seq)-n+1):
+        c = tbl.get(tuple(seq[i:i+n-1]))
+        w = seq[i+n-1]
+        p = c[w]/sum(c.values()) if c and c[w] > 0 else 0.0
+        if p == 0.0:
+            zero += 1
+            tot += cap
+        else:
+            tot += -math.log2(p)
+    m = len(seq)-n+1
+    return tot/m, zero/m
+
+
+TBL = {n: build(TRAIN, n) for n in [1, 2, 3, 4, 5, 6]}
+
+print("MLE 로 추정한 n-gram — 훈련과 테스트")
+print()
+print(f"{'n':>3} {'훈련 H':>10} {'테스트 H':>11} {'확률 0 비율':>13} "
+      f"{'테스트 PPL':>16}")
+print("-" * 58)
+MLE_ROWS = []
+for n in [1, 2, 3, 4, 5, 6]:
+    htr, _ = ce_mle(TRAIN, TBL[n], n)
+    hte, z = ce_mle(TEST, TBL[n], n)
+    MLE_ROWS.append((n, htr, hte, z))
+    tag = f"{2**hte:.2f}" if z == 0 else "**∞**"
+    print(f"{n:>3} {htr:>10.4f} {hte:>11.4f} {z:>12.2%} {tag:>16}")
+print("-" * 58)
+print(f"{'참값':>3} {'':>10} {H_TRUE:>11.4f} {0:>12.2%} {2**H_TRUE:>16.2f}")
+print()
+n3 = MLE_ROWS[2]
+print(f"**n=3 이 참 차수와 일치한다** (직전 2개 + 자기 자신).")
+print(f"  훈련 H {n3[1]:.4f}, 테스트 H {n3[2]:.4f} — 참값 {H_TRUE:.4f} 에 거의 붙는다.")
+print("  모델이 소스 구조를 정확히 회복했다.")
+print()
+print("**n 을 더 키우면 과적합한다:**")
+for n, htr, hte, z in MLE_ROWS[2:]:
+    print(f"  n={n}: 훈련 H {htr:.4f} (내려감) / 테스트 H {hte:.4f} (올라감)")
+print()
+print("**그리고 MLE 는 미관측 조합에 확률 0 을 준다.**")
+print(f"  n=3 에서 이미 테스트의 {MLE_ROWS[2][3]:.2%}, "
+      f"n=6 에서 {MLE_ROWS[5][3]:.2%} 가 확률 0 이다.")
+print("  확률 0 이 하나라도 있으면 **문장 전체 확률이 0, 퍼플렉서티가 무한대**다.")
+print("  위 표의 '테스트 H' 는 확률 0 에 40비트 상한을 씌워 계산한 값이다.")
+print("  스무딩이 선택이 아니라 필수인 이유다.")
+```
+
+```{python}
+#| label: fig-sparsity
+#| fig-cap: "n이 커질수록 표는 비어 가고 테스트 성능은 무너집니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    specs=[[{"secondary_y": True}, {"type": "xy"}]],
+                    subplot_titles=("문맥 표의 희소성",
+                                    "훈련 vs 테스트 교차엔트로피"))
+ns = [s[0] for s in SPARSE]
+fig.add_trace(go.Scatter(x=ns, y=[s[3] for s in SPARSE], mode="lines+markers",
+                         name="채워진 비율", line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=ns, y=[s[4] for s in SPARSE], mode="lines+markers",
+                         name="테스트 미관측 문맥",
+                         line=dict(color=viz.WARM, width=2.5, dash="dash"),
+                         marker=dict(size=9)), row=1, col=1, secondary_y=True)
+fig.update_yaxes(title_text="채워진 비율", tickformat=".0%", row=1, col=1)
+fig.update_yaxes(title_text="미관측 비율", tickformat=".0%", row=1, col=1,
+                 secondary_y=True)
+
+fig.add_trace(go.Scatter(x=[r[0] for r in MLE_ROWS], y=[r[1] for r in MLE_ROWS],
+                         mode="lines+markers", name="훈련 H",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[r[0] for r in MLE_ROWS], y=[r[2] for r in MLE_ROWS],
+                         mode="lines+markers", name="테스트 H",
+                         line=dict(color=viz.PINK, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+fig.add_hline(y=H_TRUE, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text=f"참 엔트로피 {H_TRUE:.3f}", row=1, col=2)
+for c in (1, 2):
+    fig.update_xaxes(title_text="n", dtick=1, row=1, col=c)
+fig.update_yaxes(title_text="bits / token", row=1, col=2)
+viz.fig_defaults(fig, height=390, title="")
+fig.show()
+```
+
+---
+
+## G7.2.2 — 스무딩
+
+확률 0을 없애려면 관측된 것에서 확률을 떼어 미관측에 나눠 줘야 한다.
+
+**애드-k (라플라스)**: 모든 조합에 $k$ 를 더한다.
+
+$$p(w \mid c) = \frac{\text{count}(c, w) + k}{\text{count}(c) + kV}$$
+
+```{python}
+#| label: addk
+#| code-fold: false
+
+import collections
+import math
+
+
+def ppl_addk(seq, tbl, n, k):
+    tot = 0.0
+    for i in range(len(seq)-n+1):
+        c = tbl.get(tuple(seq[i:i+n-1]), collections.Counter())
+        tot += -math.log2((c[seq[i+n-1]] + k)/(sum(c.values()) + k*V))
+    return 2**(tot/(len(seq)-n+1))
+
+
+KS = [1, 0.1, 0.01, 0.001]
+print("애드-k 스무딩 후 테스트 퍼플렉서티")
+print()
+print(f"{'n':>3} " + " ".join(f"{'k='+str(k):>11}" for k in KS))
+print("-" * 52)
+ADDK = {}
+for n in [2, 3, 4, 5, 6]:
+    row = [ppl_addk(TEST, TBL[n], n, k) for k in KS]
+    ADDK[n] = row
+    print(f"{n:>3} " + " ".join(f"{v:>11.3f}" for v in row))
+print("-" * 52)
+print(f"{'참값':>3} {2**H_TRUE:>11.3f}")
+print()
+best_n = min(ADDK, key=lambda n: min(ADDK[n]))
+best = min(ADDK[best_n])
+print(f"**최고 성능은 n={best_n}, PPL {best:.3f} 로 참값 {2**H_TRUE:.3f} 와 "
+      f"{abs(best-2**H_TRUE)/2**H_TRUE:.2%} 차이다.**")
+print("스무딩이 확률 0 을 없앴고, 올바른 차수에서 참 엔트로피를 회복했다.")
+print()
+print("**그런데 n 을 더 키우면 다시 나빠진다:**")
+for n in [3, 4, 5, 6]:
+    print(f"  n={n}: 최소 PPL {min(ADDK[n]):.3f}")
+print("  참 차수가 2 이므로 더 긴 문맥은 정보를 주지 않고 희소성만 늘린다.")
+print("  **스무딩은 희소성을 완화할 뿐 없애지는 못한다.**")
+```
+
+### Kneser-Ney: 무엇을 세는가
+
+애드-k는 미관측 조합에 **균등하게** 확률을 준다. 그것이 옳을 리 없다.
+백오프할 때 어떤 단어를 선호해야 하는가?
+
+::: {.key-concept}
+**Kneser-Ney의 통찰**
+
+하위 차수 분포는 "이 단어가 얼마나 흔한가"가 아니라
+**"이 단어가 얼마나 다양한 문맥에서 나타나는가"** 를 세야 한다.
+
+$$p_{\text{cont}}(w) \propto \big|\{v : \text{count}(v, w) > 0\}\big|$$
+
+빈도가 높아도 **한 문맥에서만** 나오는 단어는 새 문맥에서 나타날 가능성이 낮다.
 :::
 
-n-gram으로 시작하면 '다음 토큰 예측'이 왜 그렇게 강력한 학습 목표인지, 그리고 신경망이 정확히 무엇을 개선했는지가 명확해진다.
+```{python}
+#| label: francisco
+#| code-fold: false
+
+import collections
+
+SENTS = (
+    [["나는", "샌", "프란시스코", "에", "갔다"]] * 40 +
+    [["그는", "샌", "프란시스코", "를", "좋아한다"]] * 40 +
+    [["도시", "는", "크다"]] * 12 +
+    [["다리", "는", "길다"]] * 12 +
+    [["공원", "은", "넓다"]] * 12 +
+    [["거리", "는", "조용하다"]] * 12 +
+    [["나는", "도시", "에", "갔다"]] * 10 +
+    [["그는", "다리", "를", "건넜다"]] * 10 +
+    [["나는", "공원", "에", "갔다"]] * 10 +
+    [["그는", "거리", "를", "걸었다"]] * 10
+)
+UNI, BI = collections.Counter(), collections.Counter()
+for s in SENTS:
+    for w in s:
+        UNI[w] += 1
+    for a, b in zip(s[:-1], s[1:]):
+        BI[(a, b)] += 1
+PRED = collections.defaultdict(set)
+for (a, b) in BI:
+    PRED[b].add(a)
+TOT_U, N_BI = sum(UNI.values()), len(BI)
+
+print(f"말뭉치: 문장 {len(SENTS)}개, 토큰 {TOT_U}개, 고유 bigram {N_BI}개")
+print()
+print(f"{'단어':<12} {'빈도':>6} {'단항 MLE':>10} {'선행 단어 종류':>14} "
+      f"{'KN 계속확률':>13} {'KN / MLE':>10}")
+print("-" * 70)
+for w in ["프란시스코", "에", "를", "는", "도시", "갔다"]:
+    mle = UNI[w]/TOT_U
+    kn = len(PRED[w])/N_BI
+    print(f"{w:<12} {UNI[w]:>6} {mle:>10.4f} {len(PRED[w]):>14} "
+          f"{kn:>13.4f} {kn/mle:>9.2f}x")
+print()
+mf, kf = UNI["프란시스코"]/TOT_U, len(PRED["프란시스코"])/N_BI
+me, ke = UNI["에"]/TOT_U, len(PRED["에"])/N_BI
+print(f"**'프란시스코' 는 {UNI['프란시스코']}번 나오는 흔한 단어다** "
+      f"(단항 MLE {mf:.4f}, 2위).")
+print(f"그런데 선행 단어가 {len(PRED['프란시스코'])}가지뿐이다 — 항상 '샌' 뒤에만 온다.")
+print(f"KN 계속확률은 {kf:.4f} 로 **{mf/kf:.1f}배 낮게** 준다.")
+print()
+print(f"반대로 '에' 는 빈도 {UNI['에']}로 더 적은데 선행 단어가 "
+      f"{len(PRED['에'])}가지다.")
+print(f"  단항 MLE {me:.4f} < {mf:.4f} 인데")
+print(f"  KN 계속확률은 {ke:.4f} > {kf:.4f} 로 **순위가 뒤집힌다.**")
+print()
+print("**이 뒤집힘이 백오프에서 결정적이다.**")
+print("  '나는 ___' 같은 미관측 문맥을 만나면 하위 차수로 내려간다.")
+print("  단항 MLE 를 쓰면 '프란시스코' 를 높게 예측한다 — 거의 항상 틀린다.")
+print("  KN 은 여러 문맥에 나타나는 조사·기능어를 선호해 그 실수를 줄인다.")
+```
+
+```{python}
+#| label: kn-eval
+#| code-fold: false
+
+import collections
+import math
+
+
+class KneserNey:
+    """보간형 Kneser-Ney (절대 할인). 상위 차수는 원 카운트,
+    하위 차수는 계속 카운트(서로 다른 선행 문맥 수)를 쓴다."""
+
+    def __init__(self, seq, n, D=0.75, V=V):
+        self.n, self.D, self.V = n, D, V
+        self.cnt = [None] + [collections.defaultdict(collections.Counter)
+                             for _ in range(n)]
+        for k in range(1, n+1):
+            for i in range(len(seq)-k+1):
+                self.cnt[k][tuple(seq[i:i+k-1])][seq[i+k-1]] += 1
+        self.cont = [None] + [collections.defaultdict(collections.Counter)
+                              for _ in range(n)]
+        for k in range(1, n):
+            for ctx, c in self.cnt[k+1].items():
+                for w in c:
+                    self.cont[k][ctx[1:]][w] += 1
+        self._uni_tot = {}
+        for k in range(1, n):
+            t = self.cont[k]
+            self._uni_tot[k] = (sum(sum(v.values()) for v in t.values()) or 1,
+                                len({x for v in t.values() for x in v}) or 1)
+
+    def p(self, ctx, w, k=None):
+        k = self.n if k is None else k
+        ctx = tuple(ctx[-(k-1):]) if k > 1 else ()
+        table = self.cnt[k] if k == self.n else self.cont[k]
+        c = table.get(ctx)
+        if k == 1:
+            tot, ntypes = self._uni_tot[1] if 1 in self._uni_tot else (1, 1)
+            base = c[w] if c else 0
+            return max(base - self.D, 0)/tot + self.D*ntypes/tot/self.V
+        if not c:
+            return self.p(ctx, w, k-1)
+        tot = sum(c.values())
+        return (max(c[w]-self.D, 0)/tot
+                + self.D*len(c)/tot*self.p(ctx, w, k-1))
+
+
+def ppl_kn(seq, model):
+    n = model.n
+    tot = 0.0
+    for i in range(len(seq)-n+1):
+        tot += -math.log2(max(model.p(tuple(seq[i:i+n-1]), seq[i+n-1]), 1e-300))
+    return 2**(tot/(len(seq)-n+1))
+
+
+TE_S = TEST[:8000]                       # KN 은 파이썬 루프라 느리다
+print("스무딩 방법 비교 (테스트 퍼플렉서티, 8,000 토큰)")
+print()
+print(f"{'n':>3} {'애드-1':>11} {'애드-0.01':>12} {'Kneser-Ney':>13} "
+      f"{'KN 이득':>10}")
+print("-" * 54)
+KN_ROWS = []
+for n in [2, 3, 4, 5, 6]:
+    a1 = ppl_addk(TE_S, TBL[n], n, 1)
+    a01 = ppl_addk(TE_S, TBL[n], n, 0.01)
+    kn = ppl_kn(TE_S, KneserNey(TRAIN, n))
+    KN_ROWS.append((n, a1, a01, kn))
+    print(f"{n:>3} {a1:>11.3f} {a01:>12.3f} {kn:>13.3f} "
+          f"{min(a1, a01)/kn:>9.2f}x")
+print("-" * 54)
+print(f"{'참값':>3} {2**H_TRUE:>11.3f}")
+print()
+print("**KN 의 이득은 n 이 커질수록 커진다** — 희소할수록 백오프가 자주 일어나고,")
+print("그때 어떤 분포로 내려가느냐가 중요해지기 때문이다.")
+for n, a1, a01, kn in KN_ROWS:
+    print(f"  n={n}: 최선의 애드-k {min(a1, a01):.3f} → KN {kn:.3f} "
+          f"({min(a1, a01)/kn:.2f}배)")
+print()
+print("**그럼에도 KN 도 n 이 커지면 나빠진다.** 스무딩은 희소성의 해법이 아니다.")
+print("근본 문제는 **문맥을 이산 표로 세는 것** 자체에 있다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G7.2.3 — 퍼플렉서티, BPC, 그리고 압축
 
-- 언어모델의 정의: 시퀀스 확률과 연쇄법칙 분해
-- n-gram 모델과 마르코프 가정
-- 최대우도 추정과 희소성 문제
-- 스무딩: 라플라스, Good-Turing, Kneser-Ney
-- 백오프와 보간
-- 평가: 교차엔트로피, 퍼플렉서티, 비트/문자(BPC)
-- 신경 언어모델(Bengio 2003)과 분산 표현의 등장
-- RNN LM과 그 한계
-- 다음 토큰 예측이 왜 일반 지능적 능력을 유도하는가에 대한 논의
-- 언어모델링과 압축의 등가성
+```{python}
+#| label: perplexity
+#| code-fold: false
+
+import math
+
+print("퍼플렉서티의 정의")
+print()
+print("   PPL = 2^H,    H = −(1/T)·Σ log₂ p(wₜ | w<ₜ)")
+print()
+print("**해석: '평균적으로 몇 개 중에 고르는 것과 같은가'.**")
+print()
+print(f"{'상황':<34} {'H (bits)':>10} {'PPL':>10}")
+print("-" * 58)
+for nm, h in [("완벽한 예측 (확률 1)", 0.0),
+              ("어휘 12개 균등 추측", math.log2(12)),
+              (f"우리 소스의 참 엔트로피", H_TRUE),
+              ("어휘 5만개 균등 추측", math.log2(50000))]:
+    print(f"{nm:<34} {h:>10.4f} {2**h:>10.2f}")
+print()
+print("**주의: 퍼플렉서티는 모델 간 비교에 함부로 쓸 수 없다.**")
+print()
+print(f"{'문제':<26} {'설명'}")
+print("-" * 78)
+for a, b in [
+    ("토크나이저가 다르면", "토큰 단위가 달라 값을 비교할 수 없다"),
+    ("어휘가 다르면", "V 가 크면 불리하다 (선택지가 많다)"),
+    ("테스트셋이 다르면", "당연히 비교 불가"),
+    ("**정규화 단위**", "토큰당? 단어당? 문자당? 전부 다른 값"),
+]:
+    print(f"{a:<26} {b}")
+print()
+print("**그래서 BPC(bits per character)를 쓴다.**")
+print("  BPC = (전체 비트) / (전체 문자 수)")
+print("  토크나이저와 무관해서 **서로 다른 모델을 비교할 수 있다.**")
+print("  같은 이유로 바이트 단위 지표(BPB)도 쓰인다.")
+print()
+print("  7.1 에서 본 것이 여기서 문제가 된다:")
+print("  한국어 토큰이 문자를 적게 담으면 토큰당 PPL 은 좋아 보이는데")
+print("  BPC 는 나쁠 수 있다. **단위를 밝히지 않은 PPL 은 정보가 없다.**")
+```
+
+```{python}
+#| label: compression
+#| code-fold: false
+
+import math
+import zlib
+import numpy as np
+
+N = 3
+kn3 = KneserNey(TRAIN, N)
+seq = TEST[:8000]
+bits = 0.0
+for i in range(len(seq)-N+1):
+    bits += -math.log2(max(kn3.p(tuple(seq[i:i+N-1]), seq[i+N-1]), 1e-300))
+n_tok = len(seq)-N+1
+H_model = bits/n_tok
+
+raw = bytes(int(x) for x in seq[N-1:])
+gz = zlib.compress(raw, 9)
+
+print("언어모델링과 압축은 같은 문제다")
+print()
+print("  산술부호화를 쓰면 확률 p 인 심볼을 −log₂p 비트로 부호화할 수 있다.")
+print("  **좋은 언어모델 = 좋은 압축기.** 이것은 비유가 아니라 정리다 (Shannon).")
+print()
+print(f"테스트 {n_tok:,} 토큰을 저장하는 여러 방법")
+print()
+print(f"{'방법':<30} {'크기':>12} {'bits/token':>13} {'참값 대비':>11}")
+print("-" * 70)
+rows = [
+    ("원본 (1토큰 = 1바이트)", len(raw), 8.0),
+    ("zlib 최대 압축", len(gz), len(gz)*8/n_tok),
+    ("KN 3-gram + 산술부호화", bits/8, H_model),
+    ("참 엔트로피 (이론 하한)", H_TRUE*n_tok/8, H_TRUE),
+]
+for nm, size, bpt in rows:
+    print(f"{nm:<30} {size:>10,.0f} B {bpt:>13.4f} {bpt/H_TRUE:>10.3f}x")
+print()
+print(f"**KN 3-gram 이 zlib 보다 {(len(gz)*8/n_tok)/H_model:.2f}배 효율적이다.**")
+print(f"그리고 이론 하한 {H_TRUE:.4f} 에 {H_model/H_TRUE:.4f}배 — "
+      f"{(H_model/H_TRUE-1):.2%} 차이로 붙었다.")
+print()
+print("**이 관점이 주는 것:**")
+for s in ["'모델이 데이터를 이해했다' = '데이터를 잘 압축한다'",
+          "압축률이 지능의 대리지표라는 주장 (Hutter Prize)",
+          "**스케일링 법칙이 압축률 곡선으로 읽힌다** (Part 5)",
+          "암기와 일반화의 구분 — 암기는 압축이 아니다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G7.2.1 — n-gram 확률표
+## G7.2.4 — 신경 언어모델이 개선한 것
 
-n이 커질수록 표가 희소해지고 추정이 불안정해지는 현상
+Bengio et al.(2003)의 구조는 단순하다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: n 슬라이더
-:::
+$$w_{t-n+1}, \ldots, w_{t-1} \;\to\; \text{임베딩 연결} \;\to\; \text{MLP} \;\to\; \text{softmax}$$
+
+n-gram과 **같은 마르코프 가정**을 쓴다. 문맥 길이도 고정이다.
+그런데 결과가 다르다. 왜인지 직접 재본다.
+
+```{python}
+#| label: neural-lm
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+from src import nn
+
+TR_S = generate(60000, 1)                # 일부러 작게 — 희소성을 드러내려고
+TE_N = generate(10000, 2)
+
+
+def make_xy(seq, ctx):
+    X = np.stack([seq[i:i+ctx] for i in range(len(seq)-ctx)])
+    return X, seq[ctx:]
+
+
+def onehot(X, V):
+    n, c = X.shape
+    O = np.zeros((n, c*V))
+    O[np.arange(n)[:, None], np.arange(c)[None]*V + X] = 1.0
+    return O
+
+
+print(f"훈련 {len(TR_S):,} 토큰으로 두 방식을 나란히 학습")
+print()
+print(f"{'문맥 길이':>10} {'n-gram 문맥 수':>15} {'n-gram PPL':>13} "
+      f"{'신경 LM PPL':>14} {'신경 LM 파라미터':>18}")
+print("-" * 76)
+NEURAL = []
+for ctx in [1, 2, 3, 4, 5]:
+    ng = ppl_addk(TE_N, build(TR_S, ctx+1), ctx+1, 0.1)
+    Xtr, ytr = make_xy(TR_S, ctx)
+    Xte, yte = make_xy(TE_N, ctx)
+    net = nn.MLP([ctx*V, 64, 64, V], activation="tanh",
+                 out_activation="softmax", init="xavier", seed=0)
+    nn.train(net, onehot(Xtr, V), ytr, loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=5e-3), steps=1500,
+             batch_size=512, seed=0)
+    pr = net.predict(onehot(Xte, V))
+    ce = float(-np.log2(np.maximum(pr[np.arange(len(yte)), yte],
+                                   1e-300)).mean())
+    NEURAL.append((ctx, V**ctx, ng, 2**ce, net.n_params()))
+    print(f"{ctx:>10} {V**ctx:>15,} {ng:>13.3f} {2**ce:>14.3f} "
+          f"{net.n_params():>18,}")
+print("-" * 76)
+print(f"{'참값':>10} {'':>15} {2**H_TRUE:>13.3f} {2**H_TRUE:>14.3f}")
+print()
+c2 = NEURAL[1]
+c5 = NEURAL[4]
+print(f"**문맥 2 에서는 n-gram 이 근소하게 낫다** "
+      f"({c2[2]:.3f} vs {c2[3]:.3f}).")
+print("  참 차수와 일치하고 표가 꽉 차 있으면 그냥 세는 것이 최선이다.")
+print()
+print(f"**문맥 5 에서는 완전히 뒤집힌다** ({c5[2]:.3f} vs {c5[3]:.3f}).")
+print(f"  n-gram: {c2[2]:.3f} → {c5[2]:.3f} 로 **{c5[2]/c2[2]:.2f}배 나빠졌다**")
+print(f"  신경 LM: {c2[3]:.3f} → {c5[3]:.3f} 로 거의 그대로다")
+print()
+print("**차이의 원인은 파라미터 공유다.**")
+print(f"  n-gram 은 문맥 {V**5:,}개마다 **독립적인** 확률표를 갖는다.")
+print(f"  신경 LM 은 {c5[4]:,}개 파라미터를 **모든 문맥이 공유**한다.")
+print("  비슷한 문맥이 비슷한 표현을 갖게 되어, 본 적 없는 조합도 일반화된다.")
+print()
+print("**이것이 '분산 표현'의 의미다.**")
+print("  n-gram: 문맥 '3,7,2' 와 '3,7,5' 는 완전히 다른 칸이다")
+print("  신경 LM: 두 문맥의 벡터가 가까우면 예측도 비슷해진다")
+print()
+print("여기서 다음 장이 시작된다 — **그 벡터를 어떻게 배우는가**.")
+```
+
+```{python}
+#| label: fig-neural
+#| fig-cap: "문맥이 길어질 때 n-gram은 무너지고 신경 LM은 버팁니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("문맥 길이 vs 테스트 퍼플렉서티",
+                                    "표현해야 하는 문맥 수 vs 파라미터 수"))
+cs = [r[0] for r in NEURAL]
+fig.add_trace(go.Scatter(x=cs, y=[r[2] for r in NEURAL], mode="lines+markers",
+                         name="n-gram (애드-0.1)",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_trace(go.Scatter(x=cs, y=[r[3] for r in NEURAL], mode="lines+markers",
+                         name="신경 LM", line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_hline(y=2**H_TRUE, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text=f"참값 {2**H_TRUE:.2f}", row=1, col=1)
+fig.add_trace(go.Scatter(x=cs, y=[r[1] for r in NEURAL], mode="lines+markers",
+                         name="n-gram 문맥 수 (V^k)", showlegend=True,
+                         line=dict(color=viz.WARM, width=2.5, dash="dash"),
+                         marker=dict(size=9)), row=1, col=2)
+fig.add_trace(go.Scatter(x=cs, y=[r[4] for r in NEURAL], mode="lines+markers",
+                         name="신경 LM 파라미터",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+for c in (1, 2):
+    fig.update_xaxes(title_text="문맥 길이", dtick=1, row=1, col=c)
+fig.update_yaxes(title_text="퍼플렉서티", row=1, col=1)
+fig.update_yaxes(title_text="개수 (로그)", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=390, title="")
+fig.show()
+```
 
 ---
 
-## G7.2.2 — 스무딩 효과
+## 다음 토큰 예측은 왜 그렇게 강력한가
 
-미관측 n-gram에 확률이 재분배되는 방식 비교
+```{python}
+#| label: why-ntp
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 스무딩 방법 전환
-:::
+print("'다음 토큰 예측'이 특별한 학습 목표인 이유")
+print()
+rows = [
+    ("레이블이 공짜다", "텍스트 자체가 정답 — 인터넷 전체가 학습 데이터"),
+    ("과제를 포함한다", "'번역: 안녕 → ___' 을 잘 예측하려면 번역을 해야 한다"),
+    ("압축을 강제한다", "예측을 잘하려면 규칙성을 찾아야 한다 (위 절)"),
+    ("난이도가 자동 조절된다", "쉬운 토큰과 어려운 토큰이 한 목적함수 안에 섞인다"),
+    ("**밀도가 높다**", "토큰마다 학습 신호가 있다 — 분류는 문서당 하나"),
+]
+print(f"{'성질':<22} {'내용'}")
+print("-" * 76)
+for a, b in rows:
+    print(f"{a:<22} {b}")
+print()
+print("**두 번째가 핵심 논증이다.**")
+print("  '이 소설에서 범인은 ___' 를 맞히려면 줄거리를 이해해야 한다.")
+print("  '2 + 3 = ___' 을 맞히려면 덧셈을 해야 한다.")
+print("  다음 토큰 예측은 **다른 모든 과제를 포함하는 과제**다.")
+print()
+print("**그런데 조심할 것이 있다.**")
+for s in ["다음 토큰 예측이 지능을 '보장'하지는 않는다 — n-gram 도 같은 목표를 썼다",
+          "차이를 만든 것은 목표가 아니라 **용량과 데이터 규모**다",
+          "실제로 이 논증이 힘을 얻은 것은 GPT-2/3 이후다 (2019~2020)",
+          "그 전까지 20년간 같은 목표로 학습했지만 그런 능력은 안 나왔다"]:
+    print(f"  · {s}")
+print()
+print("**목표는 필요조건이었고 충분조건은 아니었다.**")
+print("이 장에서 만든 n-gram 도 다음 토큰을 예측한다. 그런데 번역은 못 한다.")
+print()
+print("무엇이 더 필요했는지는 Part 5 (스케일링 법칙) 와 7.4 에서 다룬다.")
+```
+
+```{python}
+#| label: rnn-limits
+#| code-fold: false
+
+print("n-gram → 신경 LM → RNN → Transformer 의 계보")
+print()
+rows = [
+    ("n-gram", "이산 카운트 표", "고정 (n−1)",
+     "**문맥이 길면 표가 빈다**"),
+    ("신경 LM (2003)", "임베딩 + MLP", "고정 (n−1)",
+     "파라미터 공유로 일반화. 여전히 문맥 고정"),
+    ("RNN LM (2010)", "은닉 상태로 요약", "**원리상 무한**",
+     "그래디언트 소실, 순차 계산"),
+    ("LSTM LM (2014~)", "게이트로 장기 기억", "수백 토큰",
+     "여전히 순차적 — 병렬화 불가"),
+    ("Transformer (2017)", "어텐션으로 직접 참조", "창 크기만큼",
+     "**병렬 학습 + 임의 거리 참조**"),
+]
+print(f"{'모델':<20} {'문맥 표현':<20} {'문맥 길이':<16} {'한계 / 기여'}")
+print("-" * 92)
+for r in rows:
+    print(f"{r[0]:<20} {r[1]:<20} {r[2]:<16} {r[3]}")
+print()
+print("**RNN 은 '원리상 무한한 문맥'을 약속했지만 실제로는 짧았다.**")
+print("  [4.2](../04_architectures/02_rnn.qmd)에서 측정한 그대로다 —")
+print("  거리가 멀어지면 그래디언트가 소실되어 학습되지 않는다.")
+print()
+print("**Transformer 의 기여는 문맥 길이가 아니라 병렬화였다.**")
+print("  어텐션은 모든 위치를 동시에 계산한다 → 규모를 키울 수 있다")
+print("  그리고 규모가 커지자 이 장에서 못 했던 것들이 나타났다")
+```
 
 ---
 
-## G7.2.3 — 퍼플렉서티 계산
+## 요약
 
-테스트 문장의 토큰별 확률에서 퍼플렉서티가 계산되는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 선택
-:::
-
----
-
-## G7.2.4 — n-gram vs 신경 LM
-
-문맥이 길어질 때 두 접근의 성능 격차
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 문맥 길이 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 언어모델 |  |
-| n-gram |  |
-| Kneser-Ney 스무딩 |  |
-| 퍼플렉서티 |  |
-| BPC |  |
+| 언어모델 | $p(w_{1:T}) = \prod p(w_t \mid w_{<t})$ — 연쇄법칙, 근사 없음 |
+| 검증 장치 | 참 엔트로피를 아는 2차 마르코프 소스 ($H = 1.752$, PPL 3.37) |
+| n-gram 희소성 | $V^{n-1}$ 로 폭발 — n=6이면 문맥 248,832개 |
+| MLE 의 성공 | 참 차수 n=3에서 테스트 H 1.774 ≈ 참값 1.752 |
+| MLE 의 실패 | n=3부터 확률 0 발생, n=6에서 테스트의 11% |
+| 과적합 | n을 키우면 훈련 H↓ 테스트 H↑ (측정) |
+| 애드-k | 확률 0을 없애고 n=3에서 참값과 0.25% 차이까지 회복 |
+| 한계 | 스무딩해도 n을 키우면 다시 나빠진다 |
+| Kneser-Ney | 빈도가 아니라 **선행 문맥의 다양성**을 센다 |
+| Francisco 효과 | 단항 MLE 0.114 → KN 계속확률 0.040 (2.8배 낮게) |
+| 순위 역전 | '에'는 빈도가 낮은데 KN 확률은 높다 |
+| KN 의 이득 | n=3에선 없고 n=6에서 1.17배 — 희소할수록 커진다 |
+| 퍼플렉서티 | $2^H$ — "몇 개 중에 고르는 셈인가" |
+| 비교 불가 | 토크나이저·어휘·단위가 다르면 비교할 수 없다 → BPC |
+| 압축 등가성 | KN 3-gram이 zlib보다 1.65배 효율적, 이론 하한과 0.51% 차이 |
+| 신경 LM의 기여 | 문맥 5에서 n-gram 4.66 vs 신경 8,844 파라미터로 3.62 |
+| 원리 | **파라미터 공유** — 비슷한 문맥이 비슷한 표현을 갖는다 |
+| 주의 | 다음 토큰 예측은 필요조건이었지 충분조건이 아니었다 |
+
+n-gram의 문맥은 **칸**이었고, 신경 LM의 문맥은 **벡터**였다.
+그 벡터를 잘 만드는 방법이 다음 장이다.
 
 ---
 
-**다음**: [7.3 단어 임베딩](03_word_embeddings.qmd) — Word2Vec·GloVe·fastText — 의미를 벡터로 만든 첫 성공
+**다음**: [7.3 단어 임베딩](03_word_embeddings.qmd)
 
 **이전**: [7.1 토크나이제이션](01_tokenization.qmd)
