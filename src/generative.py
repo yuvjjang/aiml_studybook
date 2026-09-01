@@ -6,7 +6,8 @@ Part 6 (생성 모델) 장들이 공유한다. 렌더 타임 의존성은 numpy 
 import numpy as np
 
 __all__ = ["VAE", "vae_grad_check", "blobs64", "sharpness",
-           "Net", "gan_step", "sigmoid", "ring_modes", "mode_stats"]
+           "Net", "gan_step", "sigmoid", "ring_modes", "mode_stats",
+           "Coupling", "RealNVP"]
 
 
 def _init(rng, fan_in, fan_out, gain=1.0):
@@ -290,3 +291,145 @@ def mode_stats(S, centers, thresh=0.8):
     nz = p[p > 0]
     ent = float(np.exp(-(nz*np.log(nz)).sum())) if len(nz) else 0.0
     return int((cnt > 0).sum()), ent, float(near.mean())
+
+
+# ══════════════════════════════════════════════════════════════════
+# 정규화 흐름 — RealNVP 결합 층 (6.4)
+# ══════════════════════════════════════════════════════════════════
+
+class Coupling:
+    """RealNVP 아핀 결합 층.
+
+    마스크 m 이 1 인 좌표는 그대로 통과하고, 0 인 좌표만 변환한다.
+
+        y_a = x_a                                   (m = 1)
+        y_b = x_b · exp(s(x_a)) + t(x_a)            (m = 0)
+        log|det J| = Σ_b s(x_a)
+
+    야코비안이 삼각행렬이라 행렬식이 대각원소의 곱 — **O(d) 로 계산된다.**
+    역변환도 닫힌 형태다: x_b = (y_b − t(x_a))·exp(−s(x_a)).
+    """
+
+    def __init__(self, d, mask, hidden=32, seed=0, s_scale=2.0):
+        r = np.random.default_rng(seed)
+        self.m = mask.astype(float)
+        self.d, self.s_scale = d, s_scale
+        self.p = {
+            "W0": r.normal(0, np.sqrt(2.0/d), (d, hidden)),
+            "b0": np.zeros(hidden),
+            "W1": r.normal(0, np.sqrt(2.0/hidden), (hidden, hidden)),
+            "b1": np.zeros(hidden),
+            "W2": np.zeros((hidden, 2*d)),          # s, t 를 0 으로 시작 → 항등변환
+            "b2": np.zeros(2*d),
+        }
+
+    def _st(self, xa):
+        h1 = np.tanh(xa @ self.p["W0"] + self.p["b0"])
+        h2 = np.tanh(h1 @ self.p["W1"] + self.p["b1"])
+        out = h2 @ self.p["W2"] + self.p["b2"]
+        s_raw, t = out[:, :self.d], out[:, self.d:]
+        s = self.s_scale*np.tanh(s_raw)             # 스케일을 묶어 수치 안정
+        return s, t, (h1, h2, s_raw)
+
+    def forward(self, x):
+        xa = x*self.m
+        s, t, c = self._st(xa)
+        u = 1 - self.m
+        y = xa + u*(x*np.exp(s) + t)
+        logdet = (u*s).sum(1)
+        return y, logdet, dict(x=x, xa=xa, s=s, t=t, c=c, u=u)
+
+    def inverse(self, y):
+        ya = y*self.m
+        s, t, _ = self._st(ya)
+        u = 1 - self.m
+        return ya + u*((y - t)*np.exp(-s))
+
+    def backward(self, cache, dy, dlogdet):
+        """dy: ∂L/∂y, dlogdet: ∂L/∂logdet (샘플별 스칼라). 반환 (grads, dx)."""
+        x, xa, s, t, (h1, h2, s_raw) = (cache["x"], cache["xa"], cache["s"],
+                                        cache["t"], cache["c"])
+        u, m = cache["u"], self.m
+        ds = dy*u*x*np.exp(s) + dlogdet[:, None]*u
+        dt = dy*u
+        dx = dy*u*np.exp(s)                          # x_b 경로
+        # s = s_scale·tanh(s_raw)
+        ds_raw = ds*self.s_scale*(1 - (s/self.s_scale)**2)   # tanh 미분
+        dout = np.concatenate([ds_raw, dt], 1)
+        g = {"W2": h2.T @ dout, "b2": dout.sum(0)}
+        dh2 = (dout @ self.p["W2"].T)*(1 - h2**2)
+        g["W1"] = h1.T @ dh2; g["b1"] = dh2.sum(0)
+        dh1 = (dh2 @ self.p["W1"].T)*(1 - h1**2)
+        g["W0"] = xa.T @ dh1; g["b0"] = dh1.sum(0)
+        dxa = dh1 @ self.p["W0"].T + dy*m            # 항등 경로 + 조건 경로
+        return g, dx*u + dxa*m
+
+
+class RealNVP:
+    """결합 층을 번갈아 쌓은 흐름. 최대우도로 학습한다."""
+
+    def __init__(self, d, n_layers=6, hidden=32, seed=0):
+        self.d, self.n = d, n_layers
+        self.layers = []
+        for i in range(n_layers):
+            mask = np.array([(j + i) % 2 for j in range(d)])
+            self.layers.append(Coupling(d, mask, hidden, seed=seed*100+i))
+
+    def params(self):
+        out = {}
+        for i, L in enumerate(self.layers):
+            for k, v in L.p.items():
+                out[f"L{i}.{k}"] = v
+        return out
+
+    def forward(self, x):
+        ld = np.zeros(len(x))
+        caches = []
+        for L in self.layers:
+            x, d_, c = L.forward(x)
+            ld = ld + d_
+            caches.append(c)
+        return x, ld, caches
+
+    def inverse(self, z):
+        for L in reversed(self.layers):
+            z = L.inverse(z)
+        return z
+
+    def log_prob(self, x):
+        z, ld, _ = self.forward(x)
+        lp_z = -0.5*(z**2).sum(1) - 0.5*self.d*np.log(2*np.pi)
+        return lp_z + ld
+
+    def nll_and_grads(self, x):
+        n = len(x)
+        z, ld, caches = self.forward(x)
+        lp_z = -0.5*(z**2).sum(1) - 0.5*self.d*np.log(2*np.pi)
+        nll = float(-(lp_z + ld).mean())
+        dz = z/n                                     # ∂(−mean lp_z)/∂z
+        dld = -np.ones(n)/n
+        g = {}
+        for i in range(self.n-1, -1, -1):
+            gi, dz = self.layers[i].backward(caches[i], dz, dld)
+            for k, v in gi.items():
+                g[f"L{i}.{k}"] = v
+        return nll, g
+
+    def fit(self, X, steps=3000, lr=3e-3, seed=0, batch=None, track=0):
+        from src.nn import Optimizer
+        opt = Optimizer("adam", lr=lr)
+        P = self.params()
+        r = np.random.default_rng(seed)
+        hist = []
+        for s in range(steps):
+            xb = X if not batch else X[r.choice(len(X), batch, replace=False)]
+            nll, g = self.nll_and_grads(xb)
+            opt.step(P, g)
+            if track and s % track == 0:
+                hist.append((s, nll))
+        self.hist = hist
+        return self
+
+    def sample(self, n, seed=0):
+        z = np.random.default_rng(seed).normal(size=(n, self.d))
+        return self.inverse(z)

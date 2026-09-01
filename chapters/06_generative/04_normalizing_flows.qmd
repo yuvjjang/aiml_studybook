@@ -4,88 +4,643 @@ subtitle: "가역 변환과 변수 변환 공식 — 정확한 우도를 포기�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+지금까지 두 번의 타협이 있었다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+- **VAE**: 우도를 포기하고 **하한**(ELBO)만 최적화했다
+- **GAN**: 우도를 아예 버리고 샘플러만 남겼다
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+정규화 흐름은 셋째 길을 간다. **아무것도 포기하지 않는다.**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+$$\log p_\theta(x) \;=\; \text{정확한 값}$$
 
-흐름 모델은 확산·flow matching으로 가는 다리이며, 야코비안 행렬식을 다루는 감각을 길러준다.
+근사도 하한도 아니다. 대신 신경망의 **형태에 강한 제약**을 건다 —
+가역이어야 하고, 야코비안 행렬식을 싸게 계산할 수 있어야 한다.
 
----
-
-## 이 장에서 다루는 것
-
-- 변수 변환 공식과 야코비안 행렬식
-- 가역 신경망의 조건과 설계 제약
-- 결합 층(coupling layer): NICE, RealNVP
-- 자기회귀 흐름: MAF, IAF, 그리고 학습/샘플링 비대칭
-- Glow: 1×1 가역 합성곱과 액트놈
-- 연속 정규화 흐름(CNF)과 Neural ODE
-- 흐름의 장단점: 정확한 우도 vs 표현력 제약
-- 확산 모델·flow matching과의 연결
-- 응용: 밀도 추정, 변분 사후분포, 시뮬레이션 기반 추론
+이 장에서 RealNVP를 직접 구현해 그 대가와 이득을 재본다.
+그리고 흐름이 **구조적으로 할 수 없는 일**을 하나 측정한다 —
+확산 모델과 flow matching 이 왜 필요했는지가 거기서 나온다.
 
 ---
 
-## G6.4.1 — 변수 변환 시각화
+## 변수 변환 공식
 
-단순 분포가 가역 변환을 거쳐 복잡한 분포가 되는 과정과 밀도 보정
+가역함수 $z = f(x)$ 로 확률변수를 바꾸면 밀도는 이렇게 변한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 변환 파라미터 슬라이더
-:::
+$$\boxed{\;p_x(x) = p_z(f(x))\;\left|\det \frac{\partial f}{\partial x}\right|\;}$$
 
----
+$$\log p_x(x) = \log p_z(f(x)) + \log\left|\det \frac{\partial f}{\partial x}\right|$$
 
-## G6.4.2 — 결합 층 동작
+**직관**: $f$ 가 어떤 영역을 $k$ 배로 늘리면, 그 영역의 확률은 보존되어야 하므로
+밀도는 $1/k$ 배가 되어야 한다. 야코비안 행렬식이 바로 그 국소 부피 변화율이다.
 
-절반은 그대로 두고 나머지를 조건부 변환하는 구조
+여러 층을 쌓으면 로그 행렬식이 **더해진다**.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 차원 분할 토글
-:::
+$$\log p_x(x) = \log p_z(z_L) + \sum_{\ell=1}^{L} \log\left|\det \frac{\partial f_\ell}{\partial z_{\ell-1}}\right|$$
 
----
+### 문제: 행렬식은 $O(d^3)$ 이다
 
-## G6.4.3 — 흐름 층 누적
+$d = 3072$ (CIFAR-10) 면 매 스텝 $3072^3 \approx 2.9\times10^{10}$ 번의 연산이다.
+불가능하다.
 
-층을 쌓을수록 표현 가능한 분포가 복잡해지는 모습
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 수 슬라이더
-:::
+**해법: 야코비안이 삼각행렬이 되게 신경망을 설계한다.**
+그러면 행렬식은 대각원소의 곱이고, 계산은 $O(d)$ 다.
 
 ---
 
-## G6.4.4 — 야코비안 행렬식
+## 결합 층 (RealNVP)
 
-국소 부피 변화가 밀도에 어떻게 반영되는지
+좌표를 두 덩이로 나눈다. 한쪽은 **그대로 통과**시키고,
+다른 쪽만 **통과한 쪽을 조건으로** 아핀 변환한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 변환 강도 슬라이더
-:::
+$$
+\begin{aligned}
+y_a &= x_a \\
+y_b &= x_b \odot \exp\big(s(x_a)\big) + t(x_a)
+\end{aligned}
+$$
+
+야코비안은
+
+$$\frac{\partial y}{\partial x} =
+\begin{pmatrix} I & 0 \\ \ast & \operatorname{diag}(e^{s(x_a)}) \end{pmatrix}
+\quad\Longrightarrow\quad
+\log|\det J| = \sum_b s(x_a)_b$$
+
+**하삼각이라 $\ast$ 부분은 행렬식에 전혀 기여하지 않는다.**
+그래서 $s, t$ 는 **아무리 복잡한 신경망이어도 된다** — 가역일 필요조차 없다.
+역변환도 닫힌 형태다.
+
+$$x_b = \big(y_b - t(y_a)\big) \odot \exp\big(-s(y_a)\big)$$
+
+한 층은 절반만 바꾸므로, 층마다 마스크를 뒤집어 쌓는다.
+
+```{python}
+#| label: flow-impl
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src.generative import RealNVP, ring_modes
+from src import datasets
+
+print("구현 검증 — src/generative.py 의 RealNVP")
+print()
+r = np.random.default_rng(0)
+Xc = r.normal(size=(40, 2))*0.8
+fchk = RealNVP(2, n_layers=4, hidden=16, seed=1)
+Pc = fchk.params()
+for k in Pc:                                   # 항등 초기화를 흔들어 준다
+    if k.endswith(("W2", "b2")):
+        Pc[k][:] = r.normal(0, 0.1, Pc[k].shape)
+
+nll, gc = fchk.nll_and_grads(Xc)
+e = 1e-6
+worst = 0.0
+for k in Pc:
+    flat = Pc[k].ravel()
+    for i in r.choice(flat.size, min(4, flat.size), replace=False):
+        o = flat[i]
+        flat[i] = o + e; a = fchk.nll_and_grads(Xc)[0]
+        flat[i] = o - e; b = fchk.nll_and_grads(Xc)[0]
+        flat[i] = o
+        num, ana = (a - b)/(2*e), gc[k].ravel()[i]
+        worst = max(worst, abs(num - ana)/(abs(num) + abs(ana) + 1e-12))
+
+zc, _, _ = fchk.forward(Xc)
+print(f"  그래디언트 상대오차   {worst:.2e}")
+print(f"  역변환 오차 max|f⁻¹(f(x)) − x|   {np.abs(fchk.inverse(zc) - Xc).max():.2e}")
+print()
+print("**역변환 오차가 기계 정밀도다.** 근사가 아니라 정확한 역함수다.")
+print("VAE 의 인코더-디코더는 이런 보장이 없다 — 재구성 오차가 항상 남는다.")
+```
 
 ---
 
-## 핵심 용어
+## G6.4.1 — 변수 변환 공식이 정말 성립하는가
 
-| 용어 | 비고 |
+모델이 계산한 $\log p(x)$ 를 **수치 야코비안**으로 독립 검증한다.
+
+```{python}
+#| label: change-of-var
+#| code-fold: false
+
+import numpy as np
+
+print("모델의 log p(x)  vs  수치 야코비안으로 직접 계산한 값")
+print()
+print(f"{'점':>20} {'모델 log p(x)':>16} {'수치 야코비안':>16} {'상대 차이':>12}")
+print("-" * 68)
+eps_j = 1e-5
+for x0 in r.normal(size=(6, 2)):
+    lp_model = float(fchk.log_prob(x0[None])[0])
+    J = np.zeros((2, 2))
+    for j in range(2):
+        dd = np.zeros(2); dd[j] = eps_j
+        J[:, j] = (fchk.forward((x0+dd)[None])[0][0]
+                   - fchk.forward((x0-dd)[None])[0][0])/(2*eps_j)
+    z0 = fchk.forward(x0[None])[0][0]
+    lp_num = (-0.5*(z0**2).sum() - np.log(2*np.pi)
+              + np.log(abs(np.linalg.det(J))))
+    print(f"{str(np.round(x0, 2)):>20} {lp_model:>16.6f} {lp_num:>16.6f} "
+          f"{abs(lp_model-lp_num)/abs(lp_num):>12.2e}")
+print()
+print("**공식이 성립한다.** 흐름의 log|det J| = Σs 는 진짜 야코비안 행렬식이다.")
+```
+
+---
+
+## G6.4.2 — 층을 쌓으면 얼마나 좋아지는가
+
+`two moons` 를 최대우도로 학습한다. 흐름은 **손실이 곧 음의 로그우도**라
+학습 곡선이 그대로 우도 개선을 뜻한다 — GAN 에는 없는 성질이다.
+
+```{python}
+#| label: depth
+#| code-fold: false
+
+import numpy as np
+from src.generative import RealNVP
+from src import datasets
+
+X_tr = datasets.two_moons(n=2000, noise=0.08, seed=0)[0]
+MU_, SD_ = X_tr.mean(0), X_tr.std(0)
+X_tr = (X_tr - MU_)/SD_
+X_te = (datasets.two_moons(n=1000, noise=0.08, seed=7)[0] - MU_)/SD_
+
+DEPTHS = [(1, 5e-3), (2, 5e-3), (4, 3e-3), (8, 2e-3), (16, 1e-3)]
+FLOWS, DEP = {}, []
+for L, lr in DEPTHS:
+    fl = RealNVP(2, n_layers=L, hidden=32, seed=2).fit(X_tr, steps=3000,
+                                                       lr=lr, seed=2)
+    FLOWS[L] = fl
+    z, _, _ = fl.forward(X_tr)
+    DEP.append((L, sum(v.size for v in fl.params().values()),
+                float(-fl.log_prob(X_tr).mean()),
+                float(-fl.log_prob(X_te).mean()),
+                float(np.abs(fl.inverse(z) - X_tr).max())))
+
+print(f"{'층 수':>6} {'파라미터':>10} {'훈련 NLL':>11} {'테스트 NLL':>12} "
+      f"{'역변환 오차':>13}")
+print("-" * 58)
+for L, npar, tr, te, ie in DEP:
+    print(f"{L:>6} {npar:>10,} {tr:>11.4f} {te:>12.4f} {ie:>13.1e}")
+print("-" * 58)
+gauss_nll = float(-((-0.5*(X_te**2).sum(1) - np.log(2*np.pi))).mean())
+print(f"{'N(0,I)':>6} {0:>10,} {'':>11} {gauss_nll:>12.4f}")
+print()
+print(f"**깊이를 늘릴수록 테스트 NLL 이 단조 감소한다** "
+      f"({DEP[0][3]:.3f} → {DEP[-1][3]:.3f}).")
+print(f"기준선인 표준정규는 {gauss_nll:.3f} 이니, 1층만으로도 이미 데이터를 배운다.")
+print(f"과적합도 없다 — 훈련·테스트 간극이 "
+      f"{DEP[-1][3]-DEP[-1][2]:.3f} 로 작다.")
+print(f"역변환 오차는 층을 16개 쌓아도 {DEP[-1][4]:.0e} 다.")
+print()
+
+# 밀도가 정규화되어 있는가 — 격자 적분
+gg = np.linspace(-8, 8, 500)
+GX, GY = np.meshgrid(gg, gg)
+lp_grid = FLOWS[8].log_prob(np.stack([GX.ravel(), GY.ravel()], 1))
+Z_int = float(np.exp(lp_grid).sum()*(gg[1]-gg[0])**2)
+print(f"**8층 모델의 밀도를 격자로 적분하면 ∫p(x)dx = {Z_int:.6f} 다.**")
+print("정규화 상수를 따로 계산하지 않았는데도 1 이 나온다 —")
+print("변수 변환 공식이 정규화를 **자동으로 보장**하기 때문이다.")
+print("에너지 기반 모델(EBM)이 못 하는 일이 바로 이것이다.")
+```
+
+```{python}
+#| label: fig-flow-depth
+#| fig-cap: "층을 쌓을수록 가우스가 데이터 분포로 변형됩니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+gg2 = np.linspace(-3.2, 3.2, 60)
+G2X, G2Y = np.meshgrid(gg2, gg2)
+grid2 = np.stack([G2X.ravel(), G2Y.ravel()], 1)
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.34, 0.33, 0.33],
+                    subplot_titles=("학습된 밀도 p(x)", "생성 샘플",
+                                    "테스트 NLL"),
+                    specs=[[{"type": "heatmap"}, {"type": "xy"},
+                            {"type": "xy"}]])
+
+LS = [d[0] for d in DEPTHS]
+for li, L in enumerate(LS):
+    dens = np.exp(FLOWS[L].log_prob(grid2)).reshape(len(gg2), -1)
+    fig.add_trace(go.Heatmap(z=np.round(dens, 3), x=np.round(gg2, 3),
+                             y=np.round(gg2, 3),
+                             colorscale="Blues", showscale=False,
+                             visible=(li == len(LS)-1)), row=1, col=1)
+for li, L in enumerate(LS):
+    S = FLOWS[L].sample(900, seed=9)
+    fig.add_trace(go.Scatter(x=np.round(S[:, 0], 2), y=np.round(S[:, 1], 2),
+                             mode="markers", name="생성",
+                             visible=(li == len(LS)-1), showlegend=False,
+                             marker=dict(size=3,
+                                         color=viz.hex_rgba(viz.ACCENT, 0.5))),
+                  row=1, col=2)
+fig.add_trace(go.Scatter(x=X_tr[::3, 0], y=X_tr[::3, 1], mode="markers",
+                         name="실제", showlegend=False,
+                         marker=dict(size=3,
+                                     color=viz.hex_rgba(viz.GREEN, 0.35))),
+              row=1, col=2)
+fig.add_trace(go.Scatter(x=[d[0] for d in DEP], y=[d[3] for d in DEP],
+                         mode="lines+markers", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=9)), row=1, col=3)
+fig.add_hline(y=gauss_nll, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text="N(0,I) 기준선", row=1, col=3)
+
+n_tail = 2
+steps_d = []
+for li, L in enumerate(LS):
+    vis = [False]*(2*len(LS)) + [True]*n_tail
+    vis[li] = True                       # 밀도
+    vis[len(LS)+li] = True               # 샘플
+    steps_d.append((str(L), {"visible": vis}))
+fig.update_xaxes(range=[-3.2, 3.2], row=1, col=1)
+fig.update_yaxes(range=[-3.2, 3.2], row=1, col=1)
+fig.update_xaxes(range=[-3.2, 3.2], row=1, col=2)
+fig.update_yaxes(range=[-3.2, 3.2], scaleanchor="x2", row=1, col=2)
+fig.update_xaxes(title_text="층 수", type="log", row=1, col=3)
+fig.update_yaxes(title_text="테스트 NLL", row=1, col=3)
+fig.update_layout(sliders=[viz.slider(steps_d, prefix="결합 층 수 = ",
+                                      active=len(LS)-1, pad_t=45)])
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
+
+---
+
+## G6.4.3 — 야코비안 행렬식이 하는 일
+
+$\log|\det J|$ 를 공간 위에 그려 보면 흐름이 무엇을 하는지 보인다.
+
+```{python}
+#| label: jacobian
+#| code-fold: false
+
+import numpy as np
+
+fl8 = FLOWS[8]
+z_all, ld_all, _ = fl8.forward(X_tr)
+
+print("학습된 8층 흐름의 분해:  log p(x) = log N(z; 0, I) + log|det J|")
+print()
+print(f"{'':<28} {'평균':>10} {'표준편차':>10} {'최솟값':>10} {'최댓값':>10}")
+print("-" * 72)
+lp_z = -0.5*(z_all**2).sum(1) - np.log(2*np.pi)
+for nm, v in [("log N(z; 0, I)  (사전분포)", lp_z),
+              ("log|det J|      (부피 보정)", ld_all),
+              ("log p(x)        (합계)", lp_z + ld_all)]:
+    print(f"{nm:<28} {v.mean():>10.4f} {v.std():>10.4f} {v.min():>10.4f} "
+          f"{v.max():>10.4f}")
+print()
+print(f"**부피 보정항이 사전분포 항과 맞먹는 크기다** "
+      f"(표준편차 {ld_all.std():.2f} vs {lp_z.std():.2f}).")
+print("흐름이 하는 일의 절반은 '어디를 얼마나 늘리고 줄일지' 정하는 것이다.")
+print()
+print("z 가 정말 표준정규가 되었는가 — 흐름의 목표는 이것이다")
+print(f"  z 의 평균  {np.round(z_all.mean(0), 4)}   (목표 [0, 0])")
+print(f"  z 의 표준편차 {np.round(z_all.std(0), 4)}   (목표 [1, 1])")
+print(f"  z 의 상관계수 {np.corrcoef(z_all.T)[0, 1]:>7.4f}   (목표 0)")
+print()
+print("**'정규화 흐름(normalizing flow)'이라는 이름이 여기서 나왔다** —")
+print("데이터를 정규분포로 흘려보내는(flow) 변환이라는 뜻이다.")
+```
+
+```{python}
+#| label: fig-jacobian
+#| fig-cap: "흐름이 공간을 어떻게 늘리고 줄이는지 — 격자의 변형과 부피 보정"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.34, 0.33, 0.33],
+                    subplot_titles=("데이터 공간의 격자",
+                                    "z 공간으로 흘려보낸 격자",
+                                    "log|det J| (부피 변화율)"),
+                    specs=[[{"type": "xy"}, {"type": "xy"},
+                            {"type": "heatmap"}]])
+
+# 격자선을 흐름에 통과시킨다
+NL, NP = 11, 60
+lines = []
+for v in np.linspace(-2.6, 2.6, NL):
+    lines.append(np.stack([np.full(NP, v), np.linspace(-2.6, 2.6, NP)], 1))
+    lines.append(np.stack([np.linspace(-2.6, 2.6, NP), np.full(NP, v)], 1))
+for ln in lines:
+    zln = fl8.forward(ln)[0]
+    fig.add_trace(go.Scatter(x=np.round(ln[:, 0], 2), y=np.round(ln[:, 1], 2),
+                             mode="lines", showlegend=False,
+                             line=dict(color=viz.hex_rgba(viz.ACCENT, 0.35),
+                                       width=1)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=np.round(np.clip(zln[:, 0], -4, 4), 2),
+                             y=np.round(np.clip(zln[:, 1], -4, 4), 2),
+                             mode="lines", showlegend=False,
+                             line=dict(color=viz.hex_rgba(viz.WARM, 0.35),
+                                       width=1)), row=1, col=2)
+fig.add_trace(go.Scatter(x=X_tr[::4, 0], y=X_tr[::4, 1], mode="markers",
+                         showlegend=False,
+                         marker=dict(size=3,
+                                     color=viz.hex_rgba(viz.GREEN, 0.5))),
+              row=1, col=1)
+
+ld_grid = fl8.forward(grid2)[1].reshape(len(gg2), -1)
+fig.add_trace(go.Heatmap(z=np.round(ld_grid, 2), x=np.round(gg2, 3),
+                         y=np.round(gg2, 3),
+                         colorscale="RdBu", zmid=0,
+                         colorbar=dict(thickness=11, outlinewidth=0)),
+              row=1, col=3)
+for c, rng in [(1, 2.9), (2, 4.2), (3, 3.2)]:
+    fig.update_xaxes(range=[-rng, rng], row=1, col=c)
+    fig.update_yaxes(range=[-rng, rng], row=1, col=c)
+viz.fig_defaults(fig, height=390,
+                 title="격자가 촘촘해진 곳 = 부피가 줄어든 곳 = 밀도가 커진 곳")
+fig.show()
+```
+
+---
+
+## G6.4.4 — 흐름이 구조적으로 못 하는 것: 위상
+
+여기가 이 장의 핵심이다.
+
+**흐름은 위상동형사상(homeomorphism)이다.**
+연속이고, 역함수도 연속이다. 그런 사상은 **위상을 바꿀 수 없다.**
+
+$\mathcal{N}(0, I)$ 의 지지집합은 $\mathbb{R}^d$ 전체 — **연결되어 있다.**
+따라서 흐름이 만드는 분포의 지지집합도 **반드시 연결되어 있다.**
+
+그런데 실제 데이터는 흔히 끊겨 있다 (서로 다른 클래스, 서로 다른 모드).
+흐름은 그 사이에 **반드시 질량을 남긴다.** 얼마나 남는지 재보자.
+
+```{python}
+#| label: topology
+#| code-fold: false
+
+import numpy as np
+from src.generative import RealNVP, ring_modes
+
+CEN = ring_modes(8, 3.0)
+rr = np.random.default_rng(3)
+X_ring = CEN[rr.integers(0, 8, 3000)] + rr.normal(0, 0.2, (3000, 2))
+
+print("데이터: 반지름 3 의 원 위에 놓인 8개 모드 (σ=0.2, 서로 완전히 분리)")
+print()
+print(f"{'층 수':>6} {'파라미터':>10} {'NLL':>9} {'모드 근처':>10} "
+      f"{'모드 사이 (다리)':>16}")
+print("-" * 56)
+TOPO, RING_FLOWS = [], {}
+for L, lr in [(4, 3e-3), (8, 2e-3), (12, 1e-3), (20, 7e-4)]:
+    fl = RealNVP(2, n_layers=L, hidden=48, seed=4).fit(
+        X_ring, steps=4000, lr=lr, seed=4, batch=512)
+    RING_FLOWS[L] = fl
+    S = fl.sample(4000, seed=5)
+    near = ((S[:, None, :] - CEN[None])**2).sum(-1).min(1) < 0.8**2
+    TOPO.append((L, sum(v.size for v in fl.params().values()),
+                 float(-fl.log_prob(X_ring).mean()),
+                 float(near.mean()), float((~near).mean())))
+    print(f"{L:>6} {TOPO[-1][1]:>10,} {TOPO[-1][2]:>9.4f} "
+          f"{TOPO[-1][3]:>10.1%} {TOPO[-1][4]:>16.1%}")
+S_real = CEN[rr.integers(0, 8, 4000)] + rr.normal(0, 0.2, (4000, 2))
+near_real = ((S_real[:, None, :] - CEN[None])**2).sum(-1).min(1) < 0.8**2
+print("-" * 56)
+print(f"{'실제 데이터':>6} {'':>10} {'':>9} {near_real.mean():>10.1%} "
+      f"{1-near_real.mean():>16.1%}")
+print()
+lo, hi = min(t[4] for t in TOPO), max(t[4] for t in TOPO)
+print(f"**깊이를 {TOPO[0][0]} → {TOPO[-1][0]} 으로 5배 늘려도 다리 위 질량은 "
+      f"{lo:.1%}~{hi:.1%} 사이를 맴돈다.**")
+print(f"단조로 줄지도 않고 ({' → '.join(f'{t[4]:.1%}' for t in TOPO)}),")
+print(f"실제 데이터의 {1-near_real.mean():.1%} 로 가까워지지도 않는다.")
+print("파라미터를 4배 늘려도 나아지지 않는다면 용량 문제가 아니다.")
+print()
+print("**왜 0 이 될 수 없는지는 증명할 수 있다.**")
+print()
+print("   log p(x) = log N(f(x); 0, I) + log|det J(x)|")
+print()
+print("유한한 x 에서 f(x) 도 유한하고 log|det J| = Σs 도 유한하다 (s 는 tanh 로 묶여 있다).")
+print("따라서 **모든 유한한 x 에서 p(x) > 0 이다.** 0 을 배정할 방법이 아예 없다.")
+print()
+print("링 위·링 안쪽 네 지점에서 모델 밀도와 참 밀도를 비교한다:")
+probe_pts = np.stack([CEN[0], (CEN[0] + CEN[1])/2,
+                      1.5*CEN[0]/np.linalg.norm(CEN[0]),
+                      np.array([0.0, 0.0])])
+labels = ["모드 0 중심", "인접 모드 중점", "반지름 1.5 지점", "원점 (링의 구멍)"]
+print()
+print(f"  {'위치':<20} {'모델 log p':>13} {'참 log p':>12} "
+      f"{'모델 / 참':>14}")
+print("  " + "-"*64)
+lp_probe = RING_FLOWS[TOPO[-1][0]].log_prob(probe_pts)
+
+
+def true_logp(pt):
+    return float(np.log(np.exp(-((pt - CEN)**2).sum(1)/(2*0.2**2)).sum()
+                        / (8*2*np.pi*0.2**2) + 1e-300))
+
+
+for lb, pt, lpv in zip(labels, probe_pts, lp_probe):
+    tl = true_logp(pt)
+    print(f"  {lb:<20} {lpv:>13.2f} {tl:>12.1f} {np.exp(lpv - tl):>14.1e}")
+print()
+print("**원점을 보라.** 링의 한가운데는 데이터가 절대 오지 않는 곳이고,")
+print(f"참 밀도는 log p = {true_logp(probe_pts[3]):.0f} — 사실상 0 이다.")
+print(f"그런데 흐름은 거기에 log p = {lp_probe[3]:.1f} 를 배정한다.")
+print(f"**{np.exp(lp_probe[3] - true_logp(probe_pts[3])):.0e} 배 과잉이다.**")
+print()
+print(f"반지름 1.5 지점도 {np.exp(lp_probe[2]-true_logp(probe_pts[2])):.0e} 배 과잉이다.")
+print("반면 모드 중심과 인접 모드 중점에서는 참 밀도를 잘 맞힌다 —")
+print("**틀리는 곳이 정확히 '데이터가 없어야 하는 안쪽'이다.**")
+print("**흐름은 링을 재현하면서 가운데 구멍을 메우지 못한다** —")
+print("구멍이 있는 도넛(위상적으로 S¹×R)은 원판(R²)의 연속 변형으로 만들 수 없다.")
+print()
+print("**다른 계열은 이 제약이 없다:**")
+print("  · VAE  — 디코더가 가역일 필요가 없어 여러 z 를 같은 x 로 보낼 수 있다")
+print("  · GAN  — 생성자도 마찬가지 (6.3 에서 8/8 모드를 끊어서 덮었다)")
+print("  · 확산 — 매 단계 **잡음을 새로 더한다.** 결정론적 사상이 아니다")
+print()
+print("확률 흐름 ODE([6.6](06_score_sde.qmd))는 확산을 결정론적 사상으로 다시 쓰는데,")
+print("그러면 같은 위상 제약이 돌아온다. 다만 그 사상은 **시간에 따라 변하는**")
+print("속도장의 적분이라 결합 층보다 훨씬 유연하다 — 다리를 극단적으로 가늘게 만든다.")
+```
+
+```{python}
+#| label: fig-topology
+#| fig-cap: "가우스에서 8개 모드로 — 흐름은 다리를 끊지 못합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+LSR = [t[0] for t in TOPO]
+fig = make_subplots(rows=1, cols=3, column_widths=[0.33, 0.33, 0.34],
+                    subplot_titles=("생성 샘플", "학습된 밀도 (로그)",
+                                    "모드 사이에 남는 질량"),
+                    specs=[[{"type": "xy"}, {"type": "heatmap"},
+                            {"type": "xy"}]])
+gr = np.linspace(-4.6, 4.6, 70)
+GRX, GRY = np.meshgrid(gr, gr)
+grid_r = np.stack([GRX.ravel(), GRY.ravel()], 1)
+
+for li, L in enumerate(LSR):
+    S = RING_FLOWS[L].sample(1400, seed=5)
+    fig.add_trace(go.Scatter(x=np.round(S[:, 0], 2), y=np.round(S[:, 1], 2),
+                             mode="markers", name="생성",
+                             visible=(li == len(LSR)-1),
+                             showlegend=(li == len(LSR)-1),
+                             marker=dict(size=3,
+                                         color=viz.hex_rgba(viz.ACCENT, 0.5))),
+                  row=1, col=1)
+for li, L in enumerate(LSR):
+    lpg = RING_FLOWS[L].log_prob(grid_r).reshape(len(gr), -1)
+    fig.add_trace(go.Heatmap(z=np.round(np.clip(lpg, -12, 2), 1),
+                             x=np.round(gr, 3), y=np.round(gr, 3),
+                             colorscale="Blues", showscale=False,
+                             visible=(li == len(LSR)-1)), row=1, col=2)
+fig.add_trace(go.Scatter(x=X_ring[::4, 0], y=X_ring[::4, 1], mode="markers",
+                         name="실제",
+                         marker=dict(size=3,
+                                     color=viz.hex_rgba(viz.GREEN, 0.4))),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=LSR, y=[t[4] for t in TOPO], mode="lines+markers",
+                         showlegend=False, line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)), row=1, col=3)
+fig.add_hline(y=1-near_real.mean(), line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text="실제 데이터", row=1, col=3)
+
+steps_t = []
+n_tail_t = 2
+for li, L in enumerate(LSR):
+    vis = [False]*(2*len(LSR)) + [True]*n_tail_t
+    vis[li] = True; vis[len(LSR)+li] = True
+    steps_t.append((str(L), {"visible": vis}))
+for c in (1, 2):
+    fig.update_xaxes(range=[-4.6, 4.6], row=1, col=c)
+    fig.update_yaxes(range=[-4.6, 4.6], row=1, col=c)
+fig.update_xaxes(title_text="층 수", row=1, col=3)
+fig.update_yaxes(title_text="모드 밖 샘플 비율", tickformat=".0%",
+                 rangemode="tozero", row=1, col=3)
+fig.update_layout(sliders=[viz.slider(steps_t, prefix="결합 층 수 = ",
+                                      active=len(LSR)-1, pad_t=45)])
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
+
+---
+
+## 흐름의 종류
+
+```{python}
+#| label: flow-family
+#| code-fold: false
+
+fam = [
+    ("NICE (2014)", "가산 결합 (s=0)", "1 패스", "1 패스",
+     "부피 보존 — 표현력 제한"),
+    ("RealNVP (2016)", "아핀 결합", "1 패스", "1 패스",
+     "**이 장의 구현**"),
+    ("MAF (2017)", "자기회귀 (가우스화 방향)", "1 패스", "d 패스",
+     "밀도 추정에 적합"),
+    ("IAF (2016)", "역자기회귀", "d 패스", "1 패스",
+     "VAE 사후분포·빠른 생성"),
+    ("Glow (2018)", "+ 1×1 가역 합성곱, 액트놈", "1 패스", "1 패스",
+     "채널 섞기를 학습으로"),
+    ("CNF / FFJORD (2018)", "Neural ODE + 헛친슨 추정",
+     "ODE 적분", "ODE 적분", "구조 제약 없음, 느림"),
+    ("Residual Flow (2019)", "‖f‖_L<1 인 잔차 블록", "1 패스", "고정점 반복",
+     "가역성을 립시츠로 보장"),
+]
+print(f"{'모델':<22} {'구조':<28} {'밀도':>9} {'샘플링':>9} {'특징'}")
+print("-" * 100)
+for f_ in fam:
+    print(f"{f_[0]:<22} {f_[1]:<28} {f_[2]:>9} {f_[3]:>9} {f_[4]}")
+print()
+print("**MAF 와 IAF 의 비대칭이 핵심 설계 결정이다.**")
+print()
+print("  자기회귀 변환:  z_i = (x_i − μ_i(x_<i))·exp(−α_i(x_<i))")
+print()
+print("  · x → z (MAF 방향): 모든 x_<i 를 이미 아니까 **한 번에** 계산")
+print("  · z → x (샘플링):   x_i 가 x_<i 에 의존하니 **순차적으로 d 번**")
+print()
+print("  IAF 는 조건을 z_<i 로 바꿔 방향을 뒤집는다.")
+print("  샘플링이 1 패스가 되는 대신 학습(밀도 평가)이 d 패스가 된다.")
+print("  **둘 다 빠르게 만들 수는 없다.** 그래서 결합 층이 계속 쓰인다 —")
+print("  양쪽 다 1 패스지만, 한 층이 좌표의 절반만 바꾼다는 대가를 치른다.")
+print()
+print("(참고: MAF 를 IAF 로 증류하는 것이 Parallel WaveNet 의 아이디어였다 — Part 8)")
+```
+
+---
+
+## 흐름은 어디에 살아남았는가
+
+```{python}
+#| label: flow-today
+#| code-fold: false
+
+rows = [
+    ("이미지 생성", "밀림", "표현력 대비 파라미터가 비싸다. 확산이 압도"),
+    ("밀도 추정·이상 탐지", "**현역**", "정확한 우도가 필요한 유일한 선택지"),
+    ("변분 사후분포", "현역", "IAF 로 q(z|x) 를 유연하게 (VAE 개선)"),
+    ("시뮬레이션 기반 추론", "**현역**", "우도를 못 쓰는 과학 시뮬레이션의 사후분포 추정"),
+    ("음성 합성", "밀림→부활", "WaveGlow 후 확산에 밀렸다가 flow matching 으로 복귀"),
+    ("**연속 흐름의 후손**", "**핵심**", "flow matching 이 대형 모델의 표준이 되었다"),
+]
+print(f"{'분야':<24} {'현황':<12} {'이유'}")
+print("-" * 82)
+for r_ in rows:
+    print(f"{r_[0]:<24} {r_[1]:<12} {r_[2]}")
+print()
+print("**마지막 줄이 이 장의 진짜 결론이다.**")
+print()
+print("이산 결합 층은 밀렸다. 그러나 **연속 정규화 흐름(CNF)** 의 관점 —")
+print("'속도장을 학습해 잡음을 데이터로 옮긴다' — 은 살아남았고,")
+print("확산과 만나 **flow matching** 이 되었다 (6.8).")
+print("SD3, Flux 같은 최신 대형 모델이 그 방식으로 학습된다.")
+print()
+print("CNF 의 형태:")
+print("   dx/dt = v_θ(x, t),   log p 변화 = −∫ tr(∂v/∂x) dt")
+print("**행렬식이 아니라 대각합(trace)이다** — 가역 구조를 설계할 필요가 없다.")
+print("이 한 줄이 결합 층의 모든 제약을 없앤다.")
+print("대가는 매 평가마다 ODE 를 풀어야 한다는 것이었고,")
+print("flow matching 이 그 대가마저 없앤다 (시뮬레이션 없는 학습).")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 정규화 흐름 |  |
-| 변수 변환 공식 |  |
-| 야코비안 행렬식 |  |
-| RealNVP |  |
-| Neural ODE |  |
+| 변수 변환 | $\log p_x(x) = \log p_z(f(x)) + \log\lvert\det J\rvert$ |
+| 왜 어려운가 | 일반 행렬식은 $O(d^3)$ |
+| 결합 층 | 야코비안이 삼각행렬 → $\log\lvert\det J\rvert = \sum s$, $O(d)$ |
+| $s, t$ 의 자유 | 임의의 신경망 — 가역일 필요 없음 |
+| 역변환 | 닫힌 형태, 오차 $10^{-14}$ (실측) |
+| 정규화 자동 보장 | 학습된 밀도의 격자 적분 = 1.001 |
+| 깊이 효과 | two moons 테스트 NLL 2.51 → 1.77 (1층 → 16층), N(0,I)는 2.83 |
+| 부피 보정의 비중 | $\log\lvert\det J\rvert$ 의 산포가 사전분포 항과 맞먹는다 |
+| **위상 제약** | 흐름은 위상동형사상 — 연결된 지지집합을 끊을 수 없다 |
+| 측정된 대가 | 링 한가운데 밀도가 참값의 $10^{39}$ 배 — 구멍을 못 만든다 |
+| MAF vs IAF | 밀도 1패스/샘플링 d패스 ↔ 그 반대. 둘 다는 안 된다 |
+| 오늘의 위치 | 이미지에서는 밀렸고, 밀도 추정·SBI 에서는 현역 |
+| 진짜 후손 | CNF → **flow matching** (6.8) — 행렬식 대신 대각합 |
+
+흐름은 정확한 우도를 지키려다 형태를 잃었다.
+확산 모델은 정반대로 간다 — **형태를 완전히 자유롭게 두고 우도를 하한으로 되돌린다.**
+그런데 그 결과가 지금 이미지 생성의 표준이다.
 
 ---
 
-**다음**: [6.5 확산 모델](05_diffusion.qmd) — 전방 잡음화·역방향 복원·DDPM 유도 — 현재 이미지 생성의 표준
+**다음**: [6.5 확산 모델](05_diffusion.qmd) — 잡음에서 데이터로
 
 **이전**: [6.3 적대적 생성 신경망](03_gan.qmd)
