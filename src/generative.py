@@ -5,7 +5,8 @@ Part 6 (생성 모델) 장들이 공유한다. 렌더 타임 의존성은 numpy 
 
 import numpy as np
 
-__all__ = ["VAE", "vae_grad_check", "blobs64", "sharpness"]
+__all__ = ["VAE", "vae_grad_check", "blobs64", "sharpness",
+           "Net", "gan_step", "sigmoid", "ring_modes", "mode_stats"]
 
 
 def _init(rng, fan_in, fan_out, gain=1.0):
@@ -149,3 +150,143 @@ def vae_grad_check(model, X, beta=1.0, eps_fd=1e-5, n_sample=4, seed=0):
             ana = g[key].ravel()[i]
             worst = max(worst, abs(num - ana)/(abs(num) + abs(ana) + 1e-12))
     return worst
+
+
+# ══════════════════════════════════════════════════════════════════
+# GAN — 생성자·판별자와 미니맥스 학습 (6.3)
+# ══════════════════════════════════════════════════════════════════
+
+def _lrelu(z, a=0.2):
+    return np.where(z > 0, z, a*z)
+
+
+def _dlrelu(z, a=0.2):
+    return np.where(z > 0, 1.0, a)
+
+
+class Net:
+    """입력 그래디언트까지 돌려주는 MLP. GAN 양쪽이 공유한다.
+
+    생성자 역전파는 판별자를 통과해야 하므로 dX 가 반드시 필요하다.
+    """
+
+    def __init__(self, sizes, seed=0, gain=1.0):
+        r = np.random.default_rng(seed)
+        self.sizes = list(sizes)
+        self.p = {}
+        for i in range(len(sizes)-1):
+            self.p[f"W{i}"] = r.normal(0, gain*np.sqrt(2.0/sizes[i]),
+                                       (sizes[i], sizes[i+1]))
+            self.p[f"b{i}"] = np.zeros(sizes[i+1])
+        self.n = len(sizes)-1
+
+    def forward(self, X, sn=False):
+        """sn=True 면 스펙트럼 정규화 (W / σ_max(W)) 를 적용한다."""
+        h, cache = X, {"X": X, "z": [], "a": [], "W": []}
+        for i in range(self.n):
+            W = self.p[f"W{i}"]
+            if sn:
+                W = W/np.linalg.norm(W, 2)
+            cache["W"].append(W)
+            z = h @ W + self.p[f"b{i}"]
+            cache["z"].append(z)
+            h = _lrelu(z) if i < self.n-1 else z
+            cache["a"].append(h)
+        return h, cache
+
+    def backward(self, cache, dout):
+        g, d = {}, dout
+        for i in range(self.n-1, -1, -1):
+            if i < self.n-1:
+                d = d*_dlrelu(cache["z"][i])
+            h_in = cache["X"] if i == 0 else cache["a"][i-1]
+            g[f"W{i}"] = h_in.T @ d
+            g[f"b{i}"] = d.sum(0)
+            d = d @ cache["W"][i].T
+        return g, d
+
+    def clip(self, c):
+        for k in self.p:
+            np.clip(self.p[k], -c, c, out=self.p[k])
+
+    def lipschitz(self, sn=False):
+        """층별 스펙트럼 노름의 곱 — 립시츠 상수의 상한.
+
+        sn=True 면 순전파와 같은 정규화된 가중치로 계산한다 (항상 1 이하).
+        """
+        L = 1.0
+        for i in range(self.n):
+            W = self.p[f"W{i}"]
+            sig = np.linalg.norm(W, 2)
+            L *= 1.0 if sn else sig
+        return float(L)
+
+
+def gan_step(G, D, optG, optD, real, z_dim, rng, mode="ns",
+             clip=None, sn=False, d_steps=1):
+    """GAN 한 스텝. mode: 'ns'(비포화) / 'mm'(포화) / 'wgan'.
+
+    반환: (d_loss, g_loss)
+    """
+    n = len(real)
+    for _ in range(d_steps):
+        z = rng.normal(size=(n, z_dim))
+        fake = G.forward(z)[0]
+        d_r, c_r = D.forward(real, sn=sn)
+        d_f, c_f = D.forward(fake, sn=sn)
+        if mode == "wgan":
+            gr, _ = D.backward(c_r, -np.ones_like(d_r)/n)
+            gf, _ = D.backward(c_f, np.ones_like(d_f)/n)
+            d_loss = float(d_f.mean() - d_r.mean())
+        else:
+            pr, pf = sigmoid(d_r), sigmoid(d_f)
+            gr, _ = D.backward(c_r, (pr - 1)/n)
+            gf, _ = D.backward(c_f, pf/n)
+            d_loss = float(-(np.log(pr+1e-9).mean() + np.log(1-pf+1e-9).mean()))
+        optD.step(D.p, {k: gr[k] + gf[k] for k in gr})
+        if clip:
+            D.clip(clip)
+
+    z = rng.normal(size=(n, z_dim))
+    fake, c_g = G.forward(z)
+    d_f, c_f = D.forward(fake, sn=sn)
+    if mode == "wgan":
+        g_loss = float(-d_f.mean())
+        _, dfake = D.backward(c_f, -np.ones_like(d_f)/n)
+    elif mode == "ns":                       # −log D(G(z))
+        pf = sigmoid(d_f)
+        g_loss = float(-np.log(pf+1e-9).mean())
+        _, dfake = D.backward(c_f, (pf - 1)/n)
+    else:                                    # log(1 − D(G(z)))  포화 손실
+        pf = sigmoid(d_f)
+        g_loss = float(np.log(1-pf+1e-9).mean())
+        _, dfake = D.backward(c_f, pf/n)
+    gG, _ = G.backward(c_g, dfake)
+    optG.step(G.p, gG)
+    return d_loss, g_loss
+
+
+def sigmoid(z):
+    out = np.empty_like(z, dtype=float)
+    pos = z >= 0
+    out[pos] = 1.0/(1.0 + np.exp(-z[pos]))
+    e = np.exp(z[~pos])
+    out[~pos] = e/(1.0 + e)
+    return out
+
+
+def ring_modes(k=8, radius=3.0):
+    a = np.linspace(0, 2*np.pi, k, endpoint=False)
+    return np.stack([radius*np.cos(a), radius*np.sin(a)], 1)
+
+
+def mode_stats(S, centers, thresh=0.8):
+    """커버한 모드 수와 모드별 샘플 비율의 엔트로피(균형도)."""
+    d = ((S[:, None, :] - centers[None])**2).sum(-1)
+    near = d.min(1) < thresh**2
+    a = d.argmin(1)[near]
+    cnt = np.bincount(a, minlength=len(centers)).astype(float)
+    p = cnt/max(cnt.sum(), 1)
+    nz = p[p > 0]
+    ent = float(np.exp(-(nz*np.log(nz)).sum())) if len(nz) else 0.0
+    return int((cnt > 0).sum()), ent, float(near.mean())
