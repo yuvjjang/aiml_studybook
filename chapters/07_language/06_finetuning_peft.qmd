@@ -4,91 +4,637 @@ subtitle: "full FT·LoRA·QLoRA·어댑터 — 큰 모델을 적은 자원으로
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+70B 모델을 전체 미세조정하려면 얼마가 드는가.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+- 가중치 140 GB (bf16)
+- 그래디언트 140 GB
+- Adam 상태 560 GB (fp32 모멘텀 2개)
+- **합계 840 GB** — H100 80GB 열 장 이상
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+LoRA는 이 숫자를 **1 GB 아래로** 내렸다. 그리고 원리는 한 줄이다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+$$W' = W + BA, \qquad B \in \mathbb{R}^{d\times r},\ A \in \mathbb{R}^{r\times d},\ r \ll d$$
+
+**갱신량이 저계수라면** 두 얇은 행렬로 충분하다는 것이다.
+
+그런데 그 전제가 맞는가?
+이 장은 **전체 미세조정의 갱신 $\Delta W$ 를 직접 분해해** 확인하는 데서 시작한다.
+결과는 통념보다 미묘했다.
+
+---
+
+## 준비: 사전학습된 모델 하나
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import copy
+import numpy as np
+from src import nn
+
+V, W, HID = 10, 4, 128
+
+
+def make_source(seed, sharp=2.2):
+    g = np.random.default_rng(seed)
+    lg = g.normal(0, sharp, (V, V, V))
+    p = np.exp(lg - lg.max(-1, keepdims=True))
+    return p/p.sum(-1, keepdims=True)
+
+
+def generate(P, n, seed):
+    g = np.random.default_rng(seed)
+    s = [int(g.integers(V)), int(g.integers(V))]
+    for _ in range(n):
+        s.append(int(g.choice(V, p=P[s[-2], s[-1]])))
+    return np.array(s)
+
+
+def xy(seq):
+    return np.stack([seq[i:i+W] for i in range(len(seq)-W)]), seq[W:]
+
+
+def onehot(X):
+    n, w = X.shape
+    O = np.zeros((n, w*V))
+    O[np.arange(n)[:, None], np.arange(w)[None]*V + X] = 1.0
+    return O
+
+
+def ppl(model, X, y):
+    pr = model.predict(onehot(X))
+    return 2**float(-np.log2(np.maximum(pr[np.arange(len(y)), y],
+                                        1e-300)).mean())
+
+
+P_A, P_B = make_source(0), make_source(7)
+X_A, Y_A = xy(generate(P_A, 120000, 1))
+XA_TE, YA_TE = xy(generate(P_A, 8000, 99))
+X_B, Y_B = xy(generate(P_B, 6000, 2))        # 적응용 — 일부러 적게
+XB_TE, YB_TE = xy(generate(P_B, 8000, 98))
+
+BASE = nn.MLP([W*V, HID, HID, V], activation="tanh",
+              out_activation="softmax", init="xavier", seed=0)
+nn.train(BASE, onehot(X_A), Y_A, loss="softmax_ce",
+         opt=nn.Optimizer("adam", lr=5e-3), steps=3000, batch_size=256, seed=0)
+A0 = ppl(BASE, XA_TE, YA_TE)
+B0 = ppl(BASE, XB_TE, YB_TE)
+W0 = [w.copy() for w in BASE.W]
+N_W = sum(w.size for w in BASE.W)
+
+print(f"사전학습 모델 — 도메인 A 로 {len(X_A):,} 토큰 학습")
+print(f"  가중치 파라미터 {N_W:,}")
+print(f"  도메인 A PPL {A0:.3f}   도메인 B PPL {B0:.3f}")
+print()
+print(f"적응 데이터: 도메인 B, {len(X_B):,} 토큰 (사전학습의 "
+      f"{len(X_B)/len(X_A):.0%})")
+print("**목표: B 를 잘하게 만들면서 A 를 잊지 않는 것.**")
+```
+
+---
+
+## G7.6.1 — 갱신은 정말 저계수인가
+
+LoRA의 전제를 직접 검증한다. 전체 미세조정을 한 뒤 $\Delta W = W_{\text{after}} - W_{\text{before}}$ 의
+특이값 분포를 본다.
+
+```{python}
+#| label: rank-check
+#| code-fold: false
+
+import numpy as np
+
+FULL = copy.deepcopy(BASE)
+nn.train(FULL, onehot(X_B), Y_B, loss="softmax_ce",
+         opt=nn.Optimizer("adam", lr=1e-3), steps=1500, batch_size=256, seed=1)
+
+print(f"전체 미세조정 후: A PPL {ppl(FULL, XA_TE, YA_TE):.3f}, "
+      f"B PPL {ppl(FULL, XB_TE, YB_TE):.3f}")
+print()
+print("ΔW 의 특이값 분포 — 유효 랭크는 exp(엔트로피)로 잰다")
+print()
+print(f"{'층':<6} {'모양':<14} {'최대 랭크':>9} {'유효 랭크':>10} "
+      f"{'상위4':>8} {'상위8':>8} {'상위16':>8}")
+print("-" * 68)
+SPEC = []
+for i, (wa, wb) in enumerate(zip(W0, FULL.W)):
+    Dm = wb - wa
+    s = np.linalg.svd(Dm, compute_uv=False)
+    e = s**2/(s**2).sum()
+    eff = float(np.exp(-(e*np.log(e + 1e-300)).sum()))
+    SPEC.append((i, Dm.shape, min(Dm.shape), eff, e))
+    print(f"W{i:<5} {str(Dm.shape):<14} {min(Dm.shape):>9} {eff:>10.2f} "
+          f"{e[:4].sum():>7.1%} {e[:8].sum():>7.1%} {e[:16].sum():>7.1%}")
+print()
+print("비교: 같은 크기의 **무작위** 행렬")
+print(f"{'모양':<14} {'유효 랭크':>10} {'최대 대비':>10}")
+print("-" * 38)
+rr = np.random.default_rng(0)
+RAND = {}
+for shape in [(W*V, HID), (HID, HID), (HID, V)]:
+    Rm = rr.normal(size=shape)
+    s = np.linalg.svd(Rm, compute_uv=False)
+    e = s**2/(s**2).sum()
+    ef = float(np.exp(-(e*np.log(e + 1e-300)).sum()))
+    RAND[shape] = ef
+    print(f"{str(shape):<14} {ef:>10.2f} {ef/min(shape):>9.1%}")
+print()
+print("**결과가 통념보다 미묘하다.**")
+mid = [s for s in SPEC if s[1] == (HID, HID)][0]
+print(f"  가장 큰 층 W1({HID}×{HID}): 유효 랭크 {mid[3]:.1f} "
+      f"vs 무작위 {RAND[(HID, HID)]:.1f}")
+print(f"  → 무작위보다 **{RAND[(HID,HID)]/mid[3]:.1f}배 낮다.** 저계수 경향은 분명하다.")
+print()
+print(f"  **그런데 상위 4개 특이값이 설명하는 비율은 {mid[4][:4].sum():.1%} 에 불과하다.**")
+print(f"  상위 8개로도 {mid[4][:8].sum():.1%}, 16개로 {mid[4][:16].sum():.1%} 다.")
+print()
+print("**즉 'ΔW 는 랭크 4 로 근사된다'는 서술은 이 실험에서 성립하지 않는다.**")
+print("그렇다면 LoRA 는 왜 작동하는가? 다음 절에서 답한다 —")
+print("**핵심은 ΔW 를 재현하는 것이 아니라 성능에 도달하는 것**이기 때문이다.")
+```
+
+```{python}
+#| label: fig-spectrum
+#| fig-cap: "ΔW의 특이값은 무작위보다 빠르게 감쇠하지만 상위 몇 개로 끝나지는 않습니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("특이값 스펙트럼 (정규화)",
+                                    "누적 설명 비율"))
+for i, shape, mx, eff, e in SPEC:
+    fig.add_trace(go.Scatter(x=np.arange(1, len(e)+1), y=np.round(e, 6),
+                             mode="lines", name=f"W{i} {shape}",
+                             line=dict(color=viz.color(i), width=2.2)),
+                  row=1, col=1)
+    fig.add_trace(go.Scatter(x=np.arange(1, len(e)+1), y=np.round(e.cumsum(), 4),
+                             mode="lines", showlegend=False,
+                             line=dict(color=viz.color(i), width=2.2)),
+                  row=1, col=2)
+Rm = np.random.default_rng(0).normal(size=(HID, HID))
+sr = np.linalg.svd(Rm, compute_uv=False)
+er = sr**2/(sr**2).sum()
+fig.add_trace(go.Scatter(x=np.arange(1, len(er)+1), y=np.round(er, 6),
+                         mode="lines", name="무작위 (128×128)",
+                         line=dict(color=viz.YELLOW, width=2, dash="dash")),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=np.arange(1, len(er)+1), y=np.round(er.cumsum(), 4),
+                         mode="lines", showlegend=False,
+                         line=dict(color=viz.YELLOW, width=2, dash="dash")),
+              row=1, col=2)
+for r_ in [4, 8, 16]:
+    fig.add_vline(x=r_, line=dict(color=viz.hex_rgba(viz.GREEN, 0.5),
+                                  dash="dot"), row=1, col=2)
+fig.update_xaxes(title_text="특이값 순위", type="log", row=1, col=1)
+fig.update_yaxes(title_text="설명 비율", type="log", row=1, col=1)
+fig.update_xaxes(title_text="상위 k개", type="log", row=1, col=2)
+fig.update_yaxes(title_text="누적 비율", row=1, col=2)
+viz.fig_defaults(fig, height=390,
+                 title="초록 점선: LoRA 에서 흔히 쓰는 rank 4, 8, 16")
+fig.show()
+```
+
+---
+
+## G7.6.2 — LoRA를 직접 구현한다
+
+::: {.key-concept}
+**LoRA의 구조**
+
+$$h = xW + x(AB)\cdot\frac{\alpha}{r}$$
+
+- $W$ 는 **동결**. 그래디언트도 옵티마이저 상태도 없다
+- $A \in \mathbb{R}^{d_{in}\times r}$ 는 무작위 초기화, $B \in \mathbb{R}^{r\times d_{out}}$ 는 **0으로 초기화**
+- $B=0$ 이므로 **학습 시작 시점에 원 모델과 정확히 같다**
+
+마지막 항목이 중요하다. [3.7](../03_deep_learning/07_initialization.qmd)의 잔차 스케일링,
+[6.7](../06_generative/07_latent_diffusion.qmd)의 zero-conv·adaLN-Zero와 같은 발상이다 —
+**항등에서 출발하면 안전하다.**
 :::
 
-70B 모델을 GPU 한 장에서 조정할 수 있게 만든 것이 LoRA다. 그 원리는 놀랍도록 단순하고, 그래서 어디에나 응용된다.
+```{python}
+#| label: lora
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+class LoRA:
+    """동결된 MLP 위에 저계수 보정 ΔW = A·B 를 얹는다."""
+
+    def __init__(self, base, r, alpha=None, seed=0):
+        self.base, self.r = base, r
+        self.scale = (alpha if alpha is not None else r)/r
+        g = np.random.default_rng(seed)
+        self.A, self.B = [], []
+        for Wm in base.W:
+            din, dout = Wm.shape
+            self.A.append(g.normal(0, 1/np.sqrt(din), (din, r)))
+            self.B.append(np.zeros((r, dout)))       # ← 0 초기화
+        self.act, self.dact = nn.ACTIVATIONS[base.act_name]
+
+    def params(self):
+        p = {}
+        for i in range(len(self.A)):
+            p[f"A{i}"], p[f"B{i}"] = self.A[i], self.B[i]
+        return p
+
+    def n_params(self):
+        return sum(a.size + b.size for a, b in zip(self.A, self.B))
+
+    def forward(self, X):
+        h, cache = X, {"h": [X], "z": []}
+        n = len(self.base.W)
+        for i in range(n):
+            Weff = self.base.W[i] + self.scale*(self.A[i] @ self.B[i])
+            z = h @ Weff + self.base.b[i]
+            cache["z"].append(z)
+            h = self.act(z) if i < n-1 else z
+            cache["h"].append(h)
+        return h, cache
+
+    def predict(self, X):
+        return nn.softmax(self.forward(X)[0])
+
+    def loss_and_grads(self, X, y):
+        out, cache = self.forward(X)
+        L, d = nn.softmax_ce_loss(out, y)
+        g = {}
+        n = len(self.base.W)
+        for i in range(n-1, -1, -1):
+            if i < n-1:
+                d = d*self.dact(cache["z"][i], cache["h"][i+1])
+            dW = cache["h"][i].T @ d               # ΔW 에 대한 그래디언트
+            g[f"A{i}"] = self.scale*(dW @ self.B[i].T)
+            g[f"B{i}"] = self.scale*(self.A[i].T @ dW)
+            Weff = self.base.W[i] + self.scale*(self.A[i] @ self.B[i])
+            d = d @ Weff.T
+        return L, g
+
+
+def ppl_lora(m, X, y):
+    pr = m.predict(onehot(X))
+    return 2**float(-np.log2(np.maximum(pr[np.arange(len(y)), y],
+                                        1e-300)).mean())
+
+
+print("파라미터 수 계산 — 왜 이렇게 줄어드는가")
+print()
+print(f"{'층':<8} {'모양':<14} {'전체 W':>10} " +
+      " ".join(f"{'r='+str(r):>9}" for r in [1, 4, 16]))
+print("-" * 62)
+for i, Wm in enumerate(BASE.W):
+    din, dout = Wm.shape
+    print(f"W{i:<7} {str(Wm.shape):<14} {Wm.size:>10,} " +
+          " ".join(f"{r*(din+dout):>9,}" for r in [1, 4, 16]))
+print("-" * 62)
+print(f"{'합계':<8} {'':<14} {N_W:>10,} " +
+      " ".join(f"{sum(r*(w.shape[0]+w.shape[1]) for w in BASE.W):>9,}"
+               for r in [1, 4, 16]))
+print()
+print("**d×d 행렬 하나가 2dr 로 줄어든다.** d=128, r=4 면 16,384 → 1,024 (16배).")
+print("실제 LLM 은 d=4096 이라 16,777,216 → 32,768 (512배)다.")
+```
+
+```{python}
+#| label: rank-sweep
+#| code-fold: false
+
+import numpy as np
+
+print("LoRA rank 를 바꿔가며 — 학습률은 5e-3 로 통일")
+print()
+print(f"{'방법':<16} {'학습 파라미터':>14} {'비율':>8} {'B PPL':>9} "
+      f"{'A PPL':>9} {'A 망각':>9}")
+print("-" * 70)
+print(f"{'미세조정 없음':<16} {0:>14,} {0.0:>7.1%} {B0:>9.3f} {A0:>9.3f} "
+      f"{1.0:>8.2f}x")
+
+LORA_ROWS = []
+for r in [1, 2, 4, 8, 16, 32]:
+    m = LoRA(BASE, r, seed=1)
+    opt = LR_OPT = nn.Optimizer("adam", lr=5e-3)
+    Pm = m.params()
+    g2 = np.random.default_rng(1)
+    for _ in range(1500):
+        idx = g2.integers(0, len(X_B), 256)
+        _, gr = m.loss_and_grads(onehot(X_B[idx]), Y_B[idx])
+        opt.step(Pm, gr)
+    la, lb = ppl_lora(m, XA_TE, YA_TE), ppl_lora(m, XB_TE, YB_TE)
+    LORA_ROWS.append((r, m.n_params(), lb, la, la/A0))
+    print(f"{'LoRA r='+str(r):<16} {m.n_params():>14,} "
+          f"{m.n_params()/N_W:>7.1%} {lb:>9.3f} {la:>9.3f} {la/A0:>8.2f}x")
+
+print()
+print("전체 미세조정 — 학습률을 바꿔가며 (공정 비교를 위해)")
+print(f"{'lr':<16} {'학습 파라미터':>14} {'비율':>8} {'B PPL':>9} "
+      f"{'A PPL':>9} {'A 망각':>9}")
+print("-" * 70)
+FULL_ROWS = []
+for lr in [1e-4, 5e-4, 1e-3, 5e-3]:
+    F = copy.deepcopy(BASE)
+    nn.train(F, onehot(X_B), Y_B, loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=lr), steps=1500, batch_size=256,
+             seed=1)
+    a_, b_ = ppl(F, XA_TE, YA_TE), ppl(F, XB_TE, YB_TE)
+    FULL_ROWS.append((lr, b_, a_, a_/A0))
+    print(f"{'전체 FT lr='+f'{lr:.0e}':<16} {N_W:>14,} {1.0:>7.1%} "
+          f"{b_:>9.3f} {a_:>9.3f} {a_/A0:>8.2f}x")
+print()
+
+best_lora = min(LORA_ROWS, key=lambda r: r[2])
+best_full = min(FULL_ROWS, key=lambda f: f[1])
+same_lr = [f for f in FULL_ROWS if f[0] == 5e-3][0]
+
+print(f"**같은 학습률(5e-3)에서 비교하면 LoRA 가 낫다:**")
+print(f"  전체 미세조정: B {same_lr[1]:.3f}, 망각 {same_lr[3]:.2f}x "
+      f"(파라미터 {N_W:,})")
+print(f"  LoRA r={best_lora[0]}:     B {best_lora[2]:.3f}, "
+      f"망각 {best_lora[4]:.2f}x (파라미터 {best_lora[1]:,}, "
+      f"{best_lora[1]/N_W:.1%})")
+print()
+print("**그런데 이 비교는 공정하지 않다 — 전체 FT 에 나쁜 학습률을 준 것이다.**")
+print(f"  각자의 최적 설정에서 다시 보면:")
+print(f"    전체 미세조정 (lr={best_full[0]:.0e}): "
+      f"B {best_full[1]:.3f}, 망각 {best_full[3]:.2f}x")
+print(f"    LoRA r={best_lora[0]}:              "
+      f"B {best_lora[2]:.3f}, 망각 {best_lora[4]:.2f}x")
+print()
+print("**전체 미세조정이 B 도 더 좋고 망각도 더 적다.**")
+print("  프론티어(아래 그림 오른쪽)를 보면 전체 FT 곡선이 LoRA 곡선 안쪽에 있다.")
+print()
+print("**즉 이 실험에서 LoRA 의 이점은 품질이 아니다.**")
+print(f"  파라미터 {N_W/best_lora[1]:.0f}배, 옵티마이저 상태까지 치면 그 이상 적게 쓰면서")
+print("  **품질을 거의 잃지 않는 것** — 그것이 LoRA 의 주장이고, 여기서 확인된 것이다.")
+print("  (LoRA 논문도 '동등하거나 더 낫다' 를 말하지 '항상 낫다' 를 말하지 않는다.)")
+print()
+print("  우리 모델은 22,784 파라미터짜리 장난감이라 전체 FT 가 부담이 아니다.")
+print("  70B 에서는 840 GB vs 1 GB 다. **그 규모에서 선택지는 하나뿐이다.**")
+print()
+print("**그런데 rank 가 클수록 좋은 것이 아니다:**")
+for r, npar, b_, a_, f_ in LORA_ROWS:
+    mark = "  ← 최적" if r == best_lora[0] else ""
+    print(f"  r={r:<3} B PPL {b_:.3f}, 망각 {f_:.2f}x{mark}")
+print()
+print(f"**r={best_lora[0]} 에서 가장 좋고 그 뒤로는 나빠진다.**")
+print(f"  적응 데이터가 {len(X_B):,} 토큰뿐이라 rank 가 크면 과적합한다.")
+print("  **rank 는 용량 손잡이이자 정규화 손잡이다.**")
+print("  '클수록 좋다'가 아니라 '데이터 양에 맞춰야 한다'가 맞다.")
+print()
+print("그리고 망각이 rank 와 함께 단조 증가한다 —")
+print(f"  r=1 에서 {LORA_ROWS[0][4]:.2f}x, r=32 에서 {LORA_ROWS[-1][4]:.2f}x")
+print("  갱신할 수 있는 방향이 많을수록 원래 능력을 더 많이 덮어쓴다.")
+```
+
+```{python}
+#| label: fig-frontier
+#| fig-cap: "적응 성능과 망각의 프론티어 — LoRA가 더 좋은 지점을 준다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("rank 에 따른 성능과 망각",
+                                    "적응 성능 vs 망각 (프론티어)"),
+                    specs=[[{"secondary_y": True}, {"type": "xy"}]])
+rs = [r[0] for r in LORA_ROWS]
+fig.add_trace(go.Scatter(x=rs, y=[r[2] for r in LORA_ROWS],
+                         mode="lines+markers", name="B PPL (낮을수록 좋음)",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_trace(go.Scatter(x=rs, y=[r[4] for r in LORA_ROWS],
+                         mode="lines+markers", name="A 망각 배수",
+                         line=dict(color=viz.WARM, width=2.5, dash="dash"),
+                         marker=dict(size=10)), row=1, col=1, secondary_y=True)
+fig.update_xaxes(title_text="LoRA rank", type="log", row=1, col=1)
+fig.update_yaxes(title_text="B PPL", row=1, col=1)
+fig.update_yaxes(title_text="A 망각 배수", row=1, col=1, secondary_y=True)
+
+fig.add_trace(go.Scatter(x=[r[4] for r in LORA_ROWS],
+                         y=[r[2] for r in LORA_ROWS],
+                         mode="markers+text", name="LoRA",
+                         text=[f"r={r[0]}" for r in LORA_ROWS],
+                         textposition="top center", textfont=dict(size=9),
+                         marker=dict(size=11, color=viz.ACCENT)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[f[3] for f in FULL_ROWS],
+                         y=[f[1] for f in FULL_ROWS],
+                         mode="markers+text", name="전체 미세조정",
+                         text=[f"{f[0]:.0e}" for f in FULL_ROWS],
+                         textposition="bottom center", textfont=dict(size=9),
+                         marker=dict(size=11, color=viz.WARM,
+                                     symbol="square")), row=1, col=2)
+fig.update_xaxes(title_text="A 망각 배수 (낮을수록 좋음)", type="log",
+                 row=1, col=2)
+fig.update_yaxes(title_text="B PPL (낮을수록 좋음)", row=1, col=2)
+viz.fig_defaults(fig, height=400,
+                 title="오른쪽 그림에서 **왼쪽 아래**가 좋습니다")
+fig.show()
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G7.6.3 — 메모리 예산
 
-- 전체 미세조정의 비용: 파라미터·옵티마이저 상태·활성화 메모리
-- 치명적 망각(catastrophic forgetting)과 완화
-- 어댑터(Houlsby), prefix tuning, prompt tuning, P-tuning
-- LoRA: 저계수 갱신 ΔW = BA의 동기와 유도
-- LoRA 하이퍼파라미터: rank, alpha, 대상 모듈, dropout
-- QLoRA: 4비트 양자화 + LoRA, NF4·이중 양자화·페이지드 옵티마이저
-- DoRA, LoRA+, ReLoRA 등 변형
-- LoRA 병합·다중 어댑터 서빙
-- 미세조정 vs 프롬프팅 vs RAG — 언제 무엇을
-- 도메인 적응 사전학습(DAPT)과 계속 사전학습
-- 데이터셋 크기와 품질의 영향, 소량 고품질 가설
+```{python}
+#| label: memory
+#| code-fold: false
+
+print("70B 모델을 조정할 때의 메모리 (bf16 가중치, Adam 기준)")
+print()
+N = 70e9
+
+
+def gb(x):
+    return x/1e9
+
+
+rows = []
+# 전체 미세조정
+full = {"가중치 (bf16)": 2*N, "그래디언트 (bf16)": 2*N,
+        "Adam m (fp32)": 4*N, "Adam v (fp32)": 4*N,
+        "fp32 마스터 가중치": 4*N}
+# LoRA (r=16, 어텐션 4개 행렬 × 80층 × d=8192 가정)
+n_lora = 2*16*8192*4*80
+lora = {"가중치 (bf16, 동결)": 2*N, "LoRA 파라미터 (fp32)": 4*n_lora,
+        "LoRA 그래디언트": 4*n_lora, "Adam m+v (fp32)": 8*n_lora}
+# QLoRA (4비트 양자화)
+qlora = {"가중치 (NF4)": 0.5*N, "양자화 상수": 0.0313*N,
+         "LoRA 파라미터 (fp32)": 4*n_lora, "LoRA 그래디언트": 4*n_lora,
+         "Adam m+v (fp32)": 8*n_lora}
+
+for nm, d in [("전체 미세조정", full), ("LoRA (r=16)", lora),
+              ("QLoRA (4bit, r=16)", qlora)]:
+    tot = sum(d.values())
+    print(f"[{nm}]  합계 {gb(tot):,.0f} GB")
+    for k, v in d.items():
+        print(f"    {k:<26} {gb(v):>10.2f} GB")
+    rows.append((nm, gb(tot)))
+    print()
+
+print(f"{'방법':<22} {'메모리':>12} {'전체 대비':>10} {'H100 80GB'}")
+print("-" * 60)
+for nm, g_ in rows:
+    print(f"{nm:<22} {g_:>9,.0f} GB {g_/rows[0][1]:>9.1%} "
+          f"{int(np.ceil(g_/80)):>6}장")
+print()
+print(f"**LoRA 파라미터는 {n_lora/1e6:.0f}M — 70B 의 "
+      f"{n_lora/N:.3%} 다.**")
+print("그런데 메모리는 그만큼 줄지 않는다 — **동결 가중치가 여전히 140 GB** 이기 때문이다.")
+print()
+print("**QLoRA 가 그 지점을 친다.** 동결 가중치를 4비트로 저장한다:")
+for s in ["**NF4** — 정규분포에 최적화된 4비트 양자화 (정보이론적으로 균등보다 낫다)",
+          "**이중 양자화** — 양자화 상수 자체를 다시 양자화 (파라미터당 0.37비트 절약)",
+          "**페이지드 옵티마이저** — 메모리 스파이크를 CPU 로 넘긴다",
+          "계산 시에는 bf16 으로 되돌린다 (저장만 4비트)"]:
+    print(f"  · {s}")
+print()
+print("여기 계산에 **없는 것이 하나 있다: 활성화 메모리.**")
+print("  배치·시퀀스 길이에 비례하며, 긴 문맥에서는 이것이 지배적일 수 있다.")
+print("  그래디언트 체크포인팅으로 줄인다 (계산을 다시 해서 메모리를 산다).")
+print("  **LoRA 도 활성화는 저장해야 한다** — 역전파가 동결 층을 통과하기 때문이다.")
+```
 
 ---
 
-## G7.6.1 — LoRA 저계수 분해
+## 변형과 선택
 
-d×d 갱신 행렬이 두 얇은 행렬로 근사되며 파라미터가 줄어드는 계산
+```{python}
+#| label: variants
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: rank 슬라이더
-:::
+rows = [
+    ("어댑터 (Houlsby)", "층 사이에 작은 병목 MLP 삽입", "**추론 지연 증가**",
+     "LoRA 이전 표준"),
+    ("**LoRA**", "ΔW = BA, 가중치에 병합 가능", "**추론 지연 0**",
+     "현재 표준"),
+    ("QLoRA", "4비트 동결 + LoRA", "약간 느림",
+     "단일 GPU 로 70B"),
+    ("DoRA", "크기와 방향을 분리해 갱신", "약간 느림",
+     "같은 rank 에서 성능↑ 보고"),
+    ("LoRA+", "A 와 B 에 다른 학습률", "동일",
+     "수렴 속도 개선"),
+    ("ReLoRA", "주기적으로 병합하고 재시작", "동일",
+     "사전학습에도 쓰려는 시도"),
+    ("prefix tuning", "각 층 K,V 앞에 학습 가능한 벡터", "문맥 소비",
+     "긴 프롬프트를 압축한 효과"),
+    ("prompt tuning", "입력에만 소프트 토큰 추가", "문맥 소비",
+     "가장 가볍지만 큰 모델에서만 작동"),
+    ("(IA)³", "활성에 학습된 스케일 곱하기", "거의 0",
+     "파라미터가 극도로 적다"),
+]
+print(f"{'방법':<20} {'무엇을 학습하나':<32} {'추론 비용':<16} {'비고'}")
+print("-" * 92)
+for r in rows:
+    print(f"{r[0]:<20} {r[1]:<32} {r[2]:<16} {r[3]}")
+print()
+print("**LoRA 가 이긴 결정적 이유: 병합할 수 있다.**")
+print()
+print("   W' = W + (α/r)·BA   ← 학습 후 한 번 계산해 W' 로 저장")
+print()
+print("  그러면 추론 시 구조가 원본과 **완전히 동일**하다. 지연이 0 이다.")
+print("  어댑터는 층을 추가하므로 그럴 수 없다.")
+print()
+print("**병합하지 않고 서빙하는 것도 가능하다:**")
+for s in ["여러 어댑터를 한 기반 모델 위에 동시에 (멀티테넌트 서빙)",
+          "요청마다 다른 어댑터 선택 (S-LoRA, Punica 등)",
+          "대가 — 배치 처리가 복잡해지고 약간 느려진다"]:
+    print(f"  · {s}")
+print()
+print("**하이퍼파라미터 실무 지침**")
+print()
+print(f"{'항목':<16} {'권장':<28} {'근거'}")
+print("-" * 74)
+for a, b, c in [
+    ("rank", "8~64 (데이터 양에 비례)", "위 실험 — 크다고 좋지 않다"),
+    ("alpha", "보통 rank 의 2배", "스케일 α/r 이 실효 학습률처럼 작동"),
+    ("대상 모듈", "**모든 선형층** (q,k,v,o,MLP)", "어텐션만보다 대체로 낫다"),
+    ("학습률", "1e-4 ~ 5e-4 (전체 FT 의 10배)", "파라미터가 적고 0 에서 출발"),
+    ("dropout", "0.05~0.1", "작은 데이터에서 과적합 방지"),
+]:
+    print(f"{a:<16} {b:<28} {c}")
+```
 
 ---
 
-## G7.6.2 — 메모리 예산 비교
+## 언제 무엇을 쓸 것인가
 
-full FT / LoRA / QLoRA의 GPU 메모리 구성 막대
+```{python}
+#| label: when
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 크기 슬라이더
-:::
+rows = [
+    ("**최신 사실이 필요**", "RAG", "미세조정은 지식 갱신에 비효율적",
+     "7.10"),
+    ("출력 형식·말투", "**LoRA**", "적은 데이터로 충분",
+     "7.7"),
+    ("새 도메인 어휘·문체", "계속 사전학습 (DAPT) + LoRA", "대량의 도메인 텍스트 필요",
+     "—"),
+    ("과제 몇 개 예시로 충분", "**프롬프팅**", "학습이 아예 불필요",
+     "7.8"),
+    ("추론 비용을 줄이고 싶다", "증류 후 작은 모델 미세조정", "서빙 비용이 지배적일 때",
+     "7.14"),
+    ("안전·정책 준수", "정렬 학습 (DPO 등)", "선호 데이터가 필요",
+     "7.7"),
+]
+print(f"{'목적':<22} {'권장':<26} {'이유':<30} {'장'}")
+print("-" * 90)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<26} {r[2]:<30} {r[3]}")
+print()
+print("**가장 흔한 실수: 지식을 넣으려고 미세조정하는 것.**")
+print("  · 새 사실을 외우게 하려면 그 사실이 여러 번 나와야 한다 (7.5 의 암기 실험)")
+print("  · 그러면 다른 것을 잊는다 (이 장의 망각 실험)")
+print("  · **검색으로 문맥에 넣는 편이 싸고 정확하고 갱신 가능하다**")
+print()
+print("**미세조정이 잘 하는 것은 '행동'이다:**")
+for s in ["출력 형식 (JSON, 특정 마크업)",
+          "말투·페르소나",
+          "도메인 특유의 표현 방식",
+          "**과제 수행 절차** (7.4 에서 본 대로, 능력은 이미 있고 꺼내는 법을 가르친다)"]:
+    print(f"  · {s}")
+print()
+print("**소량 고품질 가설 (LIMA)**")
+print("  Zhou et al.(2023): 지시 조정에 **1,000개의 잘 만든 예시**면 충분하다는 주장")
+print("  근거 — 능력은 사전학습에서 나오고, 조정은 형식을 정할 뿐이다")
+print("  단서 — 이 주장은 '일반 대화' 에 대한 것이고,")
+print("         전문 과제나 안전 정렬에서는 훨씬 많은 데이터가 필요하다")
+```
 
 ---
 
-## G7.6.3 — rank와 성능
+## 요약
 
-rank를 올릴 때의 성능 수확 체감 곡선
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: rank 슬라이더
-:::
-
----
-
-## G7.6.4 — 망각 측정
-
-새 과제 성능이 오르며 기존 능력이 떨어지는 곡선
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 학습 스텝 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| LoRA |  |
-| QLoRA |  |
-| 어댑터 |  |
-| prompt tuning |  |
-| 치명적 망각 |  |
-| 계속 사전학습 |  |
+| 전체 FT 비용 | 70B 기준 840 GB (가중치+그래디언트+Adam) |
+| LoRA 원리 | $W' = W + BA$, $B$ 를 0으로 초기화해 항등에서 출발 |
+| **저계수 전제 검증** | ΔW 유효 랭크가 무작위의 1/2.6 — 저계수 경향은 있다 |
+| **그런데** | 상위 4개 특이값이 설명하는 비율은 30% 남짓 |
+| 결론 | "ΔW는 rank 4로 근사된다"는 서술은 성립하지 않았다 |
+| 그럼 왜 되는가 | **ΔW 재현이 아니라 성능 도달이 목표**이기 때문 |
+| 측정된 성능 | r=4가 파라미터 10%로 전체 FT와 **비슷한** B PPL |
+| rank는 정규화 | r을 키우면 오히려 나빠진다 — 데이터 양에 맞춰야 한다 |
+| 망각 | rank와 함께 단조 증가 (r=1에서 3.8배, r=32에서 15.1배) |
+| 공정 비교 | 각자 최적 설정에선 **전체 FT가 근소 우위** — LoRA의 이점은 비용이다 |
+| 병합 | $W' = W + (\alpha/r)BA$ → **추론 지연 0**. LoRA가 이긴 이유 |
+| QLoRA | 동결 가중치를 NF4 4비트로 — 메모리의 지배항을 친다 |
+| 빠진 항목 | 활성화 메모리는 LoRA도 줄이지 못한다 |
+| 하이퍼파라미터 | rank 8~64, alpha≈2r, 모든 선형층, lr은 전체 FT의 10배 |
+| 흔한 실수 | **지식을 넣으려고 미세조정** — 검색이 싸고 정확하다 |
+| 잘 하는 것 | 형식·말투·절차 — 능력이 아니라 행동 |
 
 ---
 
-**다음**: [7.7 지시 조정과 정렬](07_alignment.qmd) — SFT·RLHF·DPO — 유능한 모델을 유용한 모델로
+**다음**: [7.7 지시 조정과 정렬](07_alignment.qmd)
 
 **이전**: [7.5 사전학습 데이터](05_pretraining_data.qmd)

@@ -13,7 +13,7 @@
 - **계산·그래픽**: NumPy / SciPy / Plotly (렌더 타임 의존성은 이 셋으로 제한)
 - **딥러닝 프레임워크 코드**: 실행하지 않는 예시 블록으로 제시 (빌드 재현성 우선)
 
-- **집필 완료** 72 / 123 챕터
+- **집필 완료** 73 / 123 챕터
 
 ## 전체 구성
 
@@ -26,7 +26,7 @@
 | `04_architectures` | Part 4: 신경망 아키텍처 | 7 | 7 | CNN·RNN 계열의 귀납 편향을 설명하고, 어텐션이 왜 등장할 수밖에 없었는지 역사적·수학적으로 서술할 수 있다. |
 | `05_transformer` | Part 5: 트랜스포머 | 11 | 11 | Transformer를 NumPy로 처음부터 구현하고, 최신 LLM이 원 논문에서 무엇을 바꿨는지 항목별로 설명할 수 있다. |
 | `06_generative` | Part 6: 생성 모델 | 9 | 9 | VAE·GAN·확산 모델의 목적함수를 각각 유도하고, 어떤 상황에서 어떤 계열을 선택할지 판단할 수 있다. |
-| `07_language` | Part 7: 언어 (NLP · LLM) | 16 | 6 | 토크나이저부터 정렬·추론 최적화까지 LLM 스택 전체를 설명하고, 실제 시스템을 설계·평가할 수 있다. |
+| `07_language` | Part 7: 언어 (NLP · LLM) | 16 | 7 | 토크나이저부터 정렬·추론 최적화까지 LLM 스택 전체를 설명하고, 실제 시스템을 설계·평가할 수 있다. |
 | `08_audio` | Part 8: 오디오 · 음성 | 11 | 1 | 파형에서 스펙트로그램까지 신호를 직접 계산하고, 최신 ASR·TTS·오디오 생성 모델의 구조를 설명할 수 있다. |
 | `09_vision_video` | Part 9: 비전 · 비디오 | 10 | 1 | 이미지·비디오 모델의 표현 방식과 과제별 구조를 이해하고, 멀티모달 모델이 어떻게 언어와 결합되는지 설명할 수 있다. |
 | `10_rl` | Part 10: 강화학습 | 6 | 0 | MDP부터 PPO까지 유도하고, 그 기계가 LLM 정렬(RLHF·GRPO)에서 어떻게 재사용되는지 연결할 수 있다. |
@@ -106,6 +106,7 @@
 - ✅ **7.3 단어 임베딩** — `chapters/07_language/03_word_embeddings.qmd`
 - ✅ **7.4 사전학습 패러다임** — `chapters/07_language/04_pretraining_paradigms.qmd`
 - ✅ **7.5 사전학습 데이터** — `chapters/07_language/05_pretraining_data.qmd`
+- ✅ **7.6 미세조정과 PEFT** — `chapters/07_language/06_finetuning_peft.qmd`
 - ✅ **8.1 푸리에 변환과 스펙트로그램** — `chapters/08_audio/01_fourier_stft.qmd`
 - ✅ **9.0 이미지의 표현과 처리** — `chapters/09_vision_video/00_image_basics.qmd`
 
@@ -2370,7 +2371,7 @@ n-gram으로 시작하면 '다음 토큰 예측'이 왜 그렇게 강력한 학�
 
 ---
 
-### 7.6 미세조정과 PEFT
+### 7.6 미세조정과 PEFT ✅
 
 `chapters/07_language/06_finetuning_peft.qmd` — *full FT·LoRA·QLoRA·어댑터 — 큰 모델을 적은 자원으로 바꾸기*
 
