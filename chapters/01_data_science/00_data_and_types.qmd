@@ -4,76 +4,567 @@ subtitle: "타입·스키마·tidy data — 분석 이전에 결정되는 것들
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+모델 성능의 상한은 데이터가 정한다.
+그리고 그 데이터가 **어떤 모양인지 정확히 말하지 못하면** 어떤 분석도 신뢰할 수 없다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장은 코드를 짜기 전에 대답해야 하는 질문들을 다룬다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+- 이 열은 **평균을 낼 수 있는 값인가?**
+- 한 행은 **무엇 하나**를 뜻하는가?
+- 이 데이터는 **어떻게 여기 왔는가?**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+세 번째 질문이 가장 위험하다.
+데이터가 어떻게 수집됐는지에 따라, **정확히 계산한 값이 정반대 결론을 가리킬 수 있다.**
+이 장의 절반은 그 사례들을 직접 재현하는 데 쓴다.
 
-모델 성능의 상한은 데이터가 정한다. 그리고 그 데이터가 어떤 모양인지 정확히 말하지 못하면 어떤 분석도 신뢰할 수 없다.
+::: {.callout-note}
+## 이 책의 도구 제약
 
----
+이 프로젝트는 렌더 타임 의존성을 **NumPy·SciPy·Plotly** 로 제한한다.
+따라서 표 데이터도 NumPy 구조화 배열로 다룬다.
 
-## 이 장에서 다루는 것
-
-- 측정 척도: 명목·순서·구간·비율 (무엇을 평균 낼 수 있는가)
-- 정형/반정형/비정형 데이터, 테이블·JSON·텍스트·신호
-- tidy data 원칙: 1변수 1열, 1관측 1행, 1테이블 1관측단위
-- wide vs long 포맷과 pivot/melt
-- 스키마, 데이터 타입, 결측 표현(NaN, NULL, sentinel)
-- 관측단위와 집계 수준, 심슨의 역설
-- 데이터 출처와 수집 편향: 표집 편향, 생존 편향, 선택 편향
-- 데이터 사전(data dictionary)과 계보(lineage) 기록
-
----
-
-## G1.0.1 — wide ↔ long 변환
-
-같은 데이터가 두 포맷에서 어떻게 보이는지 나란히 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 토글
+실무에서는 당연히 pandas나 Polars를 쓴다.
+해당하는 코드는 **실행하지 않는** ```python 블록으로 함께 적어 둔다.
 :::
 
 ---
 
-## G1.0.2 — 심슨의 역설
+## 측정 척도: 무엇을 평균 낼 수 있는가
 
-전체 추세와 그룹별 추세의 부호가 뒤집히는 산점도
+```{python}
+#| label: measurement-scales
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 그룹 분리 토글
+rows = [
+    ("명목 (nominal)", "혈액형, 국가, 부서", "= ≠", "최빈값", "평균 불가"),
+    ("순서 (ordinal)", "만족도 1~5, 학점, 등급", "= ≠ < >", "중앙값, 최빈값",
+     "**평균은 위험**"),
+    ("구간 (interval)", "섭씨온도, 연도", "= ≠ < > + −", "평균, 표준편차",
+     "비율 불가 (20°C ≠ 10°C의 2배)"),
+    ("비율 (ratio)", "길이, 무게, 개수, 소득", "모두 + ×÷", "기하평균 등 전부",
+     "절대 0이 있음"),
+]
+print(f"{'척도':<18} {'예':<26} {'가능한 연산':<14} {'대표값':<18} {'주의'}")
+print("-" * 96)
+for r in rows:
+    print(f"{r[0]:<18} {r[1]:<26} {r[2]:<14} {r[3]:<18} {r[4]}")
+print()
+print("가장 자주 어기는 것이 **순서 척도의 평균**이다.")
+print("만족도 1~5 를 평균 내는 것은 '1→2 의 간격'과 '4→5 의 간격'이")
+print("같다고 가정하는 것인데, 그 가정에는 근거가 없다.")
+```
+
+말로만 하면 와닿지 않는다. **직접 재보자.**
+
+```{python}
+#| label: ordinal-danger
+#| code-fold: false
+
+import numpy as np
+
+# 두 팀의 만족도 응답 분포 (1~5점, 각 점수의 응답자 수)
+teams = {
+    "A팀": np.array([12, 8, 10, 25, 45]),   # 양극단 + 높은 쪽에 몰림
+    "B팀": np.array([2, 10, 46, 38, 4]),    # 가운데에 몰림
+}
+levels = np.arange(1, 6)
+
+# 세 가지 인코딩 — 셋 다 '순서를 보존한다'는 점에서 똑같이 정당하다
+encodings = {
+    "선형 1,2,3,4,5":        np.array([1, 2, 3, 4, 5], float),
+    "볼록 1,2,4,8,16":       np.array([1, 2, 4, 8, 16], float),
+    "오목 0,0.6,0.85,0.95,1": np.array([0, 0.6, 0.85, 0.95, 1.0]),
+}
+
+print(f"{'인코딩':<24} {'A팀 평균':>10} {'B팀 평균':>10} {'승자':>8}")
+print("-" * 56)
+winners = []
+for name, enc in encodings.items():
+    ma = (teams["A팀"] * enc).sum() / teams["A팀"].sum()
+    mb = (teams["B팀"] * enc).sum() / teams["B팀"].sum()
+    w = "A팀" if ma > mb else ("B팀" if mb > ma else "동점")
+    winners.append(w)
+    print(f"{name:<24} {ma:>10.3f} {mb:>10.3f} {w:>8}")
+print()
+print("**같은 응답 데이터인데 인코딩에 따라 승자가 바뀐다.**")
+print(f"셋 다 순서를 보존하는 정당한 인코딩이고, 결과는 {set(winners)} 로 갈린다.")
+print()
+print("순서 척도가 실제로 지지하는 진술만 보면:")
+for name, t in teams.items():
+    med = levels[np.searchsorted(np.cumsum(t), t.sum()/2)]
+    print(f"  {name}: 중앙값 {med},  4점 이상 비율 {t[3:].sum()/t.sum():>6.1%},  "
+          f"최빈 {levels[t.argmax()]}점")
+print()
+print("이런 표현은 인코딩에 의존하지 않는다 — **이것이 순서 척도의 올바른 요약이다.**")
+print("평균을 꼭 써야 한다면 인코딩을 명시하고, 결론이 그 선택에 얼마나 민감한지 확인하라.")
+```
+
+---
+
+## tidy data: 한 행은 무엇 하나인가
+
+Wickham(2014)의 세 가지 원칙이다.
+
+1. **각 변수는 하나의 열**
+2. **각 관측은 하나의 행**
+3. **각 관측 단위는 하나의 테이블**
+
+```{python}
+#| label: tidy-wide-long
+#| code-fold: false
+
+import numpy as np
+
+# wide 포맷: 분기가 열로 펼쳐져 있다
+wide = np.array(
+    [("서울", 120, 135, 141, 158),
+     ("부산", 88, 91, 99, 104),
+     ("대구", 61, 66, 64, 72)],
+    dtype=[("도시", "U6"), ("Q1", "i4"), ("Q2", "i4"), ("Q3", "i4"), ("Q4", "i4")])
+
+quarters = ["Q1", "Q2", "Q3", "Q4"]
+print("wide 포맷 — 사람이 읽기 좋다")
+print(f"  {'도시':<6}" + "".join(f"{q:>7}" for q in quarters))
+for r in wide:
+    print(f"  {r['도시']:<6}" + "".join(f"{r[q]:>7}" for q in quarters))
+print()
+
+# long(tidy) 포맷으로 변환: melt
+long = np.array(
+    [(r["도시"], q, r[q]) for r in wide for q in quarters],
+    dtype=[("도시", "U6"), ("분기", "U2"), ("매출", "i4")])
+
+print("long 포맷 — 기계가 다루기 좋다")
+print(f"  {'도시':<6} {'분기':<5} {'매출':>6}")
+for r in long[:5]:
+    print(f"  {r['도시']:<6} {r['분기']:<5} {r['매출']:>6}")
+print(f"  ... 총 {len(long)}행")
+print()
+print(f"wide: {len(wide)}행 × {len(quarters)}개 값 열")
+print(f"long: {len(long)}행 × 값 열 1개")
+print()
+print("**어느 쪽이 옳은가는 목적에 달렸다.**")
+for a, b in [("보고서·표 출력", "wide — 사람이 한눈에 비교"),
+             ("그룹별 집계·필터", "long — '분기'가 값이라 조건을 걸 수 있다"),
+             ("시각화 라이브러리 입력", "long — 색/패싯에 열을 매핑"),
+             ("모델 입력 행렬", "wide — 한 행이 한 샘플")]:
+    print(f"  {a:<22} → {b}")
+print()
+print("wide 의 문제: 분기가 하나 늘면 **스키마가 바뀐다.**")
+print("long 은 행만 늘어난다. 그래서 저장·파이프라인은 long 이 안전하다.")
+```
+
+```python
+# pandas 로는 한 줄이다 — 실행하지 않음
+long = wide.melt(id_vars="도시", var_name="분기", value_name="매출")
+wide = long.pivot(index="도시", columns="분기", values="매출").reset_index()
+```
+
+---
+
+## 결측을 어떻게 적을 것인가
+
+```{python}
+#| label: missing-representation
+#| code-fold: false
+
+import numpy as np
+
+raw = np.array([23.5, -999.0, 31.2, np.nan, 0.0, 27.8, -1.0, 45.1])
+print(f"원시 배열: {raw}")
+print()
+print("이 배열에는 결측 표현이 **세 가지** 섞여 있을 수 있다:")
+print("  NaN     — 명시적 결측")
+print("  -999    — 센티널(sentinel) 값. 옛 시스템의 관례")
+print("  0 또는 -1 — 의미가 모호. 진짜 0인가, 미측정인가?")
+print()
+print(f"{'처리 방식':<28} {'개수':>6} {'평균':>10} {'표준편차':>10}")
+print("-" * 58)
+variants = {
+    "아무 생각 없이 nanmean": raw,
+    "-999 만 결측 처리": np.where(raw == -999, np.nan, raw),
+    "-999, -1 결측 처리": np.where((raw == -999) | (raw == -1), np.nan, raw),
+    "0 도 결측으로 본다면": np.where((raw == -999) | (raw == -1) | (raw == 0),
+                              np.nan, raw),
+}
+for name, arr in variants.items():
+    ok = ~np.isnan(arr)
+    print(f"{name:<28} {ok.sum():>6} {np.nanmean(arr):>10.2f} {np.nanstd(arr):>10.2f}")
+print()
+base = np.nanmean(variants["아무 생각 없이 nanmean"])
+best = np.nanmean(variants["-999, -1 결측 처리"])
+print(f"센티널을 놓치면 평균이 {base:.2f}, 제대로 처리하면 {best:.2f} 다.")
+print(f"**부호가 뒤집혔다.** 값 하나(-999)가 나머지 7개를 전부 눌렀다.")
+print(f"표준편차도 {np.nanstd(variants['아무 생각 없이 nanmean']):.1f} → "
+      f"{np.nanstd(variants['-999, -1 결측 처리']):.1f} 로 "
+      f"{np.nanstd(variants['아무 생각 없이 nanmean'])/np.nanstd(variants['-999, -1 결측 처리']):.0f}배 부풀려진다.")
+print()
+print("이런 값은 **히스토그램을 한 번만 그려도 즉시 보인다.**")
+print("전처리 전에 각 열의 최솟값·최댓값·고유값 개수를 찍어 보는 것이 그래서 중요하다.")
+print()
+print("데이터 사전(data dictionary)이 없으면 이 판단을 할 수 없다.")
+print("최소한 다음은 문서로 남아야 한다:")
+for s in ["열 이름 / 의미 / 단위 / 측정 척도",
+          "허용 범위와 결측 표현 규약",
+          "수집 시점·주기·출처 시스템",
+          "관측 단위 (한 행이 무엇 하나인가)",
+          "변환 이력 (계보, lineage)"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G1.0.1 — 심슨의 역설
+
+**집계 수준을 바꾸면 결론의 부호가 뒤집힐 수 있다.**
+이것은 계산 실수가 아니라, 데이터가 원래 그렇게 생긴 것이다.
+
+```{python}
+#| label: fig-simpson
+#| fig-cap: "그룹을 나누면 추세의 방향이 뒤집힙니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng = np.random.default_rng(0)
+G, PER = 4, 60
+GLBL = ["1년차", "3년차", "5년차", "7년차"]
+
+xs, ys, gs = [], [], []
+for g in range(G):
+    xg = rng.normal(2 + 2.2*g, 0.6, PER)                  # 경력이 길수록 근무시간 ↑
+    yg = 0.8*xg + (10 - 3.2*g) + rng.normal(0, 0.5, PER)  # 그룹 내에서는 + 관계
+    xs.append(xg); ys.append(yg); gs.append(np.full(PER, g))
+x = np.concatenate(xs); y = np.concatenate(ys); g = np.concatenate(gs)
+
+xr = np.array([x.min(), x.max()])
+fit_all = np.polyfit(x, y, 1)
+
+fig = go.Figure()
+for gi in range(G):
+    m = g == gi
+    fig.add_trace(go.Scatter(x=x[m], y=y[m], mode="markers", name=GLBL[gi],
+                             marker=dict(size=6, color=viz.color(gi), opacity=0.7)))
+    f = np.polyfit(x[m], y[m], 1)
+    xr_g = np.array([x[m].min(), x[m].max()])
+    fig.add_trace(go.Scatter(x=xr_g, y=np.polyval(f, xr_g), mode="lines",
+                             showlegend=False,
+                             line=dict(color=viz.color(gi), width=3)))
+fig.add_trace(go.Scatter(x=xr, y=np.polyval(fit_all, xr), mode="lines",
+                         name=f"전체 추세 (기울기 {fit_all[0]:+.2f})",
+                         line=dict(color=viz.YELLOW, width=4, dash="dash")))
+fig.update_layout(xaxis_title="주당 근무시간 (표준화 단위)",
+                  yaxis_title="업무 만족도",
+                  legend=dict(x=0.72, y=0.98, font=dict(size=10)))
+viz.fig_defaults(fig, height=450,
+                 title="같은 데이터, 정반대 결론 — 심슨의 역설")
+fig.show()
+```
+
+```{python}
+#| label: simpson-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'집계 수준':<14} {'기울기':>10} {'상관계수':>10} {'결론'}")
+print("-" * 62)
+r_all = np.corrcoef(x, y)[0, 1]
+print(f"{'전체 (풀링)':<14} {fit_all[0]:>+10.3f} {r_all:>+10.3f}   "
+      f"많이 일할수록 만족도 **하락**")
+for gi in range(G):
+    m = g == gi
+    f = np.polyfit(x[m], y[m], 1)
+    r = np.corrcoef(x[m], y[m])[0, 1]
+    print(f"{GLBL[gi]:<14} {f[0]:>+10.3f} {r:>+10.3f}   많이 일할수록 만족도 상승")
+print()
+slopes = [np.polyfit(x[g == gi], y[g == gi], 1)[0] for gi in range(G)]
+print(f"**네 그룹 모두 기울기가 양수({min(slopes):+.2f} ~ {max(slopes):+.2f})인데, "
+      f"전체는 {fit_all[0]:+.2f} 다.**")
+print()
+print("원인은 그룹 자체가 x 축을 따라 배열되어 있기 때문이다:")
+print(f"  {'그룹':<8} {'x 평균':>9} {'y 평균':>9}")
+for gi in range(G):
+    m = g == gi
+    print(f"  {GLBL[gi]:<8} {x[m].mean():>9.2f} {y[m].mean():>9.2f}")
+print()
+print("경력이 길수록 근무시간이 길고(x↑), 동시에 만족도는 낮다(y↓).")
+print("그룹 간 이 관계가 그룹 내 관계를 압도해서 부호가 뒤집힌다.")
+```
+
+역설은 비율에서도 똑같이 일어난다. 실제 사례를 보자.
+
+```{python}
+#| label: simpson-categorical
+#| code-fold: false
+
+# Charig et al. (1986) 신장결석 치료 성공률 — 심슨의 역설의 고전 사례
+data = {
+    ("A", "작은 결석"): (81, 87),
+    ("A", "큰 결석"):   (192, 263),
+    ("B", "작은 결석"): (234, 270),
+    ("B", "큰 결석"):   (55, 80),
+}
+sizes = ["작은 결석", "큰 결석"]
+
+print(f"{'':<8} " + " ".join(f"{s:>16}" for s in sizes) + f"{'전체':>16}")
+print("-" * 60)
+tot = {}
+for t in ["A", "B"]:
+    line = f"{'치료 ' + t:<8} "
+    s_all = n_all = 0
+    for s in sizes:
+        a, b = data[(t, s)]
+        s_all += a; n_all += b
+        line += f"{f'{a}/{b} = {a/b:.1%}':>16} "
+    tot[t] = s_all/n_all
+    line += f"{f'{s_all}/{n_all} = {s_all/n_all:.1%}':>16}"
+    print(line)
+print()
+for s in sizes:
+    wa = data[("A", s)][0]/data[("A", s)][1]
+    wb = data[("B", s)][0]/data[("B", s)][1]
+    print(f"  {s}: 치료 A {wa:.1%} > 치료 B {wb:.1%}  → A 가 낫다")
+print(f"  전체     : 치료 A {tot['A']:.1%} < 치료 B {tot['B']:.1%}  → B 가 낫다")
+print()
+print("**A 가 두 부분집단 모두에서 이겼는데 전체에서는 졌다.**")
+print()
+n_a_big = data[("A", "큰 결석")][1] / sum(data[("A", s)][1] for s in sizes)
+n_b_big = data[("B", "큰 결석")][1] / sum(data[("B", s)][1] for s in sizes)
+print(f"원인은 환자 배정의 불균형이다:")
+print(f"  치료 A 를 받은 환자 중 큰 결석 비율: {n_a_big:.1%}")
+print(f"  치료 B 를 받은 환자 중 큰 결석 비율: {n_b_big:.1%}")
+print("어려운 사례(큰 결석)가 A 에 몰려 있어서 A 의 전체 성공률이 끌려 내려갔다.")
+```
+
+::: {.key-concept}
+**어느 쪽이 맞는 답인가**
+
+심슨의 역설에서 "전체와 그룹별 중 무엇을 봐야 하는가"는 **통계 문제가 아니라 인과 문제다.**
+
+신장결석 예에서는 **그룹별이 맞다.**
+결석 크기가 치료 선택에 영향을 주고(의사가 큰 결석에 A를 선택), 결과에도 영향을 준다.
+즉 결석 크기는 **교란변수**이므로 통제해야 한다.
+
+하지만 항상 그런 것은 아니다.
+그룹 변수가 **처치 이후에 결정되는 변수**(중간 변수)라면, 통제하면 오히려 편향이 생긴다.
+
+무엇을 나누고 무엇을 합칠지는 **데이터가 아니라 인과 구조가 정한다.**
+그 판단 도구가 [1.6 인과추론](06_causal_inference.qmd)의 DAG 다.
 :::
 
 ---
 
-## G1.0.3 — 표집 편향 시뮬레이션
+## G1.0.2 — 데이터는 어떻게 여기 왔는가
 
-동일 모집단에서 편향된 표집이 만드는 왜곡된 분포
+수집 과정이 편향되면, **계산이 아무리 정확해도 결론이 틀린다.**
+세 가지 대표적인 편향을 재현한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 표집 규칙 선택
+```{python}
+#| label: fig-sampling-bias
+#| fig-cap: "동일한 모집단에서 표집 규칙만 바꾼 결과"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(1)
+N_POP = 6000
+
+# ── 편향 1: 선택 편향 (응답률이 값에 의존) ──
+income = rng.lognormal(np.log(3500), 0.55, N_POP)          # 만원 단위
+p_resp = 1/(1 + np.exp(-(income - 6000)/1500))             # 고소득일수록 응답 ↑
+responded = rng.random(N_POP) < p_resp
+
+# ── 편향 2: 생존 편향 ──
+YEARS = 12
+r_ann = rng.normal(0.06, 0.20, (N_POP, YEARS))
+cum = np.cumprod(1 + r_ann, axis=1)
+alive = np.all(cum > 0.8, axis=1)                          # 20% 넘게 빠지면 청산
+
+# ── 편향 3: Berkson (충돌부 조건화) ──
+talent = rng.normal(0, 1, N_POP)
+looks = rng.normal(0, 1, N_POP)                            # 독립이다
+casted = (talent + looks) > 1.5
+
+fig = make_subplots(rows=1, cols=3, subplot_titles=(
+    "선택 편향: 소득 설문", "생존 편향: 펀드 수익률", "Berkson: 캐스팅된 배우"))
+
+fig.add_trace(go.Histogram(x=income, name="모집단", nbinsx=60, opacity=0.65,
+                           marker_color=viz.ACCENT), row=1, col=1)
+fig.add_trace(go.Histogram(x=income[responded], name="응답자", nbinsx=60, opacity=0.65,
+                           marker_color=viz.WARM), row=1, col=1)
+
+fig.add_trace(go.Histogram(x=(cum[:, -1]-1)*100, name="전체 펀드", nbinsx=60,
+                           opacity=0.65, marker_color=viz.ACCENT, showlegend=False),
+              row=1, col=2)
+fig.add_trace(go.Histogram(x=(cum[alive, -1]-1)*100, name="생존 펀드", nbinsx=60,
+                           opacity=0.65, marker_color=viz.WARM, showlegend=False),
+              row=1, col=2)
+
+idx = rng.choice(N_POP, 1200, replace=False)
+fig.add_trace(go.Scatter(x=talent[idx], y=looks[idx], mode="markers",
+                         name="전체", showlegend=False,
+                         marker=dict(size=4, color=viz.hex_rgba(viz.ACCENT, 0.35))),
+              row=1, col=3)
+sel_idx = idx[casted[idx]]
+fig.add_trace(go.Scatter(x=talent[sel_idx], y=looks[sel_idx], mode="markers",
+                         name="캐스팅됨", showlegend=False,
+                         marker=dict(size=5, color=viz.WARM)), row=1, col=3)
+tr_ = np.array([talent[casted].min(), talent[casted].max()])
+fit_b = np.polyfit(talent[casted], looks[casted], 1)
+fig.add_trace(go.Scatter(x=tr_, y=np.polyval(fit_b, tr_), mode="lines",
+                         showlegend=False, line=dict(color=viz.YELLOW, width=3)),
+              row=1, col=3)
+
+fig.update_layout(barmode="overlay")
+fig.update_xaxes(title_text="월 소득 (만원)", range=[0, 15000], row=1, col=1)
+fig.update_xaxes(title_text="12년 누적 수익률 (%)", range=[-100, 500], row=1, col=2)
+fig.update_xaxes(title_text="재능", row=1, col=3)
+fig.update_yaxes(title_text="외모", row=1, col=3)
+viz.fig_defaults(fig, height=420, title="표집 편향 세 가지")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: sampling-bias-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("① 선택 편향 — 응답률이 측정하려는 값에 의존할 때")
+print(f"  모집단 평균 소득 : {income.mean():>9,.0f} 만원   (중앙값 {np.median(income):,.0f})")
+print(f"  응답자 평균 소득 : {income[responded].mean():>9,.0f} 만원   "
+      f"(중앙값 {np.median(income[responded]):,.0f})")
+print(f"  응답률 {responded.mean():.1%},  과대추정 "
+      f"{income[responded].mean()/income.mean()-1:+.1%}")
+print("  → 표본이 6,000명이든 600만명이든 이 편향은 줄어들지 않는다.")
+print("     **크기로는 편향을 이길 수 없다.**")
+print()
+
+print("② 생존 편향 — 사라진 것은 데이터에 없다")
+print(f"  전체 {N_POP:,}개 중 생존 {alive.sum():,}개 ({alive.mean():.1%})")
+print(f"  전체 평균 누적수익률   : {(cum[:, -1]-1).mean():>+8.1%}")
+print(f"  생존 펀드만 평균       : {(cum[alive, -1]-1).mean():>+8.1%}")
+print(f"  생존 편향 크기         : "
+      f"{(cum[alive, -1]-1).mean() - (cum[:, -1]-1).mean():>+8.1%}p")
+print("  → '이 전략의 과거 수익률'을 현존 상품만으로 계산하면 이만큼 부풀려진다.")
+print()
+
+print("③ Berkson 역설 — 충돌부에 조건화하면 없던 상관이 생긴다")
+r_pop = np.corrcoef(talent, looks)[0, 1]
+r_sel = np.corrcoef(talent[casted], looks[casted])[0, 1]
+print(f"  모집단에서 재능과 외모의 상관 : {r_pop:>+7.4f}  (설계상 독립)")
+print(f"  캐스팅된 배우들 사이의 상관   : {r_sel:>+7.4f}")
+print(f"  선택 비율 {casted.mean():.1%}")
+print()
+print(f"{'선택 문턱':>10} {'선택 비율':>10} {'선택 집단 상관':>15}")
+print("-" * 40)
+for thr in [0.5, 1.0, 1.5, 2.0, 2.5]:
+    sel = (talent + looks) > thr
+    print(f"{thr:>10.1f} {sel.mean():>10.1%} "
+          f"{np.corrcoef(talent[sel], looks[sel])[0, 1]:>+15.4f}")
+print()
+print("**선택이 까다로울수록 가짜 상관이 강해진다.**")
+print("재능도 외모도 없으면 캐스팅이 안 되므로, 뽑힌 사람 중에는")
+print("'재능은 있는데 외모는 평범' 또는 그 반대가 많아진다 — 그래서 음의 상관이 보인다.")
+print()
+print("이것이 '유명 배우는 연기를 못한다' 같은 인상이 만들어지는 방식이다.")
+print("데이터가 거짓말한 것이 아니라, **우리가 조건부 집단을 보고 있는 것이다.**")
+```
+
+::: {.callout-warning}
+## 세 편향의 공통 구조
+
+셋 다 **관측될 확률이 관심 변수에 의존**한다는 같은 구조다.
+
+| 편향 | 관측 조건 | 결과 |
+|------|-----------|------|
+| 선택 편향 | 응답 확률이 소득에 의존 | 평균이 한쪽으로 밀림 |
+| 생존 편향 | 생존이 수익률에 의존 | 하위 꼬리가 잘림 |
+| Berkson | 선택이 두 변수의 **합**에 의존 | 없던 상관이 생김 |
+
+**표본을 늘려도 해결되지 않는다.** 편향은 분산이 아니라 치우침이기 때문이다.
+$n \to \infty$ 로 가면 추정값이 **틀린 값에 정확하게 수렴한다.**
+
+해결하려면 수집 과정 자체를 알아야 한다 —
+그래서 데이터 계보(lineage) 기록이 통계 기법보다 먼저다.
 :::
 
 ---
 
-## 핵심 용어
+## 관측 단위를 명시하라
 
-| 용어 | 비고 |
+```{python}
+#| label: unit-of-observation
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(2)
+# 사용자 20명, 각자 세션 수가 다르다
+n_user = 20
+n_sess = rng.integers(1, 40, n_user)
+# 세션이 많은 사용자일수록 세션당 체류시간이 짧다 (헤비 유저는 짧게 자주)
+dwell = [rng.normal(300 - 5*n_sess[u], 40, n_sess[u]) for u in range(n_user)]
+
+flat = np.concatenate(dwell)
+per_user = np.array([d.mean() for d in dwell])
+
+print(f"사용자 {n_user}명, 총 세션 {len(flat)}개")
+print()
+print(f"{'집계 방식':<28} {'평균 체류시간':>14} {'한 관측 = ?'}")
+print("-" * 62)
+print(f"{'세션 단위 평균':<28} {flat.mean():>13.1f}초  세션")
+print(f"{'사용자 단위 평균 (매크로)':<28} {per_user.mean():>13.1f}초  사용자")
+print()
+print(f"차이: {abs(flat.mean() - per_user.mean()):.1f}초 "
+      f"({abs(flat.mean()/per_user.mean()-1):.1%})")
+print()
+print("세션 단위 평균은 **세션이 많은 사용자에게 더 큰 가중치**를 준다.")
+print("여기서는 헤비 유저의 체류시간이 짧으므로 세션 평균이 아래로 끌린다.")
+print()
+corr = np.corrcoef(n_sess, per_user)[0, 1]
+print(f"세션 수와 사용자별 평균 체류시간의 상관: {corr:+.3f}")
+print("이 상관이 0 이 아니면 두 평균은 반드시 달라진다.")
+print()
+print("**어느 쪽이 맞는가는 질문에 달렸다.**")
+for q, a in [("평균적인 세션은 얼마나 긴가?", "세션 단위"),
+             ("평균적인 사용자는 얼마나 머무는가?", "사용자 단위"),
+             ("A/B 테스트의 무작위 배정 단위가 사용자라면?",
+              "**사용자 단위** — 그렇지 않으면 독립성 가정이 깨진다")]:
+    print(f"  {q:<38} → {a}")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| tidy data |  |
-| 측정 척도 (measurement scale) |  |
-| 심슨의 역설 (Simpson's paradox) |  |
-| 표집 편향 (sampling bias) |  |
+| 측정 척도 | 순서 척도의 평균은 **인코딩에 따라 순위가 바뀜** (실측) |
+| tidy data | 1변수 1열 · 1관측 1행 · 1단위 1테이블 |
+| wide vs long | 목적이 정함. 저장·파이프라인은 long 이 안전 |
+| 결측 표현 | 센티널(-999)을 놓치면 평균이 크게 달라짐 |
+| 심슨의 역설 | 그룹 내 기울기 전부 $+$, 전체는 $-$ (실측) |
+| 어느 쪽이 맞나 | 통계가 아니라 **인과 구조**가 정함 |
+| 선택 편향 | 응답률이 값에 의존 — 표본을 늘려도 안 사라짐 |
+| 생존 편향 | 사라진 것은 데이터에 없다 |
+| Berkson | 충돌부 조건화가 **없던 상관을 만듦** (0.006 → −0.68) |
+| 관측 단위 | 세션 평균 ≠ 사용자 평균. 질문이 단위를 정함 |
+
+이 장의 모든 문제는 **모델을 돌리기 전에** 결정된다.
+그리고 대부분은 데이터를 눈으로 보지 않으면 발견되지 않는다.
+
+다음 장이 그 "눈으로 보는 법"이다.
 
 ---
 
-**다음**: [1.1 탐색적 데이터 분석](01_eda.qmd) — 분포·관계·이상치 — 모델을 만들기 전에 데이터를 만나는 법
+**다음**: [1.1 탐색적 데이터 분석](01_eda.qmd) — 분포·관계·이상치
 
 **이전**: [0.5 수치 컴퓨팅](../00_foundations/05_numerical_computing.qmd)
