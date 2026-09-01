@@ -4,91 +4,750 @@ subtitle: "ResNet·Inception·EfficientNet·ConvNeXt — 깊이를 다루는 설
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[4.0](00_cnn.qmd)에서 합성곱이라는 부품을 얻었다.
+이제 그것을 **어떻게 쌓을 것인가**의 문제다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장의 주인공은 **잔차 연결**이다.
+ResNet(2015)이 도입한 이 한 줄짜리 아이디어는 CNN을 넘어
+[Transformer](../05_transformer/01_transformer_architecture.qmd)의 필수 부품이 되었고,
+지금 돌아가는 거의 모든 대형 모델 안에 들어 있다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+아키텍처 설계의 역사는 골동품이 아니다. **현재 모델의 설계 근거다.**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 깊이 경쟁, 그리고 벽
+
+```{python}
+#| label: cnn-history
+#| code-fold: false
+
+rows = [
+    ("LeNet-5",     1998, 5,   0.06,  "합성곱+풀링의 원형, 우편번호 인식"),
+    ("AlexNet",     2012, 8,   62.0,  "ReLU·드롭아웃·GPU — 딥러닝의 시작점"),
+    ("VGG-16",      2014, 16,  138.0, "3×3 만으로 쌓기, 단순함의 힘"),
+    ("GoogLeNet",   2014, 22,  6.8,   "Inception 병렬 경로, 1×1 병목"),
+    ("ResNet-50",   2015, 50,  25.6,  "잔차 연결 — 깊이의 벽을 넘음"),
+    ("ResNet-152",  2015, 152, 60.2,  "같은 원리로 152층"),
+    ("DenseNet-121",2017, 121, 8.0,   "모든 앞 층을 이어붙여 특성 재사용"),
+    ("SENet-154",   2017, 154, 115.0, "채널 어텐션 — 어텐션의 CNN 판"),
+    ("MobileNetV2", 2018, 53,  3.5,   "depthwise separable + 역병목"),
+    ("EfficientNet-B0", 2019, 82, 5.3, "깊이·너비·해상도 복합 스케일링"),
+    ("ConvNeXt-T",  2022, 18,  28.6,  "ViT 설계를 CNN 에 역수입"),
+]
+print(f"{'모델':<18} {'연도':>6} {'깊이':>6} {'파라미터(M)':>13} {'기여'}")
+print("-" * 84)
+for r in rows:
+    print(f"{r[0]:<18} {r[1]:>6} {r[2]:>6} {r[3]:>13.1f} {r[4]}")
+print()
+print("2012→2015 의 3년 동안 깊이가 8층에서 152층으로 19배가 되었다.")
+print("그 사이에 넘어야 했던 벽이 하나 있었다 — **성능 저하(degradation) 문제**.")
+```
+
+---
+
+## 성능 저하 문제
+
+깊게 쌓았더니 **훈련 정확도까지** 나빠졌다.
+과적합이면 훈련은 좋아져야 하므로, 과적합이 아니다.
+
+논리적으로는 말이 안 된다.
+20층 망에 항등 함수 층을 36개 더 붙이면 56층 망이 되고, 성능은 최소한 같아야 한다.
+
+**그런데 SGD가 그 항등 해를 못 찾았다.**
+
+직접 재보자. 폭 32짜리 블록을 2개에서 128개까지 쌓으면서
+(a) 잔차 없음, (b) 잔차 $h + F(h)$, (c) 잔차를 $1/\sqrt{L}$ 로 줄인 것을 비교한다.
+
+```{python}
+#| label: fig-degradation
+#| fig-cap: "깊이를 2에서 128까지 — 세 가지 블록 구성의 훈련 손실"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=1200, noise=0.2, seed=0)
+perm = np.random.default_rng(0).permutation(len(X)); tr, te = perm[:900], perm[900:]
+WID = 32
+
+def train_stack(depth, mode, steps=800, lr=0.01, seed=0):
+    """폭 WID 인 블록을 depth 개 쌓아 학습한다.
+
+    mode: "plain" (h ← F(h)) / "res" (h ← h + F(h)) / "res_scaled" (h ← h + F(h)/√L)
+    """
+    rng = np.random.default_rng(seed)
+    Win = nn.init_weights(2, WID, "he", rng); bin_ = np.zeros(WID)
+    Ws = [nn.init_weights(WID, WID, "he", rng) for _ in range(depth)]
+    bs = [np.zeros(WID) for _ in range(depth)]
+    Wout = nn.init_weights(WID, 2, "he", rng); bout = np.zeros(2)
+
+    alpha = 1/np.sqrt(max(depth, 1)) if mode == "res_scaled" else 1.0
+    resid = (mode != "plain")
+
+    flat = {"Win": Win, "bin": bin_, "Wout": Wout, "bout": bout}
+    for i in range(depth):
+        flat[f"W{i}"] = Ws[i]; flat[f"b{i}"] = bs[i]
+
+    opt = nn.Optimizer("adam", lr=lr)
+    r = np.random.default_rng(1)
+    hist = []
+    for _ in range(steps):
+        idx = r.choice(len(tr), 128, replace=False)
+        xb, yb = X[tr][idx], y[tr][idx]
+
+        # ── 순전파 ──
+        h = np.maximum(xb @ Win + bin_, 0)
+        cache = [h]
+        for W, b in zip(Ws, bs):
+            z = h @ W + b
+            a = np.maximum(z, 0)
+            h = h + alpha*a if resid else a
+            cache.append((z, h))
+        logits = h @ Wout + bout
+        L, dout = nn.softmax_ce_loss(logits, yb)
+        if not np.isfinite(L):
+            return np.nan, np.nan
+
+        # ── 역전파 ──
+        g = {"Wout": h.T @ dout, "bout": dout.sum(0)}
+        dh = dout @ Wout.T
+        for i in range(depth-1, -1, -1):
+            z, _ = cache[i+1]
+            hprev = cache[0] if i == 0 else cache[i][1]
+            dz = (dh*alpha if resid else dh) * (z > 0)
+            g[f"W{i}"] = hprev.T @ dz
+            g[f"b{i}"] = dz.sum(0)
+            dprev = dz @ Ws[i].T
+            dh = dh + dprev if resid else dprev     # 잔차면 항등 경로가 dh 를 그대로 통과
+        dz0 = dh * (cache[0] > 0)
+        g["Win"] = xb.T @ dz0; g["bin"] = dz0.sum(0)
+        opt.step(flat, g)
+        hist.append(L)
+
+    # 시험 정확도
+    h = np.maximum(X[te] @ Win + bin_, 0)
+    for W, b in zip(Ws, bs):
+        a = np.maximum(h @ W + b, 0)
+        h = h + alpha*a if resid else a
+    acc = float(((h @ Wout + bout).argmax(1) == y[te]).mean())
+    return float(np.mean(hist[-50:])), acc
+
+depths = [2, 4, 8, 16, 32, 64, 128]
+MODES = [("plain", "잔차 없음"), ("res", "잔차 α=1"), ("res_scaled", "잔차 α=1/√L")]
+res = {(m, d): train_stack(d, m) for m, _ in MODES for d in depths}
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=("최종 훈련 손실", "시험 정확도"))
+for i, (m, lbl) in enumerate(MODES):
+    fig.add_trace(go.Scatter(x=depths, y=[res[(m, d)][0] for d in depths],
+                             mode="lines+markers", name=lbl,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=depths, y=[res[(m, d)][1] for d in depths],
+                             mode="lines+markers", showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+fig.add_hline(y=np.log(2), line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="무작위 수준", row=1, col=1)
+fig.update_xaxes(title_text="블록 수", type="log")
+fig.update_yaxes(title_text="훈련 손실", type="log", row=1, col=1)
+fig.update_yaxes(title_text="정확도", row=1, col=2)
+viz.fig_defaults(fig, height=430, title=f"폭 {WID} 블록 스택 · Adam η=0.01 · 800 스텝")
+fig.update_layout(legend=dict(x=0.02, y=0.15, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: degradation-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("최종 훈련 손실")
+print(f"{'블록 수':>8} " + " ".join(f"{lbl:>14}" for _, lbl in MODES))
+print("-" * 56)
+for d in depths:
+    print(f"{d:>8} " + " ".join(f"{res[(m, d)][0]:>14.4f}" for m, _ in MODES))
+print()
+print("시험 정확도")
+print(f"{'블록 수':>8} " + " ".join(f"{lbl:>14}" for _, lbl in MODES))
+print("-" * 56)
+for d in depths:
+    print(f"{d:>8} " + " ".join(f"{res[(m, d)][1]:>14.3f}" for m, _ in MODES))
+print()
+
+CHANCE = np.log(2)
+dead = [d for d in depths if abs(res[("plain", d)][0] - CHANCE) < 0.01]
+blown = [d for d in depths if res[("res", d)][0] > 1.0]
+ok = [d for d in depths if res[("res_scaled", d)][0] < 0.15]
+
+print(f"① **잔차 없는 망은 {dead[0]}블록에서 죽는다.** "
+      f"훈련 손실이 정확히 log 2 = {CHANCE:.4f} 다.")
+print(f"   과적합이 아니라 **훈련조차 안 된다** — 이것이 성능 저하 문제다.")
+print(f"   32블록까지는 {res[('plain', 32)][0]:.4f} 로 버티다가 갑자기 무너진다.")
+print()
+print(f"② **잔차를 그냥 붙이면 {blown[0]}블록부터 발산한다** "
+      f"(손실 {res[('res', blown[0])][0]:.1f}).")
+print("   h ← h + F(h) 는 매 블록 분산을 더하므로 활성화가 깊이에 비례해 커진다")
+print("   ([3.7](../03_deep_learning/07_initialization.qmd)에서 측정한 그대로다).")
+print()
+print(f"③ **1/√L 로 줄이면 {min(ok)}~{max(ok)}블록 전부에서 학습된다.**")
+lo = min(res[("res_scaled", d)][0] for d in depths)
+hi = max(res[("res_scaled", d)][0] for d in depths)
+print(f"   손실이 {lo:.4f} ~ {hi:.4f} 사이로 **깊이와 거의 무관하다.**")
+print()
+print("**잔차 연결만으로는 부족하다.** 스케일을 함께 다스려야 깊이가 공짜가 된다.")
+print("실제 ResNet 은 1/√L 대신 블록마다 BatchNorm 을 넣어 같은 일을 한다.")
+```
+
+::: {.callout-warning}
+## 이 실험이 보여주는 것과 원 논문의 실험
+
+여기서 잔차 없는 망이 무너진 것은 64블록부터다. 반면 ResNet 논문(He et al., 2015)이
+보고한 성능 저하는 **CIFAR-10 에서 20층 대 56층**, ImageNet 에서 18층 대 34층으로
+훨씬 얕은 곳에서 나타났다.
+
+차이는 과제 난이도에 있다. two-moons 는 2차원 두 클래스 문제라 너무 쉬워서,
+32블록까지는 얕은 부분만으로도 충분히 풀린다. 실제 이미지 분류처럼 어려운 과제에서는
+훨씬 얕은 깊이에서 최적화가 무너진다.
+
+**재현된 것**: 깊이가 늘면 plain 망의 훈련 손실이 결국 무작위 수준으로 죽는다는 것,
+그리고 잔차 스케일링이 그것을 깊이 128까지 완전히 막는다는 것.
+**재현되지 않은 것**: 논문이 보고한 20층 대 56층 수준의 얕은 저하.
 :::
 
-ResNet의 잔차 연결은 CNN을 넘어 Transformer의 필수 부품이 되었다. 아키텍처 설계의 역사는 그대로 현재 모델의 설계 근거다.
-
 ---
 
-## 이 장에서 다루는 것
+## 잔차 블록: 무엇을 학습하는가
 
-- LeNet → AlexNet → VGG: 깊이 경쟁의 시작
-- 성능 저하(degradation) 문제와 ResNet의 잔차 블록
-- 항등 매핑과 그래디언트 고속도로, pre-activation ResNet
-- Inception: 다중 스케일 병렬 경로와 1×1 병목
-- DenseNet: 특성 재사용
-- SENet·CBAM: 채널·공간 어텐션의 도입
-- MobileNet/ShuffleNet: 모바일 효율 설계
-- EfficientNet: 복합 스케일링(깊이·너비·해상도)
-- NAS(신경망 구조 탐색)의 성과와 한계
-- ConvNeXt: ViT의 설계 선택을 CNN에 역수입
-- 아키텍처 비교 시 공정한 실험 조건의 중요성
+$$\text{plain:}\quad h_{l+1} = F(h_l)
+\qquad\qquad
+\text{residual:}\quad h_{l+1} = h_l + F(h_l)$$
 
----
+잔차 블록은 $F$ 에게 **출력 전체가 아니라 "얼마나 바꿀지"** 를 학습시킨다.
+아무것도 바꾸지 않는 것이 최선이면 $F \to 0$ 이면 되고,
+$F=0$ 은 가중치를 0으로 보내면 되므로 **쉽다.**
 
-## G4.1.1 — 잔차 블록 구조
+plain 망에서 항등을 만들려면 $F$ 가 정확히 항등 함수여야 하는데, 그건 어렵다.
 
-plain / residual / pre-activation 블록의 신호 경로 도식
+```{python}
+#| label: identity-difficulty
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 블록 종류 전환
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+rng = np.random.default_rng(0)
+D = 32
+X_probe = rng.normal(0, 1, (256, D))
+X_probe = np.maximum(X_probe, 0)                  # ReLU 출력처럼 비음수
+
+def fit_identity(residual, steps=3000, lr=0.01, seed=0):
+    """블록 하나가 '입력을 그대로 내보내기'를 얼마나 잘 배우는가."""
+    r = np.random.default_rng(seed)
+    W = nn.init_weights(D, D, "he", r)
+    b = np.zeros(D)
+    opt = nn.Optimizer("adam", lr=lr)
+    P = {"W": W, "b": b}
+    for _ in range(steps):
+        z = X_probe @ W + b
+        a = np.maximum(z, 0)
+        out = X_probe + a if residual else a
+        diff = out - X_probe
+        da = 2*diff/X_probe.size
+        dz = da * (z > 0)
+        opt.step(P, {"W": X_probe.T @ dz, "b": dz.sum(0)})
+    z = X_probe @ W + b
+    a = np.maximum(z, 0)
+    out = X_probe + a if residual else a
+    return float(np.mean((out - X_probe)**2)), float(np.linalg.norm(W))
+
+for residual, name in [(False, "plain  F(x) = x 를 배워야 함"),
+                       (True,  "residual  F(x) = 0 을 배워야 함")]:
+    mse, wn = fit_identity(residual)
+    print(f"{name:<32} 최종 MSE {mse:.3e}   ‖W‖ {wn:.3f}")
+print()
+print("입력이 비음수라 plain 도 ReLU 로 항등을 표현할 수는 있다.")
+print("그런데 **찾아가는 난이도가 다르다.** residual 은 W→0 으로 가면 끝이고,")
+print("plain 은 W 가 정확히 단위행렬이어야 한다 — 32×32 = 1,024 개를 정확히 맞춰야 한다.")
+print()
+print("층이 하나면 둘 다 되지만, 이것이 수십 층 곱해지면 차이가 벌어진다.")
+print("위 성능 저하 실험이 바로 그 누적 효과다.")
+```
+
+::: {.key-concept}
+**잔차 연결의 두 가지 효과**
+
+1. **최적화** — 항등이 기본값이 되어 "안 하는 것"이 쉬워진다
+2. **그래디언트 흐름** — $\partial h_{l+1}/\partial h_l = I + \partial F/\partial h_l$
+   에서 $I$ 가 항상 살아 있다 ([3.7](../03_deep_learning/07_initialization.qmd))
+
+[3.7](../03_deep_learning/07_initialization.qmd)에서 측정했듯,
+**He 초기화만 잘 해도 그래디언트 소실은 거의 해결된다.**
+그러니 2번만으로는 ResNet의 성공을 설명할 수 없다.
+
+현재의 이해는 1번과, 그리고 **앙상블 관점** — 잔차 망은 서로 다른 길이의
+경로 $2^L$ 개의 암묵적 앙상블처럼 동작한다(Veit et al., 2016) — 쪽에 무게가 있다.
 :::
 
 ---
 
-## G4.1.2 — 깊이별 성능
+## G4.1.1 — 블록 설계의 계보
 
-plain 망은 깊어지면 나빠지고 ResNet은 좋아지는 대비
+```{python}
+#| label: fig-block-variants
+#| fig-cap: "블록 종류별 신호 경로와 비용"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 수 슬라이더
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+C, HW = 256, 56
+
+def cost(ops):
+    """ops: [(k, cin, cout, groups)] → (파라미터, FLOPs)"""
+    p = sum(k*k*(ci//g)*co for k, ci, co, g in ops)
+    f = sum(HW*HW*k*k*(ci//g)*co for k, ci, co, g in ops)
+    return p, f
+
+blocks = {
+    "VGG (3×3 ×2)":        [(3, C, C, 1), (3, C, C, 1)],
+    "ResNet basic":        [(3, C, C, 1), (3, C, C, 1)],
+    "ResNet bottleneck":   [(1, C, C//4, 1), (3, C//4, C//4, 1), (1, C//4, C, 1)],
+    "ResNeXt (32 groups)": [(1, C, C//2, 1), (3, C//2, C//2, 32), (1, C//2, C, 1)],
+    "MobileNetV2 역병목":    [(1, C, C*6, 1), (3, C*6, C*6, C*6), (1, C*6, C, 1)],
+    "ConvNeXt":            [(7, C, C, C), (1, C, C*4, 1), (1, C*4, C, 1)],
+}
+stats = {k: cost(v) for k, v in blocks.items()}
+
+names = list(blocks)
+fig = go.Figure()
+fig.add_trace(go.Bar(x=names, y=[stats[n][0]/1e6 for n in names],
+                     name="파라미터 (M)", marker_color=viz.ACCENT,
+                     text=[f"{stats[n][0]/1e6:.2f}" for n in names],
+                     textposition="outside"))
+fig.add_trace(go.Bar(x=names, y=[stats[n][1]/1e9 for n in names],
+                     name="FLOPs (G)", marker_color=viz.WARM,
+                     text=[f"{stats[n][1]/1e9:.2f}" for n in names],
+                     textposition="outside"))
+fig.update_layout(barmode="group", yaxis_title="값", yaxis_type="log",
+                  xaxis_tickangle=-18, legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=430,
+                 title=f"블록 하나의 비용 ({HW}×{HW}, {C} 채널)")
+fig.show()
+```
+
+```{python}
+#| label: block-numbers
+#| code-fold: false
+
+import numpy as np
+
+base = stats["ResNet basic"]
+print(f"{'블록':<22} {'파라미터':>12} {'FLOPs(G)':>11} {'basic 대비':>11}  {'설계 의도'}")
+print("-" * 84)
+intent = {
+    "VGG (3×3 ×2)":        "잔차 없음 — 같은 연산, 다른 학습 난이도",
+    "ResNet basic":        "기준. 3×3 두 개 + 항등 우회",
+    "ResNet bottleneck":   "1×1 로 좁히고 3×3, 다시 1×1 로 복원",
+    "ResNeXt (32 groups)": "3×3 을 32 그룹으로 쪼개 카디널리티 확보",
+    "MobileNetV2 역병목":    "먼저 6배 넓히고 depthwise, 다시 좁힘",
+    "ConvNeXt":            "7×7 depthwise + MLP — ViT 블록을 모방",
+}
+for n in names:
+    p, f = stats[n]
+    print(f"{n:<22} {p:>12,} {f/1e9:>11.2f} {f/base[1]:>10.1%}  {intent[n]}")
+print()
+cheap = min(names, key=lambda n: stats[n][1])
+print(f"가장 싼 블록: {cheap} ({stats[cheap][1]/base[1]:.1%})")
+print()
+print("주의: **비용이 싸다고 좋은 블록이 아니다.** 표현력이 함께 줄기 때문이다.")
+print("공정한 비교는 '같은 FLOPs 예산에서 어느 쪽이 정확한가'로 해야 하고,")
+print("실제 속도는 FLOPs 가 아니라 메모리 접근 패턴이 좌우하는 경우가 많다.")
+print("(depthwise 는 FLOPs 는 낮지만 산술 강도가 낮아 GPU 에서 기대만큼 빠르지 않다.)")
+```
+
+---
+
+## 병렬 경로: Inception과 다중 스케일
+
+같은 층에서 **여러 크기의 커널을 동시에** 쓰고 결과를 이어붙인다.
+"몇 ×몇 커널이 맞는가"를 고르지 않고 **모델이 고르게 한다.**
+
+```{python}
+#| label: inception-cost
+#| code-fold: false
+
+import numpy as np
+
+C_IN, HW = 192, 28
+
+def naive_inception(c1, c3, c5, cp):
+    ops = [(1, C_IN, c1), (3, C_IN, c3), (5, C_IN, c5), (1, C_IN, cp)]
+    return sum(HW*HW*k*k*C_IN*co for k, _, co in ops)
+
+def bottleneck_inception(c1, r3, c3, r5, c5, cp):
+    ops = [(1, C_IN, c1),                      # 1×1 경로
+           (1, C_IN, r3), (3, r3, c3),         # 3×3 경로 (1×1 로 축소 후)
+           (1, C_IN, r5), (5, r5, c5),         # 5×5 경로
+           (1, C_IN, cp)]                      # 풀링 후 1×1
+    return sum(HW*HW*k*k*ci*co for k, ci, co in ops)
+
+naive = naive_inception(64, 128, 32, 32)
+bott = bottleneck_inception(64, 96, 128, 16, 32, 32)
+print(f"Inception 3a 블록 ({C_IN} 채널, {HW}×{HW})")
+print(f"  1×1 축소 없이 : {naive/1e6:>8.1f} MFLOPs")
+print(f"  1×1 축소 사용 : {bott/1e6:>8.1f} MFLOPs  ({bott/naive:.1%})")
+print()
+print("5×5 경로가 비용을 지배한다. 그 앞에 1×1 로 192→16 채널로 줄이면")
+print(f"  5×5 경로만: {HW*HW*25*C_IN*32/1e6:.1f} → "
+      f"{(HW*HW*1*C_IN*16 + HW*HW*25*16*32)/1e6:.1f} MFLOPs")
+print()
+print("**1×1 합성곱의 진짜 용도가 이것이다** — 비싼 연산 앞에서 채널을 줄이는 것.")
+print("ResNet 병목, MobileNet pointwise, Transformer 의 FFN 축소가 전부 같은 발상이다.")
+```
+
+---
+
+## SENet: CNN에 들어온 어텐션
+
+채널마다 **중요도를 계산해서 곱한다.**
+전역 평균 풀링 → 작은 MLP → sigmoid → 채널별 스케일.
+
+```{python}
+#| label: fig-se-block
+#| fig-cap: "Squeeze-and-Excitation — 채널 재보정"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import datasets, imaging, nn, viz
+
+img = datasets.image_grid(64)
+# 서로 다른 커널로 8채널 특성맵을 만든다 (CNN 의 한 층을 흉내)
+kern_names = ["항등", "박스 블러", "샤픈", "소벨 x", "소벨 y",
+              "라플라시안", "엠보스", "항등"]
+feat = np.stack([imaging.convolve2d(img, imaging.KERNELS[n]) for n in kern_names])
+
+# Squeeze: 채널별 전역 평균 → 길이 8 벡터 (원 논문 그대로)
+sq_mean = feat.mean(axis=(1, 2))
+sq_std = feat.std(axis=(1, 2))                          # 참고용 통계
+
+# Excitation: 8 → 2 → 8 의 작은 MLP. 무작위 초기화에서는 게이트가 평평하다.
+r = np.random.default_rng(3)
+W1 = r.normal(0, 0.8, (8, 2)); W2 = r.normal(0, 0.8, (2, 8))
+gate_init = 1/(1 + np.exp(-(np.maximum(sq_mean @ W1, 0) @ W2)))
+
+# 학습이 끝난 SE 블록은 '정보량이 많은 채널'을 살린다. 그 상태를 직접 구성한다:
+# 표준편차(= 그 채널이 담은 변화량)를 표준화해 sigmoid 에 넣는다.
+z = (sq_std - sq_std.mean())/sq_std.std()
+gate = 1/(1 + np.exp(-3.0*z))
+recal = feat * gate[:, None, None]
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.36, 0.28, 0.36],
+                    subplot_titles=("입력 특성맵 (채널 0~7 평균)",
+                                    "채널 게이트 값", "재보정 후"))
+fig.add_trace(go.Heatmap(z=np.round(feat.mean(0), 3), colorscale="Greys",
+                         showscale=False), row=1, col=1)
+fig.add_trace(go.Bar(y=[f"ch{i}" for i in range(8)], x=gate, orientation="h",
+                     marker_color=[viz.color(i) for i in range(8)],
+                     showlegend=False,
+                     text=[f"{g:.2f}" for g in gate], textposition="outside"),
+              row=1, col=2)
+fig.add_trace(go.Heatmap(z=np.round(recal.mean(0), 3), colorscale="Greys",
+                         showscale=False), row=1, col=3)
+for c in (1, 3):
+    fig.update_yaxes(autorange="reversed", showticklabels=False, row=1, col=c)
+    fig.update_xaxes(showticklabels=False, row=1, col=c)
+fig.update_xaxes(title_text="게이트 (0~1)", range=[0, 1.15], row=1, col=2)
+viz.fig_defaults(fig, height=380, title="SE 블록: 채널마다 다른 가중치를 곱한다")
+fig.show()
+```
+
+```{python}
+#| label: se-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'채널':>4} {'커널':<12} {'평균':>9} {'표준편차':>10} {'초기 게이트':>12} {'학습 후 게이트':>14}")
+print("-" * 70)
+for i in range(8):
+    print(f"{i:>4} {kern_names[i]:<12} {sq_mean[i]:>9.4f} {sq_std[i]:>10.4f} "
+          f"{gate_init[i]:>12.3f} {gate[i]:>14.3f}")
+print()
+print(f"무작위 초기화 게이트 범위: {gate_init.min():.3f} ~ {gate_init.max():.3f} "
+      f"({gate_init.max()/gate_init.min():.2f}배) — 거의 평평하다.")
+print(f"구성한 '학습 후' 게이트 범위: {gate.min():.3f} ~ {gate.max():.3f} "
+      f"({gate.max()/gate.min():.1f}배)")
+print()
+order = np.argsort(-gate)
+print("게이트가 높은 순 (= SE 가 살리기로 한 채널):")
+for i in order:
+    print(f"  {gate[i]:.3f}  ch{i} {kern_names[i]:<10} 표준편차 {sq_std[i]:.4f}")
+print()
+print("표준편차가 큰 채널 — 에지·엠보스처럼 **변화를 담은 채널** — 이 살아남고,")
+print("블러처럼 정보가 뭉개진 채널은 눌린다. 이것이 SE 가 학습하는 종류의 함수다.")
+print()
+C_SE = 256
+for ratio in [4, 8, 16]:
+    p = C_SE*(C_SE//ratio)*2
+    print(f"  SE 블록 추가 파라미터 (C={C_SE}, 축소비 {ratio}): {p:,} "
+          f"— 3×3 블록({3*3*C_SE*C_SE:,}) 대비 {p/(3*3*C_SE*C_SE):.1%}")
+print()
+print("**거의 공짜로 어텐션을 얻는다.**")
+print()
+print("주의: 위 '학습 후' 게이트는 역전파로 얻은 것이 아니라, 표준편차를 sigmoid 에")
+print("넣어 **손으로 구성한 것**이다. SE 블록이 표현할 수 있는 함수의 한 예를 보인 것이지,")
+print("실제로 학습되는 게이트가 이것이라는 뜻은 아니다.")
+print("실제 SENet 은 이 두 층을 역전파로 학습해 ImageNet top-1 오류를 약 1%p 낮췄다.")
+print()
+print("이것이 어텐션의 CNN 판이다 — '무엇에 집중할지 데이터가 정한다'.")
+print("차이는 SE 가 **채널**에만 적용된다는 것이고,")
+print("셀프 어텐션은 이것을 **공간 위치 전체**로 확장한다.")
+```
+
+---
+
+## G4.1.2 — EfficientNet의 복합 스케일링
+
+모델을 키우는 축이 셋이다: **깊이 $d$ · 너비 $w$ · 해상도 $r$.**
+
+FLOPs는 이들과 이렇게 관계된다.
+
+$$\text{FLOPs} \;\propto\; d \cdot w^2 \cdot r^2$$
+
+깊이는 층 수에 **선형**이지만, 너비는 입력·출력 채널 양쪽에 들어가 **제곱**이고,
+해상도도 세로·가로 양쪽이라 **제곱**이다. 같은 예산이라도 축마다 살 수 있는 배율이 다르다.
+
+```{python}
+#| label: fig-compound-scaling
+#| fig-cap: "EfficientNet B0→B7 의 실제 스케일링과 정확도"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+# EfficientNet 논문(Tan & Le, 2019) 표 2 의 보고값 — 여기서 계산한 것이 아니다.
+EFF = [
+    # 이름, 해상도, 파라미터(M), FLOPs(B), ImageNet top-1
+    ("B0", 224,  5.3,  0.39, 77.1),
+    ("B1", 240,  7.8,  0.70, 79.1),
+    ("B2", 260,  9.2,  1.0,  80.1),
+    ("B3", 300, 12.0,  1.8,  81.6),
+    ("B4", 380, 19.0,  4.2,  82.9),
+    ("B5", 456, 30.0,  9.9,  83.6),
+    ("B6", 528, 43.0, 19.0,  84.0),
+    ("B7", 600, 66.0, 37.0,  84.3),
+]
+names = [e[0] for e in EFF]
+flops = np.array([e[3] for e in EFF])
+acc = np.array([e[4] for e in EFF])
+res_px = np.array([e[1] for e in EFF])
+
+# 복합 스케일링 계수: d=α^φ, w=β^φ, r=γ^φ, 제약 α·β²·γ² ≈ 2
+a, b, c = 1.2, 1.1, 1.15
+phis = np.arange(0, 8)
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("세 축이 함께 자란다 (α=1.2, β=1.1, γ=1.15)",
+                                    "FLOPs 대비 실제 정확도 (논문 보고값)"))
+for i, (sym, base, lbl) in enumerate([("d", a, "깊이 d"), ("w", b, "너비 w"),
+                                       ("r", c, "해상도 r")]):
+    fig.add_trace(go.Scatter(x=phis, y=base**phis, mode="lines+markers", name=lbl,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=flops, y=acc, mode="lines+markers+text", text=names,
+                         textposition="bottom right", name="EfficientNet",
+                         line=dict(color=viz.YELLOW, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+fig.update_xaxes(title_text="φ (스케일링 계수)", row=1, col=1)
+fig.update_yaxes(title_text="기준 대비 배율", row=1, col=1)
+fig.update_xaxes(title_text="FLOPs (B)", type="log", row=1, col=2)
+fig.update_yaxes(title_text="ImageNet top-1 (%)", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="복합 스케일링")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: compound-numbers
+#| code-fold: false
+
+import numpy as np
+
+print("① 같은 FLOPs 예산을 한 축에만 쓰면 얼마나 커질 수 있는가")
+print()
+B = 8.0
+print(f"{'배분':<14} {'깊이':>8} {'너비':>8} {'해상도':>8} {'FLOPs 검산':>12}")
+print("-" * 54)
+allocs = {
+    "깊이만":   (B, 1.0, 1.0),
+    "너비만":   (1.0, np.sqrt(B), 1.0),
+    "해상도만": (1.0, 1.0, np.sqrt(B)),
+}
+p8 = np.log(B)/np.log(a*b**2*c**2)
+allocs["복합"] = (a**p8, b**p8, c**p8)
+for k, (d, w, r) in allocs.items():
+    print(f"{k:<14} {d:>8.2f} {w:>8.2f} {r:>8.2f} {d*w**2*r**2:>12.2f}")
+print()
+print("깊이는 8배까지 갈 수 있지만 너비·해상도는 2.83배가 한계다 (제곱으로 들어가므로).")
+print("복합 배분은 셋을 1.79 / 1.35 / 1.56 배로 나눠 가진다.")
+print()
+
+print("② 복합 스케일링을 φ 로 따라가면")
+print(f"{'φ':>3} {'깊이':>7} {'너비':>7} {'해상도(px)':>11} {'FLOPs 배수':>11}")
+print("-" * 44)
+for p in range(0, 8):
+    d, w, r = a**p, b**p, c**p
+    print(f"{p:>3} {d:>7.2f} {w:>7.2f} {r*224:>11.0f} {d*w**2*r**2:>11.1f}")
+print()
+print(f"실제 EfficientNet 의 해상도: {res_px.tolist()}")
+print(f"공식 예측(224·1.15^φ):      {[round(224*c**p) for p in range(8)]}")
+print("대체로 따라가지만 정확히 일치하지는 않는다 — 논문도 반올림·조정을 했다.")
+print()
+
+print("③ 수확 체감은 실제로 나타나는가 (논문 보고값)")
+print(f"{'모델':>5} {'FLOPs(B)':>10} {'top-1':>7} {'FLOPs 2배당 이득':>18}")
+print("-" * 46)
+for i, (nm, _, _, f, ac) in enumerate(EFF):
+    if i == 0:
+        print(f"{nm:>5} {f:>10.2f} {ac:>7.1f} {'—':>18}")
+    else:
+        df = np.log2(f/EFF[i-1][3])
+        gain = (ac - EFF[i-1][4])/df
+        print(f"{nm:>5} {f:>10.2f} {ac:>7.1f} {gain:>18.2f}%p")
+print()
+slope_lo = (EFF[2][4]-EFF[0][4])/np.log2(EFF[2][3]/EFF[0][3])
+slope_hi = (EFF[7][4]-EFF[5][4])/np.log2(EFF[7][3]/EFF[5][3])
+print(f"초반(B0→B2) FLOPs 2배당 {slope_lo:.2f}%p, 후반(B5→B7) {slope_hi:.2f}%p "
+      f"— {slope_lo/slope_hi:.1f}배 둔화")
+print(f"B0 에서 B7 까지 FLOPs 를 {EFF[7][3]/EFF[0][3]:.0f}배 쓰고 얻은 것은 "
+      f"{EFF[7][4]-EFF[0][4]:.1f}%p 다.")
+```
+
+::: {.callout-warning}
+## "균형이 낫다"는 수학이 아니라 실증이다
+
+FLOPs 제약 $d\,w^2 r^2 = B$ 아래에서 이득이 $\sum c_i \log x_i$ 라면,
+최적해는 **한 축에 몰아주는 것**이 된다 (선형 목적함수의 최적은 꼭짓점에 있다).
+그러니 균형이 유리하다는 결론은 수식만으로는 나오지 않는다.
+
+균형이 이기려면 **각 축이 개별적으로 포화한다**는 성질이 있어야 한다.
+깊이만 키우면 최적화가 어려워지고, 너비만 키우면 고수준 특징을 못 잡고,
+해상도만 키우면 수용영역이 상대적으로 좁아진다.
+
+EfficientNet 논문의 기여는 이 직관이 아니라 **실제 ImageNet 격자 탐색으로
+$\alpha=1.2,\ \beta=1.1,\ \gamma=1.15$ 를 찾았다**는 점이다.
+그 값들은 백본(MBConv)에 의존하므로 다른 아키텍처에 그대로 옮기면 안 된다.
+
+또 하나: EfficientNet은 **FLOPs 기준으로 효율적이지만 실제 지연시간은 그만큼 좋지 않다.**
+depthwise 합성곱의 산술 강도가 낮기 때문이다. EfficientNetV2는 초반 층을
+일반 합성곱으로 되돌려 이 문제를 완화했다.
 :::
 
 ---
 
-## G4.1.3 — 복합 스케일링
+## ConvNeXt: ViT의 설계를 CNN으로 되가져오기
 
-세 축을 균형 있게 키울 때 효율이 최대가 되는 지형
+2020년 [ViT](../09_vision_video/02_vit.qmd)가 CNN을 이기자,
+"Transformer가 본질적으로 우월한가, 아니면 **학습 레시피와 설계 디테일** 때문인가"라는
+질문이 생겼다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 깊이·너비·해상도 슬라이더
+ConvNeXt(2022)는 ResNet-50에서 출발해 ViT의 선택들을 **하나씩** 옮겨 담으며
+매번 정확도를 측정했다.
+
+```{python}
+#| label: convnext-path
+#| code-fold: false
+
+steps = [
+    ("ResNet-50 원 논문",              76.1, "2015년 당시의 학습 설정"),
+    ("학습 레시피만 현대화",             78.8, "300에폭·AdamW·Mixup·스무딩·확률적 깊이"),
+    ("stage 비율 (3,4,6,3)→(3,3,9,3)", 79.4, "ViT 처럼 셋째 stage 를 두껍게"),
+    ("stem 을 4×4 patchify 로",       79.5, "ViT 의 패치 임베딩 모방"),
+    ("ResNeXt 화 (depthwise, 폭↑)",   80.5, "채널을 그룹으로 쪼개고 폭을 키움"),
+    ("역병목 (넓혔다 좁히기)",           80.6, "MobileNetV2 / Transformer FFN 구조"),
+    ("커널 7×7 로 확대",               80.6, "ViT 의 넓은 수용영역"),
+    ("ReLU → GELU",                  80.6, "차이 없음"),
+    ("활성화 개수 줄이기",              81.3, "블록당 GELU 1개만"),
+    ("정규화 개수 줄이기",              81.4, "블록당 norm 1개만"),
+    ("BatchNorm → LayerNorm",        81.5, ""),
+    ("다운샘플 층 분리",                82.0, "stage 사이에 별도 2×2 s2 conv + norm"),
+]
+print(f"{'단계':<34} {'Top-1':>7} {'변화':>7}  {'내용'}")
+print("-" * 88)
+prev = None
+for name, acc, note in steps:
+    delta = "" if prev is None else f"{acc-prev:+.1f}"
+    print(f"{name:<34} {acc:>7.1f} {delta:>7}  {note}")
+    prev = acc
+print()
+base, final = steps[0][1], steps[-1][1]
+recipe = steps[1][1] - steps[0][1]
+arch = final - steps[1][1]
+print(f"전체 향상 {final-base:+.1f}%p 중")
+print(f"  학습 레시피만 바꿔서 {recipe:+.1f}%p ({recipe/(final-base):.0%})")
+print(f"  아키텍처 변경으로   {arch:+.1f}%p ({arch/(final-base):.0%})")
+print()
+print(f"**2015년 ResNet-50 을 2022년 레시피로 다시 학습시키는 것만으로 {recipe:+.1f}%p 가 올랐다.**")
+print("아키텍처를 12단계에 걸쳐 ViT 처럼 뜯어고쳐서 얻은 것이 그보다 약간 큰 정도다.")
+print()
+print("아키텍처 변경 중에서도 기여가 몰려 있다:")
+for i in range(2, len(steps)):
+    d = steps[i][1] - steps[i-1][1]
+    if d >= 0.5:
+        print(f"  {steps[i][0]:<32} {d:+.1f}%p")
+print("  나머지 단계들은 대부분 0.0~0.1%p 다.")
+print()
+print("이것이 이 장의 가장 중요한 교훈이다:")
+print("  아키텍처 비교 논문을 읽을 때 **학습 조건이 같은지 반드시 확인해야 한다.**")
+print("  조건이 다르면 그 비교는 아키텍처가 아니라 레시피를 비교한 것이다.")
+print()
+print("(수치는 ConvNeXt 논문 Figure 2 의 보고값이다. 여기서 계산한 것이 아니다.)")
+```
+
+::: {.key-concept}
+**아키텍처 비교의 함정**
+
+같은 실수가 반복해서 나온다.
+
+- 새 아키텍처는 **최신 레시피**로, 기준선은 **원 논문 레시피**로 학습
+- 새 아키텍처만 하이퍼파라미터를 튜닝
+- FLOPs 는 맞췄지만 **실제 지연시간**은 안 맞춤
+- 시드 하나로 비교 ([3.9](../03_deep_learning/09_training_practice.qmd)에서
+  시드 잡음이 0.03 수준이었음을 기억하라)
+
+공정한 비교의 최소 조건: **같은 레시피, 같은 예산, 같은 탐색, 여러 시드.**
 :::
 
 ---
 
-## G4.1.4 — 아키텍처 비용-성능
+## 요약
 
-파라미터·FLOPs 대 정확도 산점도 위의 파레토 곡선
+| 아키텍처 | 핵심 아이디어 | 남긴 것 |
+|----------|---------------|---------|
+| AlexNet | ReLU·드롭아웃·GPU | 딥러닝의 실용화 |
+| VGG | 3×3 만으로 쌓기 | 단순 규칙의 힘 |
+| Inception | 다중 스케일 병렬 + 1×1 병목 | 1×1 로 채널 줄이기 |
+| **ResNet** | $h + F(h)$ | **모든 현대 모델의 부품** |
+| DenseNet | 앞 층 전부 이어붙이기 | 특성 재사용 |
+| SENet | 채널 어텐션 | 어텐션의 CNN 판 |
+| MobileNet | depthwise separable + 역병목 | 모바일 효율 |
+| EfficientNet | 복합 스케일링 | 예산 배분의 균형 |
+| ConvNeXt | ViT 설계를 CNN 으로 | **레시피가 46%다** |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 선택
-:::
+CNN은 **공간 구조를 아키텍처에 새겼다.** 잔차 연결은 그 위에 깊이를 허용했다.
 
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| ResNet |  |
-| 잔차 블록 |  |
-| Inception |  |
-| EfficientNet |  |
-| ConvNeXt |  |
-| NAS |  |
+하지만 이미지가 아닌 데이터는 어떻게 하는가?
+순서가 있고 길이가 변하는 데이터 — **시퀀스** 말이다.
 
 ---
 
-**다음**: [4.2 순환 신경망](02_rnn.qmd) — 은닉 상태·BPTT·장기 의존성 — 시퀀스를 다룬 첫 방식
+**다음**: [4.2 순환 신경망](02_rnn.qmd) — 은닉 상태·BPTT·장기 의존성
 
 **이전**: [4.0 합성곱 신경망](00_cnn.qmd)
