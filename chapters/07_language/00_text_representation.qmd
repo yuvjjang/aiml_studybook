@@ -4,88 +4,701 @@ subtitle: "유니코드·정규화·전처리 — 언어 데이터의 현실"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+이미지는 숫자 배열이다. 오디오도 숫자 배열이다.
+**텍스트는 아니다.**
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+"한글"이라는 두 글자가 컴퓨터 안에서 몇 개의 무엇인지 물으면
+답이 최소 네 가지다 — 그리고 그 답이 어긋나는 곳마다 버그가 생긴다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장은 화려하지 않다. 대신 여기서 생긴 오류는
+토크나이저를 지나 사전학습 데이터를 지나 모델 평가까지
+**끝까지 따라온다.** 그래서 먼저 한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## G7.0.1 — 같아 보이는 문자열이 같지 않다
+
+```{python}
+#| label: normalization
+#| code-fold: false
+
+import unicodedata as ud
+
+CASES = [
+    ("한글 (NFC vs NFD)", "한글", ud.normalize("NFD", "한글")),
+    ("é (완성형 vs 조합형)", "é", "é"),
+    ("전각 vs 반각", "ＡＢＣ", "ABC"),
+    ("합자 ﬁ", "ﬁ", "fi"),
+    ("로마숫자 Ⅳ", "Ⅳ", "IV"),
+    ("위첨자 ²", "²", "2"),
+]
+
+print("사람 눈에는 같거나 비슷한데, 컴퓨터에게는 다른 문자열들")
+print()
+print(f"{'사례':<24} {'A 길이':>7} {'B 길이':>7} {'A == B':>8} "
+      f"{'NFC 후':>8} {'NFKC 후':>9}")
+print("-" * 68)
+for nm, a, b in CASES:
+    print(f"{nm:<24} {len(a):>7} {len(b):>7} {str(a == b):>8} "
+          f"{str(ud.normalize('NFC', a) == ud.normalize('NFC', b)):>8} "
+          f"{str(ud.normalize('NFKC', a) == ud.normalize('NFKC', b)):>9}")
+print()
+print("**정규화 형식 네 가지**")
+print(f"{'형식':<8} {'하는 일':<34} {'되돌릴 수 있나'}")
+print("-" * 68)
+for f, w, rev in [("NFC", "조합형 → 완성형 (표준 조합)", "예 (정보 보존)"),
+                  ("NFD", "완성형 → 조합형 (표준 분해)", "예 (정보 보존)"),
+                  ("NFKC", "NFC + **호환 문자 통합**", "**아니오 (정보 손실)**"),
+                  ("NFKD", "NFD + 호환 문자 통합", "**아니오 (정보 손실)**")]:
+    print(f"{f:<8} {w:<34} {rev}")
+print()
+print("**NFC 는 한글·악센트를 고쳐 주지만 전각·합자·로마숫자는 못 고친다.**")
+print("**NFKC 는 전부 고치는 대신 정보를 지운다:**")
+for a, b in [("Ⅳ", "IV"), ("²", "2"), ("½", "1⁄2"), ("㈜", "(주)")]:
+    print(f"    {a}  →  NFKC  →  {ud.normalize('NFKC', a)!r}")
+print()
+print("수식 x²  가 NFKC 를 지나면 x2 가 된다. 의미가 달라진다.")
+print("**그래서 '무조건 NFKC' 는 위험한 기본값이다** — 도메인을 보고 골라야 한다.")
+print()
+print("실무 권장:")
+for s in ["일반 텍스트 코퍼스 — **NFC** (한글·악센트 통일, 정보 보존)",
+          "검색 색인·중복 제거 키 — NFKC (원본은 따로 보관)",
+          "코드·수식·화학식 — 정규화하지 말거나 NFC 만",
+          "**어느 쪽이든 파이프라인 전체에서 하나로 고정할 것**"]:
+    print(f"  · {s}")
+```
+
+::: {.callout-warning}
+### macOS 파일명은 NFD다
+
+macOS(HFS+/APFS)는 파일명을 **NFD 비슷한 형태**로 저장한다.
+Windows·Linux는 보통 NFC다.
+
+그래서 macOS에서 만든 `한글.txt` 를 Linux 서버에 올리면
+파일명이 `한글.txt` 로 보이는데 `open("한글.txt")` 가 실패한다.
+**같아 보이는데 바이트가 다르기 때문이다.**
+
+데이터 수집 파이프라인에서 가장 흔하게 만나는 유니코드 버그다.
 :::
 
-한국어·이모지·혼합 스크립트를 다루면 '문자란 무엇인가'부터 다시 물어야 한다. 여기서 생긴 버그는 모델 학습 끝까지 따라온다.
+---
+
+## G7.0.2 — "한글"은 몇 글자인가
+
+```{python}
+#| label: lengths
+#| code-fold: false
+
+import unicodedata as ud
+
+SAMPLES = ["한글", "안녕하세요", "Hello", "こんにちは", "مرحبا", "café"]
+
+print("같은 문자열의 네 가지 길이")
+print()
+print(f"{'문자열':<14} {'코드포인트':>10} {'NFD 후':>8} {'UTF-8 바이트':>13} "
+      f"{'UTF-16 단위':>12} {'바이트/글자':>12}")
+print("-" * 74)
+for s in SAMPLES:
+    b = len(s.encode("utf-8"))
+    print(f"{s:<14} {len(s):>10} {len(ud.normalize('NFD', s)):>8} {b:>13} "
+          f"{len(s.encode('utf-16-le'))//2:>12} {b/len(s):>12.2f}")
+print()
+print("**한글 한 글자 = UTF-8 3바이트, 영어 한 글자 = 1바이트.**")
+print("이 3배 차이가 뒤에서 계속 따라온다 —")
+print("바이트 단위 토크나이저에서, API 비용에서, 문맥 창 예산에서.")
+print()
+print("그리고 자모로 분해하면 코드포인트가 3배가 된다 (NFD 열).")
+print("**한글은 '문자 하나'가 무엇인지 특히 애매한 문자다.**")
+```
+
+```{python}
+#| label: emoji
+#| code-fold: false
+
+import unicodedata as ud
+
+EMOJI = ["😀", "👨‍👩‍👧‍👦", "🇰🇷", "👍🏽", "é", "é"]
+
+print("len() 이 사람의 직관과 어긋나는 곳")
+print()
+print(f"{'보이는 것':<8} {'코드포인트':>10} {'UTF-8':>7}  {'구성'}")
+print("-" * 78)
+for e in EMOJI:
+    parts = " + ".join(ud.name(c, "?").replace("ZERO WIDTH JOINER", "ZWJ")
+                       [:20] for c in e)
+    print(f"{e:<8} {len(e):>10} {len(e.encode('utf-8')):>7}  {parts[:58]}")
+print()
+print("**가족 이모지는 코드포인트 7개, 바이트 25개, 그런데 사람이 보기엔 1개다.**")
+print("사람이 세는 단위는 코드포인트가 아니라 **자소 클러스터(grapheme cluster)** 다.")
+print()
+print("실무에서 문제가 되는 지점:")
+for s in ["문자열 자르기 — 이모지 중간을 자르면 깨진다",
+          "글자 수 제한 — 트위터 280자는 코드포인트가 아니라 다른 규칙이다",
+          "역순 뒤집기 — s[::-1] 은 ZWJ 시퀀스를 파괴한다",
+          "**토크나이저 학습 — 바이트 단위로 자르면 이 문제가 사라진다** (7.1)"]:
+    print(f"  · {s}")
+print()
+print("마지막 항목이 byte-level BPE 가 사실상 표준이 된 이유 중 하나다.")
+print("어떤 바이트열이든 인코딩할 수 있으면 'UNK 토큰'과 깨짐이 원천적으로 없다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G7.0.3 — 한글 자모: 산술로 분해된다
 
-- 유니코드, 코드포인트, UTF-8 인코딩, 결합 문자
-- 정규화 형식(NFC/NFD/NFKC/NFKD)과 한글 자모 분리 문제
-- 언어별 특성: 교착어·굴절어·고립어, 띄어쓰기 없는 언어
-- 형태소 분석과 한국어 처리(형태소 vs 어절 vs 서브워드)
-- 정규화·정제 파이프라인: 소문자화, 문장 분리, 특수문자
-- 텍스트 데이터의 품질 문제: 중복, 보일러플레이트, 인코딩 깨짐
-- 언어 식별과 다국어 코퍼스 구성
-- 고전 표현: BoW, TF-IDF, n-gram 특성
-- 문자열 유사도: 편집거리, Jaccard, MinHash
+한글 음절은 유니코드에 **규칙적으로** 배열되어 있다.
 
----
+$$\text{코드포인트} = \texttt{0xAC00} + (\text{초성} \times 588) + (\text{중성} \times 28) + \text{종성}$$
 
-## G7.0.1 — 유니코드 정규화 비교
+```{python}
+#| label: hangul
+#| code-fold: false
 
-같아 보이는 문자열이 코드포인트 수준에서 다른 사례
+BASE = 0xAC00
+CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+JUNG = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
+JONG = "_ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ"
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 입력 문자열
-:::
 
----
+def decompose(ch):
+    i = ord(ch) - BASE
+    if not 0 <= i < 11172:
+        return None
+    return CHO[i//588], JUNG[(i % 588)//28], JONG[i % 28]
 
-## G7.0.2 — 한국어 분해 방식
 
-어절·형태소·자모·서브워드로 나눈 결과 비교
+def compose(c, j, t="_"):
+    return chr(BASE + CHO.index(c)*588 + JUNG.index(j)*28 + JONG.index(t))
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 분해 단위 전환
-:::
 
----
-
-## G7.0.3 — TF-IDF 가중치
-
-빈도와 희소성이 결합해 가중치가 정해지는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 문서 선택
-:::
-
----
-
-## G7.0.4 — 편집거리 DP 표
-
-동적계획법 표가 채워지며 최소 편집 경로가 드러나는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 두 단어 입력
-:::
+print(f"완성형 한글 음절 총 개수: {19*21*28:,} 개 (초성 19 × 중성 21 × 종성 28)")
+print(f"유니코드 범위: U+{BASE:04X} ~ U+{BASE+11171:04X}")
+print()
+print(f"{'글자':>4} {'코드포인트':>12} {'초성':>5} {'중성':>5} {'종성':>5}")
+print("-" * 38)
+for ch in "한글은 재밌다":
+    d = decompose(ch)
+    if d:
+        print(f"{ch:>4} {'U+%04X' % ord(ch):>12} {d[0]:>5} {d[1]:>5} "
+              f"{(d[2] if d[2] != '_' else '없음'):>5}")
+    else:
+        print(f"{ch:>4} {'U+%04X' % ord(ch):>12} {'(한글 음절 아님)':>17}")
+print()
+print(f"역방향 합성 검증: 초성 ㅎ + 중성 ㅏ + 종성 ㄴ = {compose('ㅎ','ㅏ','ㄴ')}")
+ok = all(compose(*decompose(chr(BASE+i))) == chr(BASE+i) for i in range(11172))
+print(f"11,172 개 전부 분해→합성 왕복 일치: {ok}")
+print()
+print("**이 규칙성이 한국어 NLP 를 특이하게 만든다.**")
+print("  · 자모 단위 모델링이 가능하다 (오탈자 교정, 음성 합성에 유용)")
+print("  · 그런데 자모로 내리면 시퀀스가 3배 길어진다")
+print("  · NFD 정규화가 곧 자모 분해다 — 의도치 않게 일어나면 재앙이다")
+```
 
 ---
 
-## 핵심 용어
+## G7.0.4 — 한국어를 나누는 단위들
 
-| 용어 | 비고 |
+```{python}
+#| label: korean-units
+#| code-fold: false
+
+import unicodedata as ud
+
+SENTS = [
+    "나는 학교에 간다",
+    "그는 학교에서 공부를 하고 있었다",
+    "The quick brown fox jumps over the lazy dog",
+]
+print("라이브러리 없이 셀 수 있는 단위들")
+print()
+print(f"{'문장':<44} {'어절':>5} {'음절':>6} {'자모':>6} {'바이트':>7}")
+print("-" * 74)
+for s in SENTS:
+    ns = s.replace(" ", "")
+    print(f"{s:<44} {len(s.split()):>5} {len(ns):>6} "
+          f"{len(ud.normalize('NFD', ns)):>6} {len(s.encode('utf-8')):>7}")
+print()
+print("**형태소는 이 표에 없다.** 규칙만으로는 못 나누기 때문이다:")
+print()
+print("  어절 '학교에서'  →  형태소 '학교' + '에서'  (명사 + 조사)")
+print("  어절 '있었다'    →  형태소 '있' + '었' + '다'  (어간 + 선어말 + 어말)")
+print("  (위 분석은 손으로 붙인 것이다 — 자동으로 하려면 형태소 분석기가 필요하다)")
+print()
+print("한국어가 **교착어**라 그렇다. 어간에 조사·어미가 줄줄이 붙는다.")
+print()
+print(f"{'유형':<12} {'특징':<32} {'예':<16} {'토크나이저 함의'}")
+print("-" * 92)
+for t, f, ex, imp in [
+    ("교착어", "어간 + 접사가 붙어 늘어난다", "한국어, 터키어, 일본어",
+     "어절 어휘가 폭발한다"),
+    ("굴절어", "단어 형태 자체가 변한다", "라틴어, 러시아어",
+     "활용형이 전부 다른 토큰"),
+    ("고립어", "형태 변화가 거의 없다", "중국어, 베트남어",
+     "**띄어쓰기가 없다**"),
+    ("분석어", "어순과 기능어로 문법 표현", "영어(부분적)",
+     "공백 분리가 잘 먹는다"),
+]:
+    print(f"{t:<12} {f:<32} {ex:<16} {imp}")
+print()
+print("**'단어로 나눈다'는 발상은 영어 중심 편향이다.**")
+print("  · 중국어·일본어·태국어에는 띄어쓰기가 없다")
+print("  · 한국어 어절 '학교에서도' 하나에 형태소가 셋이다")
+print("  · 독일어 복합명사는 한 단어가 임의로 길어진다")
+print()
+print("**서브워드 토크나이제이션(7.1)이 이 문제 전체를 우회하는 방법이다** —")
+print("언어별 규칙 대신 데이터에서 통계적으로 경계를 배운다.")
+```
+
+---
+
+## G7.0.5 — 중복 제거: 정규화가 왜 먼저인가
+
+사전학습 데이터에서 중복 제거는 성능에 직접 영향을 준다.
+그런데 **무엇을 같다고 볼 것인가**가 먼저 정해져야 한다.
+
+```{python}
+#| label: dedup-exact
+#| code-fold: false
+
+import unicodedata as ud
+
+DOCS = [
+    "한글 처리",
+    ud.normalize("NFD", "한글 처리"),
+    "한글  처리",
+    "한글 처리 ",
+    "한글\t처리",
+    "한글\u3000처리",                                   # 전각 공백
+]
+print(f"문서 {len(DOCS)}개 — 화면에는 전부 '한글 처리' 로 보인다")
+print()
+print(f"{'전처리 단계':<28} {'남는 고유 문서 수':>18}")
+print("-" * 48)
+steps = [
+    ("전처리 없음", lambda d: d),
+    ("NFC 정규화", lambda d: ud.normalize("NFC", d)),
+    ("NFC + 공백 정리", lambda d: " ".join(ud.normalize("NFC", d).split())),
+]
+COUNTS = []
+for nm, f in steps:
+    c = len(set(f(d) for d in DOCS))
+    COUNTS.append((nm, c))
+    print(f"{nm:<28} {c:>18}")
+print()
+print(f"**전처리 없이는 {COUNTS[0][1]}개, 제대로 하면 {COUNTS[-1][1]}개다.**")
+print("사전학습 코퍼스가 수십억 문서라면 이 차이가 통째로 남는다.")
+print()
+print("실제 코퍼스에서 흔한 중복의 종류:")
+for s in ["완전 중복 — 같은 문서가 여러 번 크롤링됨",
+          "정규화 차이 — NFC/NFD, 전각/반각, 공백",
+          "보일러플레이트 — 저작권 고지, 쿠키 배너, 내비게이션",
+          "**근접 중복** — 한두 문장만 다른 문서 (이게 제일 어렵다)",
+          "템플릿 생성물 — 자동 생성된 상품 페이지, 스포츠 기사"]:
+    print(f"  · {s}")
+print()
+print("완전 중복은 해시로 끝난다. 근접 중복은 다르다 —")
+print("문서 N 개를 전부 비교하면 O(N²) 이고, N=10억이면 불가능하다.")
+```
+
+---
+
+## G7.0.6 — MinHash: 근접 중복을 O(N)에 가깝게
+
+$k$-shingle 집합의 자카드 유사도를 **작은 서명 벡터**로 추정한다.
+
+$$J(A, B) = \frac{|A \cap B|}{|A \cup B|},
+\qquad
+\Pr\big[\min h(A) = \min h(B)\big] = J(A, B)$$
+
+무작위 해시 하나의 최솟값이 일치할 확률이 **정확히 자카드 유사도**다.
+$k$개를 독립적으로 쓰면 일치 비율이 불편추정량이 된다.
+
+```{python}
+#| label: minhash
+#| code-fold: false
+
+import zlib
+import numpy as np
+
+P = (1 << 31) - 1
+
+
+def h32(s):
+    """결정론적 해시. 파이썬 내장 hash() 는 프로세스마다 값이 달라 못 쓴다."""
+    return zlib.crc32(s.encode("utf-8")) % P
+
+
+def shingles(s, k=3):
+    s = " ".join(s.split())
+    return {s[i:i+k] for i in range(len(s)-k+1)}
+
+
+def minhash(S, k, seed=0):
+    r = np.random.default_rng(seed)
+    A, B = r.integers(1, P, k), r.integers(0, P, k)
+    h = np.array([h32(x) for x in sorted(S)])
+    return ((A[:, None]*h[None] + B[:, None]) % P).min(1)
+
+
+D1 = "정규화를 하지 않으면 중복 제거가 실패한다"
+D2 = "정규화를 하지 않으면 중복 탐지가 실패한다"
+S1, S2 = shingles(D1), shingles(D2)
+J_TRUE = len(S1 & S2)/len(S1 | S2)
+
+print(f"3-shingle 집합 크기: {len(S1)}, {len(S2)}")
+print(f"참 자카드 유사도: {J_TRUE:.4f}")
+print()
+print(f"{'해시 개수 k':>12} {'추정 평균 (40회)':>18} {'실측 표준편차':>14} "
+      f"{'이론 √(J(1−J)/k)':>18}")
+print("-" * 66)
+MH = []
+for k in [16, 64, 256, 1024]:
+    est = [(minhash(S1, k, s) == minhash(S2, k, s)).mean() for s in range(40)]
+    MH.append((k, np.mean(est), np.std(est), np.sqrt(J_TRUE*(1-J_TRUE)/k)))
+    print(f"{k:>12} {np.mean(est):>18.4f} {np.std(est):>14.4f} "
+          f"{np.sqrt(J_TRUE*(1-J_TRUE)/k):>18.4f}")
+print()
+print("**추정이 불편이고, 오차가 이론대로 1/√k 로 줄어든다.**")
+print(f"  k=16 실측 {MH[0][2]:.4f} vs 이론 {MH[0][3]:.4f}")
+print(f"  k=1024 실측 {MH[3][2]:.4f} vs 이론 {MH[3][3]:.4f}")
+print()
+print(f"**핵심은 비용이다.** 문서를 {MH[2][0]}차원 정수 벡터로 줄여 놓으면")
+print("두 문서 비교가 그 벡터 비교로 끝난다. 원문 길이와 무관하다.")
+print("게다가 LSH 밴딩을 쓰면 **후보 쌍만** 비교해 O(N²) 을 피할 수 있다.")
+```
+
+```{python}
+#| label: dedup-matrix
+#| code-fold: false
+
+import numpy as np
+
+CORPUS = [
+    "정규화를 하지 않으면 중복 제거가 실패한다",
+    "정규화를 하지 않으면 중복 탐지가 실패한다",
+    "정규화를  하지 않으면 중복 제거가 실패한다.",
+    "오늘 날씨가 매우 좋습니다",
+    "고양이가 매트 위에 앉았다",
+]
+K = 256
+SIGS = [minhash(shingles(d), K, 0) for d in CORPUS]
+M = np.array([[(SIGS[i] == SIGS[j]).mean() for j in range(len(CORPUS))]
+              for i in range(len(CORPUS))])
+
+print(f"MinHash 서명 {K}차원으로 추정한 유사도 행렬")
+print()
+print("      " + "  ".join(f"{j:>5}" for j in range(len(CORPUS))))
+print("-" * 42)
+for i in range(len(CORPUS)):
+    print(f"  {i}   " + "  ".join(f"{M[i, j]:>5.2f}" for j in range(len(CORPUS))))
+print()
+for i, d in enumerate(CORPUS):
+    print(f"  {i}: {d}")
+print()
+TH = 0.7
+pairs = [(i, j) for i in range(len(CORPUS)) for j in range(i+1, len(CORPUS))
+         if M[i, j] >= TH]
+print(f"임계값 {TH} 이상인 쌍: {pairs}")
+print()
+print("문서 0 과 2 는 공백·마침표만 다른데 유사도 "
+      f"{M[0, 2]:.2f} — 근접 중복으로 잡힌다.")
+print(f"문서 0 과 1 은 단어 하나만 다른데 {M[0, 1]:.4f} 로 "
+      f"임계값 {TH} 에서 **탈락한다.**")
+print("  둘째 자리로 반올림하면 0.70 이라 걸릴 것 같지만 아니다 —")
+print("  **임계값 근처는 언제나 불안정하다.** 추정값이라 시드에 따라서도 흔들린다.")
+print(f"무관한 문서 3, 4 는 {M[3, 4]:.2f} 다.")
+print()
+print("**임계값 설정이 곧 정책이다.**")
+print("  · 너무 낮으면 서로 다른 문서를 지운다 (다양성 손실)")
+print("  · 너무 높으면 템플릿 문서가 살아남는다 (모델이 그것을 외운다)")
+print("  · 실무에서는 0.7~0.9 를 쓰고, 도메인마다 다시 튜닝한다")
+```
+
+```{python}
+#| label: fig-minhash
+#| fig-cap: "MinHash 추정 오차가 해시 개수에 따라 1/√k로 줄어듭니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("추정 분포 (참값 = 초록 점선)",
+                                    "표준오차 vs 이론"),
+                    specs=[[{"type": "xy"}, {"type": "xy"}]])
+for i, (k, mean_, sd_, th_) in enumerate(MH):
+    est = np.array([(minhash(S1, k, s) == minhash(S2, k, s)).mean()
+                    for s in range(200)])
+    edges = np.linspace(0.3, 1.0, 36)
+    h_, _ = np.histogram(est, bins=edges, density=True)
+    fig.add_trace(go.Scatter(x=np.round((edges[:-1]+edges[1:])/2, 3),
+                             y=np.round(h_, 3), mode="lines", name=f"k={k}",
+                             line=dict(color=viz.color(i), width=2.2)),
+                  row=1, col=1)
+fig.add_vline(x=J_TRUE, line=dict(color=viz.GREEN, dash="dash"), row=1, col=1)
+ks = np.array([m[0] for m in MH])
+fig.add_trace(go.Scatter(x=ks, y=[m[2] for m in MH], mode="lines+markers",
+                         name="실측", line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_trace(go.Scatter(x=ks, y=[m[3] for m in MH], mode="lines+markers",
+                         name="이론 √(J(1−J)/k)",
+                         line=dict(color=viz.WARM, width=2, dash="dash"),
+                         marker=dict(size=8)), row=1, col=2)
+fig.update_xaxes(title_text="자카드 추정값", row=1, col=1)
+fig.update_yaxes(title_text="밀도", row=1, col=1)
+fig.update_xaxes(title_text="해시 개수 k", type="log", row=1, col=2)
+fig.update_yaxes(title_text="표준오차", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=380, title="")
+fig.show()
+```
+
+---
+
+## G7.0.7 — 편집거리
+
+```{python}
+#| label: edit-distance
+#| code-fold: false
+
+import numpy as np
+import unicodedata as ud
+
+
+def edit_table(a, b):
+    n, m = len(a), len(b)
+    D = np.zeros((n+1, m+1), dtype=int)
+    D[:, 0] = np.arange(n+1)
+    D[0, :] = np.arange(m+1)
+    for i in range(1, n+1):
+        for j in range(1, m+1):
+            D[i, j] = min(D[i-1, j] + 1,                       # 삭제
+                          D[i, j-1] + 1,                       # 삽입
+                          D[i-1, j-1] + (a[i-1] != b[j-1]))    # 치환/유지
+    return D
+
+
+def backtrace(D, a, b):
+    i, j, ops = len(a), len(b), []
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and D[i, j] == D[i-1, j-1] + (a[i-1] != b[j-1]):
+            ops.append(("유지" if a[i-1] == b[j-1] else "치환", a[i-1], b[j-1]))
+            i, j = i-1, j-1
+        elif i > 0 and D[i, j] == D[i-1, j] + 1:
+            ops.append(("삭제", a[i-1], "")); i -= 1
+        else:
+            ops.append(("삽입", "", b[j-1])); j -= 1
+    return ops[::-1]
+
+
+PAIRS = [("kitten", "sitting"), ("서울시", "서울특별시"),
+         ("한글", ud.normalize("NFD", "한글")), ("않됀다", "안된다")]
+print(f"{'A':<10} {'B':<10} {'편집거리':>8} {'정규화 유사도':>14}")
+print("-" * 48)
+for a, b in PAIRS:
+    d = int(edit_table(a, b)[-1, -1])
+    print(f"{a:<10} {b:<10} {d:>8} {1 - d/max(len(a), len(b)):>14.3f}")
+print()
+a_, b_ = "한글", ud.normalize("NFD", "한글")
+print(f"**'{a_}' 과 '{b_}' 의 편집거리가 "
+      f"{int(edit_table(a_, b_)[-1, -1])} 이다.**")
+print("화면에는 똑같이 보이는 두 문자열인데도 그렇다.")
+print("**정규화를 먼저 하지 않으면 문자열 유사도는 아무 의미가 없다.**")
+print()
+print("'kitten' → 'sitting' 의 최소 편집 경로:")
+for op, x, y in backtrace(edit_table("kitten", "sitting"), "kitten", "sitting"):
+    mark = "" if op == "유지" else "   ←"
+    print(f"    {op}  {x or '∅':>2} → {y or '∅':>2}{mark}")
+```
+
+```{python}
+#| label: fig-edit
+#| fig-cap: "편집거리 DP 표와 최소 편집 경로"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+A, B = "kitten", "sitting"
+D = edit_table(A, B)
+ops = backtrace(D, A, B)
+
+# 경로 좌표 복원
+i, j = len(A), len(B)
+path = [(i, j)]
+for op, _, _ in reversed(ops):
+    if op in ("유지", "치환"):
+        i, j = i-1, j-1
+    elif op == "삭제":
+        i -= 1
+    else:
+        j -= 1
+    path.append((i, j))
+path = path[::-1]
+
+fig = go.Figure(go.Heatmap(z=D, colorscale="Blues",
+                           text=D, texttemplate="%{text}",
+                           textfont=dict(size=11),
+                           colorbar=dict(thickness=11, outlinewidth=0)))
+fig.add_trace(go.Scatter(x=[p[1] for p in path], y=[p[0] for p in path],
+                         mode="lines+markers", name="최소 편집 경로",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=8, color=viz.WARM)))
+fig.update_xaxes(title_text="sitting", tickmode="array",
+                 tickvals=list(range(len(B)+1)), ticktext=["∅"]+list(B))
+fig.update_yaxes(title_text="kitten", tickmode="array",
+                 tickvals=list(range(len(A)+1)), ticktext=["∅"]+list(A),
+                 autorange="reversed")
+viz.fig_defaults(fig, height=420,
+                 title=f"D[i,j] = 앞 i글자와 앞 j글자의 편집거리 · 최종 {D[-1,-1]}")
+fig.show()
+```
+
+---
+
+## G7.0.8 — BoW와 TF-IDF, 그리고 그 한계
+
+```{python}
+#| label: tfidf
+#| code-fold: false
+
+import numpy as np
+
+CORP = [
+    "고양이가 매트 위에 앉았다",
+    "개가 매트 위에 앉았다",
+    "고양이가 생선을 먹었다",
+    "매트 매트 매트 매트",
+]
+VOCAB = sorted({w for d in CORP for w in d.split()})
+TF = np.array([[d.split().count(w) for w in VOCAB] for d in CORP], float)
+DF = (TF > 0).sum(0)
+IDF = np.log((1 + len(CORP))/(1 + DF)) + 1               # 평활화된 IDF
+TFN = TF/np.maximum(TF.sum(1, keepdims=True), 1)
+TFIDF = TFN*IDF
+
+print("문서")
+for i, d in enumerate(CORP):
+    print(f"  {i}: {d}")
+print()
+print(f"{'단어':<8} {'DF':>4} {'IDF':>8}  " +
+      "  ".join(f"{'문서'+str(i):>7}" for i in range(len(CORP))))
+print("-" * 60)
+for j, w in enumerate(VOCAB):
+    print(f"{w:<8} {int(DF[j]):>4} {IDF[j]:>8.3f}  " +
+          "  ".join(f"{TFIDF[i, j]:>7.3f}" for i in range(len(CORP))))
+print()
+print("**IDF 가 하는 일**: 모든 문서에 나오는 단어의 가중치를 낮춘다.")
+print(f"  '매트' 는 4문서 중 3곳에 나와 IDF {IDF[VOCAB.index('매트')]:.3f},")
+print(f"  '생선을' 은 1곳에만 나와 IDF {IDF[VOCAB.index('생선을')]:.3f} 다.")
+print()
+print("**그런데 문서 3 을 보라.**")
+i3, jm = 3, VOCAB.index("매트")
+print(f"  '매트 매트 매트 매트' 의 '매트' TF-IDF 가 {TFIDF[i3, jm]:.3f} —")
+print(f"  다른 어느 문서의 어느 단어보다 크다 (최대 "
+      f"{TFIDF[:3].max():.3f}).")
+print("  **의미 없는 반복이 가장 높은 점수를 받는다.**")
+print()
+print("BoW·TF-IDF 의 구조적 한계:")
+for s in ["어순을 버린다 — '개가 사람을 물었다' 와 '사람이 개를 물었다' 가 같다",
+          "동의어를 모른다 — '고양이'와 '냥이'가 완전히 다른 차원",
+          "다의어를 구분 못 한다 — '배(과일)'와 '배(선박)'가 한 차원",
+          "**반복에 취약하다** — 위 문서 3 이 그 사례",
+          "어휘 크기만큼 차원이 커지고 대부분 0 이다 (희소)"]:
+    print(f"  · {s}")
+print()
+print("그럼에도 TF-IDF 는 지금도 쓰인다:")
+for s in ["검색의 기본 점수 (BM25 는 TF-IDF 의 개선판)",
+          "**RAG 의 하이브리드 검색** — 밀집 임베딩과 함께 (7.10)",
+          "빠르고 해석 가능하고 학습이 필요 없다"]:
+    print(f"  · {s}")
+print()
+print("다음 장들이 이 한계를 하나씩 푼다:")
+print("  · 어휘 폭발 → 서브워드 토크나이제이션 (7.1)")
+print("  · 동의어·다의어 → 분산 표현 (7.3)")
+print("  · 어순 → 언어모델과 어텐션 (7.2, Part 5)")
+```
+
+---
+
+## G7.0.9 — 어휘는 왜 항상 부족한가
+
+```{python}
+#| label: zipf
+#| code-fold: false
+
+import numpy as np
+
+# 지프 분포에서 뽑은 합성 코퍼스 (시드 고정)
+V_TRUE, S_EXP = 50000, 1.07
+p = 1.0/np.arange(1, V_TRUE+1)**S_EXP
+p /= p.sum()
+r = np.random.default_rng(0)
+train = r.choice(V_TRUE, 400000, p=p)
+test = r.choice(V_TRUE, 100000, p=p)
+cnt = np.bincount(train, minlength=V_TRUE)
+order = np.argsort(cnt)[::-1]
+
+print(f"합성 코퍼스: 지프 지수 {S_EXP}, 참 어휘 {V_TRUE:,}, 훈련 토큰 {len(train):,}")
+print("(실제 언어의 어휘는 유한하지 않다 — 아래 마지막 줄의 0% 는 합성 데이터의 인공물이다)")
+print()
+print(f"{'어휘 크기 V':>12} {'훈련 토큰 커버리지':>18} {'테스트 OOV 비율':>16}")
+print("-" * 50)
+ZP = []
+for V in [1000, 5000, 10000, 30000, 50000]:
+    keep = set(order[:V].tolist())
+    oov = float(np.mean([t not in keep for t in test[:20000]]))
+    cov = float(cnt[order[:V]].sum()/cnt.sum())
+    ZP.append((V, cov, oov))
+    print(f"{V:>12,} {cov:>18.2%} {oov:>16.2%}")
+print()
+print("**어휘를 10배 늘려도 OOV 는 절반밖에 안 준다** "
+      f"({ZP[0][2]:.1%} → {ZP[2][2]:.1%}).")
+print("지프 법칙의 긴 꼬리 때문이다 — 드문 단어의 수가 사실상 무한하다.")
+print()
+print("Heaps 법칙 — 코퍼스를 키우면 어휘도 계속 자란다")
+print(f"{'토큰 수':>12} {'고유 타입 수':>14} {'타입/토큰':>11}")
+print("-" * 40)
+for n in [1000, 10000, 100000, 400000]:
+    u = int(len(np.unique(train[:n])))
+    print(f"{n:>12,} {u:>14,} {u/n:>11.4f}")
+print()
+print("**단어 단위 어휘로는 이 문제를 풀 수 없다.**")
+print("  · 어휘를 키우면 임베딩 행렬과 출력 소프트맥스가 같이 커진다")
+print("  · 그래도 새 단어(신조어, 오타, 고유명사, 숫자)는 계속 나온다")
+print("  · 한국어처럼 교착어면 어절 어휘가 훨씬 빨리 폭발한다")
+print()
+print("**해법은 어휘를 키우는 것이 아니라 단위를 바꾸는 것이다.**")
+print("바이트 수준으로 내려가면 어휘가 256 이고 OOV 가 0% 다 —")
+print("대신 시퀀스가 아주 길어진다. 그 사이 어딘가를 고르는 것이 다음 장이다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 유니코드 정규화 |  |
-| 형태소 분석 |  |
-| TF-IDF |  |
-| 편집거리 |  |
-| MinHash |  |
+| 유니코드 정규화 | NFC/NFD 는 정보 보존, **NFKC/NFKD 는 손실** |
+| NFC 가 못 고치는 것 | 전각, 합자, 로마숫자 — NFKC 가 필요 |
+| NFKC 의 위험 | x² → x2. 수식·코드에서는 쓰면 안 된다 |
+| macOS 함정 | 파일명이 NFD — 같아 보이는데 열리지 않는다 |
+| 한글 길이 | 코드포인트 2 / NFD 6 / UTF-8 6바이트 (영어의 3배) |
+| 이모지 | 가족 이모지 = 코드포인트 7, 바이트 25, 보이는 건 1개 |
+| 자모 분해 | $0\text{xAC00} + 초성{\times}588 + 중성{\times}28 + 종성$, 11,172자 왕복 일치 |
+| 언어 유형 | 교착어·굴절어·고립어 — '단어로 나누기'는 영어 편향 |
+| 중복 제거 | 전처리 없이 6개, NFC+공백 정리 후 1개 |
+| MinHash | $\Pr[\min h(A)=\min h(B)] = J(A,B)$, 오차 $\sqrt{J(1-J)/k}$ |
+| 검증 | k=16 실측 0.107 vs 이론 0.117 · k=1024 실측 0.012 vs 0.015 |
+| 편집거리 | NFC/NFD 한글 쌍의 거리가 **6** — 정규화가 먼저다 |
+| TF-IDF | '매트 매트 매트 매트' 가 최고 점수 — 반복에 취약 |
+| Zipf / Heaps | 어휘 10배 늘려도 OOV 는 절반만 준다 |
+| 결론 | 어휘를 키우지 말고 **단위를 바꿔야 한다** |
 
 ---
 
-**다음**: [7.1 토크나이제이션](01_tokenization.qmd) — BPE·WordPiece·SentencePiece — 모델이 보는 최소 단위
+**다음**: [7.1 토크나이제이션](01_tokenization.qmd) — 모델이 보는 최소 단위
 
 **이전**: [6.8 흐름 매칭과 최신 생성 기법](../06_generative/08_flow_matching.qmd)
