@@ -4,90 +4,710 @@ subtitle: "전방 잡음화·역방향 복원·DDPM 유도 — 현재 이미지 
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+앞의 세 계열은 각각 하나씩 잃었다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+| 계열 | 얻은 것 | 잃은 것 |
+|------|---------|---------|
+| VAE | 안정적 학습, 잠재 공간 | 샘플이 흐릿하다 (조건부 평균) |
+| GAN | 샘플 품질 | 학습 안정성, 모드 커버리지, 우도 |
+| 흐름 | 정확한 우도 | 표현력 (가역 제약), **위상을 바꿀 수 없다** |
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+확산 모델의 발상은 이상할 만큼 단순하다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+> **어려운 문제를 아주 쉬운 문제 수백 개로 쪼갠다.**
 
-확산 모델은 이미지·오디오·비디오 생성의 기본값이 되었고, 그 목적함수는 놀랍도록 단순한 형태로 정리된다.
+"잡음에서 이미지를 만들라"는 어렵다.
+"약간 흐려진 이미지를 조금 덜 흐리게 만들라"는 쉽다.
+후자를 1000번 반복하면 전자가 된다.
 
----
-
-## 이 장에서 다루는 것
-
-- 전방 과정: 점진적 가우스 잡음 추가, q(x_t|x_0) 닫힌 형태
-- 잡음 스케줄(linear, cosine)과 SNR
-- 역방향 과정과 신경망 파라미터화
-- 변분 하한 유도와 항별 분해
-- 단순화된 목적함수 L_simple = ‖ε − ε_θ(x_t,t)‖²
-- ε-예측 / x₀-예측 / v-예측 파라미터화 비교
-- 샘플링: DDPM 조상 샘플링, 스텝 수와 품질
-- 시간 임베딩과 U-Net 백본
-- 조건부 확산: 클래스·텍스트 조건
-- 분류자 가이던스와 분류자 없는 가이던스(CFG)
-- 가이던스 스케일과 품질-다양성 트레이드오프
+이 장에서 2차원 확산 모델을 직접 학습시켜,
+**[6.4](04_normalizing_flows.qmd)에서 흐름이 넘지 못한 위상의 벽을
+확산이 넘는 것**을 측정한다.
 
 ---
 
-## G6.5.1 — 전방 잡음화
+## 전방 과정
 
-이미지가 t에 따라 가우스 잡음으로 무너져가는 과정
+데이터에 조금씩 가우스 잡음을 더한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 타임스텝 t 슬라이더
-:::
+$$q(x_t \mid x_{t-1}) = \mathcal{N}\big(x_t; \sqrt{1-\beta_t}\,x_{t-1},\; \beta_t I\big)$$
+
+가우스에 가우스를 더하면 가우스라, **아무 $t$ 로든 한 번에 건너뛸 수 있다.**
+$\alpha_t = 1-\beta_t$, $\bar\alpha_t = \prod_{s\le t}\alpha_s$ 로 두면
+
+$$\boxed{\;q(x_t \mid x_0) = \mathcal{N}\big(x_t; \sqrt{\bar\alpha_t}\,x_0,\; (1-\bar\alpha_t) I\big)
+\;\;\Longleftrightarrow\;\;
+x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\varepsilon\;}$$
+
+이것이 학습을 가능하게 하는 결정적 성질이다.
+$t=537$ 의 상태를 얻으려고 537번 반복할 필요가 없다 — **한 줄이면 된다.**
+
+그리고 이 식은 [6.2](02_vae.qmd)의 재파라미터화와 **글자 그대로 같은 형태**다.
+
+```{python}
+#| label: forward-closed
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src.generative import make_schedule
+
+T = 200
+betas, alphas, abar = make_schedule(T, "cosine")
+r = np.random.default_rng(0)
+x0 = np.array([2.0, -1.0])
+N = 40000
+cur = np.repeat(x0[None], N, 0)
+
+print("한 스텝씩 200번 밟은 결과  vs  닫힌 형태 한 줄")
+print()
+print(f"{'t':>5} {'축차 평균':>20} {'닫힌형 평균':>20} "
+      f"{'축차 sd':>10} {'닫힌형 sd':>11}")
+print("-" * 70)
+for t in range(T):
+    cur = np.sqrt(alphas[t])*cur + np.sqrt(betas[t])*r.normal(size=cur.shape)
+    if t in (0, 9, 49, 99, 149, 199):
+        print(f"{t:>5} {str(np.round(cur.mean(0), 4)):>20} "
+              f"{str(np.round(np.sqrt(abar[t])*x0, 4)):>20} "
+              f"{cur.std(0).mean():>10.4f} {np.sqrt(1-abar[t]):>11.4f}")
+print()
+print("**소수점 셋째 자리까지 일치한다.** 닫힌 형태가 맞다.")
+print()
+print("이 성질이 없으면 확산 모델은 학습이 불가능하다 —")
+print("매 학습 스텝마다 임의의 t 를 뽑는데, 거기까지 순차적으로 가야 한다면")
+print("한 스텝의 비용이 평균 T/2 = 100 배가 된다.")
+```
 
 ---
 
-## G6.5.2 — 역방향 복원
+## 역방향 과정과 목적함수
 
-순수 잡음에서 이미지가 서서히 드러나는 디노이징 궤적
+역방향 $q(x_{t-1}|x_t)$ 는 알 수 없다 (데이터 분포 전체를 알아야 한다).
+그런데 $\beta_t$ 가 충분히 작으면 **역방향도 가우스**임이 알려져 있다.
+그래서 신경망으로 근사한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플링 스텝 재생
-:::
+$$p_\theta(x_{t-1} \mid x_t) = \mathcal{N}\big(x_{t-1};\; \mu_\theta(x_t, t),\; \sigma_t^2 I\big)$$
+
+VAE와 똑같이 변분 하한을 쓴다. $T$ 단계짜리 계층적 VAE인 셈이다.
+
+$$\mathcal{L}_{\text{VLB}} = \underbrace{\mathbb{E}\big[D_{KL}(q(x_T|x_0)\|p(x_T))\big]}_{\text{상수}}
++ \sum_{t>1}\underbrace{\mathbb{E}\big[D_{KL}(q(x_{t-1}|x_t,x_0)\,\|\,p_\theta(x_{t-1}|x_t))\big]}_{L_{t-1}}
+- \underbrace{\mathbb{E}\big[\log p_\theta(x_0|x_1)\big]}_{L_0}$$
+
+핵심은 $q(x_{t-1}|x_t, x_0)$ 가 **$x_0$ 를 조건에 넣으면 닫힌 형태**라는 것이다.
+
+$$\tilde\mu_t(x_t, x_0) = \frac{\sqrt{\bar\alpha_{t-1}}\beta_t}{1-\bar\alpha_t}x_0
++ \frac{\sqrt{\alpha_t}(1-\bar\alpha_{t-1})}{1-\bar\alpha_t}x_t$$
+
+두 가우스의 KL은 평균 차이의 제곱이므로 $L_{t-1} \propto \|\tilde\mu_t - \mu_\theta\|^2$ 다.
+
+### 그리고 놀라운 단순화
+
+$x_0 = (x_t - \sqrt{1-\bar\alpha_t}\varepsilon)/\sqrt{\bar\alpha_t}$ 를 대입해 정리하면
+목적함수가 **잡음 맞히기**가 된다.
+
+$$\boxed{\;\mathcal{L}_{\text{simple}} = \mathbb{E}_{x_0, t, \varepsilon}\Big[\big\|\varepsilon - \varepsilon_\theta(x_t, t)\big\|^2\Big]\;}$$
+
+VLB의 항별 가중치를 **전부 1로 바꾼 것**이 $L_{\text{simple}}$ 이다.
+Ho et al.(2020)은 이 단순화가 우도는 조금 나쁘게 하지만
+**샘플 품질은 크게 좋게 한다**고 보고했다.
+그 이유는 아래에서 가중치를 직접 계산해 확인한다.
+
+```{python}
+#| label: weighting
+#| code-fold: false
+
+import numpy as np
+from src.generative import make_schedule
+
+T_ = 200
+betas_, alphas_, abar_ = make_schedule(T_, "cosine")
+abar_prev = np.concatenate([[1.0], abar_[:-1]])
+# VLB 가중치: β_t² / (2σ_t²α_t(1−ᾱ_t)),  σ_t² = β̃_t
+beta_tilde = betas_*(1-abar_prev)/(1-abar_)
+w_vlb = betas_**2/(2*np.maximum(beta_tilde, 1e-20)*alphas_*(1-abar_))
+
+print("ε-예측 손실에 붙는 VLB 가중치  vs  L_simple 의 가중치(=1)")
+print("(t=0 항은 KL 이 아니라 별도의 재구성 항 L₀ 라 표에서 뺀다)")
+print()
+print(f"{'t/T':>7} {'t':>5} {'VLB 가중치':>14} {'L_simple':>10}")
+print("-" * 42)
+IDX_W = sorted({max(1, min(int(f*(T_-1)), T_-1))
+                for f in [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0]})
+for i in IDX_W:
+    print(f"{i/(T_-1):>7.3f} {i:>5} {w_vlb[i]:>14.4f} {1.0:>10.1f}")
+print()
+w_mid = w_vlb[1:]
+print("**VLB 의 가중치는 t 에 따라 극단적으로 달라진다.**")
+print(f"  가장 작은 t (t={IDX_W[0]}) 에서 {w_vlb[IDX_W[0]]:.2f}, "
+      f"가장 큰 t 에서 {w_vlb[-1]:.2f},")
+print(f"  중간 구간(t/T≈0.5)에서는 {w_vlb[T_//2]:.4f} 다.")
+print(f"  큰 t 쪽이 중간보다 {w_vlb[-1]/w_vlb[T_//2]:.0f}배, "
+      f"작은 t 쪽이 {w_vlb[IDX_W[0]]/w_vlb[T_//2]:.0f}배 무겁다 — **U 자 모양**이다.")
+print("  그 결과 **중간 구간이 사실상 무시된다.**")
+print()
+print("작은 t 는 '거의 깨끗한 이미지를 아주 조금 다듬는' 쉬운 문제이고,")
+print("우도(비트/차원)에는 그 미세한 정확도가 결정적이다.")
+print("반면 **사람이 보는 샘플 품질을 정하는 것은 중간~큰 t 의 거친 구조**다.")
+print("L_simple 은 가중치를 전부 1 로 눌러 그 구간에 무게를 되돌린다.")
+print()
+print("이것이 6.0 에서 본 '우도와 지각 품질의 불일치'가")
+print("**설계 결정으로 나타난 사례**다 — 어느 쪽을 최적화할지 고른 것이다.")
+```
 
 ---
 
-## G6.5.3 — 잡음 스케줄 비교
+## 파라미터화 세 가지
 
-linear vs cosine 스케줄의 SNR 곡선과 샘플 품질 영향
+같은 것을 세 가지로 쓸 수 있다. 서로 대수적으로 동치지만 **암묵적 가중치가 다르다.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 스케줄 선택
-:::
+```{python}
+#| label: parameterization
+#| code-fold: false
+
+import numpy as np
+
+print("세 파라미터화는 서로 변환된다")
+print()
+print("   x_t = √ᾱ·x₀ + √(1−ᾱ)·ε")
+print()
+print("   ε-예측:  ε̂        → x̂₀ = (x_t − √(1−ᾱ)·ε̂)/√ᾱ")
+print("   x₀-예측: x̂₀       → ε̂  = (x_t − √ᾱ·x̂₀)/√(1−ᾱ)")
+print("   v-예측:  v̂ = √ᾱ·ε − √(1−ᾱ)·x₀")
+print()
+print("차이는 **신경망 출력의 오차가 x̂₀ 오차로 얼마나 증폭되는가**다.")
+print()
+print(f"{'t/T':>7} {'√ᾱ':>9} {'ε 오차 → x₀ 오차 증폭':>22} "
+      f"{'x₀ 오차 → ε 오차 증폭':>22}")
+print("-" * 64)
+for f in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0]:
+    i = min(int(f*(T_-1)), T_-1)
+    sa, sb = np.sqrt(abar_[i]), np.sqrt(1-abar_[i])
+    print(f"{f:>7.3f} {sa:>9.5f} {sb/sa:>22.2f} {sa/sb:>22.4f}")
+print()
+print("**ε-예측은 큰 t 에서 위험하다.** √ᾱ 가 0 에 가까워 오차가 폭발한다.")
+i_last = T_-1
+print(f"  t=T 에서 ε 오차가 x₀ 오차로 "
+      f"{np.sqrt(1-abar_[i_last])/np.sqrt(abar_[i_last]):.0f}배 증폭된다.")
+print("**x₀-예측은 작은 t 에서 위험하다.** 반대 방향으로 같은 문제가 생긴다.")
+print()
+print("**v-예측(Salimans & Ho 2022)은 양쪽을 절충한다** —")
+print("SNR 이 높든 낮든 목표의 스케일이 일정하게 유지된다.")
+print("고해상도·증류·flow matching 에서 표준이 되었다.")
+print()
+print("실전 대응: **ε-예측을 쓰되 샘플링 때 x̂₀ 를 데이터 범위로 자른다.**")
+print("아래 G6.5.3 에서 이 클리핑이 없으면 무슨 일이 벌어지는지 직접 본다.")
+```
 
 ---
 
-## G6.5.4 — CFG 스케일
+## G6.5.1 — 잡음 스케줄: linear의 무엇이 문제인가
 
-조건 충실도와 다양성이 반대로 움직이는 지점
+```{python}
+#| label: schedules
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 가이던스 스케일 슬라이더
-:::
+import numpy as np
+from src.generative import make_schedule
+
+_, _, AB_LIN = make_schedule(T, "linear")
+_, _, AB_COS = make_schedule(T, "cosine")
+
+print("신호 대 잡음비  SNR(t) = ᾱ_t / (1 − ᾱ_t)")
+print()
+print(f"{'t/T':>7} {'linear ᾱ':>12} {'cosine ᾱ':>12} "
+      f"{'linear SNR(dB)':>16} {'cosine SNR(dB)':>16}")
+print("-" * 68)
+for f in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0]:
+    i = min(int(f*(T-1)), T-1)
+    print(f"{f:>7.2f} {AB_LIN[i]:>12.5f} {AB_COS[i]:>12.5f} "
+          f"{10*np.log10(AB_LIN[i]/(1-AB_LIN[i])):>16.2f} "
+          f"{10*np.log10(AB_COS[i]/(1-AB_COS[i])):>16.2f}")
+print()
+CROSS = {}
+for nm, ab in [("linear", AB_LIN), ("cosine", AB_COS)]:
+    t_snr1 = int(np.argmax(ab/(1-ab) < 1.0))/T
+    t_dead = int(np.argmax(ab < 0.01))/T
+    CROSS[nm] = (t_snr1, t_dead)
+    print(f"  {nm:<8} SNR=1 통과 t/T={t_snr1:.2f},  "
+          f"ᾱ<0.01 (사실상 순수 잡음) t/T={t_dead:.2f}")
+print()
+print(f"**linear 스케줄은 전체 구간의 "
+      f"{1-CROSS['linear'][1]:.0%} 를 낭비한다.**")
+print(f"t/T={CROSS['linear'][1]:.2f} 이후로는 이미 순수 잡음이라 "
+      f"신경망이 배울 것이 없다.")
+print(f"cosine 은 그 지점이 t/T={CROSS['cosine'][1]:.2f} 라 "
+      f"낭비가 {1-CROSS['cosine'][1]:.0%} 뿐이다.")
+print()
+print("**이 문제는 해상도가 높을수록 심해진다.**")
+print("인접 픽셀의 상관이 강할수록 같은 양의 잡음이 정보를 덜 파괴하기 때문이다.")
+print("32×32 에 맞춘 linear 스케줄을 256×256 에 쓰면 훨씬 더 많은 구간이 낭비된다.")
+print("Nichol & Dhariwal(2021)이 cosine 을 제안한 이유가 이것이고,")
+print("고해상도 모델이 **잡음 스케줄을 해상도에 따라 이동(shift)** 시키는 이유이기도 하다.")
+```
+
+```{python}
+#| label: fig-schedule
+#| fig-cap: "잡음 스케줄에 따른 SNR 곡선과 실제 파괴 과정"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src.generative import ring_modes
+from src import viz
+
+CEN = ring_modes(8, 3.0)
+rr0 = np.random.default_rng(3)
+X_RING = CEN[rr0.integers(0, 8, 4000)] + rr0.normal(0, 0.2, (4000, 2))
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.30, 0.30, 0.40],
+                    subplot_titles=("ᾱ_t (남은 신호)", "SNR (dB)",
+                                    "t 에 따른 데이터 파괴 (cosine)"))
+tt = np.arange(T)/T
+for nm, ab, c in [("linear", AB_LIN, viz.WARM), ("cosine", AB_COS, viz.ACCENT)]:
+    fig.add_trace(go.Scatter(x=tt, y=np.round(ab, 5), mode="lines", name=nm,
+                             line=dict(color=c, width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=tt, y=np.round(10*np.log10(ab/(1-ab)), 2),
+                             mode="lines", name=nm, showlegend=False,
+                             line=dict(color=c, width=2.5)), row=1, col=2)
+fig.add_hline(y=0, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text="SNR = 1", row=1, col=2)
+
+steps_s = []
+SHOW_T = [0, 20, 50, 100, 150, 199]
+rn = np.random.default_rng(1)
+for si, t_ in enumerate(SHOW_T):
+    xt = (np.sqrt(AB_COS[t_])*X_RING[:1500]
+          + np.sqrt(1-AB_COS[t_])*rn.normal(size=(1500, 2)))
+    fig.add_trace(go.Scatter(x=np.round(xt[:, 0], 2), y=np.round(xt[:, 1], 2),
+                             mode="markers", name="x_t", visible=(si == 0),
+                             showlegend=False,
+                             marker=dict(size=3,
+                                         color=viz.hex_rgba(viz.GREEN, 0.45))),
+                  row=1, col=3)
+for si, t_ in enumerate(SHOW_T):
+    vis = [True]*4 + [False]*len(SHOW_T)
+    vis[4+si] = True
+    steps_s.append((f"{t_}", {"visible": vis}))
+
+fig.update_xaxes(title_text="t / T", row=1, col=1)
+fig.update_xaxes(title_text="t / T", row=1, col=2)
+fig.update_yaxes(title_text="ᾱ_t", row=1, col=1)
+fig.update_yaxes(title_text="dB", row=1, col=2)
+fig.update_xaxes(range=[-5, 5], row=1, col=3)
+fig.update_yaxes(range=[-5, 5], scaleanchor="x3", row=1, col=3)
+fig.update_layout(sliders=[viz.slider(steps_s, prefix="타임스텝 t = ", pad_t=45)])
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
 
 ---
 
-## 핵심 용어
+## G6.5.2 — 학습: 위상의 벽을 넘는다
 
-| 용어 | 비고 |
+[6.4](04_normalizing_flows.qmd)에서 정규화 흐름은 8-모드 링의
+**한가운데 구멍을 만들지 못했다** — 참 밀도보다 $10^{38}$ 배 큰 값을 배정했다.
+같은 데이터로 확산 모델을 학습한다.
+
+```{python}
+#| label: diffusion-train
+#| code-fold: false
+
+import numpy as np
+from src.generative import Diffusion, ring_modes, mode_stats
+
+CEN = ring_modes(8, 3.0)
+rr = np.random.default_rng(3)
+X_R = CEN[rr.integers(0, 8, 4000)] + rr.normal(0, 0.2, (4000, 2))
+S_real = CEN[rr.integers(0, 8, 3000)] + rr.normal(0, 0.2, (3000, 2))
+COV_R, ENT_R, NEAR_R = mode_stats(S_real, CEN)
+HOLE_R = float(np.mean(np.sqrt((S_real**2).sum(1)) < 1.5))
+
+DM = Diffusion(2, T=200, schedule="cosine", hidden=128, seed=0)
+DM.fit(X_R, steps=6000, lr=2e-3, batch=256, seed=0)
+
+S_dm = DM.sample(3000, seed=7)
+
+# 같은 데이터로 6.4 의 흐름도 학습해 지표를 맞춘다
+from src.generative import RealNVP
+FLOW_R = RealNVP(2, n_layers=20, hidden=48, seed=4).fit(
+    X_R, steps=4000, lr=7e-4, seed=4, batch=512)
+S_fl = FLOW_R.sample(3000, seed=5)
+
+
+def report(S):
+    c_, e_, n_ = mode_stats(S, CEN)
+    rad = np.sqrt((S**2).sum(1))
+    return c_, e_, n_, float(np.mean(rad < 1.5)), float(rad.min())
+
+
+print(f"{'':<24} {'커버':>6} {'균형도':>8} {'모드 근처':>10} "
+      f"{'링 안쪽 r<1.5':>14} {'최소 반경':>10}")
+print("-" * 78)
+for nm, S in [("실제 데이터", S_real), ("확산 (DDPM 200스텝)", S_dm),
+              ("정규화 흐름 (6.4, 20층)", S_fl)]:
+    c_, e_, n_, h_, rmin = report(S)
+    print(f"{nm:<24} {c_:>3}/8 {e_:>8.2f} {n_:>10.1%} {h_:>14.2%} "
+          f"{rmin:>10.3f}")
+_, _, _, hole_d, rmin_d = report(S_dm)
+_, _, _, hole_f, rmin_f = report(S_fl)
+print()
+print(f"**확산은 링 안쪽에 샘플을 {hole_d:.2%} 둔다 — "
+      f"실제 데이터 {HOLE_R:.2%} 와 같다.**")
+print(f"흐름은 {hole_f:.2%} 를 둔다. 최소 반경도 "
+      f"실제 {np.sqrt((S_real**2).sum(1)).min():.2f} / 확산 {rmin_d:.2f} 대비 "
+      f"흐름은 {rmin_f:.2f} 로 중심까지 파고든다.")
+print()
+print("흐름이 못 한 일을 확산이 하는 이유는 구조적이다:")
+print("  · 흐름  — x = f⁻¹(z) 는 **결정론적 사상**이다. 연결된 z 공간의 상은 연결되어 있다.")
+print("  · 확산  — 매 단계 **새 잡음을 더한다.** 사상이 아니라 확률 과정이다.")
+print("            같은 x_T 에서 출발해도 매번 다른 모드에 도착할 수 있다.")
+print()
+print("바로 그 확률성이 위상 제약을 없앤다.")
+print("(6.6 의 확률 흐름 ODE 는 확산을 결정론적으로 다시 쓰는데,")
+print(" 그러면 제약이 돌아오지만 — 시간에 따라 변하는 속도장이라 훨씬 유연하다.)")
+```
+
+```{python}
+#| label: fig-reverse
+#| fig-cap: "순수 잡음에서 8개 모드가 드러나는 역방향 궤적"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+_, PATH = DM.sample(1200, seed=13, return_path=True)
+IDX = [0, 40, 80, 120, 160, 185, 200]
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
+                    subplot_titles=("역방향 샘플링", "샘플 20개의 궤적"))
+for si, i in enumerate(IDX):
+    P = PATH[i]
+    fig.add_trace(go.Scatter(x=np.round(P[:, 0], 2), y=np.round(P[:, 1], 2),
+                             mode="markers", name="x_t", visible=(si == 0),
+                             showlegend=False,
+                             marker=dict(size=3,
+                                         color=viz.hex_rgba(viz.ACCENT, 0.5))),
+                  row=1, col=1)
+fig.add_trace(go.Scatter(x=X_R[::6, 0], y=X_R[::6, 1], mode="markers",
+                         name="실제", showlegend=False,
+                         marker=dict(size=3,
+                                     color=viz.hex_rgba(viz.GREEN, 0.3))),
+              row=1, col=1)
+for j in range(20):
+    tr = PATH[::4, j]
+    fig.add_trace(go.Scatter(x=np.round(tr[:, 0], 2), y=np.round(tr[:, 1], 2),
+                             mode="lines", showlegend=False,
+                             line=dict(color=viz.hex_rgba(viz.WARM, 0.55),
+                                       width=1.2)), row=1, col=2)
+fig.add_trace(go.Scatter(x=CEN[:, 0], y=CEN[:, 1], mode="markers",
+                         showlegend=False,
+                         marker=dict(size=9, color=viz.GREEN, symbol="x")),
+              row=1, col=2)
+
+steps_r = []
+for si, i in enumerate(IDX):
+    vis = [False]*len(IDX) + [True] + [True]*21
+    vis[si] = True
+    steps_r.append((str(T - i), {"visible": vis}))
+for c in (1, 2):
+    fig.update_xaxes(range=[-5, 5], row=1, col=c)
+    fig.update_yaxes(range=[-5, 5], scaleanchor=f"x{c if c > 1 else ''}",
+                     row=1, col=c)
+fig.update_layout(sliders=[viz.slider(steps_r, prefix="남은 스텝 t = ", pad_t=45)])
+viz.fig_defaults(fig, height=430,
+                 title="슬라이더를 오른쪽으로 밀면 t=200(순수 잡음) → t=0(데이터)")
+fig.show()
+```
+
+---
+
+## G6.5.3 — 샘플링 스텝 수와 DDIM
+
+DDPM 샘플링은 $T$ 번의 신경망 호출이 필요하다. 줄일 수 있을까.
+
+**DDIM**(Song et al. 2020)은 같은 학습된 모델을 **결정론적으로** 되돌린다.
+
+$$x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,\hat{x}_0 + \sqrt{1-\bar\alpha_{t-1}}\,\hat\varepsilon$$
+
+잡음을 다시 더하지 않으므로 **타임스텝을 건너뛸 수 있다.**
+
+```{python}
+#| label: ddim
+#| code-fold: false
+
+import numpy as np
+from src.generative import mode_stats
+
+print("같은 학습된 모델, 다른 샘플러")
+print()
+print(f"{'샘플러':<14} {'신경망 호출':>12} {'커버':>7} {'균형도':>9} "
+      f"{'모드 근처':>10}")
+print("-" * 58)
+SAMP = []
+for meth, ns in [("ddpm", None), ("ddim", 200), ("ddim", 50), ("ddim", 20),
+                 ("ddim", 10), ("ddim", 5)]:
+    S = DM.sample(3000, seed=7, method=meth, n_steps=ns)
+    c_, e_, n_ = mode_stats(S, CEN)
+    calls = ns or DM.T
+    SAMP.append((meth, calls, c_, e_, n_))
+    print(f"{meth.upper():<14} {calls:>12} {c_:>4}/8 {e_:>9.2f} {n_:>10.1%}")
+print("-" * 58)
+print(f"{'실제 데이터':<14} {'—':>12} {COV_R:>4}/8 {ENT_R:>9.2f} {NEAR_R:>10.1%}")
+print()
+d200, d50, d10, d5 = SAMP[1], SAMP[2], SAMP[4], SAMP[5]
+print(f"**DDIM 은 {d200[1]}스텝({d200[3]:.2f})과 {d50[1]}스텝({d50[3]:.2f})의 "
+      f"차이가 거의 없다** — 4배 빠르다.")
+print(f"{d10[1]}스텝에서 균형도가 {d10[3]:.2f} 로 떨어지고, "
+      f"{d5[1]}스텝에서는 {d5[3]:.2f} 로 무너진다.")
+print("이 지점을 더 밀어내는 것이 6.8 의 증류·일관성 모델이다.")
+```
+
+### 그런데 여기 함정이 하나 있다
+
+```{python}
+#| label: ddim-clip
+#| code-fold: false
+
+import numpy as np
+from src.generative import mode_stats
+
+print("x̂₀ 를 데이터 범위로 자르지 않으면 어떻게 되는가")
+print()
+print(f"{'샘플러':<16} {'클리핑':>8} {'커버':>7} {'균형도':>9} {'모드 근처':>10} "
+      f"{'평균 반경':>10}")
+print("-" * 66)
+for meth, ns in [("ddpm", None), ("ddim", 50)]:
+    for cl in [4.0, None]:
+        S = DM.sample(3000, seed=7, method=meth, n_steps=ns, clip=cl)
+        c_, e_, n_ = mode_stats(S, CEN)
+        print(f"{meth.upper()+' '+str(ns or DM.T):<16} "
+              f"{('있음' if cl else '없음'):>8} {c_:>4}/8 {e_:>9.2f} "
+              f"{n_:>10.1%} {np.sqrt((S**2).sum(1)).mean():>10.2f}")
+print("-" * 66)
+print(f"{'실제 데이터':<16} {'':>8} {COV_R:>4}/8 {ENT_R:>9.2f} {NEAR_R:>10.1%} "
+      f"{np.sqrt((S_real**2).sum(1)).mean():>10.2f}")
+print()
+print("**DDPM 은 클리핑이 없어도 멀쩡한데 DDIM 은 무너진다.**")
+print()
+print("이유는 x̂₀ 의 정의에 있다:")
+print()
+print("   x̂₀ = (x_t − √(1−ᾱ_t)·ε̂) / √ᾱ_t")
+print()
+print(f"큰 t 에서 √ᾱ_t 는 {np.sqrt(abar[-1]):.2e} 다. "
+      f"ε̂ 의 오차가 **{1/np.sqrt(abar[-1]):.0e}배 증폭**된다.")
+print("  · DDPM — 매 단계 새 잡음을 더하므로 오차가 씻겨 나간다. 자기 교정이 된다.")
+print("  · DDIM — 결정론적이라 오차가 **누적된다.** 샘플이 바깥으로 밀려난다.")
+print()
+print("**모든 실전 구현이 x̂₀ 를 자르는 이유가 이것이다.**")
+print("Imagen 의 '동적 임계처리(dynamic thresholding)'는 이 클리핑의 정교한 판본이고,")
+print("v-예측이 선호되는 이유도 같다 — 애초에 증폭이 생기지 않게 만든다.")
+print()
+print("이 함정은 논문 본문에는 잘 안 나오고 코드에만 있다.")
+print("**직접 돌려보지 않으면 만날 수 없는 종류의 지식이다.**")
+```
+
+---
+
+## G6.5.4 — 조건부 생성과 분류자 없는 가이던스
+
+조건 $c$ 를 넣어 학습하되, 확률 $p$ 로 조건을 버려 **무조건부 모델도 함께** 학습한다.
+샘플링 때 두 예측의 차이를 증폭한다.
+
+$$\tilde\varepsilon = \varepsilon_\theta(x_t, \varnothing) + w\big[\varepsilon_\theta(x_t, c) - \varepsilon_\theta(x_t, \varnothing)\big]$$
+
+```{python}
+#| label: cfg
+#| code-fold: false
+
+import numpy as np
+from src.generative import Diffusion
+
+Y = (((np.arctan2(X_R[:, 1], X_R[:, 0]) % (2*np.pi))/(2*np.pi)*8)
+     .round().astype(int) % 8)
+DMC = Diffusion(2, T=200, schedule="cosine", hidden=128, n_class=8, seed=1)
+DMC.fit(X_R, y=Y, steps=6000, lr=2e-3, batch=256, seed=1, p_uncond=0.1)
+
+TARGET = 3
+tgt = np.full(2000, TARGET)
+real_var = float((CEN[TARGET] + rr.normal(0, 0.2, (2000, 2))).var(0).sum())
+
+print(f"조건: '모드 {TARGET} 을 생성하라' (2000 샘플)")
+print()
+print(f"{'w':>6} {'목표 모드 적중':>14} {'샘플 분산':>12} "
+      f"{'실제 분산 대비':>15} {'목표까지 거리':>14}")
+print("-" * 66)
+CFG = []
+for w in [0.0, 1.0, 2.0, 4.0, 8.0]:
+    S = DMC.sample(2000, seed=11, c=tgt, w=w)
+    hit = float((((S[:, None, :]-CEN[None])**2).sum(-1).argmin(1) == TARGET).mean())
+    var = float(S.var(0).sum())
+    dist = float(np.sqrt(((S - CEN[TARGET])**2).sum(1)).mean())
+    CFG.append((w, hit, var, dist))
+    print(f"{w:>6.1f} {hit:>14.1%} {var:>12.4f} {var/real_var:>14.2f}배 "
+          f"{dist:>14.4f}")
+print("-" * 66)
+print(f"{'실제':>6} {'100.0%':>14} {real_var:>12.4f} {1.0:>14.2f}배 "
+      f"{np.sqrt(((CEN[TARGET]+rr.normal(0,0.2,(2000,2))-CEN[TARGET])**2).sum(1)).mean():>14.4f}")
+print()
+print(f"**w=0 (무조건부): 적중률 {CFG[0][1]:.1%}, 분산 {CFG[0][2]/real_var:.0f}배** — "
+      f"8개 모드에 고루 퍼진다 (우연 수준 12.5%). 조건이 무시된다.")
+print(f"**w=1 (순수 조건부): 적중률 {CFG[1][1]:.1%}, "
+      f"분산이 실제의 {CFG[1][2]/real_var:.2f}배** — 거의 정확하다.")
+print(f"**w=2~4: 적중은 유지되는데 분산이 {CFG[2][2]/real_var:.2f}배, "
+      f"{CFG[3][2]/real_var:.2f}배로 줄어든다** — 다양성 손실이다.")
+print(f"**w=8: 분산이 실제의 {CFG[4][2]/real_var:.2f}배까지 줄어드는데")
+print(f"   목표까지의 거리는 오히려 {CFG[1][3]:.3f} → {CFG[4][3]:.3f} 로 늘어난다.**")
+print("   좁아지면서 동시에 중심에서 밀려난다 — 분포가 왜곡되고 있다는 신호다.")
+print(f"   (여기서 완전히 폭발하지 않는 것은 x̂₀ 클리핑 덕이다. "
+      f"끄면 훨씬 심해진다.)")
+print()
+print("**이것이 CFG 스케일의 정체다.**")
+print("  · w 를 키우면 조건부와 무조건부의 차이를 증폭한다")
+print("  · 조건 충실도는 오르고 **분포의 폭은 좁아진다**")
+print("  · 너무 키우면 분포 밖으로 밀려나 아티팩트가 생긴다")
+print("    (이미지에서는 채도 과포화로 나타난다)")
+print()
+print("실전 기본값이 7.5 근처인 것은 **품질을 위해 다양성을 파는 선택**이다.")
+print("6.0 의 삼중고, 6.3 의 절단 트릭과 같은 손잡이다.")
+```
+
+```{python}
+#| label: fig-cfg
+#| fig-cap: "가이던스 스케일에 따른 조건 충실도와 다양성"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
+                    subplot_titles=(f"조건 = 모드 {TARGET} 생성",
+                                    "충실도 vs 다양성"),
+                    specs=[[{"type": "xy"}, {"secondary_y": True}]])
+WS = [c[0] for c in CFG]
+for wi, w in enumerate(WS):
+    S = DMC.sample(1200, seed=11, c=np.full(1200, TARGET), w=w)
+    fig.add_trace(go.Scatter(x=np.round(S[:, 0], 2), y=np.round(S[:, 1], 2),
+                             mode="markers", name="생성", visible=(wi == 1),
+                             showlegend=False,
+                             marker=dict(size=3,
+                                         color=viz.hex_rgba(viz.ACCENT, 0.5))),
+                  row=1, col=1)
+fig.add_trace(go.Scatter(x=X_R[::6, 0], y=X_R[::6, 1], mode="markers",
+                         showlegend=False,
+                         marker=dict(size=3,
+                                     color=viz.hex_rgba(viz.GREEN, 0.28))),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=[CEN[TARGET, 0]], y=[CEN[TARGET, 1]], mode="markers",
+                         showlegend=False,
+                         marker=dict(size=13, color=viz.YELLOW, symbol="star")),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=WS, y=[c[1] for c in CFG], mode="lines+markers",
+                         name="목표 적중률",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+fig.add_trace(go.Scatter(x=WS, y=[c[2]/real_var for c in CFG],
+                         mode="lines+markers", name="분산 (실제 대비)",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=9)), row=1, col=2,
+              secondary_y=True)
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dot"),
+              row=1, col=2, secondary_y=True)
+steps_c = []
+for wi, w in enumerate(WS):
+    vis = [False]*len(WS) + [True]*4
+    vis[wi] = True
+    steps_c.append((str(w), {"visible": vis}))
+fig.update_xaxes(range=[-5, 5], row=1, col=1)
+fig.update_yaxes(range=[-5, 5], scaleanchor="x", row=1, col=1)
+fig.update_xaxes(title_text="가이던스 스케일 w", row=1, col=2)
+fig.update_yaxes(title_text="적중률", tickformat=".0%", row=1, col=2)
+fig.update_yaxes(title_text="분산 (실제 = 1)", row=1, col=2, secondary_y=True)
+fig.update_layout(sliders=[viz.slider(steps_c, prefix="가이던스 w = ",
+                                      active=1, pad_t=45)])
+viz.fig_defaults(fig, height=420, title="")
+fig.show()
+```
+
+---
+
+## 실전 구조
+
+```{python}
+#| label: practice
+#| code-fold: false
+
+rows = [
+    ("백본", "U-Net (다운→업 + 스킵)",
+     "SD 1.5/2.1, DDPM 원본. 해상도 계층이 자연스럽다"),
+    ("백본 (신형)", "DiT — Transformer",
+     "패치화 후 어텐션. **스케일링이 더 잘 된다** (SD3, Sora)"),
+    ("시간 조건", "사인 임베딩 → MLP → 각 블록에 스케일/시프트",
+     "AdaLN-Zero 가 표준"),
+    ("텍스트 조건", "CLIP/T5 인코더 → 크로스 어텐션",
+     "6.7 에서 자세히"),
+    ("어텐션 배치", "저해상도 층에만 (16×16, 8×8)",
+     "고해상도에 넣으면 O(N²) 이 폭발"),
+    ("EMA", "가중치 이동평균 (decay 0.9999)",
+     "**거의 필수** — 없으면 샘플 품질이 눈에 띄게 나쁘다"),
+    ("잡음 스케줄", "cosine / 해상도 이동(shift)",
+     "고해상도일수록 잡음을 더 넣어야 한다"),
+    ("파라미터화", "ε (기본) / v (고해상도·증류)",
+     "v 는 SNR 전 구간에서 스케일이 일정"),
+]
+print(f"{'요소':<16} {'표준 선택':<40} {'비고'}")
+print("-" * 106)
+for r_ in rows:
+    print(f"{r_[0]:<16} {r_[1]:<40} {r_[2]}")
+print()
+print("**학습 루프는 놀랍도록 짧다.**")
+print()
+print("   x0 = batch")
+print("   t  = randint(0, T)")
+print("   ε  = randn_like(x0)")
+print("   xt = sqrt(abar[t])*x0 + sqrt(1-abar[t])*ε")
+print("   loss = mse(model(xt, t), ε)")
+print()
+print("다섯 줄이다. GAN 의 미니맥스 균형도, VAE 의 KL 균형도 없다.")
+print("**손실이 그냥 내려가고, 내려가면 좋아진다.**")
+print("확산 모델이 이긴 가장 큰 이유가 이 안정성이다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| DDPM |  |
-| 전방/역방향 과정 |  |
-| ε-예측 |  |
-| 잡음 스케줄 |  |
-| 분류자 없는 가이던스 (CFG) |  |
+| 전방 과정 | $x_t = \sqrt{\bar\alpha_t}x_0 + \sqrt{1-\bar\alpha_t}\varepsilon$ — 한 줄로 임의의 $t$ |
+| 왜 필수인가 | 없으면 학습 스텝당 비용이 $T/2$ 배 |
+| 역방향 | $\beta_t$ 가 작으면 역방향도 가우스 → 신경망으로 근사 |
+| VLB | $T$단계 계층적 VAE 의 ELBO |
+| $L_{\text{simple}}$ | VLB 가중치를 전부 1로. 우도↓ 샘플 품질↑ |
+| 가중치 차이 | VLB 가중치는 U자형 — 중간 구간이 작은 t 보다 47배, 큰 t 보다 31547배 가볍다 |
+| 파라미터화 | ε / x₀ / v — 대수적 동치, 오차 증폭 특성이 다름 |
+| 잡음 스케줄 | linear 는 뒤쪽 1/3 을 낭비 (t/T=0.67 부터 순수 잡음) |
+| cosine | 낭비 구간이 6% 로 줄어든다 |
+| **위상의 벽 돌파** | 링 안쪽 샘플 비율이 실제 데이터와 일치 — 흐름은 못 했다 |
+| 이유 | 매 단계 새 잡음 → 결정론적 사상이 아니다 |
+| DDIM | 결정론적, 스텝 건너뛰기 가능. 50스텝 ≈ 200스텝 |
+| **DDIM 의 함정** | x̂₀ 클리핑이 없으면 무너진다 (모드 근처 92% → 3%) |
+| 이유 | $1/\sqrt{\bar\alpha_t}$ 증폭이 결정론적 경로에 누적된다 |
+| CFG | $\tilde\varepsilon = \varepsilon_\varnothing + w(\varepsilon_c - \varepsilon_\varnothing)$ |
+| CFG 의 대가 | w=1 에서 분산이 실제와 일치, w=4 에서 1/3, w=8 에서 붕괴 |
+| 학습 루프 | 다섯 줄. 균형도 게임도 없다 — **이것이 이긴 이유** |
+
+확산을 이산 마르코프 사슬로 봤다.
+다음 장은 이것을 **연속 시간**으로 다시 쓴다.
+그러면 DDIM, 고급 샘플러, 정확한 우도 계산이 전부 하나의 언어로 통일된다.
 
 ---
 
-**다음**: [6.6 스코어 기반 관점과 SDE](06_score_sde.qmd) — 스코어 매칭·확률미분방정식·DDIM — 확산을 연속으로 보기
+**다음**: [6.6 스코어 기반 관점과 SDE](06_score_sde.qmd) — 확산을 연속으로 보기
 
 **이전**: [6.4 정규화 흐름](04_normalizing_flows.qmd)

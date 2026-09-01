@@ -7,7 +7,8 @@ import numpy as np
 
 __all__ = ["VAE", "vae_grad_check", "blobs64", "sharpness",
            "Net", "gan_step", "sigmoid", "ring_modes", "mode_stats",
-           "Coupling", "RealNVP"]
+           "Coupling", "RealNVP", "Diffusion", "make_schedule",
+           "time_embedding"]
 
 
 def _init(rng, fan_in, fan_out, gain=1.0):
@@ -433,3 +434,142 @@ class RealNVP:
     def sample(self, n, seed=0):
         z = np.random.default_rng(seed).normal(size=(n, self.d))
         return self.inverse(z)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 확산 모델 — DDPM / DDIM (6.5, 6.6)
+# ══════════════════════════════════════════════════════════════════
+
+def time_embedding(t, dim=16, T=1000):
+    """사인·코사인 시간 임베딩. t 는 (n,) 정수 배열."""
+    half = dim//2
+    freqs = np.exp(-np.log(10000.0)*np.arange(half)/half)
+    ang = (t[:, None]/T)*1000.0*freqs[None]
+    return np.concatenate([np.sin(ang), np.cos(ang)], 1)
+
+
+def make_schedule(T=200, kind="linear", s=0.008):
+    """베타 스케줄 → (betas, alphas, alpha_bars)."""
+    if kind == "linear":
+        betas = np.linspace(1e-4, 0.02, T)*(1000.0/T)
+        betas = np.clip(betas, 1e-8, 0.999)
+    elif kind == "cosine":                       # Nichol & Dhariwal 2021
+        ts = np.linspace(0, 1, T+1)
+        f = np.cos((ts + s)/(1 + s)*np.pi/2)**2
+        ab = f/f[0]
+        betas = np.clip(1 - ab[1:]/ab[:-1], 1e-8, 0.999)
+    elif kind == "quadratic":
+        betas = np.linspace(1e-4**0.5, 0.02**0.5, T)**2*(1000.0/T)
+        betas = np.clip(betas, 1e-8, 0.999)
+    else:
+        raise ValueError(kind)
+    alphas = 1 - betas
+    return betas, alphas, np.cumprod(alphas)
+
+
+class Diffusion:
+    """2D 데이터용 DDPM. ε-예측 신경망을 직접 학습한다.
+
+    입력: [x (d), 시간 임베딩 (t_dim), 조건 원-핫 (n_class+1)]
+    출력: ε̂ (d)
+    """
+
+    def __init__(self, d=2, T=200, schedule="cosine", hidden=128,
+                 t_dim=16, n_class=0, seed=0):
+        self.d, self.T, self.t_dim, self.n_class = d, T, t_dim, n_class
+        self.betas, self.alphas, self.abar = make_schedule(T, schedule)
+        in_dim = d + t_dim + (n_class + 1 if n_class else 0)
+        self.net = Net([in_dim, hidden, hidden, hidden, d], seed=seed)
+
+    def _inp(self, x, t, c=None):
+        parts = [x, time_embedding(t, self.t_dim, self.T)]
+        if self.n_class:
+            oh = np.zeros((len(x), self.n_class + 1))
+            if c is None:                        # 무조건부 = 마지막 슬롯
+                oh[:, -1] = 1.0
+            else:
+                oh[np.arange(len(x)), c] = 1.0
+            parts.append(oh)
+        return np.concatenate(parts, 1)
+
+    def eps(self, x, t, c=None):
+        return self.net.forward(self._inp(x, t, c))[0]
+
+    def q_sample(self, x0, t, noise):
+        a = self.abar[t][:, None]
+        return np.sqrt(a)*x0 + np.sqrt(1 - a)*noise
+
+    def fit(self, X, y=None, steps=6000, lr=2e-3, batch=256, seed=0,
+            p_uncond=0.1, track=0):
+        from src.nn import Optimizer
+        opt = Optimizer("adam", lr=lr)
+        r = np.random.default_rng(seed)
+        hist = []
+        for s in range(steps):
+            idx = r.choice(len(X), batch, replace=False)
+            x0 = X[idx]
+            t = r.integers(0, self.T, batch)
+            noise = r.normal(size=x0.shape)
+            xt = self.q_sample(x0, t, noise)
+            c = None
+            if self.n_class and y is not None:
+                c = y[idx].copy()
+                drop = r.random(batch) < p_uncond
+                inp = self._inp(xt, t, c)
+                oh = inp[:, -(self.n_class+1):]
+                oh[drop] = 0.0
+                oh[drop, -1] = 1.0
+            else:
+                inp = self._inp(xt, t, c)
+            out, cache = self.net.forward(inp)
+            L = float(((out - noise)**2).mean())
+            g, _ = self.net.backward(cache, 2*(out - noise)/(batch*self.d))
+            opt.step(self.net.p, g)
+            if track and s % track == 0:
+                hist.append((s, L))
+        self.hist = hist
+        return self
+
+    def _guided_eps(self, x, t, c, w):
+        if c is None or w == 1.0:
+            return self.eps(x, t, c)
+        e_c = self.eps(x, t, c)
+        e_u = self.eps(x, t, None)
+        return e_u + w*(e_c - e_u)
+
+    def sample(self, n, seed=0, c=None, w=1.0, method="ddpm", n_steps=None,
+               return_path=False, clip=4.0):
+        """clip: x̂₀ 예측을 [−clip, clip] 로 자른다 (None 이면 자르지 않음).
+
+        결정론적 샘플러(DDIM)에서는 이 클리핑이 사실상 필수다 —
+        x̂₀ = (x_t − √(1−ᾱ)ε̂)/√ᾱ 의 오차가 1/√ᾱ 배로 증폭되기 때문이다.
+        """
+        r = np.random.default_rng(seed)
+        x = r.normal(size=(n, self.d))
+        ts = (np.arange(self.T)[::-1] if n_steps is None else
+              np.linspace(self.T-1, 0, n_steps).round().astype(int))
+        path = [x.copy()]
+        for i, t in enumerate(ts):
+            tt = np.full(n, t)
+            e = self._guided_eps(x, tt, c, w)
+            ab = self.abar[t]
+            x0h = (x - np.sqrt(1-ab)*e)/np.sqrt(ab)
+            if clip is not None:
+                x0h = np.clip(x0h, -clip, clip)
+                e = (x - np.sqrt(ab)*x0h)/np.sqrt(1-ab)   # ε̂ 도 일관되게 갱신
+            t_prev = ts[i+1] if i+1 < len(ts) else -1
+            ab_prev = self.abar[t_prev] if t_prev >= 0 else 1.0
+            if method == "ddim":
+                x = np.sqrt(ab_prev)*x0h + np.sqrt(1-ab_prev)*e
+            else:
+                beta = 1 - ab/ab_prev if t_prev >= 0 else 1 - ab
+                mean = (np.sqrt(ab_prev)*(1-ab/ab_prev)*x0h
+                        + np.sqrt(ab/ab_prev)*(1-ab_prev)*x)/(1-ab)
+                if t_prev >= 0:
+                    sig = np.sqrt(beta*(1-ab_prev)/(1-ab))
+                    x = mean + sig*r.normal(size=x.shape)
+                else:
+                    x = x0h
+            if return_path:
+                path.append(x.copy())
+        return (x, np.array(path)) if return_path else x
