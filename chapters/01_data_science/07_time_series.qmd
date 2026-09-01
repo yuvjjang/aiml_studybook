@@ -4,89 +4,634 @@ subtitle: "정상성·ARIMA·예측 검증 — 시간이 붙은 데이터의 규
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+시간 데이터는 **i.i.d. 가정을 깬다.**
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그리고 그 결과는 두 가지 방향으로 나타난다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+1. **없는 관계가 보인다** — 독립인 두 시계열의 상관이 83% 확률로 "유의"하다
+2. **없는 성능이 보인다** — 무작위 교차검증이 오차를 최대 71% 과소평가한다
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+둘 다 이 장에서 직접 잰다.
+
+[1.3](03_preprocessing.qmd)의 누수 규칙과 [1.5](05_experiment_design.qmd)의
+"기각 못 함 ≠ 참"이 시간축에서 어떻게 다시 나타나는지가 이 장의 줄거리다.
+
+---
+
+## G1.7.1 — 가짜 회귀: 추세가 만드는 상관
+
+```{python}
+#| label: fig-spurious
+#| fig-cap: "독립인 두 무작위 걷기가 강한 상관을 보입니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy import stats
+from src import viz
+
+rng = np.random.default_rng(0)
+T_S, N_SIM = 200, 1000
+
+lv_r, df_r = [], []
+sig_lv = sig_df = 0
+for _ in range(N_SIM):
+    a = np.cumsum(rng.normal(0, 1, T_S))
+    b = np.cumsum(rng.normal(0, 1, T_S))          # 완전히 독립
+    r1 = stats.pearsonr(a, b)
+    r2 = stats.pearsonr(np.diff(a), np.diff(b))
+    lv_r.append(r1.statistic); df_r.append(r2.statistic)
+    sig_lv += r1.pvalue < 0.05
+    sig_df += r2.pvalue < 0.05
+
+# 예시 하나
+ea = np.cumsum(rng.normal(0, 1, T_S))
+eb = np.cumsum(rng.normal(0, 1, T_S))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=(
+                        f"독립인 두 무작위 걷기 (r = {np.corrcoef(ea, eb)[0,1]:+.3f})",
+                        "상관계수 분포 (1,000회)"))
+fig.add_trace(go.Scatter(y=ea, mode="lines", name="계열 A",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(y=eb, mode="lines", name="계열 B",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=1)
+fig.add_trace(go.Histogram(x=lv_r, nbinsx=50, name="수준 상관",
+                           marker_color=viz.WARM, opacity=0.7), row=1, col=2)
+fig.add_trace(go.Histogram(x=df_r, nbinsx=50, name="차분 상관",
+                           marker_color=viz.ACCENT, opacity=0.7), row=1, col=2)
+fig.update_layout(barmode="overlay")
+fig.update_xaxes(title_text="시점", row=1, col=1)
+fig.update_xaxes(title_text="상관계수", range=[-1, 1], row=1, col=2)
+viz.fig_defaults(fig, height=400,
+                 title="추세를 가진 계열은 관계가 없어도 상관이 크다")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: spurious-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"독립인 무작위 걷기 쌍 {N_SIM:,}개 (길이 {T_S})")
+print()
+print(f"{'':<14} {'|r| 평균':>10} {'|r| 최대':>10} {'p<0.05 비율':>13}")
+print("-" * 50)
+print(f"{'수준 상관':<14} {np.mean(np.abs(lv_r)):>10.4f} "
+      f"{np.max(np.abs(lv_r)):>10.4f} {sig_lv/N_SIM:>13.1%}")
+print(f"{'차분 상관':<14} {np.mean(np.abs(df_r)):>10.4f} "
+      f"{np.max(np.abs(df_r)):>10.4f} {sig_df/N_SIM:>13.1%}")
+print()
+print(f"**두 계열은 완전히 독립인데 수준 상관이 {sig_lv/N_SIM:.0%} 확률로 '유의'하다.**")
+print(f"명목 유의수준은 5% 인데 실제 거짓 양성률이 {sig_lv/N_SIM/0.05:.0f}배다.")
+print()
+print(f"차분하면 정확히 {sig_df/N_SIM:.1%} 로 돌아온다 — 설계대로다.")
+print()
+print("이유: 회귀의 표준오차 공식이 **관측치의 독립성**을 가정한다.")
+print("자기상관이 있으면 유효 표본 크기가 실제보다 훨씬 작은데,")
+print("공식은 n 을 그대로 쓰므로 표준오차를 과소평가한다 → p 값이 작아진다.")
+print()
+print("이것이 '아이스크림 판매량과 익사 사고', '나이지리아 인구와 미국 원유 수입' 같은")
+print("유명한 가짜 상관들의 정체다. 둘 다 시간에 따라 증가할 뿐이다.")
+print()
+print("대응:")
+for a, b in [("차분", "수준이 아니라 변화량을 본다 — 위 실험"),
+             ("공적분 검정", "두 계열이 **함께** 움직이는 균형 관계인지 확인"),
+             ("추세 항 포함", "회귀에 t 를 넣어 공통 추세를 흡수"),
+             ("Newey-West 표준오차", "자기상관을 반영해 표준오차를 보정"),
+             ("그레인저 인과", "시차를 넣어 예측력 개선 여부를 검정 (인과는 아님)")]:
+    print(f"  {a:<20} {b}")
+```
+
+---
+
+## 정상성: 왜 필요한가
+
+**정상(stationary)** 시계열은 평균·분산·자기공분산이 시간에 따라 변하지 않는다.
+대부분의 시계열 방법이 이 가정 위에 서 있다.
+
+```{python}
+#| label: stationarity
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+rng_s = np.random.default_rng(3)
+NS = 400
+t_ = np.arange(NS)
+
+SERIES = {
+    "백색잡음 (정상)":      rng_s.normal(0, 1, NS),
+    "AR(1) φ=0.7 (정상)":  None,
+    "추세 (비정상)":        0.02*t_ + rng_s.normal(0, 1, NS),
+    "무작위 걷기 (비정상)":   np.cumsum(rng_s.normal(0, 1, NS)),
+    "분산 변화 (비정상)":     rng_s.normal(0, 1, NS)*(1 + 3*t_/NS),
+}
+ar1 = np.zeros(NS)
+for i in range(1, NS):
+    ar1[i] = 0.7*ar1[i-1] + rng_s.normal(0, 1)
+SERIES["AR(1) φ=0.7 (정상)"] = ar1
+
+def half_stats(x):
+    h = len(x)//2
+    return x[:h].mean(), x[h:].mean(), x[:h].std(), x[h:].std()
+
+print("전반부와 후반부의 통계량 비교 — 정상이면 비슷해야 한다")
+print(f"{'계열':<22} {'전반 평균':>10} {'후반 평균':>10} {'전반 표준편차':>13} "
+      f"{'후반 표준편차':>13}  {'판정'}")
+print("-" * 88)
+for k, v in SERIES.items():
+    m1, m2, s1, s2 = half_stats(v)
+    dm = abs(m2-m1)/(v.std()+1e-12)
+    ds = abs(s2-s1)/(v.std()+1e-12)
+    verd = "정상으로 보임" if (dm < 0.3 and ds < 0.3) else "**비정상**"
+    print(f"{k:<22} {m1:>10.3f} {m2:>10.3f} {s1:>13.3f} {s2:>13.3f}  {verd}")
+print()
+print("**이 간단한 검사만으로도 비정상 계열이 드러난다.**")
+print("정식 검정은 ADF(단위근 있음이 귀무), KPSS(정상이 귀무)를 함께 쓴다 —")
+print("두 검정의 귀무가설이 반대라서 교차 확인이 된다.")
+print()
+print(f"{'ADF':<8} {'KPSS':<8} {'결론'}")
+print("-" * 46)
+for a, b, c in [("기각", "기각 못함", "정상"),
+                ("기각 못함", "기각", "비정상 (단위근)"),
+                ("기각", "기각", "추세 정상일 수 있음"),
+                ("기각 못함", "기각 못함", "**정보 부족** — 표본이 짧음")]:
+    print(f"{a:<8} {b:<8} {c}")
+print()
+print("차분이 만능은 아니다:")
+for s in ["과차분(over-differencing)은 인위적 MA 구조를 만든다",
+          "분산이 변하는 비정상은 차분으로 안 고쳐진다 → 로그 변환이나 GARCH",
+          "계절성은 계절 차분(lag=s)이 따로 필요하다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G1.7.2 — ACF와 PACF로 차수 읽기
+
+```{python}
+#| label: fig-acf-pacf
+#| fig-cap: "생성 과정에 따라 ACF·PACF가 잘리는 위치가 다릅니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def acf(x, k):
+    x = x - x.mean()
+    return np.array([1.0] + [np.sum(x[l:]*x[:-l])/np.sum(x*x)
+                             for l in range(1, k+1)])
+
+def pacf(x, k):
+    """Durbin-Levinson 재귀"""
+    r = acf(x, k)
+    phi = np.zeros((k+1, k+1))
+    out = [1.0, r[1]]
+    phi[1, 1] = r[1]
+    for m in range(2, k+1):
+        num = r[m] - sum(phi[m-1, j]*r[m-j] for j in range(1, m))
+        den = 1 - sum(phi[m-1, j]*r[j] for j in range(1, m))
+        phi[m, m] = num/den if abs(den) > 1e-12 else 0.0
+        for j in range(1, m):
+            phi[m, j] = phi[m-1, j] - phi[m, m]*phi[m-1, m-j]
+        out.append(phi[m, m])
+    return np.array(out)
+
+T_A, K_A = 2000, 12
+rng_a = np.random.default_rng(1)
+e = rng_a.normal(0, 1, T_A+10)
+ar2 = np.zeros(T_A)
+for t in range(2, T_A):
+    ar2[t] = 0.6*ar2[t-1] - 0.3*ar2[t-2] + e[t]
+ma2 = e[2:T_A+2] + 0.7*e[1:T_A+1] + 0.4*e[0:T_A]
+arma = np.zeros(T_A)
+for t in range(1, T_A):
+    arma[t] = 0.7*arma[t-1] + e[t+1] + 0.5*e[t]
+
+PROC = {"AR(2)": ar2, "MA(2)": ma2, "ARMA(1,1)": arma}
+BOUND = 1.96/np.sqrt(T_A)
+
+fig = make_subplots(rows=2, cols=3, subplot_titles=tuple(
+    [f"{k} — ACF" for k in PROC] + [f"{k} — PACF" for k in PROC]),
+    vertical_spacing=0.16)
+lags = np.arange(1, K_A+1)
+for i, (k, x) in enumerate(PROC.items(), start=1):
+    a_, p_ = acf(x, K_A), pacf(x, K_A)
+    fig.add_trace(go.Bar(x=lags, y=a_[1:], marker_color=viz.ACCENT,
+                         showlegend=False), row=1, col=i)
+    fig.add_trace(go.Bar(x=lags, y=p_[1:], marker_color=viz.WARM,
+                         showlegend=False), row=2, col=i)
+    for r_ in (1, 2):
+        fig.add_hline(y=BOUND, line=dict(color=viz.YELLOW, dash="dot"),
+                      row=r_, col=i)
+        fig.add_hline(y=-BOUND, line=dict(color=viz.YELLOW, dash="dot"),
+                      row=r_, col=i)
+        fig.update_yaxes(range=[-0.5, 0.9], row=r_, col=i)
+        fig.update_xaxes(title_text="시차", row=r_, col=i)
+viz.fig_defaults(fig, height=560,
+                 title=f"n={T_A:,}, 점선 = 유의 경계 ±{BOUND:.3f}")
+fig.show()
+```
+
+```{python}
+#| label: acf-pacf-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"유의 경계 ±{BOUND:.4f}  (±1.96/√n)")
+print()
+for k, x in PROC.items():
+    a_, p_ = acf(x, K_A), pacf(x, K_A)
+    sig_a = [l for l in range(1, K_A+1) if abs(a_[l]) > BOUND]
+    sig_p = [l for l in range(1, K_A+1) if abs(p_[l]) > BOUND]
+    print(f"[{k}]")
+    print(f"  ACF  " + " ".join(f"{v:>6.2f}" for v in a_[1:7]))
+    print(f"  PACF " + " ".join(f"{v:>6.2f}" for v in p_[1:7]))
+    print(f"  유의한 ACF 시차 : {sig_a[:6]}{' ...' if len(sig_a) > 6 else ''}")
+    print(f"  유의한 PACF 시차: {sig_p[:6]}{' ...' if len(sig_p) > 6 else ''}")
+    print()
+
+print("**읽는 규칙**")
+print(f"{'생성 과정':<14} {'ACF':<22} {'PACF':<22} {'차수 읽기'}")
+print("-" * 78)
+for a, b, c, d in [
+    ("AR(p)", "천천히 감쇠 (꼬리)", "**시차 p 이후 절단**", "PACF 가 끊기는 곳 = p"),
+    ("MA(q)", "**시차 q 이후 절단**", "천천히 감쇠 (꼬리)", "ACF 가 끊기는 곳 = q"),
+    ("ARMA(p,q)", "감쇠", "감쇠", "**둘 다 안 끊김** — 정보기준으로"),
+]:
+    print(f"{a:<14} {b:<22} {c:<22} {d}")
+print()
+ar_p, ar_a = pacf(ar2, K_A), acf(ar2, K_A)
+ma_a, ma_p = acf(ma2, K_A), pacf(ma2, K_A)
+print(f"위 실험에서:")
+print(f"  AR(2) 의 PACF: 시차 1·2 가 {ar_p[1]:+.2f}, {ar_p[2]:+.2f} 로 크고, "
+      f"시차 3 부터 {ar_p[3]:+.2f} 로 작다 → **p = 2** ✓")
+print(f"  MA(2) 의 ACF : 시차 1·2 가 {ma_a[1]:+.2f}, {ma_a[2]:+.2f} 로 크고, "
+      f"시차 3 부터 {ma_a[3]:+.2f} 로 작다 → **q = 2** ✓")
+print()
+print("**AR(2) 의 ACF 를 보면 '천천히 감쇠'가 단조 감소를 뜻하지 않음을 알 수 있다.**")
+print(f"  ACF: " + " ".join(f"{v:+.2f}" for v in ar_a[1:7]))
+print(f"  φ₂ = −0.3 이 음수라 **진동하며** 감쇠한다. 시차 2 에서 우연히 "
+      f"{ar_a[2]:+.2f} 로 0 근처를 지난다.")
+print("  이론값 ρ₂ = φ₁ρ₁ + φ₂ = 0.6×0.46 − 0.3 = "
+      f"{0.6*ar_a[1] - 0.3:+.3f} 로 계산과 일치한다.")
+print("  → **'절단'과 '우연히 0 을 지남'을 구별해야 한다.** 시차 3·4 는 다시 유의하다.")
+print("  → 그래서 시차 하나만 보지 말고 **패턴 전체**를 봐야 한다.")
+print()
+print("**주의**: 실무 데이터에서 이 그림이 이렇게 깨끗한 경우는 드물다.")
+print("표본이 짧으면 유의 경계가 넓어져 판단이 어렵고, ARMA 는 애초에 안 끊긴다.")
+print("그래서 실제로는 AIC/BIC 로 여러 (p,d,q) 를 비교하고,")
+print("**잔차의 ACF 가 백색잡음처럼 보이는지**로 최종 확인한다.")
+```
+
+---
+
+## G1.7.3 — 검증: 무작위 교차검증은 왜 안 되는가
+
+이 장에서 가장 실무적인 부분이다.
+
+```{python}
+#| label: fig-cv-leakage
+#| fig-cap: "무작위 교차검증이 오차를 얼마나 과소평가하는가"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def make_series(kind, n=600, seed=2):
+    r = np.random.default_rng(seed)
+    t = np.arange(n)
+    if kind == "정상 AR(1) φ=0.5":
+        y = np.zeros(n)
+        for i in range(1, n):
+            y[i] = 0.5*y[i-1] + r.normal(0, 1)
+    elif kind == "강한 자기상관 φ=0.95":
+        y = np.zeros(n)
+        for i in range(1, n):
+            y[i] = 0.95*y[i-1] + r.normal(0, 1)
+    elif kind == "추세 + 계절성":
+        y = 0.05*t + 3*np.sin(2*np.pi*t/24) + r.normal(0, 0.8, n)
+    else:
+        y = np.cumsum(r.normal(0, 1, n))
+    return y
+
+def knn_predict(Xtr, ytr, Xte, k=3):
+    d = ((Xte[:, None, :] - Xtr[None, :, :])**2).sum(-1)
+    idx = np.argpartition(d, k, axis=1)[:, :k]
+    return ytr[idx].mean(1)
+
+def evaluate(y, mode, model, k=5):
+    """mode: random(무작위 폴드) / time(앞부분으로 학습, 뒤를 검증)"""
+    lags = np.column_stack([np.roll(y, j) for j in [1, 2, 3, 4]])
+    X = lags[5:]
+    yy = y[5:]
+    X = (X - X.mean(0))/(X.std(0) + 1e-12)
+    m = len(yy)
+    errs = []
+    for f in range(k):
+        if mode == "random":
+            te = (np.arange(m) % k) == f
+            tr = ~te
+        else:
+            lo = int(m*(f+1)/(k+1)); hi = int(m*(f+2)/(k+1))
+            te = np.zeros(m, bool); te[lo:hi] = True
+            tr = np.zeros(m, bool); tr[:lo] = True     # 미래를 절대 안 봄
+        if tr.sum() < 20:
+            continue
+        if model == "선형":
+            A = np.column_stack([np.ones(tr.sum()), X[tr]])
+            coef = np.linalg.lstsq(A, yy[tr], rcond=None)[0]
+            pred = np.column_stack([np.ones(te.sum()), X[te]]) @ coef
+        else:
+            pred = knn_predict(X[tr], yy[tr], X[te])
+        errs.append(np.sqrt(np.mean((yy[te]-pred)**2)))
+    return float(np.mean(errs))
+
+KINDS = ["정상 AR(1) φ=0.5", "강한 자기상관 φ=0.95", "추세 + 계절성", "무작위 걷기"]
+MODELS = ["선형", "kNN (k=3)"]
+CV_RES = {}
+for md in MODELS:
+    for kd in KINDS:
+        y = make_series(kd)
+        CV_RES[(md, kd)] = (evaluate(y, "random", md), evaluate(y, "time", md))
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=tuple(
+    f"{md} 모델" for md in MODELS))
+for i, md in enumerate(MODELS, start=1):
+    under = [(CV_RES[(md, kd)][1]-CV_RES[(md, kd)][0])/CV_RES[(md, kd)][1]
+             for kd in KINDS]
+    fig.add_trace(go.Bar(x=KINDS, y=under, showlegend=False,
+                         marker_color=[viz.color(j) for j in range(len(KINDS))],
+                         text=[f"{u:.1%}" for u in under],
+                         textposition="outside"), row=1, col=i)
+    fig.update_yaxes(title_text="오차 과소평가 비율", range=[0, 0.85], row=1, col=i)
+    fig.update_xaxes(tickangle=-20, row=1, col=i)
+viz.fig_defaults(fig, height=430,
+                 title="무작위 CV 가 시간 분할 대비 오차를 얼마나 낮게 보고하는가")
+fig.show()
+```
+
+```{python}
+#| label: cv-leakage-numbers
+#| code-fold: false
+
+import numpy as np
+
+for md in MODELS:
+    print(f"[{md} 모델]  lag 1~4 특성")
+    print(f"  {'시계열':<24} {'무작위 CV':>11} {'시간 분할':>11} {'과소평가':>11}")
+    print("  " + "-" * 62)
+    for kd in KINDS:
+        a, b = CV_RES[(md, kd)]
+        print(f"  {kd:<24} {a:>11.4f} {b:>11.4f} {(b-a)/b:>10.1%}")
+    print()
+
+lin_max = max((CV_RES[("선형", k)][1]-CV_RES[("선형", k)][0])/CV_RES[("선형", k)][1]
+              for k in KINDS)
+knn_max = max((CV_RES[("kNN (k=3)", k)][1]-CV_RES[("kNN (k=3)", k)][0])
+              / CV_RES[("kNN (k=3)", k)][1] for k in KINDS)
+print(f"**모델 용량이 클수록 누수가 심하다.**")
+print(f"  선형 모델의 최대 과소평가 {lin_max:.1%}")
+print(f"  kNN 모델의 최대 과소평가 {knn_max:.1%}")
+print()
+print("이유: kNN 은 **시간상 이웃한 점을 그대로 찾아본다.**")
+print("무작위 폴드에서는 t 의 바로 앞뒤 시점이 학습셋에 있고,")
+print("자기상관이 강하면 그 점들의 lag 특성이 거의 같다 — 사실상 정답 조회다.")
+print()
+print("**그리고 계열이 지속적일수록 심하다.**")
+for kd in KINDS:
+    a, b = CV_RES[("kNN (k=3)", kd)]
+    print(f"  {kd:<24} {(b-a)/b:>7.1%}")
+print()
+print("무작위 걷기는 이웃 값이 거의 같으므로 조회가 완벽하게 통한다.")
+print()
+print("**올바른 검증: 롤링 오리진 (walk-forward)**")
+print("  학습 [0..100]        → 검증 [101..120]")
+print("  학습 [0..120]        → 검증 [121..140]")
+print("  학습 [0..140]        → 검증 [141..160]   ...")
+print()
+for s in ["학습 구간은 항상 검증 구간보다 **과거**",
+          "고정 창(sliding)과 확장 창(expanding) 중 선택 — 분포 이동이 있으면 고정 창",
+          "예측 지평(horizon)을 실제 운영과 맞춘다 (1步 예측인가, 7步인가)",
+          "특성 생성도 폴드 안에서 — [1.4](04_feature_engineering.qmd)의 shift(1) 규칙"]:
+    print(f"  · {s}")
+print()
+print("**갭(gap)을 두기도 한다.** 검증 시작 직전 몇 시점을 학습에서 빼면,")
+print("학습 끝과 검증 시작이 자기상관으로 이어지는 것을 막을 수 있다 (purged CV).")
+```
+
+---
+
+## G1.7.4 — 예측 지표: 무엇을 비교하는가
+
+```{python}
+#| label: fig-metrics
+#| fig-cap: "같은 예측을 스케일이 다른 두 계열에서 평가"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng_m = np.random.default_rng(5)
+NM, SPLIT = 300, 200
+
+def build(base):
+    t = np.arange(NM)
+    return base*(1 + 0.3*np.sin(2*np.pi*t/24)) + rng_m.normal(0, base*0.02, NM)
+
+SCALES = {"작은 값 (≈0.5)": 0.5, "큰 값 (≈1000)": 1000.0}
+METRICS = ["MAE", "RMSE", "MAPE(%)", "MASE"]
+FORECASTS = ["학습 평균", "나이브 (직전값)", "계절 나이브 (24 전)"]
+TABLE = {}
+
+for nm, base in SCALES.items():
+    y = build(base)
+    tr, te = y[:SPLIT], y[SPLIT:]
+    naive_mae_tr = np.mean(np.abs(np.diff(tr)))       # MASE 분모: 학습셋 나이브
+    preds = {
+        "학습 평균": np.full(len(te), tr.mean()),
+        "나이브 (직전값)": y[SPLIT-1:-1],
+        "계절 나이브 (24 전)": y[SPLIT-24:NM-24],
+    }
+    for fn, p in preds.items():
+        mae = float(np.mean(np.abs(te-p)))
+        TABLE[(nm, fn)] = [mae, float(np.sqrt(np.mean((te-p)**2))),
+                           float(np.mean(np.abs((te-p)/te))*100),
+                           mae/naive_mae_tr]
+
+fig = make_subplots(rows=1, cols=len(METRICS), subplot_titles=tuple(METRICS))
+for mi, met in enumerate(METRICS, start=1):
+    for si, nm in enumerate(SCALES):
+        fig.add_trace(go.Bar(x=FORECASTS,
+                             y=[TABLE[(nm, fn)][mi-1] for fn in FORECASTS],
+                             name=nm, marker_color=viz.color(si),
+                             showlegend=(mi == 1)), row=1, col=mi)
+    if met in ("MAE", "RMSE"):
+        fig.update_yaxes(type="log", row=1, col=mi)
+    fig.update_xaxes(tickangle=-30, row=1, col=mi)
+viz.fig_defaults(fig, height=430,
+                 title="지표에 따라 두 계열이 비교 가능해지기도, 안 되기도")
+fig.update_layout(barmode="group", legend=dict(x=0.02, y=1.15, orientation="h",
+                                               font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: metrics-numbers
+#| code-fold: false
+
+import numpy as np
+
+for nm in SCALES:
+    print(f"[{nm}]")
+    print(f"  {'예측':<20} " + " ".join(f"{m:>12}" for m in METRICS))
+    print("  " + "-" * 68)
+    for fn in FORECASTS:
+        v = TABLE[(nm, fn)]
+        print(f"  {fn:<20} " + " ".join(f"{x:>12.4f}" for x in v))
+    print()
+
+print("**스케일이 2,000배 다른 두 계열을 비교해 보면**")
+print(f"  {'예측':<20} {'MAE 비율':>12} {'RMSE 비율':>12} {'MAPE 비율':>12} "
+      f"{'MASE 비율':>12}")
+print("-" * 74)
+small, large = list(SCALES)
+for fn in FORECASTS:
+    a, b = TABLE[(small, fn)], TABLE[(large, fn)]
+    print(f"  {fn:<20} " + " ".join(f"{b[i]/a[i]:>12.1f}" for i in range(4)))
+print()
+print("**MAE·RMSE 는 스케일에 비례해 2,000배 차이 난다** — 두 계열을 비교할 수 없다.")
+print("**MAPE 와 MASE 는 거의 1.0** — 스케일에 무관하다.")
+print()
+print("그런데 MAPE 에는 별도의 문제가 있다:")
+for s in ["실제값이 0 이거나 0 에 가까우면 발산한다",
+          "과소예측(최대 100%)과 과대예측(무한)에 비대칭이다",
+          "0 근처 값이 많은 계열(수요 예측 등)에서는 쓸 수 없다"]:
+    print(f"  · {s}")
+print()
+print("**MASE 가 나은 이유**")
+print("  MASE = MAE / (학습셋 나이브 예측의 MAE)")
+print()
+print("  · 스케일 무관 (위 표)")
+print("  · 0 에 강건 (분모가 차분의 평균 크기)")
+print("  · **해석이 명확하다**: MASE < 1 이면 나이브보다 낫다는 뜻")
+for nm in SCALES:
+    for fn in FORECASTS:
+        v = TABLE[(nm, fn)][3]
+        verd = "나이브보다 나음" if v < 1 else "나이브보다 못함"
+        print(f"    {nm} / {fn:<20} MASE {v:.3f} — {verd}")
+    break
+print()
+print("**기준선을 반드시 함께 보고하라.**")
+print("  RMSE 0.05 가 좋은 값인지 나쁜 값인지는 그 자체로 알 수 없다.")
+print("  나이브 예측·계절 나이브·직전 평균을 함께 계산하면 바로 판단이 선다.")
+print("  [3.9](../03_deep_learning/09_training_practice.qmd)에서 본 것과 같은 원칙이다 —")
+print("  **성능은 절대값이 아니라 기준선 대비로 읽는다.**")
+```
+
+---
+
+## 모델 계보
+
+```{python}
+#| label: model-family
+#| code-fold: false
+
+rows = [
+    ("AR(p)", "과거 값의 선형 결합", "PACF 가 p 에서 절단", "정상성 필요"),
+    ("MA(q)", "과거 **오차**의 선형 결합", "ACF 가 q 에서 절단", "정상성 필요"),
+    ("ARMA(p,q)", "둘의 결합", "둘 다 감쇠", "정보기준으로 차수 선택"),
+    ("ARIMA(p,d,q)", "d 번 차분 후 ARMA", "차분으로 정상화", "d 는 보통 0~2"),
+    ("SARIMA", "+ 계절 차분·계절 항", "주기 s 를 명시", "파라미터가 많아짐"),
+    ("SARIMAX", "+ 외생 변수 X", "회귀 + 시계열 오차", "X 도 예측해야 함"),
+    ("지수평활 / ETS", "가중 평균, 최근에 큰 가중", "추세·계절 성분 분해", "M4 대회 상위권"),
+    ("VAR", "여러 계열이 서로를 예측", "다변량", "파라미터가 k² 로 증가"),
+    ("GARCH", "**분산**을 모델링", "변동성 군집", "금융 수익률"),
+    ("트리·부스팅", "시차 특성 + GBM", "비선형·상호작용", "특성 공학이 핵심"),
+    ("딥러닝 (DeepAR 등)", "다수 계열을 함께 학습", "전역 모델", "계열이 많아야 유리"),
+]
+print(f"{'모델':<20} {'무엇을 모델링':<26} {'식별 단서':<22} {'주의'}")
+print("-" * 92)
+for r in rows:
+    print(f"{r[0]:<20} {r[1]:<26} {r[2]:<22} {r[3]}")
+print()
+print("**모델 선택보다 검증이 먼저다.**")
+print("M4·M5 예측 대회의 반복된 교훈:")
+for s in ["단순한 방법(지수평활, 나이브 조합)이 자주 상위권에 든다",
+          "복잡한 모델이 이기려면 계열이 **많아야** 한다 (전역 모델의 이점)",
+          "앙상블이 거의 항상 단일 모델을 이긴다",
+          "**나이브 기준선을 못 이기는 모델이 생각보다 많다**"]:
+    print(f"  · {s}")
+```
+
+::: {.key-concept}
+**시계열에서 특히 조심할 것**
+
+[1.3](03_preprocessing.qmd)의 누수 규칙이 시간축에서는 더 엄격해진다.
+
+| 작업 | 시계열에서의 규칙 |
+|------|-------------------|
+| 스케일링 | 학습 **기간**의 통계로만. 전체 기간 통계는 미래를 봄 |
+| 결측 대치 | 앞방향 채우기(ffill)만. 뒤방향(bfill)은 미래를 봄 |
+| 이상치 제거 | 학습 기간 기준으로만 |
+| 특성 생성 | 롤링은 `shift(1)` 후 ([1.4](04_feature_engineering.qmd)) |
+| 리샘플링 | 시간 순서를 절대 섞지 않음 |
+| 하이퍼파라미터 | 롤링 오리진 안에서 선택 |
+
+그리고 **분포 이동**이 있다. 학습 기간과 운영 기간의 분포가 다르면
+아무리 검증을 잘해도 실제 성능은 떨어진다 —
+그래서 시계열 모델은 **재학습 주기**를 함께 설계해야 한다.
 :::
 
-시간 데이터는 i.i.d. 가정을 깬다. 무작위 교차검증 한 번으로 미래 정보를 새게 만들면 오프라인 점수는 아무 의미가 없다.
-
 ---
 
-## 이 장에서 다루는 것
+## 요약
 
-- 시계열의 구성: 추세·계절성·주기·잔차, 분해 기법
-- 정상성, 단위근, ADF/KPSS 검정, 차분
-- 자기상관(ACF)과 편자기상관(PACF) 읽기
-- AR, MA, ARMA, ARIMA, SARIMA, SARIMAX
-- 지수평활과 ETS, Holt-Winters
-- 다변량: VAR, 공적분, 그레인저 인과
-- 이분산성과 GARCH
-- 시계열 특성 기반 ML 접근(트리·부스팅) 과 딥러닝 접근
-- 예측 검증: 롤링 오리진, 시간 분할, 미래 정보 누수 방지
-- 예측 지표: MAE, RMSE, MAPE, sMAPE, MASE, 피나클(naive) 기준선
-
----
-
-## G1.7.1 — 시계열 분해
-
-관측 = 추세 + 계절성 + 잔차 로 분해되는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 성분 토글
-:::
-
----
-
-## G1.7.2 — 정상성과 차분
-
-비정상 시계열이 차분으로 정상화되는 모습과 ACF 변화
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 차분 차수 슬라이더
-:::
-
----
-
-## G1.7.3 — ACF/PACF 로 차수 고르기
-
-생성 과정에 따라 ACF·PACF가 잘리는 위치
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: AR/MA 파라미터 슬라이더
-:::
-
----
-
-## G1.7.4 — 롤링 오리진 검증
-
-학습·검증 창이 시간축을 따라 이동하는 올바른 검증 절차
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 윈도 애니메이션
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 정상성 (stationarity) |  |
-| ACF/PACF |  |
-| ARIMA |  |
-| 롤링 오리진 검증 |  |
-| MASE |  |
+| 가짜 회귀 | 독립인 무작위 걷기 쌍의 83%가 "유의" (명목 5%) |
+| 차분 | 5.2%로 회복 — 설계대로 |
+| 정상성 | 전·후반 평균·분산 비교만으로도 비정상이 드러남 |
+| ADF / KPSS | 귀무가설이 반대 — 함께 써서 교차 확인 |
+| ACF / PACF | AR(p)는 PACF가 p에서, MA(q)는 ACF가 q에서 절단 |
+| ARMA | **둘 다 안 끊김** — 정보기준으로 |
+| 무작위 CV | 선형 모델도 최대 8% 과소평가 |
+| 모델 용량 | kNN에서는 **최대 71%** — 이웃 조회가 되기 때문 |
+| 롤링 오리진 | 학습은 항상 검증보다 과거. 갭을 두면 더 안전 |
+| MAPE | 스케일 무관하지만 0 근처에서 발산 |
+| MASE | 스케일 무관 + 0에 강건 + **1 미만이면 나이브보다 나음** |
 
 ---
 
-**다음**: [2.0 학습이란 무엇인가](../02_classical_ml/00_learning_problem.qmd) — 가설공간·손실·경험적 위험 최소화 — 문제의 형식화
+**Part 1이 끝났다.**
+
+[1.0](00_data_and_types.qmd)의 "한 행은 무엇인가"에서 시작해
+탐색·시각화·전처리·특성·실험·인과·시간까지 왔다.
+
+이 파트를 관통하는 것은 하나다.
+
+> **정확하게 계산한 값이 틀린 답일 수 있다.**
+
+심슨의 역설도, 충돌부 편향도, 엿보기도, 무작위 교차검증도
+계산 자체는 정확했다. 틀린 것은 **그 계산이 답하는 질문**이었다.
+
+다음 파트는 이 데이터로 **모델을 만든다.**
+그리고 거기서도 같은 원칙이 반복된다 — 검증이 먼저다.
+
+---
+
+**다음**: [2.0 학습 문제의 정의](../02_classical_ml/00_learning_problem.qmd)
 
 **이전**: [1.6 인과추론](06_causal_inference.qmd)
