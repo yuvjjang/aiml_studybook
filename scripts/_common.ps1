@@ -1,4 +1,4 @@
-# _common.ps1
+﻿# _common.ps1
 # Windows용 스크립트들이 공유하는 헬퍼: 프로젝트 경로, .env 로드,
 # venv 파이썬 / quarto 실행 파일 탐색.
 #

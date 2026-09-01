@@ -1,4 +1,4 @@
-# preview.ps1  (preview.sh 의 Windows 버전)
+﻿# preview.ps1  (preview.sh 의 Windows 버전)
 #
 # quarto preview 로 로컬 전용 실시간 미리보기 서버를 띄운다.
 # .qmd 를 저장하면 자동으로 다시 렌더링되고 브라우저가 새로고침된다.

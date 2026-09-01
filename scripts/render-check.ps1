@@ -1,4 +1,4 @@
-# render-check.ps1  (render-check.sh 의 Windows 버전)
+﻿# render-check.ps1  (render-check.sh 의 Windows 버전)
 #
 # 챕터 하나를 렌더링해서 빌드 에러 여부만 확인한다. (/note, /merge 커맨드에서 사용)
 # PUBLIC_HOST 가 비어있으면 quarto의 dotenv 검증이 실패하므로 기본값을 채워 넣는다.

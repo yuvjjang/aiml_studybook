@@ -1,4 +1,4 @@
-# build.ps1  (build.sh 의 Windows 버전)
+﻿# build.ps1  (build.sh 의 Windows 버전)
 #
 # Quarto 책 전체를 _site/ 로 렌더링한다.
 #
