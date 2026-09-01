@@ -13,14 +13,14 @@
 - **계산·그래픽**: NumPy / SciPy / Plotly (렌더 타임 의존성은 이 셋으로 제한)
 - **딥러닝 프레임워크 코드**: 실행하지 않는 예시 블록으로 제시 (빌드 재현성 우선)
 
-- **집필 완료** 55 / 123 챕터
+- **집필 완료** 56 / 123 챕터
 
 ## 전체 구성
 
 | 파트 | 주제 | 챕터 | 완료 | 이 파트를 마치면 |
 |------|------|------|------|------------------|
 | `00_foundations` | Part 0: 수학·컴퓨팅 기초 | 6 | 6 | 머신러닝 논문의 수식을 읽고, 그 수식이 코드에서 어떤 배열 연산으로 바뀌는지 옮길 수 있다. |
-| `01_data_science` | Part 1: 데이터 사이언스 | 8 | 6 | 원시 데이터를 받아 정제·탐색하고, 통계적으로 방어 가능한 결론과 실험 설계를 내놓을 수 있다. |
+| `01_data_science` | Part 1: 데이터 사이언스 | 8 | 7 | 원시 데이터를 받아 정제·탐색하고, 통계적으로 방어 가능한 결론과 실험 설계를 내놓을 수 있다. |
 | `02_classical_ml` | Part 2: 고전 머신러닝 | 13 | 13 | 정형 데이터 문제에 알고리즘을 고르고, 왜 그 알고리즘이 그렇게 동작하는지 수식과 그림으로 설명할 수 있다. |
 | `03_deep_learning` | Part 3: 딥러닝 기초 | 10 | 10 | 신경망의 순전파·역전파·최적화를 NumPy로 처음부터 구현하고, 학습이 안 될 때 원인을 진단할 수 있다. |
 | `04_architectures` | Part 4: 신경망 아키텍처 | 7 | 7 | CNN·RNN 계열의 귀납 편향을 설명하고, 어텐션이 왜 등장할 수밖에 없었는지 역사적·수학적으로 서술할 수 있다. |
@@ -48,6 +48,7 @@
 - ✅ **1.3 데이터 전처리** — `chapters/01_data_science/03_preprocessing.qmd`
 - ✅ **1.4 특성 공학** — `chapters/01_data_science/04_feature_engineering.qmd`
 - ✅ **1.5 실험 설계와 A/B 테스트** — `chapters/01_data_science/05_experiment_design.qmd`
+- ✅ **1.6 인과추론** — `chapters/01_data_science/06_causal_inference.qmd`
 - ✅ **2.0 학습이란 무엇인가** — `chapters/02_classical_ml/00_learning_problem.qmd`
 - ✅ **2.1 편향-분산과 일반화** — `chapters/02_classical_ml/01_bias_variance.qmd`
 - ✅ **2.2 선형회귀** — `chapters/02_classical_ml/02_linear_regression.qmd`
@@ -476,7 +477,7 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지
 
 ---
 
-### 1.6 인과추론
+### 1.6 인과추론 ✅
 
 `chapters/01_data_science/06_causal_inference.qmd` — *교란·DAG·성향점수 — 실험할 수 없을 때 인과를 묻는 법*
 
