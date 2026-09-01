@@ -8,6 +8,7 @@ import numpy as np
 __all__ = ["VAE", "vae_grad_check", "blobs64", "sharpness",
            "Net", "gan_step", "sigmoid", "ring_modes", "mode_stats",
            "Coupling", "RealNVP", "Diffusion", "make_schedule",
+           "FlowMatching", "straightness",
            "time_embedding"]
 
 
@@ -573,3 +574,73 @@ class Diffusion:
             if return_path:
                 path.append(x.copy())
         return (x, np.array(path)) if return_path else x
+
+
+# ══════════════════════════════════════════════════════════════════
+# 흐름 매칭 / Rectified Flow (6.8)
+# ══════════════════════════════════════════════════════════════════
+
+class FlowMatching:
+    """조건부 흐름 매칭 — 선형 보간 경로의 속도장을 학습한다.
+
+        x_t = (1−t)·x₀ + t·x₁,   x₀ ~ 데이터,  x₁ ~ N(0, I)
+        목표 속도 v = x₁ − x₀     (경로를 t 로 미분한 값, 상수다)
+        손실 = E‖v_θ(x_t, t) − (x₁ − x₀)‖²
+
+    t=0 이 데이터, t=1 이 잡음이다. 샘플링은 t=1 → 0 으로 적분한다.
+    """
+
+    def __init__(self, d=2, hidden=128, t_dim=16, seed=0):
+        self.d, self.t_dim = d, t_dim
+        self.net = Net([d + t_dim, hidden, hidden, hidden, d], seed=seed)
+
+    def _inp(self, x, t):
+        return np.concatenate([x, time_embedding(t*1000, self.t_dim, 1000)], 1)
+
+    def v(self, x, t):
+        return self.net.forward(self._inp(x, t))[0]
+
+    def fit(self, X, steps=6000, lr=2e-3, batch=256, seed=0, pairs=None):
+        """pairs=(x1, x0) 를 주면 그 짝을 그대로 쓴다 (reflow)."""
+        from src.nn import Optimizer
+        opt = Optimizer("adam", lr=lr)
+        r = np.random.default_rng(seed)
+        for _ in range(steps):
+            if pairs is None:
+                x0 = X[r.choice(len(X), batch, replace=False)]
+                x1 = r.normal(size=x0.shape)
+            else:
+                idx = r.choice(len(pairs[0]), batch, replace=False)
+                x1, x0 = pairs[0][idx], pairs[1][idx]
+            t = r.random(batch)
+            xt = (1 - t[:, None])*x0 + t[:, None]*x1
+            target = x1 - x0
+            out, cache = self.net.forward(self._inp(xt, t))
+            g, _ = self.net.backward(cache, 2*(out - target)/(batch*self.d))
+            opt.step(self.net.p, g)
+        return self
+
+    def sample(self, n, n_steps=50, seed=0, x1=None, return_path=False):
+        r = np.random.default_rng(seed)
+        x = r.normal(size=(n, self.d)) if x1 is None else x1.copy()
+        ts = np.linspace(1.0, 0.0, n_steps + 1)
+        path = [x.copy()]
+        for i in range(n_steps):
+            t_cur, t_next = ts[i], ts[i+1]
+            x = x + (t_next - t_cur)*self.v(x, np.full(len(x), t_cur))
+            if return_path:
+                path.append(x.copy())
+        return (x, np.array(path)) if return_path else x
+
+    def make_pairs(self, n, n_steps=100, seed=0):
+        """reflow 용 짝 (x₁, x₀) 생성 — 같은 잡음에서 출발한 결과를 짝지운다."""
+        r = np.random.default_rng(seed)
+        x1 = r.normal(size=(n, self.d))
+        return x1, self.sample(n, n_steps=n_steps, x1=x1)
+
+
+def straightness(path):
+    """경로의 굽은 정도 — 경로 길이 / 직선 거리. 1.0 이면 완전한 직선."""
+    seg = np.linalg.norm(np.diff(path, axis=0), axis=-1).sum(0)
+    direct = np.linalg.norm(path[-1] - path[0], axis=-1)
+    return float((seg/np.maximum(direct, 1e-9)).mean())
