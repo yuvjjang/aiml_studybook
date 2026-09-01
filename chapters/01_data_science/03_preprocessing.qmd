@@ -4,88 +4,624 @@ subtitle: "결측·이상치·스케일링·인코딩 — 모델에 넣을 수 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+전처리는 지루한 잡일이 아니다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+**모델 성능에 가장 큰 영향을 주는 단계**이고,
+동시에 **데이터 누수가 가장 자주 발생하는 지점**이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장의 첫 실험이 그것을 보여준다.
+타깃과 아무 관계도 없는 범주 변수로, 검증 AUC 0.76을 만들어 보인다.
+모델을 바꾼 것도, 특성을 추가한 것도 아니다.
+**인코딩을 언제 계산했는지만 다르다.**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## G1.3.1 — 데이터 누수: 가장 비싼 실수
+
+target encoding은 범주를 그 범주의 **타깃 평균**으로 바꾼다.
+고카디널리티 범주에 강력하지만, **계산 시점**을 틀리면 재앙이다.
+
+```{python}
+#| label: fig-target-leakage
+#| fig-cap: "타깃과 무관한 범주인데 누수만으로 AUC가 0.76이 됩니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng = np.random.default_rng(0)
+N, CARD, K = 800, 200, 5
+cat = rng.integers(0, CARD, N)
+y = rng.integers(0, 2, N)          # ← 타깃은 범주와 완전히 무관하다
+folds = np.arange(N) % K
+
+def auc(score, label):
+    pos, neg = score[label == 1], score[label == 0]
+    if len(pos) == 0 or len(neg) == 0:
+        return np.nan
+    r = np.argsort(np.argsort(np.concatenate([pos, neg]))) + 1
+    return float((r[:len(pos)].sum() - len(pos)*(len(pos)+1)/2)/(len(pos)*len(neg)))
+
+def cv_auc(feature):
+    return float(np.nanmean([auc(feature[folds == f], y[folds == f])
+                             for f in range(K)]))
+
+def encode(idx_fit):
+    """idx_fit 로 지정된 행들만 써서 범주 → 타깃평균 사전을 만든다."""
+    m = y[idx_fit].mean()
+    out = np.full(CARD, m)
+    for c in np.unique(cat[idx_fit]):
+        out[c] = y[idx_fit][cat[idx_fit] == c].mean()
+    return out
+
+# (a) 누수: 전체 데이터로 인코딩을 만들고 검증에도 그대로 쓴다
+feat_leak = encode(np.arange(N))[cat]
+
+# (b) 정상: 각 폴드의 값은 **그 폴드를 제외한** 데이터로만 만든다
+feat_ok = np.zeros(N)
+for f in range(K):
+    feat_ok[folds == f] = encode(np.where(folds != f)[0])[cat[folds == f]]
+
+CARDS = [20, 50, 100, 200, 400]
+leak_curve, ok_curve = [], []
+for c_ in CARDS:
+    cc = rng.integers(0, c_, N)
+    def enc_c(idx_fit, card, cvec):
+        m = y[idx_fit].mean(); o = np.full(card, m)
+        for v in np.unique(cvec[idx_fit]):
+            o[v] = y[idx_fit][cvec[idx_fit] == v].mean()
+        return o
+    fl = enc_c(np.arange(N), c_, cc)[cc]
+    fo = np.zeros(N)
+    for f in range(K):
+        fo[folds == f] = enc_c(np.where(folds != f)[0], c_, cc)[cc[folds == f]]
+    leak_curve.append(cv_auc(fl)); ok_curve.append(cv_auc(fo))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.45, 0.55],
+                    subplot_titles=("인코딩 값의 분포",
+                                    "범주 카디널리티에 따른 검증 AUC"))
+fig.add_trace(go.Histogram(x=feat_leak, nbinsx=30, name="누수 있음",
+                           marker_color=viz.WARM, opacity=0.7), row=1, col=1)
+fig.add_trace(go.Histogram(x=feat_ok, nbinsx=30, name="누수 없음",
+                           marker_color=viz.ACCENT, opacity=0.7), row=1, col=1)
+fig.add_trace(go.Scatter(x=CARDS, y=leak_curve, mode="lines+markers",
+                         name="누수 있음", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_trace(go.Scatter(x=CARDS, y=ok_curve, mode="lines+markers",
+                         name="누수 없음", showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_hline(y=0.5, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="진짜 AUC (무작위)", row=1, col=2)
+fig.update_layout(barmode="overlay")
+fig.update_xaxes(title_text="인코딩 값", row=1, col=1)
+fig.update_xaxes(title_text="범주 수", type="log", row=1, col=2)
+fig.update_yaxes(title_text="검증 AUC", row=1, col=2)
+viz.fig_defaults(fig, height=410,
+                 title=f"타깃이 범주와 무관한 데이터 (n={N})")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: target-leakage-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"범주 {CARD}개, 표본 {N}개 (범주당 평균 {N/CARD:.1f}개)")
+print(f"**타깃 y 는 범주와 독립으로 생성했다. 진짜 AUC 는 0.5 다.**")
+print()
+print(f"  전체 데이터로 인코딩 (누수)  : AUC {cv_auc(feat_leak):.4f}")
+print(f"  폴드 밖 데이터로만 인코딩    : AUC {cv_auc(feat_ok):.4f}")
+print()
+print(f"{'범주 수':>8} {'범주당 표본':>11} {'누수 AUC':>11} {'정상 AUC':>11} {'과대평가':>10}")
+print("-" * 56)
+for c_, a_, b_ in zip(CARDS, leak_curve, ok_curve):
+    print(f"{c_:>8} {N/c_:>11.1f} {a_:>11.4f} {b_:>11.4f} {a_-b_:>+10.4f}")
+print()
+print("**범주가 잘게 쪼개질수록 누수가 심해진다.**")
+print("극단적으로 범주가 표본 수만큼 많으면 인코딩 값이 곧 그 행의 타깃이 된다 —")
+print("검증 행의 정답을 특성에 그대로 적어 넣는 셈이다.")
+print()
+print(f"정상 인코딩의 AUC 는 {min(ok_curve):.3f}~{max(ok_curve):.3f} 로 0.5 근처다.")
+print("**있어야 할 답이 나온 것이다.** 이 변수는 쓸모가 없다고 올바르게 말해 준다.")
+print()
+print("이 실수가 무서운 이유:")
+for s in ["오프라인 검증 점수가 **좋아지므로** 실수를 알아차릴 신호가 없다",
+          "배포 후에야 성능이 무너지고, 그때는 원인을 찾기 어렵다",
+          "코드는 정상 동작한다 — 예외도, 경고도 없다"]:
+    print(f"  · {s}")
+```
+
+::: {.key-concept}
+**누수 방지의 단 하나의 규칙**
+
+> **모든 fit 은 학습 폴드에서만. 검증·시험 폴드는 transform 만.**
+
+무엇이 `fit` 인가 — 데이터를 보고 **파라미터를 정하는 모든 것**이다.
+
+| 단계 | 학습해야 하는 것 | 누수 시 증상 |
+|------|------------------|--------------|
+| 표준화 | 평균, 표준편차 | 미묘함. 대개 작은 편향 |
+| min-max | 최솟값, 최댓값 | 시험셋 극단값이 새어 들어옴 |
+| 결측 대치 | 대치값(평균 등) | 미묘함 |
+| target encoding | 범주별 타깃 평균 | **치명적** (위 실험) |
+| 특성 선택 | 어떤 열을 남길지 | 치명적 — 전체로 고르면 안 됨 |
+| 이상치 임계값 | 분위수, 표준편차 | 중간 |
+| 오버샘플링(SMOTE) | 합성 표본 | **치명적** — 분할 전에 하면 안 됨 |
+
+가장 자주 틀리는 것이 **특성 선택**과 **SMOTE** 다.
+둘 다 "전처리니까 먼저 해두자"는 자연스러운 충동이 곧 누수다.
 :::
 
-전처리는 지루한 잡일이 아니라 모델 성능에 가장 큰 영향을 주는 단계이며, 데이터 누수가 가장 자주 발생하는 지점이다.
+```python
+# scikit-learn 파이프라인 — 실행하지 않음
+# Pipeline 으로 묶으면 cross_val_score 가 폴드마다 알아서 fit/transform 을 나눈다
+pipe = Pipeline([
+    ("impute", SimpleImputer(strategy="median")),
+    ("scale",  StandardScaler()),
+    ("select", SelectKBest(k=20)),        # ← 이것도 반드시 파이프라인 안에
+    ("model",  LogisticRegression()),
+])
+scores = cross_val_score(pipe, X, y, cv=5)   # 폴드마다 fit 은 학습부분에서만
+
+# 흔한 실수: 파이프라인 밖에서 미리 변환
+X = StandardScaler().fit_transform(X)        # ✗ 전체 통계가 새어 들어감
+X = SelectKBest(k=20).fit_transform(X, y)    # ✗ 타깃을 보고 열을 골랐음
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G1.3.2 — 스케일링: 이상치가 있을 때
 
-- 결측치 처리: 삭제, 단순 대치, 회귀 대치, MICE, 결측 지시자
-- 스케일링: 표준화, min-max, robust, 정규화(단위 노름)
-- 왜도 보정: 로그·Box-Cox·Yeo-Johnson, quantile transform
-- 범주형 인코딩: one-hot, ordinal, target/mean encoding, hashing
-- 고카디널리티 범주와 임베딩 기반 인코딩
-- 이상치 처리: 절단(clipping), 윈저화, 변환, 별도 모델링
-- 불균형 데이터: 리샘플링, SMOTE, 클래스 가중치
-- 파이프라인으로 묶기 — fit 은 학습셋에서만 (누수 방지의 핵심)
-- 전처리 순서와 교차검증 안쪽/바깥쪽 배치
+```{python}
+#| label: fig-scaling
+#| fig-cap: "이상치 2개가 스케일링 결과를 어떻게 바꾸는가"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy import stats
+from src import viz
+
+rng_s = np.random.default_rng(1)
+xs = np.concatenate([rng_s.normal(50, 8, 200), [500.0, 480.0]])
+normal_mask = np.ones(len(xs), bool); normal_mask[-2:] = False
+
+q1s, q3s = np.percentile(xs, [25, 75])
+ranks = stats.rankdata(xs)/(len(xs)+1)
+SCALERS = {
+    "원본": xs,
+    "표준화 (z)": (xs - xs.mean())/xs.std(),
+    "min-max": (xs - xs.min())/(xs.max() - xs.min()),
+    "robust (중앙값/IQR)": (xs - np.median(xs))/(q3s - q1s),
+    "분위수 → 정규": stats.norm.ppf(ranks),
+}
+
+fig = make_subplots(rows=1, cols=len(SCALERS),
+                    subplot_titles=tuple(SCALERS.keys()))
+for i, (k, v) in enumerate(SCALERS.items(), start=1):
+    fig.add_trace(go.Box(y=v[normal_mask], name="정상값", showlegend=(i == 1),
+                         marker_color=viz.ACCENT, boxpoints=False), row=1, col=i)
+    fig.add_trace(go.Scatter(x=["정상값"]*2, y=v[~normal_mask], mode="markers",
+                             name="이상치", showlegend=(i == 1),
+                             marker=dict(size=11, color=viz.WARM, symbol="x")),
+                  row=1, col=i)
+viz.fig_defaults(fig, height=400,
+                 title="같은 데이터, 다섯 가지 스케일링 (이상치 2개 포함)")
+fig.update_layout(legend=dict(x=0.02, y=1.12, orientation="h", font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: scaling-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"데이터: N(50, 8) 200개 + 이상치 2개 (500, 480)")
+print()
+print(f"{'방법':<20} {'정상값 범위':>22} {'정상값 표준편차':>15} {'정상값 IQR':>12} "
+      f"{'이상치 위치':>12}")
+print("-" * 86)
+for k, v in SCALERS.items():
+    lo, hi = v[normal_mask].min(), v[normal_mask].max()
+    iqr_n = float(np.subtract(*np.percentile(v[normal_mask], [75, 25])))
+    print(f"{k:<20} {f'[{lo:.2f}, {hi:.2f}]':>22} {v[normal_mask].std():>15.3f} "
+          f"{iqr_n:>12.3f} {v[-2]:>12.2f}")
+print()
+print("**먼저 짚을 것**: z·min-max·robust 는 전부 선형 변환이므로")
+print("정상값끼리의 **상대적 간격은 셋 다 똑같이 보존된다.** 여기서 갈리지 않는다.")
+print()
+print("차이는 **정상값이 어떤 스케일에 놓이느냐**다 —")
+print("이상치가 스케일 파라미터를 오염시키기 때문이다.")
+print()
+z = SCALERS["표준화 (z)"]
+rb = SCALERS["robust (중앙값/IQR)"]
+mm = SCALERS["min-max"]
+print(f"  표준화의 목표는 '표준편차 1'인데, 정상값의 실제 표준편차는 "
+      f"{z[normal_mask].std():.3f} 다.")
+print(f"    이상치 2개가 전체 표준편차를 {1/z[normal_mask].std():.1f}배 부풀렸기 때문이다.")
+print()
+print(f"  min-max 의 목표는 '[0,1] 범위'인데, 정상값은 "
+      f"[{mm[normal_mask].min():.2f}, {mm[normal_mask].max():.2f}] 만 쓴다.")
+print(f"    나머지 {1-mm[normal_mask].max():.0%} 는 이상치 2개가 차지한다.")
+print("    신경망 입력처럼 절대 범위가 의미를 갖는 곳에서 문제가 된다.")
+print()
+print(f"  robust 는 중앙값·IQR 을 쓰므로 이상치가 파라미터에 들어가지 않는다.")
+print(f"    정상값 IQR 이 정확히 {float(np.subtract(*np.percentile(rb[normal_mask], [75, 25]))):.3f} "
+      f"— 설계대로다.")
+print(f"    대신 이상치는 {rb[-2]:.1f} 로 멀리 남는다 (**지워지지 않는다**).")
+print()
+qt = SCALERS["분위수 → 정규"]
+print(f"  분위수 변환만 비선형이다. 순위만 쓰므로 이상치를 {qt[-2]:.2f} 로 끌어당긴다.")
+print("    분포를 강제로 정규로 만든다 — 강력하지만 **거리 정보를 버린다.**")
+print("    '500 과 480 은 아주 크다'는 사실이 '상위 두 개'로만 남는다.")
+print()
+print("선택 기준:")
+for a, b in [("이상치가 없고 대략 정규", "표준화 — 가장 무난"),
+             ("신경망 입력, 범위를 알아야 함", "min-max — 단 이상치를 먼저 처리"),
+             ("이상치가 있음", "robust"),
+             ("분포가 심하게 치우침", "분위수 변환 또는 멱변환(아래)"),
+             ("트리 모델", "**스케일링이 불필요하다** — 분할 기준은 순서만 본다")]:
+    print(f"  {a:<28} → {b}")
+```
 
 ---
 
-## G1.3.1 — 스케일링 방법 비교
+## G1.3.3 — 멱변환: 치우침 바로잡기
 
-이상치가 있는 데이터에서 표준화·min-max·robust 결과 비교
+$$\text{Box-Cox: } x^{(\lambda)} = \begin{cases}
+\dfrac{x^\lambda - 1}{\lambda} & \lambda \neq 0 \\[4pt]
+\ln x & \lambda = 0
+\end{cases}
+\qquad (x > 0 \text{ 필요})$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 방법 선택
+Yeo-Johnson은 이를 음수까지 확장한 것이다.
+
+```{python}
+#| label: fig-power-transform
+#| fig-cap: "λ 를 바꿔가며 — 치우친 분포가 정규에 가까워지는 과정"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from scipy import stats
+from src import viz
+
+rng_p = np.random.default_rng(4)
+raw = rng_p.lognormal(mean=1.0, sigma=0.9, size=3000)   # 오른쪽으로 크게 치우침
+
+def boxcox(x, lam):
+    return np.log(x) if abs(lam) < 1e-9 else (x**lam - 1)/lam
+
+LAMS = [-0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
+curves = {}
+for lam in LAMS:
+    t = boxcox(raw, lam)
+    t = (t - t.mean())/t.std()
+    c, e = np.histogram(t, bins=45, density=True, range=(-4, 4))
+    curves[lam] = (np.round(e[:-1], 3), np.round(c, 5))
+
+lam0 = 0.0
+fig = go.Figure()
+fig.add_trace(go.Bar(x=curves[lam0][0], y=curves[lam0][1],
+                     width=8/45, marker_color=viz.ACCENT, opacity=0.85,
+                     name="변환 후 (표준화)"))
+gz = np.linspace(-4, 4, 200)
+fig.add_trace(go.Scatter(x=gz, y=np.exp(-gz**2/2)/np.sqrt(2*np.pi), mode="lines",
+                         name="표준정규", line=dict(color=viz.YELLOW, width=3)))
+steps = [(f"{lam:g}", {"x": [curves[lam][0], None], "y": [curves[lam][1], None]})
+         for lam in LAMS]
+fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ",
+                                      active=LAMS.index(lam0), pad_t=52)])
+fig.update_layout(xaxis_title="변환 후 값 (표준화)", yaxis_title="밀도",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420,
+                 title="Box-Cox 변환 (원본은 로그정규, λ=1 이 원본)")
+fig.show()
+```
+
+```{python}
+#| label: power-transform-numbers
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+print(f"원본 분포: 로그정규, 왜도 {stats.skew(raw):.3f}, "
+      f"초과첨도 {stats.kurtosis(raw):.3f}")
+print()
+print(f"{'λ':>7} {'왜도':>10} {'초과첨도':>11} {'정규성 검정 통계량':>18}  {'비고'}")
+print("-" * 62)
+best_lam, best_skew = None, np.inf
+for lam in LAMS:
+    t = boxcox(raw, lam)
+    sk = stats.skew(t)
+    ks = stats.kstest(t, stats.norm(loc=t.mean(), scale=t.std()).cdf).statistic
+    note = "원본" if lam == 1.0 else ("로그 변환" if lam == 0.0 else "")
+    if abs(sk) < abs(best_skew):
+        best_lam, best_skew = lam, sk
+    print(f"{lam:>7.2f} {sk:>10.4f} {stats.kurtosis(t):>11.4f} {ks:>18.4f}  {note}")
+print()
+print(f"왜도가 0 에 가장 가까운 λ: {best_lam} (왜도 {best_skew:+.4f})")
+print()
+# scipy 의 최대우도 추정과 비교
+fitted, lam_mle = stats.boxcox(raw)
+print(f"scipy.stats.boxcox 의 최대우도 λ: {lam_mle:.4f}")
+print(f"  그때 왜도 {stats.skew(fitted):+.4f}, "
+      f"초과첨도 {stats.kurtosis(fitted):+.4f}")
+print()
+print("**로그정규를 로그 변환하면 정확히 정규가 된다** — λ=0 이 이론적 정답이고,")
+print(f"최대우도 추정도 {lam_mle:.3f} 로 거의 그 값을 찾아냈다.")
+print()
+print("주의할 점:")
+for s in ["λ 도 **학습셋에서만** 추정해야 한다 (누수 방지)",
+          "Box-Cox 는 양수만 가능. 0 이나 음수가 있으면 Yeo-Johnson",
+          "변환 후 값은 해석이 어려워진다 — 계수의 의미가 바뀐다",
+          "트리 모델에는 대체로 불필요하다 (단조 변환이라 분할이 동일)"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G1.3.4 — 결측 대치의 부작용
+
+```{python}
+#| label: fig-imputation
+#| fig-cap: "평균 대치는 분산을 줄이고 상관을 약화시킵니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng_i = np.random.default_rng(2)
+NI = 2000
+u = rng_i.normal(0, 1, NI)
+v = 0.8*u + rng_i.normal(0, 0.6, NI)
+TRUE_R, TRUE_SD = float(np.corrcoef(u, v)[0, 1]), float(v.std())
+
+RATES = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+METHODS = ["평균 대치", "중앙값 대치", "회귀 대치", "확률적 회귀 대치"]
+sd_by, r_by = {m: [] for m in METHODS}, {m: [] for m in METHODS}
+
+for rate in RATES:
+    miss = rng_i.random(NI) < rate
+    obs = ~miss
+    for m in METHODS:
+        vi = v.copy()
+        if rate > 0:
+            if m == "평균 대치":
+                vi[miss] = v[obs].mean()
+            elif m == "중앙값 대치":
+                vi[miss] = np.median(v[obs])
+            else:
+                b_, a_ = np.polyfit(u[obs], v[obs], 1)
+                pred = a_ + b_*u[miss]
+                if m == "회귀 대치":
+                    vi[miss] = pred
+                else:                       # 잔차 분산을 되살려 준다
+                    resid_sd = (v[obs] - (a_ + b_*u[obs])).std()
+                    vi[miss] = pred + rng_i.normal(0, resid_sd, miss.sum())
+        sd_by[m].append(float(vi.std()))
+        r_by[m].append(float(np.corrcoef(u, vi)[0, 1]))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("표준편차 (참값 대비)", "상관계수 (참값 대비)"))
+for i, m in enumerate(METHODS):
+    fig.add_trace(go.Scatter(x=RATES, y=sd_by[m], mode="lines+markers", name=m,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=RATES, y=r_by[m], mode="lines+markers", name=m,
+                             showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+fig.add_hline(y=TRUE_SD, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="참값", row=1, col=1)
+fig.add_hline(y=TRUE_R, line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="참값", row=1, col=2)
+fig.update_xaxes(title_text="결측률")
+fig.update_yaxes(title_text="표준편차", row=1, col=1)
+fig.update_yaxes(title_text="상관계수", row=1, col=2)
+viz.fig_defaults(fig, height=400,
+                 title=f"두 변수의 참 상관 {TRUE_R:.3f} (MCAR 결측)")
+fig.update_layout(legend=dict(x=0.02, y=0.35, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: imputation-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"참값: 표준편차 {TRUE_SD:.4f}, 상관 {TRUE_R:.4f}")
+print()
+print("결측률 50% 에서의 결과")
+print(f"{'방법':<20} {'표준편차':>10} {'오차':>9} {'상관':>10} {'오차':>9}")
+print("-" * 62)
+k50 = RATES.index(0.5)
+for m in METHODS:
+    print(f"{m:<20} {sd_by[m][k50]:>10.4f} {sd_by[m][k50]/TRUE_SD-1:>+8.1%} "
+          f"{r_by[m][k50]:>10.4f} {r_by[m][k50]-TRUE_R:>+9.4f}")
+print()
+print("**평균 대치는 두 방향으로 왜곡한다.**")
+print(f"  ① 분산 축소: 대치값이 전부 같은 값이라 산포가 줄어든다 "
+      f"({sd_by['평균 대치'][k50]/TRUE_SD-1:+.1%})")
+print(f"  ② 상관 약화: 대치된 행은 u 와 무관한 상수가 되므로 관계가 희석된다 "
+      f"({r_by['평균 대치'][k50]:.3f} vs 참값 {TRUE_R:.3f})")
+print()
+print("**회귀 대치는 반대 방향으로 틀린다.**")
+print(f"  대치값이 회귀선 **위에 정확히** 놓이므로 상관이 오히려 과대해진다 "
+      f"({r_by['회귀 대치'][k50]:.3f}).")
+print("  '없는 데이터를 완벽하게 예측한 것처럼' 보이게 만든다.")
+print()
+print("**확률적 회귀 대치가 둘 사이를 잡는다.**")
+print(f"  잔차 분산만큼 잡음을 다시 넣어 주면 "
+      f"표준편차 {sd_by['확률적 회귀 대치'][k50]:.4f}, "
+      f"상관 {r_by['확률적 회귀 대치'][k50]:.4f} 로 참값에 가깝다.")
+print()
+print("이것이 **다중 대치(MICE)** 의 핵심 아이디어다 —")
+print("대치는 한 번이 아니라 여러 번 하고, 그 변동을 최종 불확실성에 반영한다.")
+print()
+print("실무 지침:")
+for s in ["결측률이 낮고(<5%) MCAR 이면 삭제나 단순 대치로 충분",
+          "결측 지시자 열을 함께 넣는 것이 대체로 이득 (결측 자체가 정보)",
+          "트리 모델은 결측을 직접 다룰 수 있다 (LightGBM, XGBoost)",
+          "**어떤 대치든 fit 은 학습셋에서만** — 위 누수 규칙 그대로"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 범주형 인코딩
+
+```{python}
+#| label: categorical-encoding
+#| code-fold: false
+
+import numpy as np
+
+rows = [
+    ("one-hot", "카디널리티 k", "낮은 카디널리티 (<15)", "순서 가정 없음",
+     "고카디널리티에서 차원 폭발"),
+    ("ordinal", "1", "**진짜 순서가 있을 때만**", "메모리 최소",
+     "없는 순서를 가정하면 치명적"),
+    ("target/mean", "1", "고카디널리티", "강력함",
+     "**누수 위험 — 폴드 밖 계산 필수**"),
+    ("frequency", "1", "빈도가 신호일 때", "누수 없음(타깃 미사용)",
+     "빈도가 같은 범주를 구별 못 함"),
+    ("hashing", "고정 d", "카디널리티가 미지·무한", "메모리 고정",
+     "충돌이 생김"),
+    ("임베딩", "d (학습)", "딥러닝, 초고카디널리티", "유사도 학습",
+     "학습 데이터가 많이 필요"),
+]
+print(f"{'방법':<14} {'차원':<12} {'적합한 상황':<24} {'장점':<20} {'주의'}")
+print("-" * 100)
+for r in rows:
+    print(f"{r[0]:<14} {r[1]:<12} {r[2]:<24} {r[3]:<20} {r[4]}")
+print()
+
+# one-hot 차원 폭발을 수치로
+print("one-hot 의 차원 비용")
+print(f"{'열':<16} {'카디널리티':>10} {'one-hot 차원':>14} {'1만 행 메모리(fp32)':>20}")
+print("-" * 64)
+total = 0
+for name, card in [("성별", 2), ("등급", 5), ("지역", 17), ("업종", 120),
+                   ("상품ID", 45000)]:
+    total += card
+    print(f"{name:<16} {card:>10,} {card:>14,} {card*10000*4/1e6:>18.1f}MB")
+print("-" * 64)
+print(f"{'합계':<16} {'':>10} {total:>14,} {total*10000*4/1e6:>18.1f}MB")
+print()
+print(f"상품ID 하나가 전체의 {45000/total:.1%} 를 차지한다.")
+print("이래서 고카디널리티에는 target encoding 이나 임베딩을 쓴다.")
+print()
+print("**ordinal 인코딩의 함정**")
+regions = ["서울", "부산", "대구", "인천"]
+print(f"  {regions} → {list(range(len(regions)))}")
+print("  이렇게 넣으면 모델은 '인천 − 대구 = 부산 − 서울' 이라고 읽는다.")
+print("  선형 모델에서는 명백한 오류이고, 트리에서도 분할 후보를 왜곡한다.")
+print("  **순서가 실재할 때만 쓴다** (등급 A<B<C, 학력, 만족도 등).")
+print("  단, [1.0](00_data_and_types.qmd)에서 봤듯 순서 척도의 **간격**은 여전히 가정이다.")
+```
+
+---
+
+## 불균형 데이터
+
+```{python}
+#| label: imbalance
+#| code-fold: false
+
+import numpy as np
+
+print("소수 클래스가 1% 인 문제에서 '전부 다수 클래스로 예측' 하면")
+print(f"  정확도 {0.99:.1%} — 아무것도 안 배웠는데 높은 점수가 나온다.")
+print("  **정확도는 불균형 데이터에서 쓸모없는 지표다.**")
+print()
+print(f"{'대응':<22} {'무엇을 하는가':<30} {'주의'}")
+print("-" * 88)
+for a, b, c in [
+    ("클래스 가중치", "손실에서 소수 클래스에 큰 가중치", "가장 안전. 데이터를 안 바꿈"),
+    ("언더샘플링", "다수 클래스를 버림", "정보 손실. 데이터가 많을 때만"),
+    ("오버샘플링(복제)", "소수 클래스를 복제", "과적합 위험"),
+    ("SMOTE", "이웃 사이 보간으로 합성 표본", "**분할 후 학습셋에만**"),
+    ("임계값 조정", "확률 컷오프를 옮김", "재학습 불필요. 먼저 시도할 것"),
+]:
+    print(f"{a:<22} {b:<30} {c}")
+print()
+print("**SMOTE 를 분할 전에 하면 누수다.**")
+print("  합성 표본이 검증 행의 이웃으로 만들어지면, 검증 정보가 학습셋에 들어간다.")
+print("  위 target encoding 과 정확히 같은 구조의 실수다.")
+print()
+print("그리고 리샘플링은 **확률 보정을 깨뜨린다**:")
+p_true = 0.01
+for ratio in [1, 5, 20, 99]:
+    # 소수 클래스를 ratio 배로 늘리면 사후확률이 어떻게 왜곡되는가
+    p_resampled = p_true*ratio/(p_true*ratio + (1-p_true))
+    print(f"  소수 클래스를 {ratio:>2}배로 오버샘플 → 모델이 배우는 사전확률 "
+          f"{p_resampled:.1%} (실제 {p_true:.1%})")
+print()
+print("  → 모델의 출력 확률이 실제 확률이 아니게 된다.")
+print("  → 확률이 필요하면 **가중치 방식**을 쓰거나 사후 보정(Platt/isotonic)을 한다.")
+print("  → 순위만 필요하면(AUC) 문제가 덜하다.")
+```
+
+---
+
+## 전처리 순서
+
+::: {.key-concept}
+**교차검증 안쪽에 들어가야 하는 것**
+
+```
+바깥 (한 번만)                    안쪽 (폴드마다 반복)
+─────────────────────            ──────────────────────────
+· 명백한 오류 행 제거              · 결측 대치 (fit)
+· 타입 변환 · 파싱                 · 스케일링 (fit)
+· 중복 제거                       · 인코딩 사전 만들기 (fit)
+· 열 이름 정리                     · 특성 선택 (fit)
+· 데이터 분할 ★                    · 이상치 임계값 (fit)
+                                 · 리샘플링 / SMOTE
+                                 · 모델 학습
+```
+
+**★ 분할이 기준선이다.** 분할 이전에 하는 것은 타깃과 무관해야 하고,
+분할 이후의 모든 `fit` 은 학습 폴드만 본다.
+
+판단이 서지 않으면 이렇게 물어라 —
+**"이 계산이 검증 행의 값을 하나라도 봤는가?"**
+봤다면 누수다.
 :::
 
 ---
 
-## G1.3.2 — 결측 대치의 부작용
+## 요약
 
-평균 대치가 분산을 줄이고 상관을 왜곡하는 모습
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 대치 방법 선택
-:::
-
----
-
-## G1.3.3 — target encoding 누수
-
-폴드 밖 통계를 쓰면 검증 점수가 비현실적으로 뛰는 실험
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 누수 유무 토글
-:::
-
----
-
-## G1.3.4 — 멱변환 효과
-
-치우친 분포가 Box-Cox로 정규에 가까워지는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: λ 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 데이터 누수 (data leakage) |  |
-| 표준화 (standardization) |  |
-| target encoding |  |
-| SMOTE |  |
-| 파이프라인 (pipeline) |  |
+| 데이터 누수 | 타깃과 무관한 범주로 **AUC 0.76** 을 만들 수 있음 (실측) |
+| 누수 규칙 | fit 은 학습 폴드에서만, 검증엔 transform 만 |
+| 가장 위험한 것 | target encoding · 특성 선택 · SMOTE |
+| 표준화 | 이상치가 표준편차를 부풀려 정상값이 0.17 로 눌림 |
+| min-max | 이상치가 [0,1] 의 대부분을 차지 — 절대 범위가 무너짐 |
+| robust | 중앙값·IQR — 이상치에 흔들리지 않음 |
+| 멱변환 | 로그정규는 $\lambda=0$ 에서 정규화. MLE 도 그 값을 찾음 |
+| 평균 대치 | 분산 축소 + 상관 약화 |
+| 회귀 대치 | **반대로** 상관 과대 — 확률적 대치가 균형 |
+| 불균형 | 리샘플링은 확률 보정을 깨뜨림. 가중치가 안전 |
+
+전처리는 데이터를 모델에 맞추는 일이다.
+다음 장은 반대로, **데이터에서 새 정보를 만들어내는** 일이다.
 
 ---
 
-**다음**: [1.4 특성 공학](04_feature_engineering.qmd) — 도메인 지식을 숫자로 — 딥러닝 시대에도 살아남은 기술
+**다음**: [1.4 특성 공학](04_feature_engineering.qmd) — 도메인 지식을 숫자로
 
 **이전**: [1.2 데이터 시각화](02_visualization.qmd)
