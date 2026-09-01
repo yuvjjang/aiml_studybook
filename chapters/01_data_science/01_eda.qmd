@@ -4,88 +4,710 @@ subtitle: "분포·관계·이상치 — 모델을 만들기 전에 데이터를
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 **신호인지 데이터 수집 사고인지**
+끝까지 알 수 없다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+[1.0](00_data_and_types.qmd)에서 데이터가 어떻게 왜곡될 수 있는지 봤다.
+이 장은 그것을 **찾아내는 도구**를 다룬다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그런데 도구 자체가 거짓말을 한다.
+같은 데이터가 히스토그램 구간 폭에 따라 단봉으로도 이봉으로도 보이고,
+요약통계가 완전히 같은데 그림은 전혀 다른 네 데이터셋이 존재한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+**그래서 EDA의 핵심 기술은 "여러 각도로 보고 일치하는 것만 믿는 것"이다.**
+
+---
+
+## 1변량 요약: 숫자 네 개로 분포를 알 수 있는가
+
+```{python}
+#| label: shape-stats
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(1)
+N = 4000
+sets = {
+    "정규":            rng.normal(0, 1, N),
+    "로그정규":         rng.lognormal(0, 0.6, N),
+    "균등":            rng.uniform(-2, 2, N),
+    "이봉 (대칭)":      np.concatenate([rng.normal(-2, 0.5, N//2),
+                                     rng.normal(2, 0.5, N//2)]),
+    "t(3) 두꺼운 꼬리":  rng.standard_t(3, N),
+}
+
+print(f"{'분포':<18} {'평균':>8} {'중앙값':>9} {'표준편차':>9} {'왜도':>8} {'초과첨도':>10}")
+print("-" * 68)
+for k, v in sets.items():
+    print(f"{k:<18} {v.mean():>8.3f} {np.median(v):>9.3f} {v.std():>9.3f} "
+          f"{stats.skew(v):>8.3f} {stats.kurtosis(v):>10.3f}")
+print()
+sk_uni = stats.skew(sets["균등"])
+sk_bi = stats.skew(sets["이봉 (대칭)"])
+print(f"**왜도가 0 이라고 정규분포인 것이 아니다.**")
+print(f"  균등 왜도 {sk_uni:+.3f}, 이봉 왜도 {sk_bi:+.3f} — 둘 다 0 근처지만 모양이 전혀 다르다.")
+print(f"  구분은 초과첨도가 해준다: 균등 {stats.kurtosis(sets['균등']):.2f}, "
+      f"이봉 {stats.kurtosis(sets['이봉 (대칭)']):.2f} (정규는 0)")
+print()
+kt = stats.kurtosis(sets["t(3) 두꺼운 꼬리"])
+print(f"그런데 t(3) 의 표본 초과첨도는 {kt:.1f} 로 터무니없이 크다.")
+print("t(3) 은 **4차 적률이 존재하지 않으므로 모첨도가 정의되지 않는다.**")
+print("표본 첨도는 극단값 몇 개에 좌우되어 표본마다 크게 흔들린다 —")
+print("**꼬리가 두꺼운 데이터에서 첨도 숫자를 믿으면 안 된다.**")
+print()
+print("산포도 마찬가지다. 이상치에 강건한 지표를 함께 봐야 한다:")
+print(f"{'분포':<18} {'표준편차':>9} {'IQR':>9} {'MAD×1.4826':>13}")
+print("-" * 52)
+for k, v in sets.items():
+    iqr = np.subtract(*np.percentile(v, [75, 25]))
+    madn = 1.4826*np.median(np.abs(v - np.median(v)))   # 정규에서 σ 와 일치하게 보정
+    print(f"{k:<18} {v.std():>9.3f} {iqr:>9.3f} {madn:>13.3f}")
+print()
+print("정규분포에서는 셋이 거의 일치하지만, 꼬리가 두꺼우면 표준편차만 크게 부푼다.")
+```
+
+---
+
+## G1.1.1 — 히스토그램 구간 폭의 함정
+
+```{python}
+#| label: fig-histogram-bins
+#| fig-cap: "같은 데이터, bin 수만 바꾼 결과"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng_h = np.random.default_rng(0)
+NH = 600
+mix = np.concatenate([rng_h.normal(-1.1, 0.7, NH//2),
+                      rng_h.normal(1.1, 0.7, NH//2)])
+
+BINS = [3, 5, 8, 12, 20, 30, 60, 120]
+hists = {}
+for b in BINS:
+    c, e = np.histogram(mix, bins=b, density=True)
+    hists[b] = (np.round(e[:-1], 4), np.round(c, 5), round(float(e[1]-e[0]), 4))
+
+b0 = 12
+fig = go.Figure()
+fig.add_trace(go.Bar(x=hists[b0][0], y=hists[b0][1], width=hists[b0][2],
+                     marker_color=viz.ACCENT, opacity=0.85, name="히스토그램"))
+# 진짜 밀도
+grid = np.linspace(mix.min(), mix.max(), 300)
+true_pdf = 0.5*(np.exp(-(grid+1.1)**2/(2*0.7**2))/(0.7*np.sqrt(2*np.pi))
+                + np.exp(-(grid-1.1)**2/(2*0.7**2))/(0.7*np.sqrt(2*np.pi)))
+fig.add_trace(go.Scatter(x=grid, y=true_pdf, mode="lines", name="진짜 밀도",
+                         line=dict(color=viz.YELLOW, width=3)))
+steps = [(str(b), {"x": [hists[b][0], None], "y": [hists[b][1], None],
+                   "width": [hists[b][2], None]}) for b in BINS]
+fig.update_layout(sliders=[viz.slider(steps, prefix="bin 수 = ",
+                                      active=BINS.index(b0), pad_t=52)])
+fig.update_layout(xaxis_title="값", yaxis_title="밀도",
+                  legend=dict(x=0.02, y=0.98))
+viz.fig_defaults(fig, height=420,
+                 title=f"두 정규분포의 혼합 (n={NH}) — 진짜는 이봉이다")
+fig.show()
+```
+
+```{python}
+#| label: histogram-bins-numbers
+#| code-fold: false
+
+import numpy as np
+
+def count_peaks(counts):
+    """국소 최대의 개수 — 아주 단순한 판정."""
+    return sum(1 for i in range(1, len(counts)-1)
+               if counts[i] > counts[i-1] and counts[i] >= counts[i+1])
+
+print(f"{'bin 수':>8} {'구간 폭':>9} {'탐지된 봉우리':>14}  {'판정'}")
+print("-" * 50)
+for b in BINS:
+    c, _ = np.histogram(mix, bins=b)
+    p = count_peaks(c)
+    verd = ("이봉을 놓침" if p < 2 else
+            "정확" if p == 2 else "잡음 봉우리")
+    print(f"{b:>8} {hists[b][2]:>9.3f} {p:>14}  {verd}")
+print()
+print("**너무 적어도 너무 많아도 틀린다.**")
+print("  bin 3개  → 봉우리 1개. 이봉 구조가 통째로 사라진다")
+print("  bin 120개 → 봉우리 수십 개. 표본 잡음이 구조처럼 보인다")
+print()
+print("자동 규칙들이 고르는 값:")
+for name in ["sturges", "fd", "scott", "doane", "auto"]:
+    c, e = np.histogram(mix, bins=name)
+    print(f"  {name:<10} {len(c):>4}개  폭 {e[1]-e[0]:.3f}  봉우리 {count_peaks(c)}")
+print()
+print("규칙들이 대체로 맞는 답을 준다. 하지만 **규칙을 믿지 말고 여러 폭으로 그려 보라.**")
+print("구조가 진짜라면 폭을 바꿔도 살아남는다.")
+```
+
+::: {.key-concept}
+**ECDF: 구간 폭이 없는 대안**
+
+경험적 누적분포함수는 임의 선택이 하나도 없다.
+
+$$\hat{F}(t) = \frac{1}{n}\sum_i \mathbf{1}[x_i \le t]$$
+
+- 모든 데이터점을 그대로 쓴다 (정보 손실 없음)
+- 조정할 파라미터가 없다 (bin 폭도, 대역폭도)
+- 두 분포를 겹쳐 그리면 비교가 쉽다
+- 분위수를 눈으로 읽을 수 있다
+
+단점은 **봉우리가 눈에 잘 안 들어온다**는 것이다 (기울기로 나타난다).
+그래서 실무에서는 ECDF와 히스토그램을 함께 본다.
 :::
 
-EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 신호인지 데이터 수집 사고인지 끝까지 알 수 없다.
+```{python}
+#| label: fig-ecdf
+#| fig-cap: "같은 데이터의 ECDF — 조정할 파라미터가 없습니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+def ecdf(a):
+    s = np.sort(a)
+    return s, np.arange(1, len(s)+1)/len(s)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("ECDF (파라미터 없음)", "ECDF 의 기울기 = 밀도"))
+sx, sy = ecdf(mix)
+step = max(1, len(sx)//400)
+fig.add_trace(go.Scatter(x=sx[::step], y=sy[::step], mode="lines", name="혼합분포",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+ref = np.sort(rng_h.normal(mix.mean(), mix.std(), NH))
+fig.add_trace(go.Scatter(x=ref[::step], y=np.arange(1, len(ref)+1)[::step]/len(ref),
+                         mode="lines", name="같은 평균·분산의 정규",
+                         line=dict(color=viz.WARM, width=2.5, dash="dash")), row=1, col=1)
+# 기울기
+d = np.gradient(sy[::step], sx[::step])
+fig.add_trace(go.Scatter(x=sx[::step], y=d, mode="lines", showlegend=False,
+                         line=dict(color=viz.GREEN, width=2)), row=1, col=2)
+fig.add_trace(go.Scatter(x=grid, y=true_pdf, mode="lines", name="진짜 밀도",
+                         line=dict(color=viz.YELLOW, width=2.5, dash="dot")),
+              row=1, col=2)
+fig.update_xaxes(title_text="값")
+fig.update_yaxes(title_text="F(t)", row=1, col=1)
+fig.update_yaxes(title_text="dF/dt", row=1, col=2)
+viz.fig_defaults(fig, height=390, title="ECDF 로 본 같은 데이터")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: ecdf-numbers
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+print("ECDF 로 바로 읽을 수 있는 것들")
+for q in [5, 25, 50, 75, 95]:
+    print(f"  {q:>2}분위수: {np.percentile(mix, q):>7.3f}")
+print()
+ks = stats.kstest(mix, stats.norm(loc=mix.mean(), scale=mix.std()).cdf)
+print(f"같은 평균·분산 정규분포와의 KS 검정")
+print(f"  통계량 D = {ks.statistic:.4f}, p = {ks.pvalue:.3e}")
+print(f"  D 는 두 ECDF 의 최대 세로 간격이다 — 위 그림에서 눈으로도 보인다.")
+print()
+if ks.pvalue < 0.01:
+    print("  → 정규가 아니라고 강하게 기각된다.")
+print()
+print("**주의**: 표본이 크면 KS 검정은 사소한 차이도 기각한다.")
+print("살짝만 치우친 분포(정규에 왜도를 조금 준 것)를 표본 크기별로 검정해 본다:")
+rng_k = np.random.default_rng(11)
+print(f"  {'n':>7} {'D (효과 크기)':>14} {'p 값':>12}  {'판정'}")
+print("-" * 50)
+for nn_ in [50, 200, 1000, 5000, 20000]:
+    sub = rng_k.gamma(shape=50, scale=1/np.sqrt(50), size=nn_)   # 거의 정규지만 살짝 우편향
+    k2 = stats.kstest(sub, stats.norm(loc=sub.mean(), scale=sub.std()).cdf)
+    verd = "기각" if k2.pvalue < 0.05 else "기각 못 함"
+    print(f"  {nn_:>7,} {k2.statistic:>14.4f} {k2.pvalue:>12.2e}  {verd}")
+print()
+print("  **차이(D)는 오히려 줄어드는데 p 값은 급격히 작아진다.**")
+print("  D 가 작아지는 것은 표본이 커지며 잡음이 걷히고 참값에 수렴하기 때문이고,")
+print("  p 가 작아지는 것은 같은 크기의 차이라도 표본이 크면 확신이 커지기 때문이다.")
+print()
+print("  즉 n=50 에서는 '차이 0.097 인데 기각 못 함', "
+      "n=20,000 에서는 '차이 0.018 인데 기각' 이다.")
+print("  **p 값은 '차이가 큰가'가 아니라 '차이가 0 이 아니라고 확신하는가'를 답한다.**")
+print("  실제 크기는 D 를 봐야 하고, 표본이 충분히 크면 어떤 실제 데이터도 기각된다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G1.1.2 — 앤스컴 4중주: 요약통계의 한계
 
-- 1변량 요약: 중심(평균/중앙값/최빈), 산포(분산/IQR/MAD)
-- 왜도·첨도와 분포 모양 읽기
-- 히스토그램·KDE·ECDF — 구간 폭과 대역폭의 함정
-- 박스플롯·바이올린플롯과 그 한계
-- 2변량: 산점도, 상관계수(피어슨/스피어만/켄달)
-- 상관 ≠ 인과, 앤스컴 4중주와 Datasaurus
-- 이상치 탐지: z-score, IQR, 마할라노비스 거리, isolation forest
-- 결측 메커니즘: MCAR / MAR / MNAR
-- 고차원 데이터의 EDA: 상관 히트맵, 쌍 플롯, 차원축소 미리보기
+```{python}
+#| label: fig-anscombe
+#| fig-cap: "요약통계가 사실상 동일한 네 데이터셋"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+XA = np.array([10, 8, 13, 9, 11, 14, 6, 4, 12, 7, 5], float)
+ANS = {
+    "I: 선형 관계":
+        (XA, np.array([8.04, 6.95, 7.58, 8.81, 8.33, 9.96, 7.24, 4.26, 10.84, 4.82, 5.68])),
+    "II: 곡선 관계":
+        (XA, np.array([9.14, 8.14, 8.74, 8.77, 9.26, 8.10, 6.13, 3.10, 9.13, 7.26, 4.74])),
+    "III: 이상치 하나":
+        (XA, np.array([7.46, 6.77, 12.74, 7.11, 7.81, 8.84, 6.08, 5.39, 8.15, 6.42, 5.73])),
+    "IV: 지렛점 하나":
+        (np.array([8, 8, 8, 8, 8, 8, 8, 19, 8, 8, 8], float),
+         np.array([6.58, 5.76, 7.71, 8.84, 8.47, 7.04, 5.25, 12.50, 5.56, 7.91, 6.89])),
+}
+
+fig = make_subplots(rows=2, cols=2, subplot_titles=tuple(ANS.keys()),
+                    vertical_spacing=0.14)
+for i, (k, (xx, yy)) in enumerate(ANS.items()):
+    r_, c_ = i//2 + 1, i % 2 + 1
+    fig.add_trace(go.Scatter(x=xx, y=yy, mode="markers", showlegend=False,
+                             marker=dict(size=10, color=viz.color(i),
+                                         line=dict(width=1, color="rgba(0,0,0,0.4)"))),
+                  row=r_, col=c_)
+    b, a = np.polyfit(xx, yy, 1)
+    xr = np.array([3, 20])
+    fig.add_trace(go.Scatter(x=xr, y=a + b*xr, mode="lines", showlegend=False,
+                             line=dict(color=viz.YELLOW, width=2.5)), row=r_, col=c_)
+    fig.update_xaxes(range=[2, 21], row=r_, col=c_)
+    fig.update_yaxes(range=[2, 14], row=r_, col=c_)
+viz.fig_defaults(fig, height=560,
+                 title="앤스컴 4중주 — 회귀선까지 같다")
+fig.show()
+```
+
+```{python}
+#| label: anscombe-numbers
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+print(f"{'':<20} {'x평균':>7} {'x분산':>7} {'y평균':>7} {'y분산':>7} "
+      f"{'상관':>7} {'기울기':>7} {'절편':>7} {'R²':>7}")
+print("-" * 84)
+for k, (xx, yy) in ANS.items():
+    b, a = np.polyfit(xx, yy, 1)
+    r = np.corrcoef(xx, yy)[0, 1]
+    print(f"{k:<20} {xx.mean():>7.2f} {xx.var(ddof=1):>7.2f} {yy.mean():>7.2f} "
+          f"{yy.var(ddof=1):>7.2f} {r:>7.3f} {b:>7.3f} {a:>7.3f} {r**2:>7.3f}")
+print()
+print("**아홉 개 통계량이 소수 둘째 자리까지 같다.** 그런데 그림은 전혀 다르다.")
+print()
+print("무엇이 다른지는 다른 진단이 잡아낸다:")
+print(f"{'':<20} {'스피어만':>9} {'잔차 최대':>10} {'x 최대 지렛값':>14}")
+print("-" * 58)
+for k, (xx, yy) in ANS.items():
+    b, a = np.polyfit(xx, yy, 1)
+    resid = yy - (a + b*xx)
+    # 단순회귀의 지렛값(leverage)
+    h = 1/len(xx) + (xx - xx.mean())**2/((xx - xx.mean())**2).sum()
+    print(f"{k:<20} {stats.spearmanr(xx, yy).statistic:>+9.3f} "
+          f"{np.abs(resid).max():>10.3f} {h.max():>14.3f}")
+print()
+print("  · II 는 스피어만이 피어슨보다 낮다 → 곡선이라 단조성도 깨진다")
+print("  · III 은 잔차 하나가 유독 크다 → 이상치 (스피어만은 오히려 0.99)")
+print("  · IV 는 지렛값이 1.0 에 가깝다 → 점 하나가 회귀선을 혼자 정한다")
+print()
+print("**그래서 회귀를 돌렸으면 반드시 잔차를 그려 봐야 한다.**")
+print("R² 하나만 보고 넘어가면 네 경우를 구별할 수 없다.")
+```
 
 ---
 
-## G1.1.1 — 앤스컴 4중주
+## G1.1.3 — 상관계수가 0인데 관계가 강한 경우들
 
-평균·분산·상관이 모두 같지만 전혀 다른 네 데이터셋
+$$r = \frac{\operatorname{Cov}(X,Y)}{\sigma_X \sigma_Y}$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 데이터셋 전환
+피어슨 상관은 **선형** 관계만 잰다. 비선형 의존은 잡지 못한다.
+
+```{python}
+#| label: fig-correlation-gallery
+#| fig-cap: "피어슨 상관은 모두 0 근처인데 구조는 전혀 다릅니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng_c = np.random.default_rng(0)
+NC = 400
+t = rng_c.uniform(-1, 1, NC)
+th = rng_c.uniform(0, 2*np.pi, NC)
+s = rng_c.uniform(-1, 1, NC)
+
+PATS = {
+    "포물선": (t, t**2 + rng_c.normal(0, 0.05, NC)),
+    "원": (np.cos(th) + rng_c.normal(0, 0.03, NC),
+          np.sin(th) + rng_c.normal(0, 0.03, NC)),
+    "X자": (t, np.abs(t)*rng_c.choice([-1, 1], NC) + rng_c.normal(0, 0.05, NC)),
+    "부채꼴 (이분산)": (s, rng_c.normal(0, 0.05 + 0.5*np.abs(s), NC)),
+    "실제로 독립": (rng_c.normal(0, 0.5, NC), rng_c.normal(0, 0.5, NC)),
+}
+
+fig = make_subplots(rows=1, cols=len(PATS), subplot_titles=tuple(PATS.keys()))
+for i, (k, (a, b)) in enumerate(PATS.items(), start=1):
+    fig.add_trace(go.Scatter(x=a, y=b, mode="markers", showlegend=False,
+                             marker=dict(size=4, color=viz.color(i-1), opacity=0.7)),
+                  row=1, col=i)
+    fig.update_xaxes(showticklabels=False, row=1, col=i)
+    fig.update_yaxes(showticklabels=False, row=1, col=i)
+viz.fig_defaults(fig, height=280,
+                 title="피어슨 r 은 전부 0 근처다")
+fig.show()
+```
+
+```{python}
+#| label: correlation-gallery-numbers
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+def distance_correlation(x, y):
+    """거리 상관 — 0 이면 **독립**을 함의한다 (피어슨과 결정적으로 다른 점)."""
+    a = np.abs(x[:, None] - x[None, :])
+    b = np.abs(y[:, None] - y[None, :])
+    A = a - a.mean(0) - a.mean(1)[:, None] + a.mean()
+    B = b - b.mean(0) - b.mean(1)[:, None] + b.mean()
+    dcov2 = (A*B).mean()
+    dvx, dvy = (A*A).mean(), (B*B).mean()
+    return float(np.sqrt(max(dcov2, 0))/np.sqrt(np.sqrt(dvx*dvy))) if dvx*dvy > 0 else 0.0
+
+# 거리상관은 유한 표본에서 0 이 아니라 양의 편향을 갖는다.
+# 그래서 절대값이 아니라 **순열 검정**으로 판단해야 한다.
+def dcor_permutation_p(x, y, n_perm=200, seed=0):
+    r0 = distance_correlation(x, y)
+    rp = np.random.default_rng(seed)
+    null = np.array([distance_correlation(x, y[rp.permutation(len(y))])
+                     for _ in range(n_perm)])
+    return r0, float(null.mean()), float((null >= r0).mean())
+
+print(f"{'패턴':<16} {'피어슨':>9} {'스피어만':>10} {'켄달':>9} {'거리상관':>10} "
+      f"{'순열귀무평균':>12} {'p':>8}")
+print("-" * 84)
+res = {}
+for k, (a, b) in PATS.items():
+    p = np.corrcoef(a, b)[0, 1]
+    sp = stats.spearmanr(a, b).statistic
+    kt = stats.kendalltau(a, b).statistic
+    dc, null_mean, pval = dcor_permutation_p(a, b)
+    res[k] = (dc, null_mean, pval)
+    print(f"{k:<16} {p:>+9.4f} {sp:>+10.4f} {kt:>+9.4f} {dc:>10.4f} "
+          f"{null_mean:>12.4f} {pval:>8.3f}")
+print()
+print("**피어슨·스피어만·켄달이 전부 0 근처지만 거리상관은 다르다.**")
+print()
+print("주의: 거리상관은 유한 표본에서 **0 이 아니라 양의 편향**을 갖는다.")
+print(f"  실제로 독립인 데이터도 {res['실제로 독립'][0]:.3f} 가 나왔다.")
+print(f"  그래서 절대값이 아니라 **순열 검정**으로 판단해야 한다 —")
+print("  y 를 무작위로 섞어 독립을 강제한 뒤 같은 통계량의 분포를 만든다.")
+print()
+sig = [k for k, v in res.items() if v[2] < 0.01]
+ns = [k for k, v in res.items() if v[2] >= 0.01]
+print(f"  p < 0.01 (의존 있음) : {', '.join(sig)}")
+print(f"  p ≥ 0.01 (독립 기각 못 함) : {', '.join(ns) if ns else '없음'}")
+print()
+print("세 순위 상관(스피어만·켄달)도 도움이 안 된다 —")
+print("**단조가 아닌 관계**는 순위로도 잡히지 않기 때문이다.")
+print()
+print("각 지표가 잡는 것:")
+for a_, b_ in [("피어슨 r", "선형 관계만"),
+               ("스피어만 ρ", "단조 관계 (곡선이어도 방향이 일정하면 잡음)"),
+               ("켄달 τ", "단조 관계, 이상치에 더 강건, 작은 표본에 적합"),
+               ("거리상관", "**모든 형태의 의존**. 0 ⟺ 독립"),
+               ("상호정보", "모든 의존. 단 추정이 어렵고 표본이 많이 필요")]:
+    print(f"  {a_:<12} {b_}")
+print()
+print("실무 순서: 산점도를 먼저 그리고, 숫자는 그 다음이다.")
+print("숫자 하나로 관계를 요약하려는 순간 위 다섯 경우가 전부 같아 보인다.")
+```
+
+---
+
+## G1.1.4 — 이상치: 방법마다 다른 점을 지목한다
+
+```{python}
+#| label: fig-outliers
+#| fig-cap: "세 방법이 서로 다른 점을 이상치로 지목합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rng_o = np.random.default_rng(3)
+NO = 300
+P = rng_o.multivariate_normal([0, 0], [[1.0, 0.9], [0.9, 1.0]], NO)
+INJECT = np.array([[3.4, 3.3], [-3.2, -3.4], [2.2, -2.2], [-2.1, 2.3]])
+P = np.vstack([P, INJECT])
+truth = np.zeros(len(P), bool); truth[NO:] = True
+
+zmax = np.abs((P - P.mean(0))/P.std(0)).max(1)
+q1, q3 = np.percentile(P, [25, 75], axis=0)
+iqr_w = q3 - q1
+iqr_flag = ((P < q1 - 1.5*iqr_w) | (P > q3 + 1.5*iqr_w)).any(1)
+Cinv = np.linalg.inv(np.cov(P.T))
+dmah = np.sqrt(np.einsum("ij,jk,ik->i", P - P.mean(0), Cinv, P - P.mean(0)))
+
+METHODS = {
+    "z-score > 3": zmax > 3,
+    "IQR 1.5배": iqr_flag,
+    "마할라노비스 > 3": dmah > 3,
+}
+
+m0 = "마할라노비스 > 3"
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=P[~METHODS[m0], 0], y=P[~METHODS[m0], 1], mode="markers",
+                         name="정상 판정",
+                         marker=dict(size=5, color=viz.hex_rgba(viz.ACCENT, 0.5))))
+fig.add_trace(go.Scatter(x=P[METHODS[m0], 0], y=P[METHODS[m0], 1], mode="markers",
+                         name="이상치 판정",
+                         marker=dict(size=11, color=viz.WARM, symbol="circle-open",
+                                     line=dict(width=2.5))))
+fig.add_trace(go.Scatter(x=INJECT[:, 0], y=INJECT[:, 1], mode="markers",
+                         name="실제로 주입한 점",
+                         marker=dict(size=14, color=viz.YELLOW, symbol="x",
+                                     line=dict(width=2))))
+steps = []
+for nm, flag in METHODS.items():
+    steps.append((nm, {"x": [P[~flag, 0], P[flag, 0], INJECT[:, 0]],
+                       "y": [P[~flag, 1], P[flag, 1], INJECT[:, 1]]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="방법: ",
+                                      active=list(METHODS).index(m0), pad_t=52)])
+fig.update_layout(xaxis_title="x₁", yaxis_title="x₂",
+                  legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+viz.fig_defaults(fig, height=460,
+                 title=f"강한 상관(ρ=0.9) 데이터에 이상치 4개를 주입")
+fig.show()
+```
+
+```{python}
+#| label: outlier-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'방법':<20} {'탐지 수':>8} {'주입 4개 중':>12} {'오탐':>7} {'재현율':>9}")
+print("-" * 62)
+for nm, flag in METHODS.items():
+    hit = int((flag & truth).sum())
+    print(f"{nm:<20} {int(flag.sum()):>8} {hit:>12} "
+          f"{int((flag & ~truth).sum()):>7} {hit/4:>9.0%}")
+print()
+print("주입한 4개 점을 각 지표로 보면:")
+print(f"{'좌표':<16} {'|z| 최대':>10} {'IQR 플래그':>11} {'마할라노비스':>13}  {'성격'}")
+print("-" * 70)
+for i in range(NO, len(P)):
+    kind = ("축 방향 극단" if zmax[i] > 3 else "**상관 구조 위반**")
+    print(f"({P[i,0]:>5.1f}, {P[i,1]:>5.1f})  {zmax[i]:>10.2f} "
+          f"{str(bool(iqr_flag[i])):>11} {dmah[i]:>13.2f}  {kind}")
+print()
+print("**뒤의 두 점이 핵심이다.**")
+print(f"  (2.2, −2.2) 는 각 축만 보면 |z| = {zmax[NO+2]:.2f} 로 평범하다.")
+print(f"  그런데 마할라노비스 거리는 {dmah[NO+2]:.2f} 다.")
+print("  x₁ 과 x₂ 가 0.9 로 강하게 양의 상관인데 이 점만 부호가 반대이기 때문이다.")
+print()
+print("일변량 방법(z-score, IQR)은 **각 축을 따로 본다.**")
+print("그래서 '개별 값은 정상인데 조합이 이상한' 점을 원리적으로 찾을 수 없다.")
+print()
+print("반대로 마할라노비스도 만능이 아니다:")
+for s in ["평균과 공분산 자체가 이상치에 오염된다 (강건 추정 필요 — MCD 등)",
+          "타원형 분포를 가정한다. 군집이 여럿이거나 곡선형이면 실패",
+          "차원이 높으면 거리 자체가 의미를 잃는다 ([4.5](../04_architectures/05_embeddings.qmd))"]:
+    print(f"  · {s}")
+print()
+print("**그리고 가장 중요한 질문은 통계가 답할 수 없다** — 이 점을 버릴 것인가?")
+print("측정 오류라면 버려야 하고, 드물지만 진짜인 현상이라면 버리면 안 된다.")
+print("그 판단은 도메인 지식의 몫이다.")
+```
+
+---
+
+## 결측 메커니즘: 버려도 되는가
+
+```{python}
+#| label: fig-missingness
+#| fig-cap: "결측 메커니즘에 따른 완전사례분석의 편향"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+rng_m = np.random.default_rng(1)
+NM = 5000
+age = rng_m.normal(45, 12, NM)
+income = 2000 + 60*age + rng_m.normal(0, 800, NM)
+true_mean = income.mean()
+
+MECH = {
+    "MCAR": rng_m.random(NM) < 0.4,
+    "MAR (나이에 의존)": rng_m.random(NM) < 0.7/(1+np.exp(-(age-45)/6)),
+    "MNAR (소득 자체에 의존)": rng_m.random(NM) < 0.7/(1+np.exp(-(income-4700)/800)),
+}
+
+fig = make_subplots(rows=1, cols=3, subplot_titles=tuple(MECH.keys()))
+for i, (nm, miss) in enumerate(MECH.items(), start=1):
+    fig.add_trace(go.Histogram(x=income, nbinsx=50, name="전체", opacity=0.6,
+                               marker_color=viz.ACCENT, showlegend=(i == 1)),
+                  row=1, col=i)
+    fig.add_trace(go.Histogram(x=income[~miss], nbinsx=50, name="관측된 것만",
+                               opacity=0.6, marker_color=viz.WARM,
+                               showlegend=(i == 1)), row=1, col=i)
+    fig.update_xaxes(title_text="소득", row=1, col=i)
+fig.update_layout(barmode="overlay")
+viz.fig_defaults(fig, height=370, title="결측 후 남은 분포")
+fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: missingness-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"참 평균 소득: {true_mean:,.0f}")
+print()
+print(f"{'메커니즘':<24} {'결측률':>8} {'완전사례':>11} {'편향':>9} "
+      f"{'회귀대치':>11} {'편향':>9}")
+print("-" * 78)
+for nm, miss in MECH.items():
+    obs = ~miss
+    cc = income[obs].mean()
+    b_, a_ = np.polyfit(age[obs], income[obs], 1)     # 관측된 것으로 age→income 학습
+    imp = income.copy()
+    imp[miss] = a_ + b_*age[miss]                     # age 는 항상 관측된다고 가정
+    print(f"{nm:<24} {miss.mean():>8.1%} {cc:>11,.0f} {cc-true_mean:>+9,.0f} "
+          f"{imp.mean():>11,.0f} {imp.mean()-true_mean:>+9,.0f}")
+print()
+print("정의와 실측을 나란히 보면:")
+print()
+print("  **MCAR** (Missing Completely At Random)")
+print("    결측이 어떤 변수와도 무관. 관측된 것은 모집단의 무작위 표본이다.")
+print("    → 그냥 버려도 편향이 없다 (표본이 줄어 분산만 커진다). 실측 편향 거의 0.")
+print()
+print("  **MAR** (Missing At Random)")
+print("    결측이 **관측된 변수**(나이)에만 의존. 소득 자체에는 의존하지 않는다.")
+print("    → 완전사례분석은 편향된다. 하지만 나이를 쓰면 **복구할 수 있다.**")
+print()
+print("  **MNAR** (Missing Not At Random)")
+print("    결측이 **결측된 값 자체**(소득)에 의존. 고소득자가 답을 안 한다.")
+print("    → 관측 데이터만으로는 원리적으로 복구 불가능하다.")
+print("      회귀대치를 해도 편향이 상당히 남는다.")
+print()
+print("**그리고 데이터만 봐서는 MAR 과 MNAR 을 구분할 수 없다.**")
+print("구분하려면 결측이 왜 생겼는지 — 수집 과정을 알아야 한다.")
+print("[1.0](00_data_and_types.qmd)에서 계보 기록을 강조한 이유가 여기에도 있다.")
+print()
+print("결측 자체가 정보일 수도 있다:")
+print("  · '소득 미응답' 이라는 지시자 열을 추가하면 모델이 그 패턴을 쓸 수 있다")
+print("  · 단, 그 패턴이 학습/서빙에서 동일하게 유지되는지 확인해야 한다")
+```
+
+---
+
+## EDA 점검 순서
+
+::: {.key-concept}
+**모델을 돌리기 전에**
+
+```
+□ 행 수 · 열 수 · 결측률 · 중복 행
+□ 각 열의 dtype 과 측정 척도가 맞는가
+□ 각 수치 열의 min / max / 고유값 개수      ← 센티널(-999) 탐지
+□ 각 범주 열의 카디널리티와 상위 빈도
+□ 히스토그램을 **여러 bin 폭으로** 그려 본다
+□ 타깃 분포 (불균형? 꼬리? 다봉?)
+□ 상관 히트맵 — 단, 비선형은 안 잡힌다는 것을 기억
+□ 주요 쌍은 산점도로 직접 본다
+□ 시간 열이 있으면 시간축으로 정렬해 그려 본다  ← 분포 이동 탐지
+□ 결측 패턴 자체를 시각화 (열 간 결측이 상관되는가)
+```
+
+**가장 값싼 검사가 가장 많이 잡는다.** min/max 를 찍어 보는 데 1초 걸린다.
 :::
 
+```{python}
+#| label: eda-checklist-demo
+#| code-fold: false
+
+import numpy as np
+
+def quick_profile(name, col):
+    """수치 열 하나의 최소 프로파일 — 실무에서 가장 먼저 찍어 볼 것."""
+    finite = col[np.isfinite(col)]
+    return dict(
+        n=len(col), 결측=int(np.isnan(col).sum()),
+        고유값=len(np.unique(finite)),
+        최소=finite.min(), 최대=finite.max(),
+        중앙값=float(np.median(finite)),
+        영값=int((finite == 0).sum()),
+        음수=int((finite < 0).sum()),
+    )
+
+rng_p = np.random.default_rng(7)
+cols = {
+    "정상 열": rng_p.normal(50, 10, 1000),
+    "센티널 섞임": np.where(rng_p.random(1000) < 0.05, -999.0,
+                       rng_p.normal(50, 10, 1000)),
+    "상수 열": np.full(1000, 3.0),
+    "0 이 과다": np.where(rng_p.random(1000) < 0.7, 0.0, rng_p.exponential(20, 1000)),
+}
+keys = ["n", "결측", "고유값", "최소", "최대", "중앙값", "영값", "음수"]
+print(f"{'열':<14} " + " ".join(f"{k:>9}" for k in keys))
+print("-" * 92)
+for nm, c in cols.items():
+    p = quick_profile(nm, c)
+    print(f"{nm:<14} " + " ".join(
+        f"{p[k]:>9.1f}" if isinstance(p[k], float) else f"{p[k]:>9}" for k in keys))
+print()
+print("이 표 하나로 세 가지 문제가 즉시 보인다:")
+print("  · '센티널 섞임' — 최소가 -999. 정상 범위와 동떨어져 있다")
+print("  · '상수 열' — 고유값 1개. 모델에 아무 정보도 주지 않는다")
+print("  · '0 이 과다' — 영값이 70%. 진짜 0 인가, 미측정인가?")
+```
+
 ---
 
-## G1.1.2 — 히스토그램 구간 폭의 함정
+## 요약
 
-같은 데이터가 bin 수에 따라 단봉/다봉으로 보이는 현상
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: bin 수 슬라이더
-:::
-
----
-
-## G1.1.3 — 상관계수 갤러리
-
-상관계수 0인데 강한 비선형 관계가 있는 경우들
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 패턴 선택
-:::
-
----
-
-## G1.1.4 — 이상치 탐지 비교
-
-z-score / IQR / 마할라노비스가 서로 다른 점을 지목하는 상황
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 방법·임계값 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| EDA |  |
-| ECDF |  |
-| 스피어만 상관 (Spearman) |  |
-| MCAR/MAR/MNAR |  |
-| 마할라노비스 거리 |  |
+| 왜도·첨도 | 왜도 0 ≠ 정규. 이봉도 왜도 0 |
+| 표본 첨도 | 꼬리가 두꺼우면 불안정 — t(3)에서 79.7 |
+| 히스토그램 | 너무 적어도 많아도 틀림. **여러 폭으로 그려라** |
+| ECDF | 조정 파라미터 없음. KS 검정의 $D$ 가 최대 세로 간격 |
+| 앤스컴 4중주 | 아홉 통계량이 같아도 그림은 전혀 다름 |
+| 상관계수 | 피어슨=선형, 스피어만/켄달=단조, **거리상관=모든 의존** |
+| z-score / IQR | 축을 따로 봄 — 상관 구조 위반을 못 잡음 |
+| 마할라노비스 | 상관을 고려. 단 타원 가정·오염·고차원에 취약 |
+| MCAR/MAR/MNAR | MAR 은 복구 가능, MNAR 은 원리적으로 불가 |
+| 구분 불가 | 데이터만으로 MAR/MNAR 구분 불가 — 수집 과정을 알아야 함 |
+
+EDA의 결론은 늘 같다.
+**숫자 하나로 요약하려는 순간 정보가 사라진다.**
+
+다음 장은 그 "보는 것"을 제대로 하는 법이다 —
+그리고 그림도 얼마나 쉽게 거짓말하는지.
 
 ---
 
-**다음**: [1.2 데이터 시각화](02_visualization.qmd) — 그래픽 문법과 지각 — 거짓말하지 않는 그림 그리기
+**다음**: [1.2 데이터 시각화](02_visualization.qmd) — 그래픽 문법과 지각
 
 **이전**: [1.0 데이터의 구조](00_data_and_types.qmd)
