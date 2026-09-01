@@ -4,90 +4,540 @@ subtitle: "ELMo·BERT·GPT·T5 — 자기지도 목표의 설계"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[7.3](03_word_embeddings.qmd)은 벽에 부딪혔다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> '배'는 과일이기도 하고 선박이기도 한데, 정적 임베딩은 벡터를 하나만 준다.
+> 두 뜻 중심의 코사인이 −0.28이라 **기하학적으로** 둘 다 가까울 수 없다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+답은 명확했다. **문맥에 따라 벡터를 만들면 된다.**
+그러려면 문맥을 읽는 모델이 필요하고, 그 모델을 레이블 없이 학습시켜야 한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+2018년부터 몇 년간 이 분야는 한 질문을 두고 갈렸다.
+
+> **무엇을 맞히게 할 것인가?**
+
+- 다음 토큰? (GPT)
+- 가려진 토큰? (BERT)
+- 가려진 구간? (T5)
+- 이 토큰이 진짜인지 가짜인지? (ELECTRA)
+
+선택이 달라지면 **모델이 할 수 있는 일이 달라진다.**
+이 장은 그 선택지들을 비교하고, 왜 결국 자기회귀가 이겼는지를 본다.
+
+먼저 논쟁의 핵심 수치부터 정확히 계산한다 — **양방향 문맥은 얼마나 더 유용한가.**
+
+---
+
+## G7.4.1 — 양방향성의 가치를 정확히 계산한다
+
+[7.2](02_language_models.qmd)의 2차 마르코프 소스를 다시 쓴다.
+참 분포를 알고 있으니 **조건부 엔트로피를 정확히 계산할 수 있다.**
+
+```{python}
+#| label: bidirectional
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+V = 10
+rg = np.random.default_rng(0)
+LG = rg.normal(0, 2.2, (V, V, V))
+P = np.exp(LG - LG.max(-1, keepdims=True))
+P /= P.sum(-1, keepdims=True)
+
+
+def generate(n, seed):
+    g = np.random.default_rng(seed)
+    s = [int(g.integers(V)), int(g.integers(V))]
+    for _ in range(n):
+        s.append(int(g.choice(V, p=P[s[-2], s[-1]])))
+    return np.array(s)
+
+
+M = np.zeros((V*V, V*V))
+for a in range(V):
+    for b in range(V):
+        M[a*V+b, b*V:(b+1)*V] = P[a, b]
+pi = np.ones(V*V)/(V*V)
+for _ in range(4000):
+    pi = pi @ M
+PI = pi.reshape(V, V)                    # p(x_{t-2}=a, x_{t-1}=b)
+
+# ── 좌측 문맥만: H(x_t | x_{t-2}, x_{t-1}) ──
+H_LEFT = float(sum(PI[a, b]*(-(P[a, b]*np.log2(np.maximum(P[a, b], 1e-300))).sum())
+                   for a in range(V) for b in range(V)))
+
+# ── 양쪽 문맥: H(x_t | x_{t-2}, x_{t-1}, x_{t+1}, x_{t+2}) ──
+# 결합분포 p(a,b,c,d,e) = p(a,b)·P[a,b,c]·P[b,c,d]·P[c,d,e]
+J = (PI[:, :, None, None, None]
+     * P[:, :, :, None, None]
+     * P[None, :, :, :, None]
+     * P[None, None, :, :, :])
+J /= J.sum()
+Jc = J.transpose(0, 1, 3, 4, 2)          # (a, b, d, e, c)
+cond = Jc/np.maximum(Jc.sum(-1, keepdims=True), 1e-300)
+H_BI = float(-(Jc*np.log2(np.maximum(cond, 1e-300))).sum())
+
+print("2차 마르코프 소스에서 가운데 토큰 x_t 를 맞히는 문제")
+print()
+print(f"{'조건':<34} {'H (bits)':>10} {'PPL':>9}")
+print("-" * 56)
+print(f"{'문맥 없음 (균등)':<34} {np.log2(V):>10.4f} {V:>9.3f}")
+print(f"{'좌측만  x_{t-2}, x_{t-1}  (CLM)':<34} {H_LEFT:>10.4f} "
+      f"{2**H_LEFT:>9.3f}")
+print(f"{'양쪽    + x_{t+1}, x_{t+2}  (MLM)':<34} {H_BI:>10.4f} "
+      f"{2**H_BI:>9.3f}")
+print()
+print(f"**양방향 문맥이 {H_LEFT-H_BI:.4f} bits 를 더 준다** — "
+      f"퍼플렉서티가 {1-2**H_BI/2**H_LEFT:.1%} 줄어든다.")
+print()
+print("**이 소스는 '미래가 과거에 의존하는' 구조라 뒤쪽 토큰이 정보를 담는다.**")
+print("  x_{t+1} 은 (x_{t-1}, x_t) 에 의존하므로 x_t 에 대한 단서가 된다.")
+print("  실제 언어도 마찬가지다 — 뒤 문장이 앞 단어의 뜻을 확정하는 일이 흔하다.")
+print()
+print("**BERT 가 양방향을 택한 것은 근거가 있다.** 문제는 대가다.")
+```
+
+::: {.callout-warning}
+### 양방향성의 대가
+
+$H(x_t \mid \text{양쪽})$ 을 아무리 잘 배워도 **문장을 생성할 수 없다.**
+
+생성은 $p(x_1)p(x_2|x_1)p(x_3|x_{1:2})\cdots$ 로 진행되는데,
+양방향 모델은 $x_{t+1}$ 을 이미 안다고 가정하고 학습되었기 때문이다.
+
+그래서 BERT는 **표현을 만드는 모델**이고, GPT는 **생성하는 모델**이다.
+이 구분이 2018–2020년 이 분야를 둘로 갈랐다.
 :::
 
-'무엇을 맞히게 할 것인가'라는 선택이 모델의 능력을 결정한다. 사전학습 목표의 역사는 그 선택지를 탐색한 기록이다.
+---
+
+## G7.4.2 — 목표들이 입력을 어떻게 망가뜨리는가
+
+```{python}
+#| label: objectives
+#| code-fold: false
+
+TOKENS = ["오늘", "서울", "의", "날씨", "는", "매우", "맑고", "따뜻하다"]
+
+print("원본:  " + " ".join(TOKENS))
+print()
+
+print("① CLM (GPT) — 다음 토큰 예측, 입력을 망가뜨리지 않는다")
+for t in [3, 5]:
+    print(f"   입력 {' '.join(TOKENS[:t]):<28} → 정답 '{TOKENS[t]}'")
+print(f"   길이 {len(TOKENS)} 인 시퀀스에서 학습 신호 {len(TOKENS)-1}개 "
+      f"(모든 위치)")
+print()
+
+print("② MLM (BERT) — 15% 를 [MASK] 로 바꾸고 그것만 맞힌다")
+masked = TOKENS.copy()
+masked[3] = "[MASK]"
+print(f"   입력 {' '.join(masked)}")
+print(f"   정답 위치 3 = '{TOKENS[3]}'")
+print(f"   학습 신호 1개 (15% × 8 ≈ 1)")
+print()
+print("   BERT 의 마스킹은 사실 세 갈래다 (15% 중):")
+for a, b in [("80%", "[MASK] 로 교체"),
+             ("10%", "무작위 토큰으로 교체"),
+             ("10%", "**그대로 둠**")]:
+    print(f"     {a:<6} {b}")
+print("   이유: 미세조정 때는 [MASK] 가 없다. 그 불일치를 줄이려는 장치다.")
+print()
+
+print("③ span corruption (T5) — 연속 구간을 하나의 센티널로")
+print(f"   입력  오늘 서울 의 <X> 는 <Y> 따뜻하다")
+print(f"   정답  <X> 날씨 <Y> 매우 맑고 <Z>")
+print("   가려진 구간을 **순서대로 생성**한다 — 인코더-디코더 구조가 필요하다")
+print()
+
+print("④ RTD (ELECTRA) — 작은 생성자가 바꿔치기하고, 판별자가 찾아낸다")
+corrupted = TOKENS.copy()
+corrupted[1] = "부산"
+corrupted[5] = "조금"
+print(f"   손상 {' '.join(corrupted)}")
+print(f"   정답 " + " ".join("가짜" if TOKENS[i] != corrupted[i] else "진짜"
+                            for i in range(len(TOKENS))))
+print(f"   학습 신호 {len(TOKENS)}개 — **모든 위치**에서 이진 분류")
+print()
+
+print("학습 신호 밀도 (시퀀스 길이 128 기준)")
+print()
+print(f"{'목표':<26} {'학습 위치':>10} {'비율':>8} {'예측 대상'}")
+print("-" * 68)
+for nm, k, frac, tgt in [
+    ("CLM (GPT)", 128, 1.00, "다음 토큰 (어휘 전체)"),
+    ("MLM 15% (BERT)", 19, 0.15, "가려진 토큰 (어휘 전체)"),
+    ("span corruption (T5)", 19, 0.15, "가려진 스팬 (어휘 전체)"),
+    ("RTD (ELECTRA)", 128, 1.00, "**진짜/가짜 (이진)**"),
+]:
+    print(f"{nm:<26} {k:>10} {frac:>8.2f} {tgt}")
+print()
+print("**BERT 는 순전파 한 번에 15% 만 배운다.**")
+print("ELECTRA 의 동기가 정확히 이것이다 — 같은 계산으로 6.7배 많은 위치에서 배운다.")
+print("대신 각 신호가 약하다 (어휘 전체 대신 이진 판정).")
+print("ELECTRA 논문은 그 교환이 **작은 모델에서 특히 유리**하다고 보고했다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G7.4.3 — 마스킹 비율: 무엇을 재고 무엇을 못 재는가
 
-- 전이학습과 사전학습-미세조정 패러다임의 등장
-- ELMo: 문맥적 임베딩의 시작
-- BERT: 마스크드 언어모델(MLM)과 NSP, 양방향성의 대가
-- 마스킹 비율·전략과 그 이후의 개선(RoBERTa, whole-word masking)
-- ELECTRA: 대체 토큰 탐지로 샘플 효율 올리기
-- GPT 계열: 자기회귀 사전학습, GPT-1/2/3의 전환점
-- T5: 모든 과제를 text-to-text로, span corruption
-- BART: 잡음제거 오토인코더 관점
-- 목표별 능력 차이: 이해 vs 생성 vs 조건부 생성
-- 왜 decoder-only 자기회귀가 지배적이 되었는가
-- 최근의 통합 목표(UL2, prefix LM, fill-in-the-middle)
+```{python}
+#| label: mask-ratio
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+TR = generate(80000, 1)
+TE = generate(10000, 2)
+W = 5
+CEN = W//2
+
+
+def windows(seq):
+    return np.stack([seq[i:i+W] for i in range(len(seq)-W+1)])
+
+
+def encode(X, mask):
+    """마스킹된 자리는 별도의 [MASK] 인덱스 V 로 표시한다."""
+    n = len(X)
+    O = np.zeros((n, W*(V+1)))
+    for j in range(W):
+        idx = np.where(mask[:, j], V, X[:, j])
+        O[np.arange(n), j*(V+1) + idx] = 1.0
+    return O
+
+
+X_TR, X_TE = windows(TR), windows(TE)
+m_te = np.zeros(X_TE.shape, bool)
+m_te[:, CEN] = True
+
+print(f"창 크기 {W}, 가운데 위치를 맞힌다. 훈련 {len(X_TR):,}개")
+print("가운데는 항상 마스킹하고, **나머지 위치를 추가로 얼마나 가릴지**를 바꾼다.")
+print()
+print(f"{'추가 마스킹 비율':>16} {'평균 가려진 위치':>16} {'남은 문맥':>10} "
+      f"{'가운데 예측 PPL':>17}")
+print("-" * 66)
+MR = []
+gm = np.random.default_rng(0)
+for ratio in [0.0, 0.2, 0.4, 0.6, 0.8]:
+    m_tr = gm.random(X_TR.shape) < ratio
+    m_tr[:, CEN] = True
+    net = nn.MLP([W*(V+1), 96, 96, V], activation="tanh",
+                 out_activation="softmax", init="xavier", seed=0)
+    nn.train(net, encode(X_TR, m_tr), X_TR[:, CEN], loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=5e-3), steps=1500, batch_size=512,
+             seed=0)
+    pr = net.predict(encode(X_TE, m_te))
+    ce = float(-np.log2(np.maximum(pr[np.arange(len(X_TE)), X_TE[:, CEN]],
+                                   1e-300)).mean())
+    n_masked = 1 + ratio*(W-1)
+    MR.append((ratio, n_masked, W-n_masked, 2**ce))
+    print(f"{ratio:>16.1f} {n_masked:>16.2f} {W-n_masked:>10.2f} "
+          f"{2**ce:>17.3f}")
+print("-" * 66)
+print(f"{'양방향 하한':>16} {'':>16} {'':>10} {2**H_BI:>17.3f}")
+print()
+print(f"**마스킹을 늘릴수록 예측이 나빠진다** "
+      f"({MR[0][3]:.3f} → {MR[-1][3]:.3f}, {MR[-1][3]/MR[0][3]:.1f}배).")
+print("문맥이 줄어드니 당연하다. **이것이 마스킹의 비용이다.**")
+print()
+print("**그런데 이 실험은 트레이드오프의 절반만 잰다.**")
+print("  비용 — 위 표. 많이 가릴수록 조건이 약해져 예측이 어려워진다")
+print("  이득 — 순전파 한 번에 더 많은 위치를 배운다 (앞 절의 신호 밀도)")
+print()
+print("두 힘의 균형점은 **모델 크기·데이터·계산 예산에 함께 의존**한다.")
+print("우리 실험은 고정된 작은 모델이라 이득 쪽을 재현하지 못한다.")
+print("BERT 의 15% 는 그 균형에 대한 **경험적 선택**이었고,")
+print("이후 연구는 그 값이 절대적이지 않다고 보고했다:")
+for s in ["RoBERTa — 동적 마스킹(매 에폭 다시 마스킹)이 정적보다 낫다",
+          "Wettig et al.(2023) — 큰 모델에서는 **40% 가 15% 보다 낫다**",
+          "whole-word masking — 서브워드 조각이 아니라 단어 전체를 가린다",
+          "**즉 15% 는 정답이 아니라 특정 설정의 최적값이었다**"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-objectives
+#| fig-cap: "마스킹 비용 곡선과 목표별 학습 신호 밀도"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
+                    subplot_titles=("마스킹을 늘릴 때의 비용",
+                                    "목표별 학습 신호 밀도 (길이 128)"))
+fig.add_trace(go.Scatter(x=[m[0] for m in MR], y=[m[3] for m in MR],
+                         mode="lines+markers", name="가운데 예측 PPL",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_hline(y=2**H_BI, line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text=f"양방향 하한 {2**H_BI:.2f}", row=1, col=1)
+fig.add_hline(y=2**H_LEFT, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text=f"좌측만 {2**H_LEFT:.2f}", row=1, col=1)
+fig.update_xaxes(title_text="추가 마스킹 비율", row=1, col=1)
+fig.update_yaxes(title_text="퍼플렉서티", row=1, col=1)
+
+names = ["CLM\n(GPT)", "MLM 15%\n(BERT)", "span\n(T5)", "RTD\n(ELECTRA)"]
+vals = [128, 19, 19, 128]
+cols = [viz.ACCENT, viz.WARM, viz.PINK, viz.GREEN]
+fig.add_trace(go.Bar(x=[n.replace("\n", " ") for n in names], y=vals,
+                     showlegend=False, marker_color=cols,
+                     text=[f"{v}" for v in vals], textposition="outside"),
+              row=1, col=2)
+fig.update_yaxes(title_text="학습 위치 수", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
 
 ---
 
-## G7.4.1 — 사전학습 목표 비교
+## G7.4.4 — 문맥적 표현이 정말 생기는가
 
-MLM·CLM·span corruption·대체탐지가 입력을 손상시키는 방식
+[7.3](03_word_embeddings.qmd)의 '배' 문제로 돌아간다.
+문맥을 읽는 모델은 같은 토큰에 다른 벡터를 줄까?
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 목표 전환
-:::
+```{python}
+#| label: contextual
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+# BERT 처럼 가운데를 **80% 만** 마스킹한다 (나머지 20% 는 원래 토큰을 그대로)
+gm2 = np.random.default_rng(3)
+m_tr2 = gm2.random(X_TR.shape) < 0.2
+m_tr2[:, CEN] = gm2.random(len(X_TR)) < 0.8
+CTXNET = nn.MLP([W*(V+1), 96, 96, V], activation="tanh",
+                out_activation="softmax", init="xavier", seed=0)
+nn.train(CTXNET, encode(X_TR, m_tr2), X_TR[:, CEN], loss="softmax_ce",
+         opt=nn.Optimizer("adam", lr=5e-3), steps=2000, batch_size=512, seed=0)
+
+
+def hidden(X, mask):
+    """마지막 은닉층 활성 = 문맥적 표현."""
+    h = encode(X, mask)
+    for i in range(len(CTXNET.W)-1):
+        h = np.tanh(h @ CTXNET.W[i] + CTXNET.b[i])
+    return h
+
+
+# 가운데를 마스킹하지 않고, **주변 문맥만** 바꿔가며 표현을 본다
+m_none = np.zeros((len(X_TE), W), bool)
+H_ALL = hidden(X_TE, m_none)
+mid = X_TE[:, CEN]
+
+print("가운데를 80% 만 마스킹해 학습했다 — BERT 의 80/10/10 과 같은 이유다.")
+print("(항상 마스킹하면 모델이 그 자리의 입력을 아예 무시하도록 배운다.")
+print(" 그러면 평가 때 토큰을 보여줘도 표현에 반영되지 않는다.)")
+print()
+print("같은 가운데 토큰인데 주변 문맥이 다르면 표현이 달라지는가")
+print()
+print(f"{'토큰':>5} {'등장 횟수':>10} {'같은 토큰끼리 코사인':>20} "
+      f"{'다른 토큰과 코사인':>19}")
+print("-" * 60)
+CTXVAR = []
+for tok in range(min(V, 6)):
+    idx = np.where(mid == tok)[0][:250]
+    other = np.where(mid != tok)[0][:250]
+    if len(idx) < 20:
+        continue
+    Hs = H_ALL[idx]/np.linalg.norm(H_ALL[idx], axis=1, keepdims=True)
+    Ho = H_ALL[other]/np.linalg.norm(H_ALL[other], axis=1, keepdims=True)
+    within = float((Hs @ Hs.T)[np.triu_indices(len(Hs), 1)].mean())
+    between = float((Hs @ Ho.T).mean())
+    CTXVAR.append((tok, len(np.where(mid == tok)[0]), within, between))
+    print(f"{tok:>5} {len(np.where(mid==tok)[0]):>10,} {within:>20.4f} "
+          f"{between:>19.4f}")
+print()
+w_avg = float(np.mean([c[2] for c in CTXVAR]))
+b_avg = float(np.mean([c[3] for c in CTXVAR]))
+print(f"평균: 같은 토큰끼리 {w_avg:.4f}, 다른 토큰과 {b_avg:.4f}")
+print()
+print("**같은 토큰끼리도 코사인이 1.0 이 아니다** — 문맥에 따라 벡터가 움직인다.")
+print("동시에 다른 토큰보다는 확실히 가깝다 — 토큰 정체성도 유지한다.")
+print()
+print(f"**정적 임베딩이라면 같은 토큰끼리 코사인이 정확히 1.0 이었을 것이다.**")
+print(f"여기서는 {w_avg:.3f} 다. 그 차이가 '문맥적'이라는 말의 실체다.")
+print()
+print(f"같은 토큰끼리({w_avg:.3f})가 다른 토큰과({b_avg:.3f})보다 "
+      f"{w_avg/max(b_avg,1e-9):.1f}배 가깝다 —")
+print("토큰 정체성과 문맥이 **한 벡터 안에 함께** 들어 있다.")
+print()
+print("실제 BERT 에서 보고된 것들:")
+for s in ["층이 깊어질수록 같은 단어의 표현이 더 흩어진다 (문맥 의존↑)",
+          "얕은 층은 표면 형태, 중간 층은 구문, 깊은 층은 의미에 가깝다",
+          "마지막 층은 사전학습 목표에 과하게 특화되어 미세조정에 덜 유용할 수 있다",
+          "**이방성(anisotropy)** — 모든 표현이 좁은 원뿔에 몰린다 "
+          "(4.5 에서 다뤘고, 재현되지 않은 실험이었다)"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G7.4.2 — BERT 마스킹 비율
+## 목표별로 무엇을 할 수 있게 되는가
 
-마스킹 비율에 따른 학습 신호와 효율의 트레이드오프
+```{python}
+#| label: capabilities
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 비율 슬라이더
-:::
+rows = [
+    ("ELMo (2018)", "양방향 LSTM, 두 방향 별도 CLM", "특징 추출",
+     "문맥적 임베딩의 시작. 얕은 양방향"),
+    ("BERT (2018)", "MLM + NSP, 인코더", "**이해**",
+     "분류·NER·QA 에 강함. 생성 불가"),
+    ("RoBERTa (2019)", "MLM만, 동적 마스킹, 더 오래", "이해",
+     "NSP 제거가 오히려 나았다"),
+    ("ALBERT (2019)", "파라미터 공유 + SOP", "이해",
+     "메모리 절약, 속도는 그대로"),
+    ("ELECTRA (2020)", "RTD (모든 위치 이진 판정)", "이해",
+     "**샘플 효율** — 같은 계산에 더 좋은 성능"),
+    ("GPT-1/2/3", "CLM, 디코더", "**생성 + 이해**",
+     "규모를 키우자 문맥 내 학습이 나타났다"),
+    ("T5 (2019)", "span corruption, 인코더-디코더", "조건부 생성",
+     "모든 과제를 text-to-text 로"),
+    ("BART (2019)", "여러 잡음 + 복원, 인코더-디코더", "조건부 생성",
+     "요약·번역에 강함"),
+    ("UL2 (2022)", "여러 목표를 섞음 (mixture-of-denoisers)", "통합",
+     "목표 선택 자체를 학습에 넣음"),
+]
+print(f"{'모델':<18} {'사전학습 목표':<34} {'주 능력':<12} {'특징'}")
+print("-" * 104)
+for r in rows:
+    print(f"{r[0]:<18} {r[1]:<34} {r[2]:<12} {r[3]}")
+print()
+print("**왜 decoder-only 자기회귀가 이겼는가**")
+print()
+reasons = [
+    ("생성이 된다", "인코더 전용은 문장을 만들 수 없다. 그것만으로 용도가 갈린다"),
+    ("**학습 신호가 조밀하다**", "모든 위치에서 배운다 (MLM 은 15%)"),
+    ("구조가 단순하다", "인코더-디코더의 교차 어텐션이 없어 스케일링이 쉽다"),
+    ("**문맥 내 학습**", "프롬프트만으로 과제를 바꾼다 — 미세조정 없이 (7.8)"),
+    ("KV 캐시", "생성 시 증분 계산이 가능하다 (7.14)"),
+    ("과제 통합", "모든 것을 '다음 토큰'으로 표현할 수 있다"),
+]
+print(f"{'이유':<22} {'설명'}")
+print("-" * 84)
+for a, b in reasons:
+    print(f"{a:<22} {b}")
+print()
+print("**그런데 '이해' 만 필요하면 지금도 인코더가 낫다.**")
+for s in ["문장 임베딩·검색 — BERT 계열(E5, BGE)이 여전히 표준 (7.10)",
+          "분류·NER — 작은 인코더가 훨씬 싸고 충분히 정확하다",
+          "**양방향 문맥이 유리하다는 사실은 변하지 않았다** (이 장 첫 실험)",
+          "바뀐 것은 '생성이 필요한 용도가 압도적으로 많아졌다'는 것"]:
+    print(f"  · {s}")
+print()
+print("**그리고 두 세계가 다시 만나고 있다:**")
+for s in ["prefix LM — 앞부분은 양방향, 뒷부분은 인과적",
+          "FIM (fill-in-the-middle) — 코드 補完을 위해 순서를 재배열해 학습",
+          "  '접두사 + 접미사 + 중간' 순서로 바꾸면 자기회귀로 빈칸을 채울 수 있다",
+          "UL2 — 여러 손상 방식을 한 모델에 섞는다",
+          "인코더-디코더의 부활 — 번역·요약 전용 모델에서는 여전히 경쟁력"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fim
+#| code-fold: false
+
+print("FIM (fill-in-the-middle) — 자기회귀로 빈칸을 채우는 방법")
+print()
+print("문제: CLM 은 왼쪽만 본다. 그런데 코드 補完은 뒤쪽도 봐야 한다.")
+print()
+CODE = ["def", "add(a,b):", "return", "a+b"]
+print(f"  원본        {' '.join(CODE)}")
+print(f"  가리고 싶은 곳: '{CODE[2]}'")
+print()
+print("해법: **학습 데이터의 순서를 바꾼다.**")
+print()
+print(f"  <PRE> {' '.join(CODE[:2])} <SUF> {CODE[3]} <MID> {CODE[2]}")
+print()
+print("  이렇게 학습하면, 추론 때 '<PRE> 접두사 <SUF> 접미사 <MID>' 를 주고")
+print("  **평범한 자기회귀 생성**으로 가운데를 만들 수 있다.")
+print()
+print("**아키텍처를 바꾸지 않고 목표만 바꿔서 양방향 능력을 얻은 것이다.**")
+print("Bavarian et al.(2022)은 FIM 을 섞어도 **좌→우 성능이 떨어지지 않는다**고")
+print("보고했다 (FIM-for-free). 그래서 코드 모델은 대부분 FIM 을 함께 학습한다.")
+print()
+print("이것이 이 장의 교훈을 요약한다:")
+print("**목표의 선택은 아키텍처의 선택보다 유연하다.**")
+print("같은 디코더로도 무엇을 맞히게 하느냐에 따라 능력이 달라진다.")
+```
 
 ---
 
-## G7.4.3 — 문맥적 임베딩
+## 전이학습이라는 전제
 
-같은 단어가 문맥에 따라 다른 벡터가 되는 것을 2D로 확인
+```{python}
+#| label: transfer
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단어·문장 선택
-:::
+print("사전학습-미세조정 패러다임이 성립하는 이유")
+print()
+print("  가정: **저수준 표현은 과제와 무관하게 공유된다**")
+print("  → 큰 데이터로 표현을 배우고, 작은 데이터로 과제를 배운다")
+print()
+rows = [
+    ("2013~2017", "단어 임베딩만 전이", "Word2Vec/GloVe 를 초기값으로",
+     "나머지는 과제별로 처음부터"),
+    ("2018~2020", "**모델 전체 전이**", "BERT/GPT 를 미세조정",
+     "과제별 데이터가 수천 개면 충분"),
+    ("2020~2022", "전이 없이 프롬프트", "GPT-3 의 문맥 내 학습",
+     "가중치를 안 바꾸고 과제를 바꾼다"),
+    ("2022~", "지시 조정 + 정렬", "하나의 모델이 모든 과제",
+     "미세조정은 능력이 아니라 행동을 바꾼다"),
+]
+print(f"{'시기':<14} {'전이 단위':<20} {'방법':<28} {'함의'}")
+print("-" * 94)
+for r in rows:
+    print(f"{r[0]:<14} {r[1]:<20} {r[2]:<28} {r[3]}")
+print()
+print("**주목할 변화: 미세조정의 역할이 바뀌었다.**")
+print("  2019년 — 미세조정이 **과제를 가르치는** 단계였다")
+print("  지금   — 사전학습이 이미 능력을 갖고 있고,")
+print("           미세조정은 **그것을 꺼내는 방법**을 가르친다")
+print()
+print("이 변화가 7.6(PEFT)과 7.7(정렬)의 전제다.")
+print("작은 개입으로 충분한 이유가 '가르치는 것이 적기 때문'이다.")
+```
 
 ---
 
-## G7.4.4 — 계열 계보도
+## 요약
 
-2018~현재 주요 모델의 계보와 파라미터 규모
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 연도 축
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| MLM |  |
-| 자기회귀 사전학습 |  |
-| ELECTRA |  |
-| T5 span corruption |  |
-| 전이학습 |  |
+| 핵심 질문 | **무엇을 맞히게 할 것인가** — 선택이 능력을 정한다 |
+| 양방향의 가치 | 참 분포에서 정확히 계산: $H$ 1.865 → 0.574 bits |
+| 측정된 이득 | 퍼플렉서티 **59.1% 감소** — 근거 있는 선택이었다 |
+| 양방향의 대가 | **생성할 수 없다** — BERT는 표현, GPT는 생성 |
+| CLM | 모든 위치에서 학습 (128/128) |
+| MLM | 15%만 학습 (19/128) — 순전파의 85%가 낭비 |
+| BERT의 80/10/10 | [MASK] 불일치를 줄이려는 장치 |
+| ELECTRA | 모든 위치에서 이진 판정 — 밀도 6.7배, 신호는 약함 |
+| 마스킹 비용 | 추가 마스킹 0% → 80%에서 PPL 1.712 → 4.500 (2.6배) |
+| **못 잰 것** | 신호 밀도의 이득 — 작은 모델에서는 재현되지 않는다 |
+| 15%는 정답이 아니다 | 큰 모델에서는 40%가 낫다는 보고 (Wettig 2023) |
+| 문맥적 표현 | 같은 토큰끼리 0.396, 다른 토큰과 0.015 — 27배 분리되면서도 1.0은 아니다 |
+| decoder-only 승리 | 생성 + 신호 밀도 + 구조 단순 + 문맥 내 학습 + KV 캐시 |
+| 인코더의 생존 | 임베딩·검색·분류에서는 여전히 표준 |
+| FIM | 순서를 바꿔 자기회귀로 빈칸 채우기 — 아키텍처 변경 없이 |
+| 전이의 변화 | 미세조정이 '과제를 가르치는 것'에서 '꺼내는 법'으로 |
+
+목표를 정했으니 이제 **무엇을 먹일지**가 남았다.
+같은 목표, 같은 아키텍처에서 성능 차이를 만드는 것은 거의 언제나 데이터다.
 
 ---
 
-**다음**: [7.5 사전학습 데이터](05_pretraining_data.qmd) — 코퍼스·정제·중복 제거·혼합 비율 — 모델을 만드는 진짜 재료
+**다음**: [7.5 사전학습 데이터](05_pretraining_data.qmd)
 
 **이전**: [7.3 단어 임베딩](03_word_embeddings.qmd)
