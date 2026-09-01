@@ -4,88 +4,680 @@ subtitle: "은닉 상태·BPTT·장기 의존성 — 시퀀스를 다룬 첫 방
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[CNN](00_cnn.qmd)은 **공간**의 구조를 아키텍처에 새겼다.
+RNN은 같은 발상을 **시간**에 적용한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+$$h_t = \tanh(W_{hh}h_{t-1} + W_{xh}x_t + b)$$
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+"현재 상태는 이전 상태와 현재 입력으로 정해진다."
+가중치 $W_{hh}$ 는 **모든 시점에서 공유된다** — CNN의 가중치 공유의 시간축 버전이다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 장의 목적은 RNN을 쓰는 법을 배우는 것이 아니다.
+**RNN이 어디서 아팠는지**를 정확히 아는 것이다.
+그 통증 지점이 [LSTM](03_lstm_gru.qmd), [어텐션](04_seq2seq_attention.qmd),
+[Transformer](../05_transformer/01_transformer_architecture.qmd)를 차례로 낳았다.
+
+---
+
+## 왜 MLP로는 안 되는가
+
+```{python}
+#| label: why-not-mlp
+#| code-fold: false
+
+rows = [
+    ("가변 길이",     "MLP 입력 차원은 고정. 문장마다 길이가 다르다",
+                     "순환 구조는 길이에 무관"),
+    ("파라미터 폭발",  "길이 T 를 평탄화하면 파라미터가 T 에 비례",
+                     "W_hh 하나를 T 번 재사용"),
+    ("위치 일반화",   "3번째 단어에서 배운 것이 10번째에 안 통함",
+                     "같은 가중치라 자동 일반화"),
+    ("순서 정보",     "bag-of-words 는 순서를 버린다",
+                     "상태가 순서대로 갱신됨"),
+]
+print(f"{'문제':<14} {'MLP 로 하면':<44} {'RNN 의 답'}")
+print("-" * 92)
+for r in rows:
+    print(f"{r[0]:<14} {r[1]:<44} {r[2]}")
+print()
+D, T, HID = 128, 50, 256
+print(f"입력 차원 {D}, 길이 {T}, 은닉 {HID} 일 때 첫 층 파라미터")
+print(f"  MLP (평탄화) : {D*T*HID:>10,}   ← 길이 T 에 비례")
+print(f"  RNN          : {(D+HID)*HID:>10,}   ← 길이와 무관")
+print(f"  비율          : {D*T*HID/((D+HID)*HID):>10.1f}배")
+print()
+print("길이가 500 이면 비율은 " f"{D*500*HID/((D+HID)*HID):.0f}배가 된다.")
+print("**가중치 공유가 CNN 에서 한 일을 RNN 은 시간축에서 한다.**")
+```
+
+---
+
+## G4.2.1 — 펼치면 아주 깊은 망이다
+
+RNN은 순환처럼 보이지만, **시간축으로 펼치면 깊이 $T$ 인 피드포워드 망**이다.
+그리고 그 $T$ 개 층이 **전부 같은 가중치**를 쓴다.
+
+```{python}
+#| label: fig-unroll
+#| fig-cap: "시퀀스 길이를 늘리면 유효 깊이가 그만큼 늘어납니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+lengths = [3, 5, 8, 12, 20]
+
+def unrolled_layout(T):
+    """펼친 RNN 의 노드 좌표와 엣지."""
+    xs, ys, labels, kinds = [], [], [], []
+    for t in range(T):
+        xs += [t, t, t]
+        ys += [0, 1, 2]
+        labels += [f"x{t}", f"h{t}", f"y{t}"]
+        kinds += ["in", "hid", "out"]
+    ex, ey = [], []
+    for t in range(T):
+        ex += [t, t, None]; ey += [0, 1, None]        # x_t → h_t
+        ex += [t, t, None]; ey += [1, 2, None]        # h_t → y_t
+        if t > 0:
+            ex += [t-1, t, None]; ey += [1, 1, None]  # h_{t-1} → h_t
+    return xs, ys, labels, kinds, ex, ey
+
+layouts = {T: unrolled_layout(T) for T in lengths}
+COLOR = {"in": viz.ACCENT, "hid": viz.WARM, "out": viz.GREEN}
+
+T0 = 8
+xs, ys, labels, kinds, ex, ey = layouts[T0]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines", hoverinfo="skip", showlegend=False,
+                         line=dict(color=viz.hex_rgba(viz.ACCENT, 0.45), width=2)))
+fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers+text", text=labels,
+                         textposition="top center", showlegend=False,
+                         marker=dict(size=26, color=[COLOR[k] for k in kinds],
+                                     line=dict(width=1.5, color="rgba(0,0,0,0.4)"))))
+steps = []
+for T in lengths:
+    xs_, ys_, lb_, kd_, ex_, ey_ = layouts[T]
+    steps.append((str(T), {
+        "x": [ex_, xs_], "y": [ey_, ys_], "text": [None, lb_],
+        "marker.color": [None, [COLOR[k] for k in kd_]],
+    }))
+fig.update_layout(sliders=[viz.slider(steps, prefix="시퀀스 길이 T = ",
+                                      active=lengths.index(T0), pad_t=52)])
+fig.update_xaxes(title_text="시간 t", range=[-0.7, max(lengths)-0.3])
+fig.update_yaxes(showticklabels=False, range=[-0.6, 2.8],
+                 title_text="입력 / 은닉 / 출력")
+viz.fig_defaults(fig, height=380,
+                 title="같은 W_hh 가 매 시점 재사용된다 — 가로 화살표가 전부 같은 행렬")
+fig.show()
+```
+
+```{python}
+#| label: unroll-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'시퀀스 길이 T':>13} {'유효 깊이':>10} {'파라미터':>12} {'W_hh 사용 횟수':>15}")
+print("-" * 56)
+HID2, D2 = 256, 128
+n_par = (D2+HID2)*HID2 + HID2
+for T in [10, 50, 100, 500, 1000]:
+    print(f"{T:>13,} {T:>10,} {n_par:>12,} {T:>15,}")
+print()
+print("**파라미터는 그대로인데 유효 깊이가 T 만큼 늘어난다.**")
+print("길이 1000 짜리 시퀀스는 1000층짜리 망을 학습시키는 것과 같다.")
+print()
+print("[3.7](../03_deep_learning/07_initialization.qmd)에서 봤듯 1000층 망은")
+print("초기화·정규화·잔차 없이는 학습이 안 된다. RNN 은 그 셋이 다 없다.")
+print("게다가 **모든 층이 같은 행렬**이라 문제가 더 나쁘다 — 다음 절에서 본다.")
+```
+
+---
+
+## G4.2.2 — 그래디언트 소실: 행렬 거듭제곱 문제
+
+BPTT에서 시점 $t$ 의 손실이 시점 $k$ 의 상태에 주는 그래디언트는
+
+$$\frac{\partial h_t}{\partial h_k}
+= \prod_{i=k+1}^{t} \frac{\partial h_i}{\partial h_{i-1}}
+= \prod_{i=k+1}^{t} \operatorname{diag}(1-h_i^2)\, W_{hh}^\top$$
+
+**같은 행렬의 거듭제곱**이다. 이것이 CNN의 깊은 망과 결정적으로 다른 점이다.
+
+$W_{hh}$ 의 최대 특잇값이 $\sigma$ 이면 그래디언트는 대략 $\sigma^{t-k}$ 로 간다.
+$\sigma < 1$ 이면 지수적 소실, $\sigma > 1$ 이면 지수적 폭발.
+**딱 1이어야 하는데, 그럴 이유가 없다.**
+
+```{python}
+#| label: fig-vanishing
+#| fig-cap: "시간을 거슬러 갈수록 그래디언트가 지수적으로 사라집니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+HID_V, T_V, B_V = 64, 100, 32
+rng = np.random.default_rng(0)
+
+def bptt_norms(sigma, activation="tanh", seed=0):
+    """W_hh 의 스펙트럼 반지름을 sigma 로 맞추고, BPTT 그래디언트 노름을 잰다."""
+    r = np.random.default_rng(seed)
+    W = r.normal(0, 1/np.sqrt(HID_V), (HID_V, HID_V))
+    W *= sigma / np.max(np.abs(np.linalg.eigvals(W)))     # 스펙트럼 반지름 = sigma
+    Wx = r.normal(0, 1/np.sqrt(HID_V), (HID_V, HID_V))
+    x = r.normal(0, 1, (T_V, B_V, HID_V))
+
+    # 순전파
+    h = np.zeros((B_V, HID_V))
+    hs = []
+    for t in range(T_V):
+        pre = h @ W.T + x[t] @ Wx.T
+        h = np.tanh(pre) if activation == "tanh" else np.maximum(pre, 0)
+        hs.append(h)
+
+    # 마지막 시점 손실에서 거슬러 올라가며 노름 기록
+    g = r.normal(0, 1, (B_V, HID_V)) / np.sqrt(B_V*HID_V)
+    norms = [float(np.linalg.norm(g))]
+    for t in range(T_V-1, 0, -1):
+        if activation == "tanh":
+            g = (g * (1 - hs[t]**2)) @ W
+        else:
+            g = (g * (hs[t] > 0)) @ W
+        norms.append(float(np.linalg.norm(g)))
+    return np.array(norms[::-1])                          # 인덱스 0 = 가장 먼 과거
+
+sigmas = [0.5, 0.8, 0.95, 1.0, 1.05, 1.2, 2.0]
+curves = {s: bptt_norms(s) for s in sigmas}
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("시점별 그래디언트 노름 (오른쪽 = 손실 지점)",
+                                    "100 시점 거슬러 간 뒤의 배율"))
+for i, s in enumerate(sigmas):
+    v = np.maximum(curves[s], 1e-300)
+    fig.add_trace(go.Scatter(x=np.arange(len(v)), y=v, mode="lines",
+                             name=f"σ = {s}",
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+ratios = [curves[s][0]/curves[s][-1] for s in sigmas]
+fig.add_trace(go.Scatter(x=sigmas, y=np.maximum(ratios, 1e-300), mode="lines+markers",
+                         showlegend=False,
+                         line=dict(color=viz.YELLOW, width=2.5)), row=1, col=2)
+fig.add_hline(y=1.0, line=dict(color=viz.GREEN, dash="dash"), row=1, col=2)
+fig.update_xaxes(title_text="시점 t", row=1, col=1)
+fig.update_xaxes(title_text="스펙트럼 반지름 σ", row=1, col=2)
+fig.update_yaxes(title_text="‖g‖", type="log", row=1, col=1)
+fig.update_yaxes(title_text="가장 먼 과거 / 손실 지점", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=430, title=f"tanh RNN, 은닉 {HID_V}, {T_V} 시점 BPTT")
+fig.update_layout(legend=dict(x=0.02, y=0.35, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: vanishing-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'σ':>6} {'10시점 전':>12} {'30시점 전':>12} {'100시점 전':>12} {'시점당 배율':>12}")
+print("-" * 60)
+for s in sigmas:
+    v = curves[s]
+    n = len(v)
+    per = (v[0]/v[-1]) ** (1/(n-1))
+    def at(k):
+        return v[max(n-1-k, 0)]
+    print(f"{s:>6.2f} {at(10)/v[-1]:>12.2e} {at(30)/v[-1]:>12.2e} "
+          f"{v[0]/v[-1]:>12.2e} {per:>12.4f}")
+print()
+print("이론적으로 시점당 배율은 σ 에 가까워야 한다. 실측과 비교:")
+for s in sigmas:
+    v = curves[s]
+    per = (v[0]/v[-1]) ** (1/(len(v)-1))
+    print(f"  σ={s:<5.2f} 이론 {s:.3f}  실측 {per:.3f}  (비 {per/s:.3f})")
+print()
+print("실측이 이론보다 작다. tanh 의 도함수 1−h² 가 항상 1 이하라서")
+print("**σ=1 로 맞춰도 소실이 일어난다.** 활성화가 이미 감쇠 요인이다.")
+print()
+best = min(sigmas, key=lambda s: abs(np.log(curves[s][0]/curves[s][-1])))
+print(f"100시점 유지에 가장 가까운 σ: {best} "
+      f"(배율 {curves[best][0]/curves[best][-1]:.2e})")
+print()
+print("**이것이 RNN 의 근본 병이다.**")
+print("소실이면 먼 과거를 못 배우고, 폭발이면 학습이 터진다.")
+print("그 사이의 좁은 창을 우연히 맞춰야 하는데, 학습 중에 W 가 변하므로 유지되지도 않는다.")
+```
+
+::: {.key-concept}
+**왜 CNN의 깊은 망보다 나쁜가**
+
+[3.7](../03_deep_learning/07_initialization.qmd)에서 128층 ReLU+He 망이
+그래디언트 비 0.41로 멀쩡했던 것을 기억하라. 무엇이 다른가?
+
+- **CNN/MLP** — 층마다 **다른** $W_l$. 각 층의 스케일 오차가 독립이라
+  일부는 크고 일부는 작아 서로 상쇄된다. He 초기화로 평균을 1에 맞추면 된다
+- **RNN** — 모든 시점이 **같은** $W_{hh}$. 오차가 상쇄되지 않고
+  $\sigma^T$ 로 **한 방향으로 누적된다**
+
+같은 행렬을 반복 곱하는 것은 거듭제곱이고, 거듭제곱은 1이 아닌 모든 값을
+0이나 무한대로 보낸다. **구조적으로 피할 수 없다.**
+
+$\sigma = 1$ 인 직교 행렬로 초기화하면 잠시 도움이 되지만
+([3.7](../03_deep_learning/07_initialization.qmd)의 직교 초기화),
+학습이 시작되면 $W$ 가 그 조건을 벗어난다.
 :::
 
-RNN의 실패 지점(장기 의존성, 순차 계산)이 정확히 Transformer가 해결한 문제다. 무엇이 아팠는지 알아야 처방을 이해한다.
+---
+
+## 공통 실험 설정
+
+앞으로 두 절에서 같은 과제를 쓴다.
+
+**과제**: 길이 $T$ 시퀀스의 **한 위치에** $\pm 1$ 신호가 있고, 나머지는 $N(0,1)$ 잡음이다.
+마지막 시점에 그 신호의 부호를 맞힌다.
+
+정보를 **바꾸지 않고 보관만** 하면 되는, 가능한 한 사소한 장기 의존성 과제다.
+
+```{python}
+#| label: rnn-task
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+HID_T, B_T = 48, 64
+
+def train_rnn(T, signal_pos=0, clip=1.0, sigma=1.0, lr=0.05,
+              steps=500, wx=2.0, seed=0):
+    """바닐라 RNN 을 SGD 로 학습한다. (손실 이력, 클리핑 전 그래디언트 노름) 반환.
+
+    signal_pos : 신호가 놓인 시점. 마지막 시점까지의 거리 = T-1-signal_pos
+    sigma      : W_hh 의 스펙트럼 반지름
+    """
+    r = np.random.default_rng(seed)
+    Wh = r.normal(0, 1/np.sqrt(HID_T), (HID_T, HID_T))
+    Wh *= sigma / np.max(np.abs(np.linalg.eigvals(Wh)))
+    Wx = r.normal(0, wx, (1, HID_T))
+    Wo = r.normal(0, 1/np.sqrt(HID_T), (HID_T, 2)); bo = np.zeros(2)
+    P = {"Wh": Wh, "Wx": Wx, "Wo": Wo, "bo": bo}
+    opt = nn.Optimizer("sgd", lr=lr)
+    rng = np.random.default_rng(seed+100)
+    losses, gnorms = [], []
+
+    for _ in range(steps):
+        x = rng.normal(0, 1, (B_T, T, 1))
+        sign = rng.choice([-1.0, 1.0], size=B_T)
+        x[:, signal_pos, 0] = sign
+        y = (sign > 0).astype(int)
+
+        h = np.zeros((B_T, HID_T)); hs = []
+        for t in range(T):
+            h = np.tanh(h @ Wh + x[:, t] @ Wx)
+            hs.append(h)
+        L, dout = nn.softmax_ce_loss(h @ Wo + bo, y)
+        if not np.isfinite(L):
+            losses.append(np.nan)
+            break
+
+        g = {"Wo": h.T @ dout, "bo": dout.sum(0),
+             "Wh": np.zeros_like(Wh), "Wx": np.zeros_like(Wx)}
+        dh = dout @ Wo.T
+        for t in range(T-1, -1, -1):
+            dpre = dh * (1 - hs[t]**2)
+            hprev = hs[t-1] if t > 0 else np.zeros((B_T, HID_T))
+            g["Wh"] += hprev.T @ dpre
+            g["Wx"] += x[:, t].T @ dpre
+            dh = dpre @ Wh.T
+        gnorms.append(np.sqrt(sum(float((v**2).sum()) for v in g.values())))
+        if clip is not None:
+            nn.clip_grads(g, clip)
+        opt.step(P, g)
+        losses.append(L)
+    return np.array(losses), np.array(gnorms)
+
+L, _ = train_rnn(T=5, signal_pos=0)
+print(f"동작 확인 — 거리 4 에서 최종 손실 {np.nanmean(L[-50:]):.4f} "
+      f"(무작위 수준 {np.log(2):.4f})")
+print()
+print("옵티마이저는 SGD 를 쓴다. [3.9](../03_deep_learning/09_training_practice.qmd)에서")
+print("확인했듯 Adam 은 스텝 크기를 정규화해 그래디언트 병리를 덮어버리기 때문이다.")
+print("실제로 이 과제를 Adam 으로 돌리면 거리 80 까지 전부 풀려서 아무것도 보이지 않는다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G4.2.3 — 결정적 실험: 길이가 문제인가, 거리가 문제인가
 
-- 시퀀스 데이터와 가변 길이 입력의 문제
-- 순환 구조와 은닉 상태, 파라미터 공유의 시간축 버전
-- 시간에 따른 역전파(BPTT)와 절단 BPTT
-- 그래디언트 소실·폭발의 행렬 거듭제곱 분석
-- 그래디언트 클리핑
-- 양방향 RNN과 다층 RNN
-- RNN의 표현력: 튜링 완전성 논의
-- 순차 계산의 병렬화 불가능성 — 학습 속도의 근본 한계
-- teacher forcing 과 노출 편향(exposure bias)
+**시퀀스 길이를 40으로 고정**하고 신호의 위치만 옮긴다.
+계산량도, 펼친 깊이도, 파라미터도 전부 같다. **오직 기억해야 할 거리만 다르다.**
+
+```{python}
+#| label: fig-long-dependency
+#| fig-cap: "같은 길이, 다른 거리 — 실패는 거리 때문입니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+T_FIX = 40
+positions = [39, 38, 35, 30, 25, 20, 10, 0]
+by_dist = {}
+for pos in positions:
+    Ls, _ = train_rnn(T=T_FIX, signal_pos=pos)
+    by_dist[T_FIX-1-pos] = float(np.nanmean(Ls[-50:]))
+
+lengths_v = [3, 5, 7, 10, 15, 20, 40, 80]
+by_len = {}
+for T in lengths_v:
+    Ls, _ = train_rnn(T=T, signal_pos=0)
+    by_len[T-1] = float(np.nanmean(Ls[-50:]))
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=(f"길이 고정 T={T_FIX}, 신호 위치만 이동",
+                                    "신호는 항상 맨 앞, 길이만 변화"))
+ds = sorted(by_dist)
+fig.add_trace(go.Scatter(x=ds, y=[by_dist[d] for d in ds], mode="lines+markers",
+                         name=f"T={T_FIX} 고정",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+ds2 = sorted(by_len)
+fig.add_trace(go.Scatter(x=ds2, y=[by_len[d] for d in ds2], mode="lines+markers",
+                         name="길이 = 거리+1", showlegend=False,
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+for c in (1, 2):
+    fig.add_hline(y=np.log(2), line=dict(color=viz.YELLOW, dash="dash"),
+                  annotation_text="무작위 수준", row=1, col=c)
+    fig.update_xaxes(title_text="기억해야 할 거리", row=1, col=c)
+    fig.update_yaxes(title_text="최종 훈련 손실", row=1, col=c)
+viz.fig_defaults(fig, height=400,
+                 title="바닐라 RNN · SGD η=0.05 · 클리핑 1.0 · 500 스텝")
+fig.show()
+```
+
+```{python}
+#| label: dependency-numbers
+#| code-fold: false
+
+import numpy as np
+
+CH = np.log(2)
+def verdict(L):
+    return "학습됨" if L < CH*0.5 else ("부분적" if L < CH*0.95 else "실패 (무작위)")
+
+print(f"① 길이 T={T_FIX} 고정, 신호 위치만 이동")
+print(f"{'신호 위치':>10} {'거리':>6} {'최종 손실':>12}  {'판정'}")
+print("-" * 46)
+for pos in positions:
+    d = T_FIX-1-pos
+    print(f"{pos:>10} {d:>6} {by_dist[d]:>12.4f}  {verdict(by_dist[d])}")
+print()
+ok_d = sorted(d for d in by_dist if by_dist[d] < CH*0.5)
+bad_d = sorted(d for d in by_dist if by_dist[d] >= CH*0.95)
+print(f"학습에 성공한 거리: {ok_d}")
+print(f"완전히 실패한 거리: {bad_d}")
+print(f"→ 경계가 거리 {max(ok_d)} 와 {min(bad_d)} 사이에 있다.")
+print()
+
+print(f"② 신호는 항상 맨 앞, 길이만 변화")
+print(f"{'길이 T':>8} {'거리':>6} {'최종 손실':>12}  {'판정'}")
+print("-" * 44)
+for T in lengths_v:
+    d = T-1
+    print(f"{T:>8} {d:>6} {by_len[d]:>12.4f}  {verdict(by_len[d])}")
+print()
+ok_l = sorted(d for d in by_len if by_len[d] < CH*0.5)
+bad_l = sorted(d for d in by_len if by_len[d] >= CH*0.95)
+print(f"→ 경계가 거리 {max(ok_l)} 와 {min(bad_l)} 사이 — **①의 경계와 겹친다.**")
+print()
+print("**두 실험이 같은 답을 준다. 원인은 시퀀스 길이가 아니라 의존 거리다.**")
+print(f"길이 40 시퀀스에서도 신호가 끝에서 {max(ok_d)}칸 안에 있으면 배우고,")
+print(f"{min(bad_d)}칸을 넘어가면 못 배운다.")
+print()
+print("앞 절의 σ 실험과 연결하면 이유가 보인다.")
+print("거리 10 이면 그래디언트가 10번 곱해져 오는데, 실측 시점당 배율이 0.61 이었다.")
+print(f"0.61^10 = {0.61**10:.2e} — 신호가 사실상 도착하지 않는다.")
+print()
+print("과제는 '숫자 하나를 그대로 들고 있기'다. 이보다 쉬울 수 없다.")
+print("**필요한 것은 정보를 감쇠 없이 나르는 통로다.** 그것이 다음 장의 셀 상태다.")
+```
 
 ---
 
-## G4.2.1 — RNN 펼치기(unroll)
+## 그래디언트 클리핑: 폭발 쪽만은 막을 수 있다
 
-순환 구조가 시간축으로 펼쳐진 깊은 망이 되는 모습
+소실은 구조를 바꿔야 하지만, **폭발은 값싸게 막는다.**
+노름이 임계를 넘으면 방향은 두고 크기만 줄인다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시퀀스 길이 슬라이더
+폭발이 실제로 일어나는 영역에서 재보자 — $\sigma = 5$, 학습률 1.0.
+
+```{python}
+#| label: fig-clipping
+#| fig-cap: "폭발 영역에서 클리핑 임계값에 따른 학습"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+SIG, LR_C, T_C = 5.0, 1.0, 20
+runs = {}
+for lbl, c in [("클리핑 없음", None), ("클리핑 1.0", 1.0), ("클리핑 0.25", 0.25)]:
+    runs[lbl] = train_rnn(T=T_C, signal_pos=0, clip=c, sigma=SIG, lr=LR_C)
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("훈련 손실", "클리핑 전 그래디언트 노름"))
+for i, (lbl, (loss, gn)) in enumerate(runs.items()):
+    v = np.nan_to_num(loss, nan=1e2, posinf=1e2)
+    sm = np.convolve(v, np.ones(15)/15, mode="valid")
+    fig.add_trace(go.Scatter(x=np.arange(len(sm)), y=sm, mode="lines", name=lbl,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=np.arange(len(gn)), y=np.maximum(gn, 1e-12),
+                             mode="lines", showlegend=False, opacity=0.8,
+                             line=dict(color=viz.color(i), width=1.1)), row=1, col=2)
+fig.add_hline(y=np.log(2), line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="무작위 수준", row=1, col=1)
+fig.update_xaxes(title_text="스텝")
+fig.update_yaxes(title_text="손실", type="log", row=1, col=1)
+fig.update_yaxes(title_text="‖g‖", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=420,
+                 title=f"σ={SIG}, η={LR_C}, 거리 {T_C-1} — 폭발이 실제로 일어나는 설정")
+fig.update_layout(legend=dict(x=0.55, y=0.98, font=dict(size=11)))
+fig.show()
+```
+
+```{python}
+#| label: clipping-numbers
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'설정':<14} {'최종 손실':>11} {'최대 ‖g‖':>12} {'99분위 ‖g‖':>13} {'중앙 ‖g‖':>11}  {'판정'}")
+print("-" * 80)
+for lbl, (loss, gn) in runs.items():
+    fin = float(np.nanmean(loss[-50:]))
+    v = ("발산" if fin > np.log(2)*1.5 else
+         "무작위에 갇힘" if fin > np.log(2)*0.95 else "학습됨")
+    print(f"{lbl:<14} {fin:>11.4f} {np.nanmax(gn):>12.2e} "
+          f"{np.percentile(gn, 99):>13.2e} {np.median(gn):>11.2e}  {v}")
+print()
+none_g = runs["클리핑 없음"][1]
+print(f"클리핑 없을 때 관측된 최대 그래디언트 노름: {np.nanmax(none_g):.2e}")
+print(f"  중앙값 {np.median(none_g):.2e} 대비 {np.nanmax(none_g)/np.median(none_g):.1e}배")
+print("  → 드물게 오는 이 한 번의 스텝이 가중치를 망가뜨린다.")
+print()
+fin = {k: float(np.nanmean(v[0][-50:])) for k, v in runs.items()}
+best = min(fin, key=fin.get)
+print(f"최종 손실이 가장 낮은 설정: {best} ({fin[best]:.4f})")
+print()
+print("세 결과가 각각 다른 것을 말한다:")
+print(f"  · 클리핑 없음  → 학습은 되지만 손실이 {fin['클리핑 없음']/fin['클리핑 1.0']:.0f}배 높다.")
+print("                  폭발 스텝이 진전을 반복해서 되돌린다")
+print("  · 클리핑 1.0   → 폭발만 잘라내고 정상 스텝은 그대로 → 가장 좋음")
+print("  · 클리핑 0.25  → 너무 조여서 정상 그래디언트까지 잘림 → 무작위 수준")
+print()
+med = {k: float(np.median(v[1])) for k, v in runs.items()}
+print(f"클리핑 0.25 의 그래디언트 중앙값이 {med['클리핑 0.25']:.1e} 로 "
+      f"다른 설정({med['클리핑 1.0']:.1e})보다 오히려 크다.")
+print("학습이 진행되지 못해 손실이 큰 지점에 계속 머물러 있기 때문이다 —")
+print("**너무 센 클리핑은 그래디언트를 줄이는 게 아니라 학습을 멈춘다.**")
+print()
+print("**임계값이 너무 작아도 안 된다.** 중앙값보다는 충분히 크고")
+print("이상치는 잡을 수 있는 곳에 둬야 한다. 트랜스포머의 관례값 1.0 이 그 자리다.")
+print()
+print("그리고 이것으로 해결되는 것은 **폭발뿐이다.**")
+print("작은 그래디언트를 키워주지는 않으므로 소실에는 아무 도움이 안 된다.")
+print("앞 절에서 본 거리 10 의 벽은 클리핑 1.0 을 켠 상태에서 나온 결과다.")
+```
+
+---
+
+## teacher forcing과 노출 편향
+
+시퀀스를 **생성**할 때 문제가 하나 더 있다.
+학습 때는 정답을 넣어주고(teacher forcing), 추론 때는 자기 출력을 넣는다.
+
+```{python}
+#| label: exposure-bias
+#| code-fold: false
+
+import numpy as np
+
+print("학습과 추론의 입력이 다르다")
+print()
+print(f"{'시점':>5} {'학습 (teacher forcing)':<26} {'추론 (자기회귀)'}")
+print("-" * 62)
+gold = ["<s>", "나는", "밥을", "먹었다"]
+pred = ["<s>", "나는", "빵을", "???"]
+for t in range(1, 4):
+    print(f"{t:>5} 입력: {' '.join(gold[:t]):<20} 입력: {' '.join(pred[:t])}")
+print()
+print("2번째 시점에서 '빵을' 이라고 한 번 틀리면, 그 뒤로는")
+print("**학습 중 한 번도 본 적 없는 문맥**에 놓인다. 오류가 누적된다.")
+print()
+
+# 오류 누적을 수치로: 시점당 정확도 p 일 때 길이 T 문장이 완전히 맞을 확률
+print(f"{'시점당 정확도':>14} " + " ".join(f"T={t:<5}" for t in [5, 10, 20, 50]))
+print("-" * 52)
+for p in [0.99, 0.97, 0.95, 0.90]:
+    print(f"{p:>14.2f} " + " ".join(f"{p**t:<7.3f}" for t in [5, 10, 20, 50]))
+print()
+print("시점당 99% 여도 50토큰 문장이 통째로 맞을 확률은 60% 다.")
+print()
+print("완화책들:")
+for name, desc in [
+    ("scheduled sampling", "학습 중 정답 대신 자기 출력을 확률적으로 섞어 넣기"),
+    ("빔 서치",             "탐욕적 선택 대신 여러 후보를 유지"),
+    ("최소 위험 학습",       "시퀀스 수준 지표(BLEU 등)를 직접 최적화"),
+    ("강화학습 미세조정",     "생성 결과에 보상을 주기 — 지금의 RLHF 계보"),
+]:
+    print(f"  · {name:<20} {desc}")
+print()
+print("**노출 편향은 RNN 만의 문제가 아니다.** 자기회귀 생성이면 Transformer 도 같다.")
+print("현재 LLM 이 teacher forcing 으로 사전학습하고 RL 로 후처리하는 구조가")
+print("정확히 이 문제에 대한 답의 연장선이다.")
+```
+
+---
+
+## 결정타: 병렬화가 안 된다
+
+소실 문제는 [LSTM](03_lstm_gru.qmd)이 상당히 완화했다.
+**RNN을 정말로 끝낸 것은 이쪽이다.**
+
+$h_t$ 를 계산하려면 $h_{t-1}$ 이 있어야 한다. **순서대로만** 계산할 수 있다.
+
+```{python}
+#| label: parallelism
+#| code-fold: false
+
+import numpy as np
+
+print("길이 T 시퀀스를 처리할 때의 순차 단계 수")
+print()
+print(f"{'구조':<24} {'순차 단계':>12} {'시점당 연산':>14} {'총 연산'}")
+print("-" * 68)
+rows = [
+    ("RNN",                   "T",      "O(d²)",     "O(T·d²)"),
+    ("1D CNN (커널 k)",        "T/k 층",  "O(k·d²)",   "O(T·k·d²)"),
+    ("셀프 어텐션",             "1",      "O(T·d)",    "O(T²·d)"),
+]
+for r in rows:
+    print(f"{r[0]:<24} {r[1]:>12} {r[2]:>14} {r[3]}")
+print()
+d = 512
+print(f"d={d} 일 때 총 연산량 비교")
+print(f"{'T':>7} {'RNN':>14} {'셀프 어텐션':>16} {'어텐션/RNN':>12}")
+print("-" * 54)
+for T in [32, 128, 512, 2048, 8192]:
+    rnn = T*d*d
+    att = T*T*d
+    print(f"{T:>7,} {rnn:>14,} {att:>16,} {att/rnn:>12.2f}")
+print()
+cross = d
+print(f"교차점: T = d = {cross}. 그보다 짧으면 어텐션이 **연산량도 더 적다.**")
+print()
+print("하지만 진짜 차이는 총 연산량이 아니라 **순차 단계 수**다.")
+print(f"  RNN 은 길이 {2048} 시퀀스에 {2048} 번의 순차 단계가 필요하다.")
+print("  셀프 어텐션은 1 번이다 — 모든 위치를 한 번의 행렬곱으로 처리한다.")
+print()
+print("GPU 는 병렬 연산기다. 순차 단계가 많으면 연산 유닛이 놀게 된다.")
+print("**RNN 은 하드웨어와 맞지 않았다.** 이것이 Transformer 가 이긴 결정적 이유다.")
+print()
+print("(그래서 최근 [상태공간 모델](../05_transformer/07_ssm_mamba.qmd)은")
+print(" '순환의 효율 + 병렬 학습'을 동시에 얻으려 한다 — 순환 구조를")
+print(" 학습 시에는 합성곱으로 펼쳐 병렬화하는 방식이다.)")
+```
+
+---
+
+## 그래도 남은 것들
+
+::: {.key-concept}
+**RNN이 남긴 유산**
+
+RNN 자체는 거의 안 쓰지만, 그 개념들은 전부 살아 있다.
+
+- **은닉 상태** — 지금까지의 정보를 압축한 벡터. KV 캐시도 같은 역할이다
+- **시간축 가중치 공유** — Transformer 층도 모든 위치에 같은 가중치를 쓴다
+- **BPTT** — 자기회귀 학습의 그래디언트가 흐르는 방식은 본질적으로 같다
+- **teacher forcing** — 지금 모든 LLM 사전학습이 이 방식이다
+- **순차 생성** — 추론 시에는 Transformer 도 결국 한 토큰씩 순차 생성한다
+
+특히 마지막 항목이 흥미롭다.
+**Transformer는 학습을 병렬화했지 추론을 병렬화하지는 못했다.**
+추론 시 Transformer는 KV 캐시를 들고 한 스텝씩 도는 — 사실상 RNN이다.
 :::
 
 ---
 
-## G4.2.2 — 그래디언트 소실
+## 요약
 
-시간을 거슬러 갈수록 그래디언트 크기가 지수적으로 줄어드는 곡선
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시퀀스 길이·가중치 슬라이더
-:::
-
----
-
-## G4.2.3 — 은닉 상태 궤적
-
-은닉 상태가 2D 사영에서 그리는 궤적 — 기억이 저장되는 방식
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 입력 시퀀스 선택
-:::
-
----
-
-## G4.2.4 — 클리핑 효과
-
-클리핑 유무에 따른 학습 손실 안정성 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 임계값 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| RNN |  |
-| BPTT |  |
-| 그래디언트 소실 |  |
-| teacher forcing |  |
-| 노출 편향 |  |
+| 순환 구조 | $h_t = \tanh(W_{hh}h_{t-1} + W_{xh}x_t)$, 가중치 시간축 공유 |
+| 유효 깊이 | 길이 $T$ = 깊이 $T$, 그런데 **모든 층이 같은 행렬** |
+| 그래디언트 소실 | $\partial h_t/\partial h_k \sim \sigma^{t-k}$ — 거듭제곱은 피할 수 없다 |
+| tanh의 기여 | $1-h^2 \le 1$ 이라 $\sigma=1$ 이어도 감쇠 |
+| 클리핑 | 폭발만 막는다. 소실에는 무력 |
+| 장기 의존성 | 사소한 과제도 거리가 길면 실패 |
+| 노출 편향 | teacher forcing 과 자기회귀 추론의 불일치 |
+| **병렬화 불가** | 순차 단계 $T$ 번 — Transformer 가 이긴 진짜 이유 |
+
+RNN의 병 두 가지가 보였다.
+**기억을 유지하지 못하는 것**과 **병렬화가 안 되는 것.**
+
+다음 장은 앞의 것을 고친다 — 게이트로 정보 흐름을 명시적으로 관리하는 LSTM.
+뒤의 것은 [Part 5](../05_transformer/01_transformer_architecture.qmd)까지 기다려야 한다.
 
 ---
 
-**다음**: [4.3 LSTM과 GRU](03_lstm_gru.qmd) — 게이트와 셀 상태 — 기억을 명시적으로 관리하기
+**다음**: [4.3 LSTM과 GRU](03_lstm_gru.qmd) — 게이트와 셀 상태
 
 **이전**: [4.1 현대 CNN 아키텍처](01_cnn_modern.qmd)

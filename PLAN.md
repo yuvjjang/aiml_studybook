@@ -13,7 +13,7 @@
 - **계산·그래픽**: NumPy / SciPy / Plotly (렌더 타임 의존성은 이 셋으로 제한)
 - **딥러닝 프레임워크 코드**: 실행하지 않는 예시 블록으로 제시 (빌드 재현성 우선)
 
-- **집필 완료** 44 / 123 챕터
+- **집필 완료** 45 / 123 챕터
 
 ## 전체 구성
 
@@ -23,7 +23,7 @@
 | `01_data_science` | Part 1: 데이터 사이언스 | 8 | 0 | 원시 데이터를 받아 정제·탐색하고, 통계적으로 방어 가능한 결론과 실험 설계를 내놓을 수 있다. |
 | `02_classical_ml` | Part 2: 고전 머신러닝 | 13 | 13 | 정형 데이터 문제에 알고리즘을 고르고, 왜 그 알고리즘이 그렇게 동작하는지 수식과 그림으로 설명할 수 있다. |
 | `03_deep_learning` | Part 3: 딥러닝 기초 | 10 | 10 | 신경망의 순전파·역전파·최적화를 NumPy로 처음부터 구현하고, 학습이 안 될 때 원인을 진단할 수 있다. |
-| `04_architectures` | Part 4: 신경망 아키텍처 | 7 | 2 | CNN·RNN 계열의 귀납 편향을 설명하고, 어텐션이 왜 등장할 수밖에 없었는지 역사적·수학적으로 서술할 수 있다. |
+| `04_architectures` | Part 4: 신경망 아키텍처 | 7 | 3 | CNN·RNN 계열의 귀납 편향을 설명하고, 어텐션이 왜 등장할 수밖에 없었는지 역사적·수학적으로 서술할 수 있다. |
 | `05_transformer` | Part 5: 트랜스포머 | 11 | 11 | Transformer를 NumPy로 처음부터 구현하고, 최신 LLM이 원 논문에서 무엇을 바꿨는지 항목별로 설명할 수 있다. |
 | `06_generative` | Part 6: 생성 모델 | 9 | 0 | VAE·GAN·확산 모델의 목적함수를 각각 유도하고, 어떤 상황에서 어떤 계열을 선택할지 판단할 수 있다. |
 | `07_language` | Part 7: 언어 (NLP · LLM) | 16 | 0 | 토크나이저부터 정렬·추론 최적화까지 LLM 스택 전체를 설명하고, 실제 시스템을 설계·평가할 수 있다. |
@@ -67,6 +67,7 @@
 - ✅ **3.9 학습 실전과 디버깅** — `chapters/03_deep_learning/09_training_practice.qmd`
 - ✅ **4.0 합성곱 신경망** — `chapters/04_architectures/00_cnn.qmd`
 - ✅ **4.1 현대 CNN 아키텍처** — `chapters/04_architectures/01_cnn_modern.qmd`
+- ✅ **4.2 순환 신경망** — `chapters/04_architectures/02_rnn.qmd`
 - ✅ **5.0 어텐션 메커니즘** — `chapters/05_transformer/00_attention_mechanism.qmd`
 - ✅ **5.1 셀프 어텐션과 마스킹** — `chapters/05_transformer/01_self_attention.qmd`
 - ✅ **5.2 멀티헤드 어텐션** — `chapters/05_transformer/02_multi_head.qmd`
@@ -1340,7 +1341,7 @@ ResNet의 잔차 연결은 CNN을 넘어 Transformer의 필수 부품이 되었�
 
 ---
 
-### 4.2 순환 신경망
+### 4.2 순환 신경망 ✅
 
 `chapters/04_architectures/02_rnn.qmd` — *은닉 상태·BPTT·장기 의존성 — 시퀀스를 다룬 첫 방식*
 
