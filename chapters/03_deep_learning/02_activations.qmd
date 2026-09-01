@@ -4,88 +4,655 @@ subtitle: "sigmoid·ReLU·GELU·SwiGLU — 비선형성의 선택지"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[3.0](00_perceptron_mlp.qmd)에서 활성화가 없으면 층을 쌓아도 소용없다는 것을 봤다.
+[3.1](01_backpropagation.qmd)에서는 시그모이드가 그래디언트를 죽인다는 것도 봤다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+활성화 함수 하나를 바꾸는 것만으로 학습이 되고 안 되고가 갈린다.
+그리고 그 이유는 전부 **도함수의 모양**에 있다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
-
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-활성화 하나를 바꾸는 것만으로 학습이 되고 안 되고가 갈린다. 그 이유는 전부 그래디언트 모양에 있다.
+이 장은 그 모양을 하나씩 뜯어본다. 순전파에서 무엇을 하는지보다
+**역전파에서 무엇을 통과시키는지**가 중요하다.
 
 ---
 
-## 이 장에서 다루는 것
+## 좋은 활성화의 조건
 
-- 활성화의 요건: 비선형, 미분 가능, 그래디언트 보존
-- sigmoid·tanh의 포화(saturation)와 그래디언트 소실
-- ReLU: 단순함의 승리, 죽은 ReLU 문제
-- Leaky ReLU, PReLU, ELU, SELU
-- GELU와 확률적 해석, Swish/SiLU
-- GLU 계열: GLU, GEGLU, SwiGLU — 현대 LLM의 기본값
-- 출력층 활성화: 항등, 시그모이드, softmax의 선택 기준
-- 활성화와 초기화·정규화의 상호작용
-- 학습되는 활성화와 최근 탐색 결과
-
----
-
-## G3.2.1 — 활성화 함수 갤러리
-
-함수값과 도함수를 나란히 — 어디서 그래디언트가 죽는가
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 함수 선택
-:::
-
----
-
-## G3.2.2 — 포화 영역 시각화
-
-sigmoid의 |x|가 클 때 도함수가 0에 붙는 구간 강조
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 입력 범위 슬라이더
-:::
-
----
-
-## G3.2.3 — 죽은 ReLU 실험
-
-음수 영역에 갇혀 영원히 갱신되지 않는 유닛 비율
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 초기화 편향 슬라이더
-:::
-
----
-
-## G3.2.4 — SwiGLU 구조
-
-게이트가 정보 흐름을 조절하는 방식의 도식
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 게이트 값 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 요건 | 이유 |
 |------|------|
-| ReLU |  |
-| GELU |  |
-| SwiGLU |  |
-| 그래디언트 소실 |  |
-| 죽은 ReLU |  |
+| **비선형** | 없으면 층이 무의미 ([3.0](00_perceptron_mlp.qmd)) |
+| **미분 가능** (거의 모든 곳에서) | 경사하강이 가능해야 |
+| **도함수가 1 근처** | 곱의 사슬에서 크기가 유지되어야 |
+| 계산이 싸다 | 층마다 원소별로 수억 번 호출된다 |
+| 0 근처에서 대략 항등 | 초기화 시 신호가 그대로 통과 |
+
+세 번째가 실질적으로 가장 중요하다.
+[3.1의 야코비안 곱](01_backpropagation.qmd)에서 도함수가 곱해지기 때문이다.
 
 ---
 
-**다음**: [3.3 손실함수](03_losses.qmd) — MSE·교차엔트로피·대조손실 — 무엇을 최적화한다고 말하는가
+## G3.2.1 — 함수와 도함수를 나란히
+
+```{python}
+#| label: fig-activation-gallery
+#| fig-cap: "위: 함수값, 아래: 도함수. 도함수가 어디서 죽는지 보세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+z = np.linspace(-6, 6, 800)
+names = ["sigmoid", "tanh", "relu", "leaky_relu", "elu", "gelu", "swish"]
+
+vals, ders = {}, {}
+for nm in names:
+    f, df = nn.ACTIVATIONS[nm]
+    a = f(z)
+    vals[nm] = a
+    ders[nm] = df(z, a)
+
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                    subplot_titles=("활성화 함수 σ(z)", "도함수 σ'(z)"))
+n0 = "relu"
+fig.add_trace(go.Scatter(x=z, y=vals[n0], mode="lines", name="σ(z)",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+fig.add_trace(go.Scatter(x=z, y=ders[n0], mode="lines", name="σ'(z)",
+                         line=dict(color=viz.WARM, width=3)), row=2, col=1)
+# 비교용 흐린 배경 곡선
+for nm in names:
+    fig.add_trace(go.Scatter(x=z, y=vals[nm], mode="lines", showlegend=False,
+                             line=dict(color="rgba(255,255,255,0.13)", width=1),
+                             hoverinfo="skip"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=z, y=ders[nm], mode="lines", showlegend=False,
+                             line=dict(color="rgba(255,255,255,0.13)", width=1),
+                             hoverinfo="skip"), row=2, col=1)
+fig.add_hline(y=1.0, line=dict(color=viz.GREEN, dash="dot"),
+              annotation_text="σ' = 1 (크기 보존)", row=2, col=1)
+
+steps = []
+for nm in names:
+    ys = [vals[nm], ders[nm]] + [vals[k] for k in names] + [ders[k] for k in names]
+    steps.append((nm, {"y": ys}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="활성화 = ",
+                                      active=names.index(n0), pad_t=50)])
+fig.update_xaxes(title_text="z", row=2, col=1)
+fig.update_yaxes(title_text="σ(z)", range=[-1.6, 4], row=1, col=1)
+fig.update_yaxes(title_text="σ'(z)", range=[-0.15, 1.35], row=2, col=1)
+viz.fig_defaults(fig, height=560, title="활성화 함수 갤러리")
+fig.update_layout(legend=dict(x=0.01, y=0.99))
+fig.show()
+```
+
+```{python}
+#| label: activation-stats
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+z = np.linspace(-6, 6, 4001)
+print(f"{'활성화':<12} {'σ′ 최댓값':>10} {'σ′ 평균':>10} "
+      f"{'σ′<0.01 비율':>13} {'0에서 σ':>9}")
+print("-" * 62)
+for nm in ["sigmoid", "tanh", "relu", "leaky_relu", "elu", "gelu", "swish"]:
+    f, df = nn.ACTIVATIONS[nm]
+    d = df(z, f(z))
+    print(f"{nm:<12} {d.max():>10.3f} {d.mean():>10.3f} "
+          f"{np.mean(np.abs(d) < 0.01):>12.1%} {f(np.array([0.0]))[0]:>9.3f}")
+print()
+print("σ′ 최댓값이 0.25 인 sigmoid 는 층마다 최소 4배씩 그래디언트를 줄인다.")
+print("ReLU 계열은 활성 영역에서 정확히 1 이라 크기가 보존된다.")
+```
+
+::: {.interaction-hint}
+슬라이더로 함수를 바꿔보세요. **sigmoid**의 도함수는 최대 0.25이고 양쪽 끝에서 0으로 붙습니다. **relu**는 양수 영역에서 정확히 1인 계단입니다. **gelu·swish**는 0 근처에서 부드럽고 음수 영역에서도 약간의 그래디언트를 남깁니다.
+:::
+
+---
+
+## 포화: 시그모이드의 근본 문제
+
+$$\sigma'(z) = \sigma(z)(1-\sigma(z)) \le 0.25$$
+
+최댓값이 $z=0$ 에서 0.25이고, $|z|$ 가 조금만 커져도 급격히 0으로 간다.
+이것을 **포화(saturation)** 라 한다.
+
+```{python}
+#| label: fig-saturation
+#| fig-cap: "입력 분포가 넓어지면 대부분의 유닛이 포화 영역에 들어갑니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+rng = np.random.default_rng(0)
+z_grid = np.linspace(-10, 10, 600)
+sig, dsig = nn.ACTIVATIONS["sigmoid"]
+d_curve = dsig(z_grid, sig(z_grid))
+
+scales = [0.5, 1.0, 2.0, 4.0, 8.0]
+samples = {s: rng.normal(0, s, 4000) for s in scales}
+frac_sat, mean_grad = [], []
+for s in scales:
+    zs = samples[s]
+    d = dsig(zs, sig(zs))
+    frac_sat.append(float(np.mean(d < 0.05)))
+    mean_grad.append(float(d.mean()))
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("도함수 곡선 위의 입력 분포",
+                                    "입력 스케일에 따른 평균 도함수"))
+s0 = 2.0
+fig.add_trace(go.Scatter(x=z_grid, y=d_curve, mode="lines", name="σ′(z)",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+hist, edges = np.histogram(samples[s0], bins=60, range=(-10, 10), density=True)
+centers = (edges[:-1] + edges[1:]) / 2
+fig.add_trace(go.Bar(x=centers, y=hist * 0.25 / max(hist.max(), 1e-9),
+                     name="입력 z 의 분포",
+                     marker_color=viz.hex_rgba(viz.WARM, 0.55)), row=1, col=1)
+fig.add_trace(go.Scatter(x=scales, y=mean_grad, mode="lines+markers",
+                         showlegend=False,
+                         line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
+
+steps = []
+for s in scales:
+    h, e = np.histogram(samples[s], bins=60, range=(-10, 10), density=True)
+    steps.append((f"{s:g}", {"y": [d_curve, h*0.25/max(h.max(),1e-9), mean_grad]}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="입력 표준편차 = ",
+                                      active=scales.index(s0), pad_t=55)])
+fig.update_xaxes(title_text="z", row=1, col=1)
+fig.update_yaxes(title_text="σ′(z)", row=1, col=1)
+fig.update_xaxes(title_text="입력 표준편차", row=1, col=2)
+fig.update_yaxes(title_text="평균 σ′", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="시그모이드 포화")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+```{python}
+#| label: saturation-numbers
+#| code-fold: false
+
+print(f"{'입력 표준편차':>13} {'평균 σ′':>10} {'포화(σ′<0.05) 비율':>18} "
+      f"{'10층 후 배율':>14}")
+print("-" * 60)
+for s, f_, m_ in zip(scales, frac_sat, mean_grad):
+    print(f"{s:>13.1f} {m_:>10.4f} {f_:>17.1%} {m_**10:>14.2e}")
+print()
+print("→ 입력 스케일이 커지면 대부분이 포화 영역으로 밀려나고,")
+print("  10층만 쌓아도 그래디언트가 천문학적으로 줄어든다.")
+print("  이것이 [3.5 정규화 층]이 입력 스케일을 붙잡아두는 이유이기도 하다.")
+```
+
+::: {.key-concept}
+**포화가 만드는 악순환**
+
+1. 가중치가 커지면 $z$ 의 분산이 커진다
+2. $z$ 가 포화 영역으로 밀려난다
+3. 그래디언트가 0에 가까워진다
+4. 가중치가 갱신되지 않아 **빠져나올 수 없다**
+
+시그모이드·tanh는 이 함정에 스스로 걸어 들어간다.
+[3.5 정규화 층](05_normalization.qmd)이 $z$ 의 분산을 강제로 붙잡는 것이
+이 문제에 대한 처방 중 하나다.
+:::
+
+---
+
+## ReLU: 단순함의 승리
+
+$$\text{ReLU}(z) = \max(0, z), \qquad \text{ReLU}'(z) = \begin{cases}1 & z>0\\ 0 & z<0\end{cases}$$
+
+바꾼 것은 세 가지다.
+
+1. **양수 영역에서 도함수가 정확히 1** — 곱해도 크기가 안 변한다
+2. **계산이 비교 하나** — 지수함수보다 훨씬 싸다
+3. **희소 활성화** — 절반 정도가 0이라 표현이 희소해진다
+
+대신 새 문제가 생겼다.
+
+---
+
+## G3.2.2 — 죽은 ReLU
+
+$z < 0$ 이면 도함수가 **정확히 0**이다.
+어떤 유닛이 모든 입력에 대해 음수를 내면, 그 유닛은 **영원히 갱신되지 않는다.**
+
+```{python}
+#| label: fig-dead-relu
+#| fig-cap: "초기 bias를 음수로 밀면 유닛이 죽고 성능이 무너집니다."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=400, noise=0.2, seed=0)
+biases = [0.0, -0.25, -0.5, -1.0, -2.0, -3.0, -4.0]
+
+dead_frac, accs, curves = [], [], {}
+for b0 in biases:
+    m = nn.MLP([2, 64, 64, 2], activation="relu", init="he", seed=0)
+    for i in range(len(m.b) - 1):
+        m.b[i][:] = b0
+    h = nn.train(m, X, y, loss="softmax_ce",
+                 opt=nn.Optimizer("sgd", lr=0.1), steps=400, batch_size=64)
+    _, c = m.forward(X, training=False)
+    dead_frac.append(float(np.mean([(a <= 0).all(0).mean() for a in c["a"]])))
+    accs.append(float((m.predict(X).argmax(1) == y).mean()))
+    curves[b0] = h["loss"]
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.45, 0.55],
+                    subplot_titles=("죽은 유닛 비율과 정확도", "학습 곡선"))
+fig.add_trace(go.Scatter(x=biases, y=dead_frac, mode="lines+markers",
+                         name="죽은 유닛 비율",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=biases, y=accs, mode="lines+markers", name="정확도",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_hline(y=0.5, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text="무작위 수준", row=1, col=1)
+for i, b0 in enumerate(biases):
+    fig.add_trace(go.Scatter(x=np.arange(len(curves[b0])), y=curves[b0], mode="lines",
+                             name=f"b₀={b0:g}", showlegend=False,
+                             line=dict(color=viz.color(i), width=2)), row=1, col=2)
+
+fig.update_xaxes(title_text="초기 bias b₀", row=1, col=1)
+fig.update_yaxes(title_text="비율 / 정확도", range=[0, 1.05], row=1, col=1)
+fig.update_xaxes(title_text="학습 스텝", row=1, col=2)
+fig.update_yaxes(title_text="교차엔트로피", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="죽은 ReLU 문제")
+fig.update_layout(legend=dict(x=0.02, y=0.5))
+fig.show()
+```
+
+```{python}
+#| label: dead-relu-table
+#| code-fold: false
+
+print(f"{'초기 bias':>10} {'죽은 유닛':>10} {'최종 손실':>11} {'정확도':>9}")
+print("-" * 44)
+for b0, d, a in zip(biases, dead_frac, accs):
+    note = "  ← 완전 붕괴" if a < 0.55 else ""
+    print(f"{b0:>10.2f} {d:>9.1%} {curves[b0][-1]:>11.4f} {a:>9.3f}{note}")
+print()
+print("→ 죽은 유닛은 그래디언트가 정확히 0 이라 **되살아나지 않는다.**")
+print("  bias 를 -4 로 밀면 98% 가 죽고 모델이 무작위 수준으로 떨어진다.")
+```
+
+::: {.callout-warning}
+## 실무에서 유닛이 죽는 경우
+
+인위적으로 bias를 밀지 않아도 죽는다.
+
+- **학습률이 너무 큼** — 큰 갱신 한 번이 유닛을 음수 영역으로 밀어버린다
+- **큰 음수 그래디언트가 한 번 들어옴** — 그 뒤로 복구 불가
+- 죽은 유닛은 **파라미터를 낭비**한다. 순전파에도 역전파에도 기여하지 않는다
+
+진단: 검증 데이터에서 각 유닛의 활성화가 **항상 0인지** 확인한다.
+비율이 10%를 넘으면 학습률을 낮추거나 Leaky ReLU 계열로 바꾼다.
+:::
+
+---
+
+## ReLU의 변형들
+
+| 함수 | 정의 | 해결하려는 것 |
+|------|------|---------------|
+| Leaky ReLU | $\max(\alpha z, z)$, $\alpha=0.01$ | 음수 영역에 작은 기울기 → 죽지 않음 |
+| PReLU | 같은 형태, $\alpha$ 를 **학습** | $\alpha$ 를 데이터가 정함 |
+| ELU | $z>0$: $z$, else $e^z-1$ | 부드럽고 평균이 0에 가까움 |
+| SELU | ELU × 스케일 상수 | 자기 정규화 (특정 초기화 전제) |
+
+```{python}
+#| label: fig-relu-variants
+#| fig-cap: "음수 영역 처리 방식의 차이"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+z = np.linspace(-4, 2.5, 600)
+variants = ["relu", "leaky_relu", "elu", "gelu", "swish"]
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("음수 영역 확대", "도함수"))
+for i, nm in enumerate(variants):
+    f, df = nn.ACTIVATIONS[nm]
+    a = f(z)
+    fig.add_trace(go.Scatter(x=z, y=a, mode="lines", name=nm,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=z, y=df(z, a), mode="lines", name=nm, showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
+fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.3)", dash="dot"))
+fig.update_xaxes(title_text="z")
+fig.update_yaxes(title_text="σ(z)", range=[-1.2, 2.5], row=1, col=1)
+fig.update_yaxes(title_text="σ′(z)", range=[-0.15, 1.25], row=1, col=2)
+viz.fig_defaults(fig, height=390, title="ReLU 계열 비교 (음수 영역 중심)")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.interaction-hint}
+**gelu**와 **swish**는 $z \approx -1$ 부근에서 **아래로 볼록한 골**을 갖습니다. 도함수가 잠시 음수가 되는 구간인데, 이 "비단조성"이 성능에 도움이 된다는 것이 실증적으로 관찰되었습니다.
+:::
+
+---
+
+## GELU: 확률적 해석
+
+$$\text{GELU}(z) = z\cdot\Phi(z)$$
+
+$\Phi$ 는 표준정규 누적분포함수다. 읽는 법이 있다.
+
+> **입력을 그 값이 "살아남을 확률"만큼 통과시킨다.**
+
+ReLU는 $z>0$ 이면 1, 아니면 0으로 **결정론적으로** 게이트한다.
+GELU는 그 게이트를 **부드러운 확률**로 바꾼 것이다.
+
+```{python}
+#| label: gelu-interpretation
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import stats
+from src import nn
+
+z = np.array([-3.0, -1.5, -0.5, 0.0, 0.5, 1.5, 3.0])
+gelu_f, _ = nn.ACTIVATIONS["gelu"]
+
+print(f"{'z':>6} {'Φ(z) = 통과 확률':>17} {'z·Φ(z)':>10} "
+      f"{'GELU(tanh 근사)':>17} {'ReLU':>7}")
+print("-" * 62)
+for v in z:
+    phi = float(stats.norm.cdf(v))
+    print(f"{v:>6.1f} {phi:>17.4f} {v*phi:>10.4f} "
+          f"{gelu_f(np.array([v]))[0]:>17.4f} {max(v,0):>7.1f}")
+print()
+print("정확한 GELU 는 z·Φ(z) 이고, 실무 구현은 tanh 근사를 쓴다 (차이 < 0.001).")
+print("ReLU 는 Φ 를 계단함수로 바꾼 극단적 특수 경우로 볼 수 있다.")
+```
+
+::: {.key-concept}
+**Swish (SiLU)**: $z\cdot\sigma(\beta z)$
+
+GELU와 거의 같은 모양이고 계산이 더 싸다.
+$\beta=1$ 이면 SiLU이고, PyTorch의 `nn.SiLU` 가 이것이다.
+
+GELU는 BERT·GPT 계열이, SiLU는 LLaMA 계열이 쓴다.
+**둘의 성능 차이는 실무에서 거의 무시할 수준**이고, 관례의 문제에 가깝다.
+:::
+
+---
+
+## GLU 계열: 게이트를 따로 학습하기
+
+현대 LLM의 실제 기본값은 ReLU도 GELU도 아니다.
+[5.4에서 본](../05_transformer/04_transformer_block.qmd) **SwiGLU** 다.
+
+발상이 다르다. 게이트를 활성화 함수로 계산하는 대신 **별도의 선형층으로 학습**한다.
+
+$$\begin{aligned}
+\text{GLU}(x) &= (xW_1) \odot \sigma(xW_2) \\
+\text{GEGLU}(x) &= (xW_1) \odot \text{GELU}(xW_2) \\
+\text{SwiGLU}(x) &= (xW_1) \odot \text{Swish}(xW_2)
+\end{aligned}$$
+
+```{python}
+#| label: fig-glu
+#| fig-cap: "게이트 값이 정보 흐름을 조절합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, viz
+
+x = np.linspace(-4, 4, 400)
+swish_f, _ = nn.ACTIVATIONS["swish"]
+
+# 게이트 경로의 가중치를 바꿔가며
+gate_ws = [-1.5, -0.5, 0.0, 0.5, 1.0, 2.0]
+curves = {}
+for gw in gate_ws:
+    value = x                       # 값 경로 (선형)
+    gate = swish_f(gw * x)          # 게이트 경로
+    curves[gw] = (value, gate, value * gate)
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("값 경로와 게이트 경로", "SwiGLU 출력 = 값 × 게이트"))
+g0 = 1.0
+v, g, o = curves[g0]
+fig.add_trace(go.Scatter(x=x, y=v, mode="lines", name="값 xW₁",
+                         line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=x, y=g, mode="lines", name="게이트 Swish(xW₂)",
+                         line=dict(color=viz.WARM, width=2.5)), row=1, col=1)
+fig.add_trace(go.Scatter(x=x, y=o, mode="lines", showlegend=False,
+                         line=dict(color=viz.GREEN, width=3)), row=1, col=2)
+
+steps = [(f"{gw:g}", {"y": [curves[gw][0], curves[gw][1], curves[gw][2]]})
+         for gw in gate_ws]
+fig.update_layout(sliders=[viz.slider(steps, prefix="게이트 가중치 W₂ = ",
+                                      active=gate_ws.index(g0), pad_t=55)])
+fig.update_xaxes(title_text="x")
+fig.update_yaxes(title_text="값", range=[-5, 5], row=1, col=1)
+fig.update_yaxes(title_text="출력", range=[-6, 12], row=1, col=2)
+viz.fig_defaults(fig, height=400, title="SwiGLU 의 두 경로")
+fig.update_layout(legend=dict(x=0.02, y=0.98))
+fig.show()
+```
+
+::: {.key-concept}
+**게이팅의 계보**
+
+같은 아이디어가 여러 번 재발견되었다.
+
+| 어디서 | 게이트가 하는 일 |
+|--------|------------------|
+| [LSTM](../04_architectures/03_lstm_gru.qmd) | 셀 상태에 무엇을 쓰고 지울지 |
+| GLU (2017) | 합성곱 언어모델의 정보 흐름 |
+| **SwiGLU** | Transformer FFN의 채널별 선택 |
+| [Mamba](../05_transformer/10_alternatives_ssm.qmd) | 입력에 따라 상태를 갱신할지 |
+
+공통점은 **"곱셈으로 흐름을 조절한다"** 는 것이다.
+덧셈은 정보를 더하지만, 곱셈은 정보를 **차단**할 수 있다.
+:::
+
+### 8/3 규칙
+
+행렬이 2개에서 3개로 늘어나므로, 파라미터를 맞추려면 은닉 차원을 $\tfrac{2}{3}$ 로 줄인다
+([5.4](../05_transformer/04_transformer_block.qmd)에서 계산했다).
+
+```{python}
+#| label: swiglu-params
+#| code-fold: false
+
+d = 4096
+print(f"d_model = {d}")
+print(f"  ReLU FFN, 은닉 4d      : {2*d*(4*d)/1e6:>7.1f}M  (W₁, W₂)")
+print(f"  SwiGLU, 은닉 4d        : {3*d*(4*d)/1e6:>7.1f}M  (W₁, W₂, W₃) ← 1.5배")
+print(f"  SwiGLU, 은닉 8d/3      : {3*d*int(8/3*d)/1e6:>7.1f}M  ← 파라미터 일치")
+print()
+print(f"LLaMA-2 7B 실제: d=4096, FFN 은닉=11008 = {11008/4096:.2f}d ≈ 8/3")
+```
+
+---
+
+## 실측: 활성화가 학습에 미치는 영향
+
+같은 구조·같은 초기화에서 활성화만 바꿔 비교한다.
+
+```{python}
+#| label: fig-activation-training
+#| fig-cap: "깊은 망에서 활성화 선택이 학습을 가르는 것"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import nn, datasets, viz
+
+X, y = datasets.two_moons(n=600, noise=0.2, seed=1)
+rng = np.random.default_rng(0)
+perm = rng.permutation(len(X)); tr, te = perm[:450], perm[450:]
+
+acts = ["sigmoid", "tanh", "relu", "leaky_relu", "elu", "gelu", "swish"]
+depth_sets = {"얕음 (3층)": [2]+[32]*2+[2], "깊음 (10층)": [2]+[32]*9+[2]}
+
+results = {}
+for dname, sizes in depth_sets.items():
+    for a in acts:
+        init = "xavier" if a in ("sigmoid", "tanh") else "he"
+        m = nn.MLP(sizes, activation=a, init=init, seed=0)
+        h = nn.train(m, X[tr], y[tr], loss="softmax_ce",
+                     opt=nn.Optimizer("adam", lr=0.01), steps=600, batch_size=64)
+        results[(dname, a)] = (h["loss"],
+                               float((m.predict(X[te]).argmax(1) == y[te]).mean()))
+
+fig = make_subplots(rows=1, cols=2, subplot_titles=list(depth_sets))
+for c, dname in enumerate(depth_sets, start=1):
+    for i, a in enumerate(acts):
+        loss, _ = results[(dname, a)]
+        fig.add_trace(go.Scatter(x=np.arange(len(loss)), y=loss, mode="lines",
+                                 name=a, showlegend=(c == 1),
+                                 line=dict(color=viz.color(i), width=2)),
+                      row=1, col=c)
+fig.update_xaxes(title_text="학습 스텝")
+fig.update_yaxes(title_text="교차엔트로피", type="log", row=1, col=1)
+viz.fig_defaults(fig, height=410, title="같은 구조, 활성화만 다르게 (Adam, 600스텝)")
+fig.update_layout(legend=dict(x=0.42, y=0.98, font=dict(size=10)))
+fig.show()
+```
+
+```{python}
+#| label: activation-results
+#| code-fold: false
+
+print(f"{'활성화':<12} {'얕음 손실':>11} {'얕음 정확도':>12} "
+      f"{'깊음 손실':>11} {'깊음 정확도':>12}")
+print("-" * 62)
+for a in acts:
+    ls, acc_s = results[("얕음 (3층)", a)]
+    ld, acc_d = results[("깊음 (10층)", a)]
+    print(f"{a:<12} {ls[-1]:>11.4f} {acc_s:>12.3f} {ld[-1]:>11.4f} {acc_d:>12.3f}")
+print()
+relu_like = ["relu", "leaky_relu", "elu", "gelu", "swish"]
+for dname in depth_sets:
+    losses = {a: results[(dname, a)][0][-1] for a in acts}
+    spread = max(losses[a] for a in relu_like) / min(losses[a] for a in relu_like)
+    gap = losses["sigmoid"] / min(losses[a] for a in relu_like)
+    print(f"{dname}: ReLU 계열끼리 손실 격차 {spread:.1f}배, "
+          f"sigmoid 대 최선 {gap:.1f}배")
+print()
+print("→ ReLU 계열끼리는 어느 쪽을 골라도 큰 차이가 없다.")
+print("  차이를 만드는 것은 포화하는 활성화(sigmoid)를 쓰느냐이고,")
+print("  그 격차는 깊어질수록 벌어진다.")
+```
+
+---
+
+## 출력층은 다르다
+
+은닉층과 출력층의 활성화는 **다른 기준**으로 고른다.
+출력층은 **손실함수와 짝**을 이뤄야 한다.
+
+| 과제 | 출력 활성화 | 손실 |
+|------|-------------|------|
+| 회귀 | 없음 (항등) | MSE / MAE |
+| 이진 분류 | sigmoid | 이진 교차엔트로피 |
+| 다중 클래스 | softmax | 교차엔트로피 |
+| 다중 레이블 | sigmoid (각각) | BCE 합 |
+| 양수 출력 | softplus / exp | 상황에 따라 |
+
+::: {.callout-warning}
+## 출력 활성화와 손실을 따로 계산하지 말 것
+
+`softmax` 후 `log` 를 취하면 수치적으로 불안정하다
+([0.5](../00_foundations/05_numerical_computing.qmd)).
+
+프레임워크가 합쳐진 함수를 제공하는 이유다 —
+`nn.CrossEntropyLoss` 는 **로짓을 받는다**(softmax를 적용하지 않은 값).
+이미 softmax를 통과시킨 값을 넣으면 softmax가 두 번 적용되어 조용히 틀린다.
+
+이 책의 [`src/nn.py`](https://github.com/yuvjjang/aiml_studybook/blob/main/src/nn.py)의
+`softmax_ce_loss` 도 로짓을 받고, 그래디언트가 $(p-y)/n$ 으로 단순해지는 이점을 그대로 얻는다.
+:::
+
+---
+
+## 선택 가이드
+
+```{python}
+#| label: activation-guide
+#| code-fold: false
+
+rows = [
+    ("일반 은닉층 (기본)",   "ReLU",       "빠르고 충분히 좋음"),
+    ("Transformer FFN",    "SwiGLU",     "현대 LLM 사실상 표준"),
+    ("BERT/GPT 계열 FFN",  "GELU",       "관례"),
+    ("죽은 유닛이 문제",     "Leaky/ELU",  "음수 기울기 확보"),
+    ("얕은 망·RNN 게이트",   "sigmoid/tanh", "출력 범위가 필요할 때"),
+    ("CNN",                "ReLU",       "여전히 지배적"),
+    ("출력층",              "과제가 결정", "손실과 짝을 이룸"),
+]
+print(f"{'상황':<22} {'권장':<14} {'이유'}")
+print("-" * 62)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<14} {r[2]}")
+print()
+print("실무 순서: ReLU 로 시작 → 학습이 안 되면 원인을 진단 →")
+print("          죽은 유닛이면 Leaky, 성능을 더 짜내야 하면 GELU/SwiGLU")
+```
+
+::: {.key-concept}
+**활성화는 단독으로 고르는 것이 아니다**
+
+| 활성화 | 어울리는 초기화 | 이유 |
+|--------|-----------------|------|
+| tanh, sigmoid | Xavier | 도함수가 0 근처에서 1 |
+| ReLU 계열 | **He** | 절반이 0이 되어 분산이 반감 |
+| SELU | LeCun | 자기 정규화 조건 |
+
+[3.7 초기화](07_initialization.qmd)에서 이 대응을 유도한다.
+잘못 짝지으면 활성화를 바꾼 이득이 사라진다.
+:::
+
+---
+
+## 요약
+
+| 함수 | $\sigma'$ 최댓값 | 특징 | 문제 |
+|------|------------------|------|------|
+| sigmoid | **0.25** | 출력 $[0,1]$ | 포화 → 소실 |
+| tanh | 1.0 | 0 중심 | 여전히 포화 |
+| **ReLU** | 1.0 | 빠름, 희소 | **죽은 유닛** |
+| Leaky ReLU | 1.0 | 죽지 않음 | 하이퍼파라미터 $\alpha$ |
+| ELU | 1.0 | 부드러움, 평균 0 | 지수 계산 |
+| **GELU** | ~1.1 | 확률적 게이트 | 계산 비용 |
+| Swish/SiLU | ~1.1 | GELU와 유사, 더 쌈 | — |
+| **SwiGLU** | — | 게이트를 **학습** | 파라미터 1.5배 (8/3로 보정) |
+
+| 핵심 사실 | |
+|---|---|
+| 중요한 것 | 함수값이 아니라 **도함수의 크기** |
+| 포화 | 악순환 — 빠져나올 수 없음 |
+| 죽은 ReLU | 그래디언트 정확히 0 → 복구 불가 |
+| 깊이 | 깊을수록 활성화 선택이 중요해짐 |
+| 출력층 | 손실과 짝, 로짓을 넘길 것 |
+| 초기화와 짝 | ReLU↔He, tanh↔Xavier |
+
+활성화는 **무엇을 통과시킬지**를 정했다.
+다음 장은 **무엇을 목표로 삼을지** — 손실함수를 다룬다.
+
+---
+
+**다음**: [3.3 손실함수](03_losses.qmd) — MSE·교차엔트로피·대조손실
 
 **이전**: [3.1 역전파](01_backpropagation.qmd)
