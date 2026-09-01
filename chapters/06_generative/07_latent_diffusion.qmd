@@ -4,91 +4,568 @@ subtitle: "Stable Diffusion·DiT·조건 주입 — 실전 생성 시스템의 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[6.5](05_diffusion.qmd)–[6.6](06_score_sde.qmd)에서 확산의 이론은 갖췄다.
+그런데 512×512 이미지를 픽셀 공간에서 생성하려면
+**262,144차원 벡터**를 수백 번 디노이징해야 한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+Rombach et al.(2022)의 관찰은 단순했다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+> 이미지의 **대부분 비트는 사람이 보지 못하는 고주파 디테일**이다.
+> 확산 모델을 거기에 쓰는 것은 낭비다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+그래서 두 단계로 나눴다.
+
+1. **지각 압축** — 오토인코더가 512×512×3 을 64×64×4 로 줄인다 (48배)
+2. **의미 압축** — 확산 모델이 그 잠재 공간에서 돈다
+
+이 설계 하나가 Stable Diffusion을 소비자 GPU에서 돌아가게 만들었다.
+
+이 장에서 확인할 것은 **잠재 확산이 정말 이득인가**다.
+같은 데이터로 픽셀 확산과 잠재 확산을 나란히 학습시켜 비교한다.
+결과가 조금 뜻밖이었다.
+
+---
+
+## G6.7.1 — 픽셀 공간 vs 잠재 공간, 직접 비교
+
+64차원 데이터(8×8 이미지, 실제 자유도 5개)로 두 방식을 나란히 돌린다.
+
+```{python}
+#| label: latent-vs-pixel
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import time
+import numpy as np
+from src.generative import Diffusion, blobs64, sharpness
+from src import nn
+
+X_raw, Z_true = blobs64(3000, seed=0)
+MU = X_raw.mean(0)
+X = X_raw - MU
+X_te = blobs64(600, seed=99)[0] - MU
+REAL_SHARP = sharpness(X_raw)
+
+# ── 1단계: 지각 압축 (오토인코더) ──
+K = 6
+ae = nn.MLP([64, 48, K, 48, 64], activation="tanh", init="xavier", seed=1)
+nn.train(ae, X, X, loss="mse", opt=nn.Optimizer("adam", lr=0.005),
+         steps=4000, seed=1)
+
+
+def enc(A):
+    h = A
+    for i in range(2):
+        h = np.tanh(h @ ae.W[i] + ae.b[i])
+    return h
+
+
+def dec(Z):
+    h = Z
+    for i in range(2, 4):
+        h = h @ ae.W[i] + ae.b[i]
+        if i < 3:
+            h = np.tanh(h)
+    return h
+
+
+Z = enc(X)
+ZM, ZS = Z.mean(0), Z.std(0)
+Z_n = (Z - ZM)/ZS
+AE_MSE = float(((X - dec(Z))**2).mean())
+
+print(f"1단계 — 지각 압축: 64차원 → {K}차원")
+print(f"  재구성 MSE {AE_MSE:.6f}  (데이터 분산의 {AE_MSE/float((X**2).mean()):.3%})")
+print(f"  잠재를 표준화해 확산 모델에 넘긴다 (SD 의 scale_factor 와 같은 역할)")
+print()
+
+
+def nearest(S, ref):
+    """생성 샘플에서 가장 가까운 실제 데이터까지의 평균 거리."""
+    d = -2*S @ ref.T + (S**2).sum(1)[:, None] + (ref**2).sum(1)[None]
+    return float(np.sqrt(np.maximum(d.min(1), 0)).mean())
+
+
+print("2단계 — 확산. 픽셀 공간과 잠재 공간에서 각각 학습한다")
+print("  (같은 은닉 폭 256, 같은 스텝 수 6000, 같은 시드)")
+print()
+LP = []
+for nm, dim in [("픽셀 공간 (64D)", 64), (f"잠재 공간 ({K}D)", K)]:
+    data = X if dim == 64 else Z_n
+    t0 = time.time()
+    dm = Diffusion(dim, T=200, schedule="cosine", hidden=256, seed=0)
+    dm.fit(data, steps=6000, lr=2e-3, batch=256, seed=0)
+    t_train = time.time() - t0
+    t0 = time.time()
+    S = dm.sample(600, seed=7)
+    t_samp = time.time() - t0
+    if dim != 64:
+        S = dec(S*ZS + ZM)
+    LP.append((nm, sum(v.size for v in dm.net.p.values()), t_train, t_samp,
+               nearest(S, X), sharpness(S + MU)))
+
+print(f"{'':<18} {'파라미터':>10} {'학습(s)':>9} {'샘플링(s)':>10} "
+      f"{'최근접 거리':>12} {'선명도':>9}")
+print("-" * 74)
+for nm, npar, tt, ts, nd, sh in LP:
+    print(f"{nm:<18} {npar:>10,} {tt:>9.1f} {ts:>10.2f} {nd:>12.4f} {sh:>9.4f}")
+print("-" * 74)
+print(f"{'실제 데이터':<18} {'':>10} {'':>9} {'':>10} "
+      f"{nearest(X_te[:600], X):>12.4f} {REAL_SHARP:>9.4f}")
+print()
+px, lt = LP[0], LP[1]
+print(f"**잠재 확산이 {px[2]/lt[2]:.1f}배 빨리 학습하고 "
+      f"{px[3]/lt[3]:.1f}배 빨리 샘플링한다.** 여기까지는 예상대로다.")
+print()
+print(f"**뜻밖은 품질이다: 최근접 거리 {px[4]:.4f} → {lt[4]:.4f}.**")
+print(f"실제 데이터끼리의 거리가 {nearest(X_te[:600], X):.4f} 이니")
+print(f"잠재 확산은 거의 실제 데이터 수준이고, 픽셀 확산은 "
+      f"{px[4]/nearest(X_te[:600], X):.1f}배 멀다.")
+print()
+print("**잠재 확산은 싼 근사가 아니다. 더 나은 결과를 준다.**")
+print()
+print("왜 그런가:")
+print(f"  · 픽셀 확산은 64차원 전부를 모델링해야 한다. 그런데 실제 자유도는 "
+      f"{Z_true.shape[1]}개뿐이다.")
+print("  · 나머지 차원은 데이터가 거의 채우지 않는 얇은 껍질이다 —")
+print("    확산 모델이 그 껍질을 정확히 맞히기는 어렵고, 조금만 벗어나도 티가 난다.")
+print(f"  · 오토인코더가 먼저 {K}차원으로 줄여 주면 확산 모델은 "
+      f"**밀도가 실제로 있는 공간**에서만 일한다.")
+print()
+print(f"  · 압축의 대가는 재구성 오차 {AE_MSE:.6f} 인데,")
+print(f"    픽셀 확산이 만드는 오차보다 훨씬 작다.")
+print()
+print("이것이 LDM 논문이 '지각 압축'과 '의미 압축'을 나눈 이유다.")
+print("**두 문제를 각각 잘하는 도구에 맡기는 것**이 요점이다.")
+```
+
+```{python}
+#| label: fig-latent-vs-pixel
+#| fig-cap: "픽셀 확산과 잠재 확산의 샘플 비교"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+# 두 모델을 다시 만들어 샘플만 얻는다 (시드 고정이라 위와 동일)
+SAMP = {}
+for nm, dim in [("픽셀", 64), ("잠재", K)]:
+    data = X if dim == 64 else Z_n
+    dm = Diffusion(dim, T=200, schedule="cosine", hidden=256, seed=0)
+    dm.fit(data, steps=6000, lr=2e-3, batch=256, seed=0)
+    S = dm.sample(16, seed=11)
+    SAMP[nm] = (dec(S*ZS + ZM) if dim != 64 else S) + MU
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.31, 0.31, 0.38],
+                    subplot_titles=("픽셀 공간 확산", f"잠재 공간 확산 ({K}D)",
+                                    "지표 비교"),
+                    specs=[[{"type": "heatmap"}, {"type": "heatmap"},
+                            {"type": "xy"}]])
+for ci, nm in enumerate(["픽셀", "잠재"], start=1):
+    tiles = SAMP[nm].reshape(4, 4, 8, 8)
+    canvas = np.block([[tiles[i, j] for j in range(4)] for i in range(4)])
+    fig.add_trace(go.Heatmap(z=np.round(canvas, 3), colorscale="Blues",
+                             zmin=0, zmax=1, showscale=False), row=1, col=ci)
+    fig.update_xaxes(showticklabels=False, row=1, col=ci)
+    fig.update_yaxes(showticklabels=False, autorange="reversed", row=1, col=ci)
+
+labels = ["픽셀 확산", "잠재 확산", "실제 데이터"]
+vals = [LP[0][4], LP[1][4], nearest(X_te[:600], X)]
+fig.add_trace(go.Bar(x=labels, y=np.round(vals, 4), showlegend=False,
+                     marker_color=[viz.WARM, viz.ACCENT, viz.GREEN],
+                     text=[f"{v:.4f}" for v in vals], textposition="outside"),
+              row=1, col=3)
+fig.update_yaxes(title_text="가장 가까운 실데이터까지 거리", row=1, col=3)
+viz.fig_defaults(fig, height=380, title="낮을수록 좋습니다")
+fig.show()
+```
+
+---
+
+## G6.7.2 — 해상도와 연산량
+
+```{python}
+#| label: cost
+#| code-fold: false
+
+import numpy as np
+
+DOWN = 8                       # SD 의 VAE 다운샘플 배율
+
+print(f"VAE 다운샘플 {DOWN}배 (512×512×3 → 64×64×4)")
+print()
+print(f"{'해상도':>12} {'픽셀 토큰':>12} {'잠재 토큰':>11} "
+      f"{'픽셀 자기어텐션':>18} {'잠재 자기어텐션':>18}")
+print("-" * 78)
+for r_ in [64, 128, 256, 512, 1024]:
+    n_p, n_l = r_*r_, (r_//DOWN)**2
+    print(f"{f'{r_}×{r_}':>12} {n_p:>12,} {n_l:>11,} {n_p**2:>18,.0f} "
+          f"{n_l**2:>18,.0f}")
+print()
+print(f"**비율 자체는 해상도와 무관하다** — 토큰 수 {DOWN**2}배, "
+      f"어텐션 {DOWN**4:,}배로 일정하다.")
+print("달라지는 것은 **절대값**이다.")
+n512 = 512*512
+print(f"  512×512 픽셀 자기어텐션: {n512**2:,.0f} 개 원소")
+print(f"    float16 으로만 담아도 {n512**2*2/1e9:.0f} GB — 계산 이전에 저장이 불가능하다.")
+print(f"  같은 이미지의 잠재(64×64): {(64*64)**2:,} 개 → "
+      f"{(64*64)**2*2/1e6:.0f} MB. 문제없다.")
+print(f"  (한 층·한 헤드 기준이다. 실제로는 층 수 × 헤드 수만큼 더 든다.)")
+print()
+print("**그래서 픽셀 공간 확산 모델은 어텐션을 저해상도 층에만 넣는다.**")
+print("  DDPM 원본(32×32): 16×16 층에만 어텐션")
+print("  ADM(256×256): 32×32, 16×16, 8×8 층에만")
+print("  → 고해상도 층에서는 **국소 정보만** 다룰 수 있다는 뜻이다.")
+print()
+print("**잠재 확산은 이 제약을 없앤다.** 64×64 전체에 어텐션을 걸 수 있어")
+print("이미지 전역의 일관성(구도, 색조, 텍스트 정렬)을 다룰 수 있다.")
+print()
+print("계단식 확산(Imagen, DALL·E 2)은 다른 답이다 —")
+print("저해상도에서 생성하고 초해상 모델을 여러 번 쌓는다.")
+print("잠재 확산이 이긴 이유는 **하나의 모델**로 끝나기 때문이다.")
+```
+
+---
+
+## G6.7.3 — 조건 주입: 크로스 어텐션
+
+텍스트를 어떻게 넣는가. 답은 **어텐션의 K, V 를 텍스트로 채우는 것**이다.
+
+$$\text{CrossAttn}(z, c) = \text{softmax}\!\left(\frac{(zW_Q)(cW_K)^\top}{\sqrt{d}}\right)(cW_V)$$
+
+- $Q$ 는 **이미지 잠재**에서 온다 — 출력 길이가 이미지 토큰 수로 유지된다
+- $K, V$ 는 **텍스트 임베딩**에서 온다 (CLIP 또는 T5)
+
+```{python}
+#| label: cross-attn
+#| code-fold: false
+
+import numpy as np
+from src.attention import scaled_dot_product_attention
+
+rng = np.random.default_rng(0)
+d = 32
+n_img, n_txt = 64, 5                       # 8×8 잠재, 5-토큰 프롬프트
+img_tok = rng.normal(size=(n_img, d))
+txt_tok = rng.normal(size=(n_txt, d))
+Wq, Wk, Wv = [rng.normal(0, 0.2, (d, d)) for _ in range(3)]
+out, attn = scaled_dot_product_attention(img_tok @ Wq, txt_tok @ Wk,
+                                         txt_tok @ Wv)
+
+print(f"Q (이미지 잠재)  {img_tok.shape}")
+print(f"K, V (텍스트)    {txt_tok.shape}")
+print(f"출력             {out.shape}   ← 이미지 토큰 수가 그대로 유지된다")
+print(f"어텐션 가중치     {attn.shape}   ← 각 이미지 위치가 어느 단어를 보는가")
+print()
+print("**길이가 다른 두 시퀀스를 잇는 것이 크로스 어텐션의 역할이다.**")
+print("자기 어텐션은 Q=K=V 라 길이가 같아야 하지만, 크로스는 그럴 필요가 없다.")
+print("그래서 프롬프트 길이가 바뀌어도 이미지 해상도는 안 바뀐다.")
+print()
+print("비용 비교")
+print(f"{'구성':<30} {'Q 길이':>10} {'K/V 길이':>10} {'어텐션 원소':>16} "
+      f"{'상대 비용':>11}")
+print("-" * 82)
+base = 4096*77
+for nm, nq, nkv in [("크로스 어텐션 (64×64 잠재 × 텍스트 77)", 4096, 77),
+                    ("자기 어텐션 (64×64 잠재)", 4096, 4096),
+                    ("자기 어텐션 (256×256 픽셀)", 65536, 65536),
+                    ("자기 어텐션 (512×512 픽셀)", 262144, 262144)]:
+    print(f"{nm:<30} {nq:>10,} {nkv:>10,} {nq*nkv:>16,} "
+          f"{nq*nkv/base:>10,.0f}배")
+print()
+print("**크로스 어텐션은 사실상 공짜다.** 텍스트가 77 토큰뿐이라 K/V 가 짧다.")
+print(f"비싼 것은 자기 어텐션이고, 픽셀 공간에서는 크로스 대비 "
+      f"{262144**2/base:,.0f}배다.")
+print()
+print("**그래서 '텍스트 조건이 비싸다'는 오해다.**")
+print("비싼 것은 이미지 자신을 보는 것이고, 그것이 잠재 공간을 쓰는 이유다.")
+print("조건 주입은 그 위에 거의 무료로 얹힌다.")
+```
+
+```{python}
+#| label: fig-cross-attn
+#| fig-cap: "크로스 어텐션 맵 — 각 이미지 위치가 어떤 텍스트 토큰에 집중하는지"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.56, 0.44],
+                    subplot_titles=("토큰별 어텐션 히트맵 (8×8 잠재 격자)",
+                                    "어텐션 가중치 행렬"),
+                    specs=[[{"type": "heatmap"}, {"type": "heatmap"}]])
+TOKENS = ["a", "cat", "on", "red", "sofa"]
+for ti in range(n_txt):
+    fig.add_trace(go.Heatmap(z=np.round(attn[:, ti].reshape(8, 8), 3),
+                             colorscale="Blues", showscale=False,
+                             visible=(ti == 1)), row=1, col=1)
+fig.add_trace(go.Heatmap(z=np.round(attn, 3), colorscale="Blues",
+                         colorbar=dict(thickness=11, outlinewidth=0)),
+              row=1, col=2)
+steps_a = []
+for ti, tk in enumerate(TOKENS):
+    vis = [False]*n_txt + [True]
+    vis[ti] = True
+    steps_a.append((f'"{tk}"', {"visible": vis}))
+fig.update_xaxes(showticklabels=False, row=1, col=1)
+fig.update_yaxes(showticklabels=False, autorange="reversed", row=1, col=1)
+fig.update_xaxes(title_text="텍스트 토큰", tickmode="array",
+                 tickvals=list(range(n_txt)), ticktext=TOKENS, row=1, col=2)
+fig.update_yaxes(title_text="이미지 잠재 위치", autorange="reversed",
+                 row=1, col=2)
+fig.update_layout(sliders=[viz.slider(steps_a, prefix="토큰 = ", active=1,
+                                      pad_t=45)])
+viz.fig_defaults(fig, height=400,
+                 title="무작위 가중치 예시 — 구조를 보이기 위한 도식입니다")
+fig.show()
+```
+
+::: {.callout-warning}
+### 위 히트맵은 학습된 모델이 아니다
+
+무작위 초기화된 $W_Q, W_K, W_V$ 로 만든 **구조 도식**이다.
+실제 학습된 모델의 크로스 어텐션 맵은 훨씬 뚜렷한 공간 구조를 보인다 —
+"cat"에 해당하는 픽셀 영역에 집중되는 식이다.
+
+그 성질을 이용한 것이 **Prompt-to-Prompt** 편집 기법이다:
+크로스 어텐션 맵을 유지한 채 단어만 바꾸면 구도는 보존하고 내용만 바꿀 수 있다.
+학습 없이 편집이 되는 이유가 이 맵의 해석 가능성이다.
 :::
 
-실제로 쓰이는 이미지 생성기는 픽셀이 아니라 잠재 공간에서 작동한다. 이 설계 하나가 비용을 수십 배 낮췄다.
+---
+
+## Stable Diffusion의 전체 구조
+
+```{python}
+#| label: sd-arch
+#| code-fold: false
+
+print("Stable Diffusion 1.5 의 데이터 흐름")
+print()
+flow = [
+    ("텍스트", '"a cat on a red sofa"', ""),
+    ("↓ CLIP 텍스트 인코더", "77 × 768", "고정 (학습 안 함)"),
+    ("↓", "", ""),
+    ("잠재 초기값", "4 × 64 × 64 잡음", "= 16,384 차원"),
+    ("↓ U-Net × 50 스텝", "각 블록: ResBlock → 자기어텐션 → 크로스어텐션",
+     "860M 파라미터"),
+    ("↓", "4 × 64 × 64 잠재", ""),
+    ("↓ VAE 디코더", "3 × 512 × 512", "83M 파라미터"),
+    ("최종 이미지", "512 × 512 × 3", "= 786,432 차원"),
+]
+for a, b, c in flow:
+    print(f"  {a:<22} {b:<44} {c}")
+print()
+print("**세 신경망이 협업한다:**")
+print("  · CLIP  — 텍스트를 벡터로 (사전학습, 동결)")
+print("  · VAE   — 픽셀 ↔ 잠재 (사전학습, 동결)")
+print("  · U-Net — 확산 (이것만 학습)")
+print()
+print("VAE 가 **동결**이라는 점이 중요하다.")
+print("한 번 학습해 두면 여러 확산 모델이 같은 잠재 공간을 공유한다 —")
+print("SD 1.x 계열 모델들이 서로 LoRA·임베딩을 주고받을 수 있는 이유다.")
+print()
+print("그리고 그 VAE 는 순수 VAE 가 아니다 — **VQGAN 계열**이다.")
+print("[6.2](02_vae.qmd)에서 본 흐릿함 문제를 [6.3](03_gan.qmd)의 판별자로 해결했다:")
+print("   L = 재구성 + KL(아주 작은 가중치) + **지각 손실(LPIPS)** + **적대적 손실**")
+print("두 장에 걸친 아이디어가 여기서 한 부품으로 합쳐진다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 제어 기법
 
-- 픽셀 공간 확산의 비용 문제
-- VAE 오토인코더로 잠재 공간 만들기(지각 압축)
-- 잠재 확산(LDM) 구조와 Stable Diffusion 계보
-- 텍스트 조건: CLIP/T5 인코더와 크로스 어텐션 주입
-- U-Net 백본의 구조와 어텐션 배치
-- DiT: U-Net을 Transformer로 교체, 스케일링 특성
-- 제어: ControlNet, IP-Adapter, LoRA 스타일 미세조정
-- 인페인팅·아웃페인팅·이미지-투-이미지
-- 해상도 확장: 계단식 확산, 초해상, SDXL의 조건화
-- 샘플링 가속: 증류(distillation), consistency, LCM, Turbo
-- 안전 필터·워터마킹·출처 표시
+```{python}
+#| label: control
+#| code-fold: false
 
----
-
-## G6.7.1 — 픽셀 vs 잠재 공간 비용
-
-해상도에 따른 두 방식의 연산량 격차
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 해상도 슬라이더
-:::
-
----
-
-## G6.7.2 — 크로스 어텐션 주입
-
-텍스트 토큰이 이미지 영역 어디에 어텐션을 주는지 히트맵
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 프롬프트 토큰 선택
-:::
-
----
-
-## G6.7.3 — ControlNet 조건
-
-에지·깊이·포즈 조건이 생성 결과를 구속하는 정도
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 조건 종류 전환
-:::
+rows = [
+    ("이미지-투-이미지", "중간 t 까지만 잡음을 넣고 거기서 생성",
+     "학습 불필요", "구도 보존 정도를 t 로 조절"),
+    ("인페인팅", "마스크 밖은 매 스텝 원본의 x_t 로 덮어씀",
+     "학습 불필요", "경계 아티팩트가 생길 수 있음"),
+    ("ControlNet", "U-Net 인코더를 복제해 조건 분기를 만들고 zero-conv 로 합류",
+     "**추가 학습**", "에지·깊이·자세를 강하게 구속"),
+    ("T2I-Adapter", "가벼운 어댑터만 학습", "추가 학습", "ControlNet 보다 싸고 약함"),
+    ("IP-Adapter", "이미지를 크로스 어텐션 K/V 로 추가 주입",
+     "추가 학습", "'이 스타일로' 가 가능"),
+    ("LoRA", "어텐션 가중치에 저랭크 보정",
+     "**소량 학습**", "수십 장으로 개념/화풍 주입"),
+    ("Textual Inversion", "새 토큰 임베딩 하나만 학습",
+     "소량 학습", "가장 가벼움, 표현력 제한"),
+    ("Prompt-to-Prompt", "크로스 어텐션 맵을 재사용",
+     "학습 불필요", "구도 유지하며 단어만 교체"),
+]
+print(f"{'기법':<20} {'방식':<44} {'학습':<12} {'특징'}")
+print("-" * 108)
+for r_ in rows:
+    print(f"{r_[0]:<20} {r_[1]:<44} {r_[2]:<12} {r_[3]}")
+print()
+print("**ControlNet 의 zero-conv 가 영리하다.**")
+print("합류 지점의 합성곱을 0 으로 초기화한다 → 학습 시작 시 조건 분기의 기여가 0 이다.")
+print("원본 모델의 능력을 **전혀 훼손하지 않고** 출발해 서서히 조건을 배운다.")
+print("[3.7](../03_deep_learning/07_initialization.qmd)의 잔차 스케일링과 같은 발상이다 —")
+print("항등에서 출발하면 깊은 모델을 안전하게 늘릴 수 있다.")
+```
 
 ---
 
-## G6.7.4 — 증류 전후 스텝 수
+## 해상도와 속도
 
-50스텝 모델과 4스텝 증류 모델의 품질·속도 비교
+```{python}
+#| label: scaling-speed
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 전환
-:::
+print("① 고해상도로 가는 방법")
+print()
+rows = [
+    ("계단식 확산", "64² 생성 → 초해상 256² → 초해상 1024²",
+     "Imagen, DALL·E 2", "모델 3개, 오류 전파"),
+    ("잠재 확산 + 큰 잠재", "128×128×4 잠재로 1024² 생성",
+     "SDXL", "메모리 요구 급증"),
+    ("다중 종횡비 학습", "여러 비율을 버킷으로 나눠 학습",
+     "SDXL", "1:1 이외 비율 품질 개선"),
+    ("조건화 강화", "원본 크기·크롭 좌표를 조건으로",
+     "SDXL", "저해상도 학습 데이터를 버리지 않음"),
+]
+print(f"{'방법':<22} {'내용':<40} {'대표':<18} {'대가'}")
+print("-" * 100)
+for r_ in rows:
+    print(f"{r_[0]:<22} {r_[1]:<40} {r_[2]:<18} {r_[3]}")
+print()
+print("② 속도 — 스텝 수를 줄이는 계보")
+print()
+print(f"{'방법':<26} {'스텝':>8} {'학습 필요':>10} {'원리'}")
+print("-" * 82)
+for nm, st, tr, pr in [
+    ("DDPM", "1000", "—", "원본"),
+    ("DDIM", "50", "—", "확률 흐름 ODE 이산화"),
+    ("DPM-Solver++", "15~25", "—", "지수 적분기"),
+    ("Progressive Distillation", "4~8", "필요", "교사 2스텝 → 학생 1스텝, 반복"),
+    ("LCM (일관성 증류)", "2~8", "필요", "궤적 위 모든 점을 같은 끝점으로"),
+    ("SDXL-Turbo (ADD)", "1~4", "필요", "**적대적 손실 + 점수 증류**"),
+    ("SD3-Turbo (LADD)", "1~4", "필요", "잠재 공간 적대적 증류"),
+]:
+    print(f"{nm:<26} {st:>8} {tr:>10} {pr}")
+print()
+print("**증류의 뒤쪽 절반은 전부 GAN 이다.**")
+print("6.3 에서 '확산 시대의 GAN' 이라 한 것이 이것이다 —")
+print("적대적 손실이 1~4 스텝 생성을 가능하게 하는 결정적 부품이다.")
+print()
+print("6.5 에서 우리도 같은 벽을 봤다: DDIM 5스텝에서 균형도가 3.95 로 무너졌다.")
+print("증류는 **그 스텝 수에서도 분포를 유지하도록 학생을 따로 학습**시키는 것이다.")
+print("자세한 것은 다음 장에서 다룬다.")
+```
 
 ---
 
-## 핵심 용어
+## U-Net에서 Transformer로
 
-| 용어 | 비고 |
+```{python}
+#| label: dit
+#| code-fold: false
+
+print("DiT (Diffusion Transformer, Peebles & Xie 2023)")
+print()
+print("  잠재 (4×64×64) → 패치화(2×2) → 1024 토큰 → Transformer 블록 × N → 언패치")
+print()
+rows = [
+    ("귀납 편향", "U-Net: 지역성·다중해상도 내장",
+     "DiT: 없음 (데이터로 배움)"),
+    ("스케일링", "U-Net: 깊이/폭 늘려도 이득이 빨리 준다",
+     "**DiT: FLOPs 와 FID 가 깨끗한 멱법칙**"),
+    ("시간·조건 주입", "U-Net: GroupNorm 스케일/시프트",
+     "DiT: **adaLN-Zero** (0 초기화 게이트)"),
+    ("어텐션 범위", "U-Net: 저해상도 층만",
+     "DiT: 모든 층 전역"),
+    ("채택", "SD 1.x/2.x, SDXL",
+     "**SD3, Sora, Flux, PixArt**"),
+]
+print(f"{'축':<16} {'U-Net':<40} {'DiT'}")
+print("-" * 96)
+for r_ in rows:
+    print(f"{r_[0]:<16} {r_[1]:<40} {r_[2]}")
+print()
+print("**adaLN-Zero 를 눈여겨볼 것.**")
+print("각 블록의 출력에 곱해지는 게이트를 0 으로 초기화한다 →")
+print("학습 시작 시 **모든 블록이 항등함수**다.")
+print("ControlNet 의 zero-conv, 3.7 의 잔차 스케일링과 완전히 같은 발상이다.")
+print("깊은 모델 학습의 공통 처방이 계속 재등장한다.")
+print()
+print("**교훈은 Part 5 의 스케일링 법칙과 같다:**")
+print("귀납 편향은 데이터가 적을 때 이득이고, 많아지면 **제약**이 된다.")
+print("합성곱 → Transformer 전환이 비전(4.x)·언어(5.x)에 이어 생성에서도 일어났다.")
+```
+
+---
+
+## 안전과 출처
+
+```{python}
+#| label: safety
+#| code-fold: false
+
+rows = [
+    ("학습 데이터 필터링", "NSFW·저작권 문제 데이터 제거",
+     "가장 근본적", "완전하지 않고, 재현성 문제"),
+    ("안전 체커", "생성물 분류기로 사후 차단",
+     "배포 단계 방어", "우회 쉬움, 오탐"),
+    ("개념 제거", "모델 가중치에서 특정 개념을 지움",
+     "우회가 어려움", "부수 피해, 복원 가능성"),
+    ("눈에 보이는 워터마크", "이미지에 표시",
+     "즉시 인지", "잘라내면 사라짐"),
+    ("비가시 워터마크", "주파수 영역에 신호 삽입",
+     "SD 기본 탑재", "재압축·크롭에 약함"),
+    ("C2PA 출처 메타데이터", "서명된 생성 이력 첨부",
+     "**업계 표준화 중**", "메타데이터는 쉽게 제거됨"),
+]
+print(f"{'수단':<22} {'내용':<32} {'강점':<18} {'한계'}")
+print("-" * 96)
+for r_ in rows:
+    print(f"{r_[0]:<22} {r_[1]:<32} {r_[2]:<18} {r_[3]}")
+print()
+print("**어느 것도 단독으로는 충분하지 않다.**")
+print("6.0 의 평가 지표와 같은 구조다 — 여러 층을 겹쳐야 한다.")
+print()
+print("그리고 기술적 수단만으로는 안 되는 부분이 남는다:")
+for s in ["학습 데이터의 저작권 — 법적 문제이지 기술 문제가 아니다",
+          "실존 인물 생성 — 초상권·명예훼손",
+          "생성물의 편향 — 학습 데이터의 편향이 증폭되어 나온다",
+          "탐지의 군비 경쟁 — 탐지기가 좋아지면 회피도 좋아진다"]:
+    print(f"  · {s}")
+print()
+print("Part 12 (신뢰성) 에서 이 문제들을 다시 다룬다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 잠재 확산 (LDM) |  |
-| Stable Diffusion |  |
-| 크로스 어텐션 조건 |  |
-| DiT |  |
-| ControlNet |  |
-| 증류 |  |
+| 2단계 설계 | 지각 압축(오토인코더) → 의미 압축(확산) |
+| **측정된 이득** | 학습·샘플링이 빠른 데다 **품질까지 더 좋다** (0.425 → 0.278, 실제 0.258) |
+| 왜 품질까지 | 확산이 밀도가 실제로 있는 저차원 공간에서만 일한다 |
+| 압축의 대가 | 재구성 MSE 가 확산 오차보다 훨씬 작다 |
+| 해상도 비용 | 잠재화로 토큰 64배 · 어텐션 4096배 감소 (배율은 일정) |
+| 절대값이 문제 | 512² 픽셀 자기어텐션은 한 층만도 float16 으로 137 GB |
+| 크로스 어텐션 | $Q$=이미지, $K,V$=텍스트. 길이가 달라도 된다 |
+| 조건 주입 비용 | 자기 어텐션 대비 **1/53** — 사실상 공짜 |
+| SD 의 VAE | 순수 VAE 가 아니라 VQGAN — 6.2 의 흐릿함을 6.3 의 판별자로 해결 |
+| VAE 동결 | 잠재 공간 공유 → LoRA·임베딩 생태계 |
+| zero-conv / adaLN-Zero | 항등에서 출발 — 3.7 의 잔차 스케일링과 같은 발상 |
+| DiT | 귀납 편향을 버리고 스케일링을 얻는다 (SD3, Sora, Flux) |
+| 증류 | 1~4 스텝 생성. 뒤쪽 절반은 **GAN 손실**이다 |
+
+잠재 확산은 비용을 해결했다. 남은 것은 스텝 수다.
+다음 장은 확산의 경로 자체를 다시 설계해 그 문제를 공략한다.
 
 ---
 
-**다음**: [6.8 흐름 매칭과 최신 생성 기법](08_flow_matching.qmd) — rectified flow·consistency·일관된 속도장 — 확산 이후
+**다음**: [6.8 흐름 매칭과 최신 생성 기법](08_flow_matching.qmd)
 
 **이전**: [6.6 스코어 기반 관점과 SDE](06_score_sde.qmd)
