@@ -4,90 +4,880 @@ subtitle: "ELBO·재파라미터화·KL 항 — 확률적 생성 모델의 표�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[6.1](01_autoencoder.qmd)의 오토인코더는 마지막에 구멍 하나를 남겼다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> 잠재 공간에서 아무 $z$ 나 뽑아 디코딩하면 데이터가 아닌 것이 나온다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+인코더가 데이터를 잠재 공간의 **어딘가**로 보내긴 하는데,
+그 "어딘가"가 어떻게 생겼는지 우리는 모른다.
+그러니 새 샘플을 뽑을 방법이 없다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+VAE의 해법은 단순하다. **잠재 분포를 우리가 정한다.**
+인코더가 $q(z|x) \approx \mathcal{N}(0, I)$ 를 따르도록 벌점을 준다.
+그러면 $z \sim \mathcal{N}(0, I)$ 에서 뽑아 디코딩하면 된다.
+
+문제는 그 벌점이 어디서 나오느냐다. 임의로 붙인 정규화 항이 아니다 —
+**로그 우도의 하한을 유도하면 저절로 나온다.** 그 유도가 이 장의 핵심이다.
+
+---
+
+## 문제: 주변화를 할 수 없다
+
+잠재변수 모델의 우도는 적분이다.
+
+$$p_\theta(x) = \int p_\theta(x \mid z)\, p(z)\, dz$$
+
+$z$ 가 8차원만 되어도 이 적분은 닫힌 형태로 안 풀리고,
+몬테카를로로 근사하려면 $p(z)$ 에서 뽑은 $z$ 대부분이
+$p_\theta(x|z) \approx 0$ 이라 쓸모가 없다.
+
+**핵심 아이디어**: $x$ 를 보고 **그럴듯한 $z$ 만** 제안하는 분포 $q_\phi(z|x)$ 를 도입한다.
+
+---
+
+## ELBO 유도 — 두 가지 방법
+
+### 방법 1: 옌센 부등식
+
+$$\log p_\theta(x) = \log \int p_\theta(x|z)p(z)\,dz
+= \log \mathbb{E}_{q_\phi(z|x)}\!\left[\frac{p_\theta(x|z)p(z)}{q_\phi(z|x)}\right]$$
+
+$\log$ 는 오목하므로 옌센 부등식 $\log \mathbb{E}[Y] \ge \mathbb{E}[\log Y]$ 를 쓰면
+
+$$\log p_\theta(x) \;\ge\; \mathbb{E}_{q_\phi}\!\left[\log \frac{p_\theta(x|z)p(z)}{q_\phi(z|x)}\right] \;=\; \mathcal{L}(\theta,\phi;x)$$
+
+### 방법 2: KL 분해 (더 많은 것을 알려준다)
+
+$$\log p_\theta(x) = \underbrace{\mathbb{E}_{q_\phi}\!\left[\log\frac{p_\theta(x,z)}{q_\phi(z|x)}\right]}_{\text{ELBO } \mathcal{L}} \;+\; \underbrace{D_{KL}\!\big(q_\phi(z|x)\,\|\,p_\theta(z|x)\big)}_{\ge 0}$$
+
+두 번째 항은 항상 0 이상이므로 $\mathcal{L} \le \log p_\theta(x)$ 다.
+**그리고 그 간극이 무엇인지도 알려준다** — 근사 사후분포와 진짜 사후분포의 KL이다.
+$q$ 가 진짜 사후분포와 같아지면 하한은 딱 붙는다.
+
+### ELBO를 실용적인 형태로
+
+$$\boxed{\;\mathcal{L} = \underbrace{\mathbb{E}_{q_\phi(z|x)}\big[\log p_\theta(x|z)\big]}_{\text{재구성}} \;-\; \underbrace{D_{KL}\big(q_\phi(z|x)\,\|\,p(z)\big)}_{\text{정규화}}\;}$$
+
+- **재구성항**: $z$ 로부터 $x$ 를 얼마나 잘 복원하는가 — 오토인코더와 같다
+- **KL항**: 인코더 출력이 사전분포에서 얼마나 벗어났는가 — **이것이 새로 생긴 것**
+
+가우스 사후분포 $q = \mathcal{N}(\mu, \sigma^2)$ 와 사전분포 $\mathcal{N}(0,I)$ 사이의 KL은 닫힌 형태다.
+
+$$D_{KL} = \tfrac{1}{2}\sum_{j=1}^{k}\big(\mu_j^2 + \sigma_j^2 - 1 - \log\sigma_j^2\big)$$
+
+---
+
+## G6.2.1 — 재파라미터화 트릭: 왜 이것이 필요한가
+
+$\mathcal{L}$ 을 $\phi$ 로 미분해야 하는데, 기댓값의 **분포 자체가** $\phi$ 에 의존한다.
+
+$$\nabla_\phi \mathbb{E}_{q_\phi(z)}[f(z)] = ?$$
+
+두 가지 방법이 있다.
+
+**① 스코어 함수 추정량 (REINFORCE)** — 분포를 그대로 두고 로그미분 항등식을 쓴다
+
+$$\nabla_\phi \mathbb{E}_{q_\phi}[f(z)] = \mathbb{E}_{q_\phi}\big[f(z)\,\nabla_\phi \log q_\phi(z)\big]$$
+
+**② 재파라미터화** — 확률성을 파라미터 밖으로 밀어낸다
+
+$$z = \mu_\phi + \sigma_\phi \odot \varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)
+\;\;\Longrightarrow\;\;
+\nabla_\phi \mathbb{E}[f(z)] = \mathbb{E}_\varepsilon\big[\nabla_\phi f(\mu_\phi + \sigma_\phi\varepsilon)\big]$$
+
+둘 다 **불편추정량**이다. 차이는 **분산**이다.
+
+```{python}
+#| label: reparam-variance
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+# 목표: ∇_μ E_{z~N(μ,σ²)}[z²].  해석해는 2μ 다.
+r = np.random.default_rng(0)
+NS = 40000
+
+print("두 추정량의 표준편차 (샘플 1개 기준)")
+print()
+print(f"{'σ':>5} {'μ':>5} {'해석해':>8} {'재파라미터화':>14} {'스코어 함수':>13} "
+      f"{'분산 비율':>11}")
+print("-" * 62)
+VAR_TABLE = []
+for sig in [0.5, 1.0, 2.0]:
+    for mu in [0.0, 1.0, 3.0]:
+        eps = r.normal(size=NS)
+        z = mu + sig*eps
+        g_rep = 2*z                          # ∂/∂μ f(μ+σε) = f'(z)
+        g_sf = (z**2)*(z - mu)/sig**2        # f(z)·∂/∂μ log q(z)
+        ratio = (g_sf.std()/g_rep.std())**2
+        VAR_TABLE.append((sig, mu, g_rep.std(), g_sf.std(), ratio))
+        print(f"{sig:>5.1f} {mu:>5.1f} {2*mu:>8.2f} {g_rep.std():>14.4f} "
+              f"{g_sf.std():>13.4f} {ratio:>10.1f}배")
+print()
+print("두 추정량 모두 **평균은 맞다** (불편추정량):")
+eps = r.normal(size=(4000, 64))
+z = 1.0 + 1.0*eps
+a, b = (2*z).mean(1), ((z**2)*(z-1.0)/1.0).mean(1)
+print(f"  n=64 미니배치 기준")
+print(f"    재파라미터화: 평균 {a.mean():.4f} (참값 2.0), 표준오차 {a.std():.4f}")
+print(f"    스코어 함수 : 평균 {b.mean():.4f} (참값 2.0), 표준오차 {b.std():.4f}")
+print(f"    → 표준오차 {b.std()/a.std():.1f}배 차이. "
+      f"같은 정밀도를 얻으려면 샘플이 {(b.std()/a.std())**2:.0f}배 필요하다.")
+print()
+print("**왜 이런 차이가 나는가**")
+print("  스코어 함수 추정량은 f 를 **블랙박스로** 다룬다 — f 의 값만 쓴다.")
+print("  재파라미터화는 f 의 **그래디언트**를 쓴다 — 훨씬 많은 정보다.")
+print("  대신 재파라미터화는 z 가 μ, σ 의 **미분 가능한 함수**여야 쓸 수 있다.")
+print("  이산 잠재변수에는 못 쓴다 → Gumbel-softmax 나 REINFORCE 로 우회한다.")
+```
+
+```{python}
+#| label: fig-reparam
+#| fig-cap: "재파라미터화는 확률 노드를 그래디언트 경로 밖으로 빼냅니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
+                    subplot_titles=("그래디언트 추정량의 분포 (σ=1, μ=1)",
+                                    "미니배치 크기에 따른 표준오차"))
+
+r2 = np.random.default_rng(4)
+zz = 1.0 + r2.normal(size=60000)
+edges = np.linspace(-14, 18, 121)
+ctr = (edges[:-1] + edges[1:])/2
+for nm, v, c in [("재파라미터화", 2*zz, viz.ACCENT),
+                 ("스코어 함수", (zz**2)*(zz-1.0), viz.WARM)]:
+    dens, _ = np.histogram(v, bins=edges, density=True)
+    fig.add_trace(go.Bar(x=ctr, y=np.round(dens, 5), name=nm, opacity=0.6,
+                         marker_color=c, marker_line_width=0), row=1, col=1)
+fig.add_vline(x=2.0, line=dict(color=viz.GREEN, dash="dash"),
+              annotation_text="참값 2.0", row=1, col=1)
+fig.update_xaxes(title_text="추정된 그래디언트", range=[-12, 16], row=1, col=1)
+fig.update_yaxes(title_text="밀도", row=1, col=1)
+
+BS = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256])
+se_rep, se_sf = [], []
+for n_ in BS:
+    e = r2.normal(size=(3000, int(n_)))
+    zb = 1.0 + e
+    se_rep.append((2*zb).mean(1).std())
+    se_sf.append(((zb**2)*(zb-1.0)).mean(1).std())
+for nm, v, c in [("재파라미터화", se_rep, viz.ACCENT),
+                 ("스코어 함수", se_sf, viz.WARM)]:
+    fig.add_trace(go.Scatter(x=BS, y=v, mode="lines+markers", name=nm,
+                             showlegend=False, line=dict(color=c, width=2.5),
+                             marker=dict(size=8)), row=1, col=2)
+fig.update_xaxes(title_text="미니배치 크기", type="log", row=1, col=2)
+fig.update_yaxes(title_text="그래디언트 표준오차", type="log", row=1, col=2)
+fig.update_layout(barmode="overlay")
+viz.fig_defaults(fig, height=400,
+                 title="두 추정량 모두 평균은 2.0 으로 맞습니다 — 퍼짐이 다릅니다")
+fig.show()
+```
+
+::: {.key-concept}
+**재파라미터화의 구조적 의미**
+
+$$x \to \text{인코더} \to (\mu, \log\sigma^2) \to \boxed{z = \mu + \sigma\varepsilon} \to \text{디코더} \to \hat{x}$$
+
+$\varepsilon$ 은 **바깥에서 들어오는 상수**다.
+그래디언트는 $\hat{x} \to z \to (\mu,\sigma) \to$ 인코더로 막힘 없이 흐른다.
+확률성은 여전히 있지만, **그래디언트 경로 위에는 없다.**
+
+이 트릭은 VAE 밖에서도 계속 쓰인다 —
+확산 모델의 $x_t = \sqrt{\bar\alpha_t}x_0 + \sqrt{1-\bar\alpha_t}\varepsilon$ 이
+정확히 같은 형태다 ([6.5](05_diffusion.qmd)).
 :::
 
-ELBO 유도는 변분추론 전체의 축소판이며, 확산 모델의 목적함수도 결국 같은 방식으로 얻어진다.
-
 ---
 
-## 이 장에서 다루는 것
+## 구현
 
-- 잠재변수 모델 p(x) = ∫p(x|z)p(z)dz 와 계산 불가능성
-- 변분추론: 근사 사후분포 q(z|x) 도입
-- ELBO 유도 (옌센 부등식 / KL 분해 두 가지 방법)
-- ELBO = 재구성항 − KL항, 각 항의 의미
-- 재파라미터화 트릭 — 샘플링을 통과하는 그래디언트
-- 인코더/디코더 신경망 설계와 가우스 가정
-- 사후 붕괴(posterior collapse)와 KL 소실
-- β-VAE와 분리(disentanglement)
-- 이산 잠재와 Gumbel-softmax
-- 조건부 VAE, 계층적 VAE(NVAE, VDVAE)
-- VAE 샘플이 흐릿한 이유
+```{python}
+#| label: vae-impl
+#| code-fold: false
 
----
+import sys; sys.path.append("../..")
+import numpy as np
+from src.generative import VAE, vae_grad_check, blobs64, sharpness
+from src import nn
 
-## G6.2.1 — ELBO 두 항의 줄다리기
+X_raw, Z_true = blobs64(1500, seed=0)
+MU = X_raw.mean(0)
+X = X_raw - MU
+X_te = blobs64(400, seed=99)[0] - MU
+K = 8
+REAL_SHARP = sharpness(X_raw)
 
-재구성 품질과 잠재 정규화가 β에 따라 균형이 바뀌는 모습
+print(f"데이터 {X.shape} — 실제 자유도 {Z_true.shape[1]}개, 잠재 차원 k={K}")
+print()
+print("구현 검증 — 유한차분 그래디언트 검사 (ε 고정)")
+print(f"{'잠재 k':>7} {'β':>6} {'상대오차':>12}")
+print("-" * 28)
+for k in [1, 4, 8]:
+    for beta in [0.0, 1.0, 4.0]:
+        m = VAE(64, 32, k, seed=1)
+        print(f"{k:>7} {beta:>6.1f} {vae_grad_check(m, X[:200], beta=beta, n_sample=4):>12.2e}")
+print()
+print("역전파가 정확하다. 이제 실험할 수 있다.")
+```
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: β 슬라이더
+::: {.callout-note collapse="true"}
+### `src/generative.py` 의 VAE 역전파 핵심
+
+```python
+dxh = (xh - X)/sigma_x**2/n                    # 재구성항
+...
+dz  = dz3 @ W3.T                               # 디코더를 통과해 z 로
+
+dmu = dz + beta*mu/n                           # ← 재구성 + KL
+dlv = dz*eps*np.exp(0.5*lv)*0.5 \              # ← 재파라미터화 경로
+    + beta*0.5*(np.exp(lv) - 1)/n              # ← KL 경로
+```
+
+`dmu` 와 `dlv` 각각에 **두 경로가 더해진다** — 디코더에서 온 재구성 그래디언트와
+KL 항에서 직접 온 그래디언트. 이 합류점이 ELBO 두 항의 줄다리기가
+실제로 벌어지는 자리다.
 :::
 
 ---
 
-## G6.2.2 — 재파라미터화 도식
+## G6.2.2 — ELBO 두 항의 줄다리기
 
-z = μ + σ·ε 로 확률 노드를 결정론 경로 밖으로 빼내는 구조
+$\beta$ 로 KL 항의 무게를 바꾸면 무엇이 변하는가 (β-VAE).
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플 재생
-:::
+$$\mathcal{L}_\beta = \mathbb{E}_q[\log p(x|z)] - \beta\, D_{KL}(q \| p)$$
+
+```{python}
+#| label: beta-sweep
+#| code-fold: false
+
+import numpy as np
+from src.generative import VAE, sharpness
+
+BETAS = [0.0, 0.05, 0.2, 1.0, 4.0, 20.0]
+BS = {"beta": BETAS, "rec": [], "kl": [], "au": [], "mse": [], "sharp": []}
+BETA_MODELS = {}
+
+for beta in BETAS:
+    m = VAE(64, 48, K, seed=1, sigma_x=0.1).fit(X, beta=beta, steps=3000,
+                                                lr=3e-3, seed=1)
+    BETA_MODELS[beta] = m
+    c = m.forward(X_te, eps=np.zeros((len(X_te), K)))
+    rec, kl = m.loss_terms(X_te, c)
+    au, _ = m.active_units(X_te)
+    BS["rec"].append(rec); BS["kl"].append(kl); BS["au"].append(au)
+    BS["mse"].append(float(((X_te - c["xh"])**2).mean()))
+    BS["sharp"].append(sharpness(m.sample(400, seed=2) + MU))
+
+print(f"{'β':>7} {'재구성항':>10} {'KL항':>10} {'활성 잠재':>10} "
+      f"{'테스트 MSE':>12} {'사전 샘플 선명도':>17}")
+print("-" * 72)
+for i, b in enumerate(BETAS):
+    print(f"{b:>7.2f} {BS['rec'][i]:>10.2f} {BS['kl'][i]:>10.3f} "
+          f"{BS['au'][i]:>7}/{K} {BS['mse'][i]:>12.6f} {BS['sharp'][i]:>17.4f}")
+print("-" * 72)
+print(f"{'실제 데이터':>7} {'':>10} {'':>10} {'':>10} {'':>12} {REAL_SHARP:>17.4f}")
+print()
+print("**β 를 키우면 KL 이 줄고 재구성이 나빠진다** — 정확히 예상대로다.")
+print(f"  β=0:  KL {BS['kl'][0]:.1f},  MSE {BS['mse'][0]:.6f}")
+print(f"  β=20: KL {BS['kl'][5]:.1f},  MSE {BS['mse'][5]:.6f} "
+      f"({BS['mse'][5]/BS['mse'][0]:.0f}배 악화)")
+print()
+print("**흥미로운 것은 마지막 열이다 — 사전분포에서 뽑은 샘플의 선명도.**")
+print(f"  실제 데이터: {REAL_SHARP:.4f}")
+for i in [0, 2, 3, 5]:
+    b = BETAS[i]
+    d = BS['sharp'][i]/REAL_SHARP
+    tag = ("너무 날카롭다 (고주파 잡음)" if d > 1.3 else
+           "너무 흐릿하다" if d < 0.85 else "**실제와 비슷하다**")
+    print(f"  β={b:<5}     {BS['sharp'][i]:.4f}  ({d:.2f}배) — {tag}")
+print()
+print("β=0 은 오토인코더다. 잠재에 아무 제약이 없으니")
+print("N(0,I) 에서 뽑은 z 는 인코더가 실제로 쓰는 영역 밖에 떨어진다.")
+print("디코더가 본 적 없는 입력을 받고 **고주파 쓰레기**를 뱉는다 — 선명도가 2배 넘게 튄다.")
+print("β 가 너무 크면 반대로 흐릿해진다. **중간 어딘가가 맞다.**")
+```
+
+```{python}
+#| label: fig-beta
+#| fig-cap: "β에 따른 재구성-KL 트레이드오프와 사전 샘플의 변화"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=2, cols=6,
+                    column_widths=[0.34, 0.02] + [0.16]*4,
+                    specs=[[{"rowspan": 2, "secondary_y": True}, None]
+                           + [{"type": "heatmap"}]*4,
+                           [None, None] + [{"type": "heatmap"}]*4],
+                    subplot_titles=("ELBO 두 항", "", "", "", "", "",
+                                    "", "", "", ""),
+                    horizontal_spacing=0.02, vertical_spacing=0.06)
+
+xb = [max(b, 0.02) for b in BETAS]           # 로그축용
+fig.add_trace(go.Scatter(x=xb, y=BS["rec"], mode="lines+markers", name="재구성항",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=xb, y=BS["kl"], mode="lines+markers", name="KL항",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=9)), row=1, col=1,
+              secondary_y=True)
+fig.update_xaxes(title_text="β (로그축, β=0 은 0.02 위치)", type="log",
+                 row=1, col=1)
+fig.update_yaxes(title_text="재구성항", type="log", row=1, col=1)
+fig.update_yaxes(title_text="KL항", row=1, col=1, secondary_y=True)
+
+steps = []
+for bi, b in enumerate(BETAS):
+    smp = (BETA_MODELS[b].sample(8, seed=2) + MU).reshape(-1, 8, 8)
+    for j in range(4):
+        fig.add_trace(go.Heatmap(z=np.round(smp[j], 3), colorscale="Blues",
+                                 zmin=0, zmax=1, showscale=False,
+                                 visible=(bi == 0)), row=1, col=j+3)
+        fig.add_trace(go.Heatmap(z=np.round(smp[j+4], 3), colorscale="Blues",
+                                 zmin=0, zmax=1, showscale=False,
+                                 visible=(bi == 0)), row=2, col=j+3)
+n_per = 8
+for bi, b in enumerate(BETAS):
+    vis = [True, True] + [False]*(n_per*len(BETAS))
+    for t in range(n_per):
+        vis[2 + bi*n_per + t] = True
+    steps.append((str(b), {"visible": vis}))
+for c in range(3, 7):
+    for r_ in (1, 2):
+        fig.update_xaxes(showticklabels=False, row=r_, col=c)
+        fig.update_yaxes(showticklabels=False, autorange="reversed",
+                         row=r_, col=c)
+fig.update_layout(sliders=[viz.slider(steps, prefix="β = ", pad_t=30)])
+viz.fig_defaults(fig, height=430,
+                 title="오른쪽: z ~ N(0,I) 에서 뽑아 디코딩한 샘플 8개")
+fig.show()
+```
 
 ---
 
-## G6.2.3 — 잠재공간 보간
+## G6.2.3 — 사후 붕괴: 무엇이 진짜 원인인가
 
-잠재 공간 직선 이동이 만드는 부드러운 출력 변화
+**사후 붕괴**(posterior collapse)는 $q(z|x) \to p(z)$ 가 되어
+잠재변수가 아무 정보도 나르지 않는 현상이다.
+KL 이 0으로 가고, 디코더는 $z$ 를 무시한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 두 점 사이 슬라이더
-:::
+교과서는 흔히 "디코더가 강력할수록 잠재를 무시한다"고 말한다.
+**시험해 보자.**
+
+```{python}
+#| label: collapse-width
+#| code-fold: false
+
+import numpy as np
+from src.generative import VAE
+
+print("가설 A: 디코더 폭을 키우면 붕괴한다")
+print()
+print(f"{'디코더 폭':>10} {'KL항':>9} {'활성 잠재':>10} {'테스트 MSE':>12} "
+      f"{'z 를 섞었을 때':>16}")
+print("-" * 62)
+CW = []
+for hdim in [4, 16, 48, 128]:
+    m = VAE(64, hdim, K, seed=1, sigma_x=0.1).fit(X, beta=1.0, steps=3000,
+                                                  lr=3e-3, seed=1)
+    c = m.forward(X_te, eps=np.zeros((len(X_te), K)))
+    _, kl = m.loss_terms(X_te, c)
+    au, _ = m.active_units(X_te)
+    mse = float(((X_te - c["xh"])**2).mean())
+    perm = np.random.default_rng(3).permutation(len(X_te))
+    mse_p = float(((X_te - m.decode(c["mu"][perm])[1])**2).mean())
+    CW.append((hdim, kl, au, mse, mse_p))
+    print(f"{hdim:>10} {kl:>9.3f} {au:>7}/{K} {mse:>12.6f} {mse_p:>16.6f}")
+print()
+print("**가설 A 는 재현되지 않았다.**")
+print("디코더 폭을 4 → 128 로 32배 키워도 KL 은 8.1 근처에서 안정적이고,")
+print(f"활성 잠재도 {CW[-1][2]}/{K} 로 유지된다. z 를 섞으면 MSE 가 "
+      f"{CW[1][4]/CW[1][3]:.0f}~{CW[-1][4]/CW[-1][3]:.0f}배 나빠진다 —")
+print("디코더는 여전히 z 를 **적극적으로 쓰고 있다.**")
+print()
+print("(오히려 폭 4 에서 KL 이 4.0 으로 낮은데, 이건 붕괴가 아니라")
+print(" **디코더가 너무 약해서** 잠재 정보를 다 못 쓰는 경우다.)")
+```
+
+왜 재현되지 않았을까. 이 디코더에게는 **$z$ 말고 다른 정보원이 없기 때문이다.**
+$z$ 를 버리면 재구성을 포기해야 한다.
+
+교과서가 말하는 붕괴는 **자기회귀 디코더**에서 일어난다.
+그 디코더는 $z$ 없이도 $p(x)$ 를 스스로 모델링할 수 있다.
+
+```{python}
+#| label: collapse-ar
+#| code-fold: false
+
+import numpy as np
+from src.generative import VAE
+
+
+class ARVae(VAE):
+    """디코더에 하삼각 자기회귀 항을 더한 VAE.
+
+    x̂_i = MLP(z)_i + Σ_{j<i} A_ji · x_j     (교사 강요)
+
+    AR 항은 z 를 전혀 쓰지 않고도 데이터를 설명할 수 있다.
+    """
+
+    def __init__(self, d, h, k, seed=0, sigma_x=0.1, ar=True):
+        super().__init__(d, h, k, seed=seed, sigma_x=sigma_x)
+        self.mask = np.tril(np.ones((d, d)), -1)          # j < i 만 참조
+        self.p["A"] = np.zeros((d, d))
+        self.ar = ar
+
+    def loss_and_grads(self, Xb, beta=1.0, eps=None):
+        n = len(Xb)
+        c = self.forward(Xb, eps=eps)
+        A = self.p["A"]*self.mask
+        ar_term = Xb @ A if self.ar else 0.0
+        xh = c["xh"] + ar_term
+        rec = float(((Xb - xh)**2).sum()/(2*self.sigma_x**2)/n)
+        kl = float(0.5*(c["mu"]**2 + np.exp(c["lv"]) - 1 - c["lv"]).sum()/n)
+        P = self.p
+        dxh = (xh - Xb)/(self.sigma_x**2)/n
+        g = {"A": (Xb.T @ dxh)*self.mask if self.ar else np.zeros_like(A),
+             "W4": c["hd"].T @ dxh, "b4": dxh.sum(0)}
+        dhd = dxh @ P["W4"].T
+        dz3 = dhd*(1 - c["hd"]**2)
+        g["W3"] = c["z"].T @ dz3; g["b3"] = dz3.sum(0)
+        dz = dz3 @ P["W3"].T
+        dmu = dz + beta*c["mu"]/n
+        dlv = (dz*c["eps"]*np.exp(0.5*c["lv"])*0.5
+               + beta*0.5*(np.exp(c["lv"]) - 1)/n)
+        dst = np.concatenate([dmu, dlv], 1)
+        g["W2"] = c["he"].T @ dst; g["b2"] = dst.sum(0)
+        dhe = dst @ P["W2"].T
+        dz1 = dhe*(1 - c["he"]**2)
+        g["W1"] = Xb.T @ dz1; g["b1"] = dz1.sum(0)
+        return rec + beta*kl, g, (rec, kl)
+
+
+print("가설 B: 디코더에게 z 말고 다른 정보원을 주면 붕괴한다")
+print()
+print(f"{'디코더':<26} {'KL항':>9} {'활성 잠재':>10} {'재구성 MSE':>13} "
+      f"{'z 를 섞었을 때':>16}")
+print("-" * 80)
+AR_RES = {}
+for nm, use_ar in [("MLP 만 (z 가 유일한 정보)", False),
+                   ("MLP + 자기회귀 항", True)]:
+    m = ARVae(64, 48, K, seed=1, sigma_x=0.1, ar=use_ar)
+    m.fit(X, beta=1.0, steps=3000, lr=3e-3, seed=1)
+    c = m.forward(X_te, eps=np.zeros((len(X_te), K)))
+    A = m.p["A"]*m.mask
+    ar_t = X_te @ A if use_ar else 0.0
+    xh = c["xh"] + ar_t
+    kl = float(0.5*(c["mu"]**2+np.exp(c["lv"])-1-c["lv"]).sum()/len(X_te))
+    au, var = m.active_units(X_te)
+    mse = float(((X_te - xh)**2).mean())
+    perm = np.random.default_rng(3).permutation(len(X_te))
+    mse_p = float(((X_te - (m.decode(c["mu"][perm])[1] + ar_t))**2).mean())
+    AR_RES[use_ar] = (kl, au, mse, mse_p, var)
+    print(f"{nm:<26} {kl:>9.4f} {au:>7}/{K} {mse:>13.6f} {mse_p:>16.6f}")
+print()
+print("**가설 B 는 완벽하게 재현되었다.**")
+k0, a0, m0, p0, _ = AR_RES[False]
+k1, a1, m1, p1, _ = AR_RES[True]
+print(f"  KL:        {k0:.4f} → {k1:.4f}  ({k0/k1:.0f}배 감소)")
+print(f"  활성 잠재:  {a0}/{K} → {a1}/{K}")
+print(f"  z 를 섞었을 때 MSE: {p0:.6f} → {p1:.6f}")
+print(f"    ← **z 를 완전히 무작위로 바꿔도 재구성이 전혀 안 변한다** "
+      f"({m1:.6f} vs {p1:.6f})")
+print(f"  그런데 재구성 성능은 그대로다 ({m0:.6f} vs {m1:.6f}).")
+print("  AR 항이 일을 다 하고 z 는 놀고 있다.")
+print()
+print("**결론: 사후 붕괴의 원인은 디코더의 '용량'이 아니라**")
+print("**'z 없이도 데이터를 설명할 수 있는 경로가 있는가'다.**")
+print("텍스트 VAE 가 특히 잘 붕괴하는 이유가 이것이다 —")
+print("LSTM·Transformer 디코더는 그 자체로 훌륭한 언어모델이다.")
+print()
+print("대응책:")
+for s in ["KL 어닐링(warm-up) — β 를 0 에서 서서히 1 로 올린다",
+          "자유 비트(free bits) — 차원마다 KL 하한 λ 를 두어 그 아래로는 벌하지 않는다",
+          "디코더 약화 — 단어 드롭아웃, 문맥 창 제한",
+          "δ-VAE — q 의 분산에 하한을 두어 구조적으로 붕괴를 막는다",
+          "이산 잠재 (VQ-VAE) — KL 항 자체가 없어 붕괴하지 않는다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: collapse-beta
+#| code-fold: false
+
+import numpy as np
+from src.generative import VAE
+
+print("가설 C: β 를 키우면 붕괴한다 (KL 항이 재구성을 이긴다)")
+print()
+print(f"{'β':>8} {'KL항':>11} {'활성 잠재':>10} {'테스트 MSE':>13} "
+      f"{'z 를 섞었을 때':>16}")
+print("-" * 62)
+CB = []
+for beta in [1.0, 20.0, 100.0, 500.0]:
+    m = VAE(64, 48, K, seed=1, sigma_x=0.1).fit(X, beta=beta, steps=3000,
+                                                lr=3e-3, seed=1)
+    c = m.forward(X_te, eps=np.zeros((len(X_te), K)))
+    _, kl = m.loss_terms(X_te, c)
+    au, _ = m.active_units(X_te)
+    mse = float(((X_te - c["xh"])**2).mean())
+    perm = np.random.default_rng(3).permutation(len(X_te))
+    mse_p = float(((X_te - m.decode(c["mu"][perm])[1])**2).mean())
+    CB.append((beta, kl, au, mse, mse_p))
+    print(f"{beta:>8.0f} {kl:>11.5f} {au:>7}/{K} {mse:>13.6f} {mse_p:>16.6f}")
+mean_mse = float((X_te**2).mean())
+print("-" * 62)
+print(f"{'평균 출력':>8} {'':>11} {'0/8':>10} {mean_mse:>13.6f}")
+print()
+print("**가설 C 도 재현되었다.** β=100 에서 완전 붕괴다 —")
+print(f"  KL {CB[2][1]:.5f} ≈ 0, 활성 잠재 0/{K},")
+print(f"  테스트 MSE {CB[2][3]:.6f} 가 **평균만 출력하는 모델({mean_mse:.6f})과 같다.**")
+print("  디코더가 입력을 완전히 무시하고 데이터 평균 하나만 뱉고 있다.")
+```
+
+### 어떤 차원이 살아남는가
+
+```{python}
+#| label: active-dims
+#| code-fold: false
+
+import numpy as np
+
+m = BETA_MODELS[1.0]
+_, mu_te, lv_te = m.encode(X_te)
+kl_dim = 0.5*(mu_te**2 + np.exp(lv_te) - 1 - lv_te).mean(0)
+order = np.argsort(kl_dim)[::-1]
+
+print("β=1 모델의 잠재 차원별 상태")
+print()
+print(f"{'차원':>5} {'KL':>9} {'Var[μ]':>10} {'평균 σ':>9} {'상태'}")
+print("-" * 46)
+for j in order:
+    alive = kl_dim[j] > 0.05
+    print(f"{j:>5} {kl_dim[j]:>9.4f} {mu_te[:, j].var():>10.4f} "
+          f"{np.exp(0.5*lv_te[:, j]).mean():>9.4f}  "
+          f"{'살아있음' if alive else '붕괴 (사전분포 그대로)'}")
+print()
+n_alive = int((kl_dim > 0.05).sum())
+print(f"**{n_alive}개 차원이 살아있다.** 데이터의 실제 자유도는 "
+      f"{Z_true.shape[1]}개였다.")
+print("VAE 가 아무도 알려주지 않은 내재 차원을 스스로 찾아낸 것이다.")
+print()
+print("붕괴한 차원은 μ≈0, σ≈1 — 정확히 사전분포 N(0,1) 이다.")
+print("KL 항 입장에서 이것이 최선이고, 쓰지 않을 차원은 여기로 수렴한다.")
+print("**이것은 버그가 아니라 자동 차원 선택이다** (β-VAE 의 분리 학습이 기대는 성질).")
+```
 
 ---
 
-## G6.2.4 — 사후 붕괴
+## G6.2.4 — VAE 샘플은 왜 흐릿한가
 
-디코더가 강력할수록 잠재를 무시하게 되는 현상
+가우스 디코더 $p(x|z) = \mathcal{N}(x; \hat{x}_\theta(z), \sigma_x^2 I)$ 의
+로그우도는 MSE다. 그리고 **MSE의 최적해는 조건부 평균**이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 디코더 용량 슬라이더
-:::
+$$\hat{x}^*(z) = \mathbb{E}[x \mid z]$$
+
+같은 $z$ 에 대응하는 $x$ 가 여럿이면, 모델은 그 **평균**을 낸다.
+평균은 어느 것도 아니다.
+
+```{python}
+#| label: blurry
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+# 조건 c 마다 x 가 ±1 두 봉우리를 갖는 데이터
+rr = np.random.default_rng(7)
+n_b = 4000
+c_in = rr.uniform(-1, 1, n_b)
+x_out = np.where(rr.random(n_b) < 0.5, -1.0, 1.0) + rr.normal(0, 0.1, n_b)
+
+net = nn.MLP([1, 32, 32, 1], activation="tanh", init="xavier", seed=0)
+nn.train(net, c_in[:, None], x_out[:, None], loss="mse",
+         opt=nn.Optimizer("adam", lr=0.01), steps=3000, seed=0)
+grid = np.linspace(-1, 1, 9)
+pred = net.forward(grid[:, None], training=False)[0].ravel()
+
+print("데이터: 조건 c 와 무관하게 x 는 −1 또는 +1 (각 50%)")
+print(f"  실제 x 의 분포: 평균 {x_out.mean():.3f}, "
+      f"봉우리 {np.percentile(x_out, 25):.2f} 와 {np.percentile(x_out, 75):.2f}")
+print()
+print(f"{'c':>7} {'MSE 학습 예측':>14} {'가장 가까운 봉우리까지':>22}")
+print("-" * 46)
+for c_, p_ in zip(grid, pred):
+    print(f"{c_:>7.2f} {p_:>14.4f} {min(abs(p_-1), abs(p_+1)):>22.4f}")
+print()
+print(f"**모든 예측이 0 근처다 — 데이터에는 존재하지 않는 값이다.**")
+print(f"평균 |예측| = {np.abs(pred).mean():.4f}, 실제 |x| ≈ 1.0")
+print()
+print("이미지에서 이것이 '흐릿함'으로 나타난다.")
+print("  · 어떤 z 가 '왼쪽을 보는 얼굴'과 '오른쪽을 보는 얼굴' 둘 다에 대응하면")
+print("  · 디코더는 두 얼굴의 픽셀 평균 — 유령 같은 이미지 — 을 낸다")
+print()
+print("**해결책은 모두 '조건부 평균을 내지 않게' 하는 방향이다:**")
+for s in ["GAN 손실 — 판별자가 '평균 이미지'를 바로 잡아낸다 (VAE-GAN)",
+          "이산화 로그우도 — PixelCNN 디코더로 픽셀 분포를 다봉으로 (PixelVAE)",
+          "계층적 잠재 — z 를 더 세분화해 조건부 분포를 좁힌다 (NVAE, VDVAE)",
+          "확산 — 한 번에 평균을 내지 않고 여러 단계로 나눠 샘플링한다"]:
+    print(f"  · {s}")
+print()
+print("**마지막 항목이 결정적이다.** 확산 모델은 각 단계에서 조건부 평균을 예측하지만,")
+print("매 단계 잡음을 다시 더해 **분포를 유지한다.** 그래서 흐려지지 않는다.")
+```
+
+```{python}
+#| label: fig-blurry
+#| fig-cap: "MSE 최적해는 두 봉우리의 평균 — 데이터에 없는 값입니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=c_in[::3], y=x_out[::3], mode="markers", name="데이터",
+                         marker=dict(size=3.5,
+                                     color=viz.hex_rgba(viz.GREEN, 0.35))))
+gx = np.linspace(-1, 1, 60)
+gy = net.forward(gx[:, None], training=False)[0].ravel()
+fig.add_trace(go.Scatter(x=gx, y=gy, mode="lines", name="MSE 학습 예측 = E[x|c]",
+                         line=dict(color=viz.WARM, width=4)))
+for y_, lb in [(1.0, "봉우리 +1"), (-1.0, "봉우리 −1")]:
+    fig.add_hline(y=y_, line=dict(color=viz.ACCENT, dash="dot"),
+                  annotation_text=lb)
+fig.update_layout(xaxis_title="조건 c", yaxis_title="x",
+                  yaxis=dict(range=[-1.6, 1.6]))
+viz.annotate_box(fig, f"예측의 평균 절댓값 {np.abs(pred).mean():.3f}<br>"
+                      f"실제 |x| ≈ 1.0")
+viz.fig_defaults(fig, height=390,
+                 title="주황 선은 데이터가 한 점도 없는 영역을 지납니다")
+fig.show()
+```
 
 ---
 
-## 핵심 용어
+## G6.2.5 — 그래서 VAE는 오토인코더보다 나은가
 
-| 용어 | 비고 |
+[6.1](01_autoencoder.qmd)에서 남긴 질문에 답한다.
+
+```{python}
+#| label: vae-vs-ae
+#| code-fold: false
+
+import numpy as np
+from src import nn
+from src.generative import sharpness
+
+ae = nn.MLP([64, 48, K, 48, 64], activation="tanh", init="xavier", seed=1)
+nn.train(ae, X, X, loss="mse", opt=nn.Optimizer("adam", lr=0.005),
+         steps=3000, seed=1)
+
+
+def ae_enc(A):
+    h = A
+    for i in range(2):
+        h = np.tanh(h @ ae.W[i] + ae.b[i])
+    return h
+
+
+def ae_dec(Z):
+    h = Z
+    for i in range(2, 4):
+        h = h @ ae.W[i] + ae.b[i]
+        if i < 3:
+            h = np.tanh(h)
+    return h
+
+
+vae = BETA_MODELS[1.0]
+Z_ae = ae_enc(X)
+_, Z_vae, _ = vae.encode(X)
+
+print("인코더가 실제로 쓰는 잠재 영역 (차원별 평균)")
+print(f"{'모델':<8} {'평균 |μ|':>10} {'평균 sd':>10} {'사전분포 N(0,1) 과의 거리'}")
+print("-" * 58)
+for nm, Z in [("AE", Z_ae), ("VAE", Z_vae)]:
+    gap = float(np.abs(Z.std(0) - 1).mean())
+    print(f"{nm:<8} {np.abs(Z.mean(0)).mean():>10.4f} {Z.std(0).mean():>10.4f} "
+          f"{gap:>18.4f}")
+print()
+print("AE 의 잠재는 표준편차 0.22 — N(0,1) 에서 뽑으면 대부분 **훈련 영역 밖**이다.")
+print()
+
+
+def nearest_dist(S, ref):
+    """생성 샘플에서 가장 가까운 실제 데이터까지의 평균 거리."""
+    d = -2*S @ ref.T + (S**2).sum(1)[:, None] + (ref**2).sum(1)[None]
+    return float(np.sqrt(np.maximum(d.min(1), 0)).mean())
+
+
+zp = np.random.default_rng(5).normal(size=(400, K))
+print("z ~ N(0, I) 에서 400개를 뽑아 디코딩한 결과")
+print()
+print(f"{'출처':<22} {'가장 가까운 실데이터까지 거리':>26} {'선명도':>10}")
+print("-" * 62)
+rows = [("실제 데이터 (홀드아웃)", X_te[:400]),
+        ("VAE 사전 샘플", vae.decode(zp)[1]),
+        ("AE 사전 샘플", ae_dec(zp))]
+D = {}
+for nm, S in rows:
+    D[nm] = nearest_dist(S, X)
+    print(f"{nm:<22} {D[nm]:>26.4f} {sharpness(S + MU):>10.4f}")
+print("-" * 62)
+print(f"{'(실제 데이터 선명도)':<22} {'':>26} {REAL_SHARP:>10.4f}")
+print()
+print(f"**AE 사전 샘플은 실제 데이터에서 {D['AE 사전 샘플']/D['실제 데이터 (홀드아웃)']:.1f}배 멀다.**")
+print(f"  실제 데이터끼리의 거리      {D['실제 데이터 (홀드아웃)']:.4f}  ← 기준선")
+print(f"  VAE 사전 샘플              {D['VAE 사전 샘플']:.4f}  ← 기준선의 "
+      f"{D['VAE 사전 샘플']/D['실제 데이터 (홀드아웃)']:.2f}배")
+print(f"  AE 사전 샘플               {D['AE 사전 샘플']:.4f}  ← 완전히 다른 것")
+print()
+print("**VAE 는 실제로 생성 모델이 되었다.** KL 항이 한 일이다.")
+print("대신 재구성은 AE 보다 나쁘다 — ELBO 가 두 항의 타협이기 때문이다.")
+```
+
+```{python}
+#| label: fig-vae-ae
+#| fig-cap: "잠재 공간 점유 영역과 사전 샘플의 품질 비교"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.36, 0.30, 0.34],
+                    subplot_titles=("잠재 공간 (활성 차원 2개)",
+                                    "가장 가까운 실데이터까지 거리",
+                                    "사전 샘플"),
+                    specs=[[{"type": "xy"}, {"type": "xy"},
+                            {"type": "heatmap"}]])
+
+kl_all = 0.5*(Z_vae**2 + 1).mean(0)
+d0, d1 = np.argsort(Z_vae.var(0))[::-1][:2]
+th = np.linspace(0, 2*np.pi, 100)
+for nm, Z, c in [("AE", Z_ae, viz.WARM), ("VAE", Z_vae, viz.ACCENT)]:
+    fig.add_trace(go.Scatter(x=Z[::3, d0], y=Z[::3, d1], mode="markers", name=nm,
+                             marker=dict(size=3.5, color=viz.hex_rgba(c, 0.45))),
+                  row=1, col=1)
+fig.add_trace(go.Scatter(x=2*np.cos(th), y=2*np.sin(th), mode="lines",
+                         name="사전분포 2σ",
+                         line=dict(color=viz.GREEN, width=2, dash="dash")),
+              row=1, col=1)
+fig.update_xaxes(title_text=f"z[{d0}]", range=[-3.5, 3.5], row=1, col=1)
+fig.update_yaxes(title_text=f"z[{d1}]", range=[-3.5, 3.5], scaleanchor="x",
+                 row=1, col=1)
+
+names = [r[0] for r in rows]
+fig.add_trace(go.Bar(x=names, y=[D[n] for n in names], showlegend=False,
+                     marker_color=[viz.GREEN, viz.ACCENT, viz.WARM],
+                     text=[f"{D[n]:.3f}" for n in names],
+                     textposition="outside"), row=1, col=2)
+fig.update_yaxes(title_text="평균 거리", row=1, col=2)
+
+grid_img = np.block([[
+    (vae.decode(zp[[i*4+j]])[1] + MU).reshape(8, 8) if i < 2
+    else (ae_dec(zp[[i*4+j]]) + MU).reshape(8, 8) for j in range(4)]
+    for i in range(4)])
+fig.add_trace(go.Heatmap(z=np.round(grid_img, 3), colorscale="Blues",
+                         zmin=0, zmax=1, showscale=False), row=1, col=3)
+fig.update_xaxes(showticklabels=False, row=1, col=3)
+fig.update_yaxes(showticklabels=False, autorange="reversed", row=1, col=3)
+fig.add_annotation(text="위 2줄 VAE · 아래 2줄 AE", xref="paper", yref="paper",
+                   x=0.86, y=-0.10, showarrow=False, font=dict(size=11))
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
+
+---
+
+## 변형들
+
+```{python}
+#| label: variants
+#| code-fold: false
+
+rows_v = [
+    ("β-VAE", "KL 항에 β 배", "분리(disentanglement) 유도",
+     "β 클수록 분리↑ 재구성↓ — 위 실험에서 확인"),
+    ("조건부 VAE (CVAE)", "인코더·디코더에 조건 c 주입",
+     "레이블별 생성", "q(z|x,c), p(x|z,c)"),
+    ("VQ-VAE", "잠재를 이산 코드북으로", "**KL 항 없음 → 붕괴 없음**",
+     "6.1 에서 다룸, PixelCNN 을 잠재에 얹음"),
+    ("계층적 VAE", "z 를 여러 층으로 (NVAE, VDVAE)",
+     "표현력↑, 흐릿함↓", "확산과 성능이 비슷해짐"),
+    ("IWAE", "중요도 가중 다중 샘플 하한", "더 조인 하한",
+     "K 샘플이면 log(1/K)Σ 형태"),
+    ("Gumbel-softmax", "이산 잠재를 연속 완화",
+     "재파라미터화를 이산에", "온도 τ→0 이면 원-핫"),
+]
+print(f"{'변형':<20} {'무엇을 바꾸나':<32} {'얻는 것':<24} {'비고'}")
+print("-" * 108)
+for r_ in rows_v:
+    print(f"{r_[0]:<20} {r_[1]:<32} {r_[2]:<24} {r_[3]}")
+print()
+print("**Gumbel-softmax** — 이산 잠재에도 재파라미터화를 쓰는 방법")
+print()
+print("   y = softmax( (log π + g) / τ ),   g ~ Gumbel(0,1)")
+print()
+import numpy as np
+rg = np.random.default_rng(3)
+logits = np.log(np.array([0.6, 0.3, 0.1]))
+g = -np.log(-np.log(rg.random((20000, 3))))
+print(f"{'온도 τ':>8} {'평균 최댓값':>12} {'argmax 분포':>26} {'해석'}")
+print("-" * 66)
+for tau in [5.0, 1.0, 0.5, 0.1]:
+    y = np.exp((logits + g)/tau)
+    y = y/y.sum(1, keepdims=True)
+    cnt = np.bincount(y.argmax(1), minlength=3)/len(y)
+    note = "거의 균등 (연속)" if tau >= 5 else ("원-핫에 근접" if tau <= 0.5
+                                            else "중간")
+    print(f"{tau:>8.1f} {y.max(1).mean():>12.4f} {str(np.round(cnt, 3)):>26} {note}")
+print(f"{'(참값)':>8} {'1.0000':>12} {str(np.round([0.6, 0.3, 0.1], 3)):>26}")
+print()
+print("**τ→0 이면 진짜 argmax 샘플링과 같아지지만 그래디언트가 폭발한다.**")
+print("실전에서는 τ 를 1.0 에서 0.1 쪽으로 어닐링한다.")
+print("τ 가 커도 argmax 분포는 참값을 유지한다 — 편향은 '얼마나 원-핫이냐'에 있다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| ELBO |  |
-| 변분추론 |  |
-| 재파라미터화 트릭 |  |
-| 사후 붕괴 |  |
-| β-VAE |  |
+| 문제 | $p(x)=\int p(x|z)p(z)dz$ 를 계산할 수 없다 |
+| 해법 | 근사 사후분포 $q_\phi(z|x)$ 를 도입해 하한을 최적화 |
+| ELBO | $\mathbb{E}_q[\log p(x\vert z)] - D_{KL}(q\|p)$ |
+| 하한의 간극 | $\log p(x) - \mathcal{L} = D_{KL}(q_\phi \| p_\theta(z\vert x))$ |
+| 재파라미터화 | $z = \mu + \sigma\varepsilon$ — 확률성을 그래디언트 경로 밖으로 |
+| 분산 이득 | 스코어 함수 대비 분산 3.7~456배 낮음 (μ가 클수록 격차↑) |
+| KL 닫힌 형태 | $\frac12\sum(\mu^2+\sigma^2-1-\log\sigma^2)$ |
+| β 의 역할 | β↑ → KL↓, 재구성↓, 활성 잠재↓ |
+| β 의 최적점 | 사전 샘플 선명도가 실제 데이터와 맞는 지점 (여기선 β≈0.2~1) |
+| 사후 붕괴 원인 | **디코더 용량이 아니다** (폭 32배 키워도 재현 안 됨) |
+| 진짜 원인 | z 없이 데이터를 설명할 경로 (자기회귀 디코더) — KL 8.13 → 0.001 |
+| 또 다른 원인 | β 과대 (β=100 에서 완전 붕괴, MSE = 평균 출력과 동일) |
+| 자동 차원 선택 | β=1 에서 5개 차원 생존 = 데이터의 실제 자유도 5 |
+| 흐릿함의 정체 | 가우스 우도 = MSE → 최적해가 조건부 평균 |
+| AE 대비 | AE 사전 샘플은 실데이터에서 10배 먼데 VAE 는 1.17배 |
+
+VAE는 잠재 공간을 길들였지만 흐릿함을 남겼다.
+다음 장은 정반대 접근을 본다 — **손실함수 자체를 학습하는 것**이다.
 
 ---
 
-**다음**: [6.3 적대적 생성 신경망](03_gan.qmd) — 미니맥스 게임·모드 붕괴·WGAN — 판별자를 손실로 쓰기
+**다음**: [6.3 적대적 생성 신경망](03_gan.qmd) — 판별자를 손실로 쓰기
 
 **이전**: [6.1 오토인코더](01_autoencoder.qmd)
