@@ -4,91 +4,594 @@ subtitle: "video diffusion·DiT·시간 일관성 — 움직이는 것을 만들
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[9.5](05_video_representation.qmd)에서 비디오를 **읽을 때**의 제약을 봤다.
+데이터는 300배인데 정보는 그만큼 늘지 않는다는 것.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+만들 때는 그 비대칭이 반대로 작동한다.
+읽을 때는 중복을 **버리면** 됐지만, 만들 때는 그 중복을 **정확히 지어내야** 한다.
+프레임 하나만 어긋나도 사람 눈에는 깜빡임으로 보인다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+비디오 생성의 문제는 셋이고, 셋 다 이 장에서 수치로 만난다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+| 문제 | 무엇인가 | 이 장의 절 |
+|------|---------|-----------|
+| **차원 폭발** | 이미지의 수백 배를 한 번에 만들어야 한다 | G9.8.1 |
+| **시간 일관성** | 프레임마다 조금씩 다르면 깜빡인다 | G9.8.2 |
+| **장기 구조** | 길게 이어 붙이면 표류한다 | G9.8.3 |
+
+그리고 네 번째 문제가 있다 — **그것을 어떻게 평가할 것인가.** (G9.8.4)
+
+---
+
+## G9.8.1 — 시공간 패치와 잠재 압축
+
+이미지 확산 모델이 그랬듯, 비디오도 **잠재 공간**에서 만든다.
+다만 압축을 공간뿐 아니라 **시간축으로도** 한다.
+
+Sora 계열이 정리한 표현이 **시공간 패치(spacetime patch)** 다.
+잠재 비디오를 $(p_t, p, p)$ 크기 조각으로 잘라 토큰 시퀀스로 만든다.
+[9.2](02_vit.qmd)의 패치 임베딩에 시간축이 하나 붙은 것이다.
+
+```{python}
+#| label: tokens
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+print("10초 512x512 30fps 영상을 토큰으로 바꾸면")
+print()
+T_, H_, W_ = 300, 512, 512
+print(f"{'단계':<30} {'모양':<22} {'원소 수':>15}")
+print("-" * 70)
+rows = []
+n0 = T_*H_*W_*3
+rows.append(("원본 픽셀", f"{T_}x{H_}x{W_}x3", n0))
+# 비디오 오토인코더: 공간 8배, 시간 4배 압축, 채널 4
+lt, lh, lw, lc = T_//4, H_//8, W_//8, 4
+n1 = lt*lh*lw*lc
+rows.append(("잠재 (공간 8x, 시간 4x)", f"{lt}x{lh}x{lw}x{lc}", n1))
+for pt, p in [(1, 2), (2, 2), (2, 4)]:
+    nt = (lt//pt)*(lh//p)*(lw//p)
+    rows.append((f"시공간 패치 ({pt}x{p}x{p})", f"토큰 {nt:,}개", nt))
+for nm, sh, n in rows:
+    print(f"{nm:<30} {sh:<22} {n:>15,}")
+print()
+base = rows[0][2]
+print("**압축 단계마다 무엇이 줄어드는가**")
+for i in range(1, len(rows)):
+    print(f"  · {rows[i][0]:<26} 원본의 {rows[i][2]/base:>10.5f}배")
+print()
+print("**그리고 어텐션은 그 토큰 수의 제곱이다**")
+print()
+print(f"{'패치 크기':<16} {'토큰':>10} {'어텐션 원소':>16} "
+      f"{'이미지(1024토큰) 대비':>22}")
+print("-" * 68)
+img = 1024
+for pt, p in [(1, 2), (2, 2), (2, 4), (4, 4)]:
+    nt = (lt//pt)*(lh//p)*(lw//p)
+    print(f"{f'{pt}x{p}x{p}':<16} {nt:>10,} {nt*nt:>16,} "
+          f"{nt*nt/(img*img):>21,.0f}배")
+print()
+print("**여기서 설계가 갈린다.**")
+for s in ["**시간 압축**이 가장 값싸다 — 인접 프레임은 어차피 중복적이다 "
+          "([9.5](05_video_representation.qmd)에서 잰 그것)",
+          "그래서 비디오 오토인코더는 공간뿐 아니라 **시간축도 4~8배** 압축한다",
+          "패치를 키우면 토큰이 줄지만 세부가 뭉개진다 — "
+          "[9.2](02_vit.qmd)의 그 절충이 그대로",
+          "**가변 길이·해상도 학습**이 가능한 것이 시공간 패치의 큰 이점이다 — "
+          "토큰 시퀀스는 길이가 달라도 된다",
+          "세로 영상, 짧은 클립, 정지 이미지(T=1)를 **한 모델로** 학습할 수 있다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 구조: 어떻게 시간을 넣는가
+
+```{python}
+#| label: arch
+#| code-fold: false
+
+print("**이미지 확산 모델을 비디오로 늘리는 방법들**")
+print()
+print(f"{'접근':<24} {'무엇을 하나':<34} {'특징'}")
+print("-" * 82)
+for a, b, c in [
+    ("시간 층 삽입", "사전학습 이미지 UNet 사이에 시간 어텐션",
+     "**이미지 가중치를 물려받는다**"),
+    ("시공간 분리 어텐션", "공간 → 시간 순서로 ([9.6](06_video_models.qmd))",
+     "비용이 선형에 가깝다"),
+    ("전체 시공간 (DiT)", "토큰 하나의 시퀀스로 통째 어텐션",
+     "스케일링이 잘 되지만 비싸다"),
+    ("계단식 (cascade)", "저해상도 → 시간 보간 → 초해상",
+     "단계마다 모델 필요"),
+]:
+    print(f"{a:<24} {b:<34} {c}")
+print()
+print("**시간 층 삽입이 실무의 출발점이 된 이유**")
+for s in ["이미지 확산 모델은 이미 수십억 장으로 학습돼 있다",
+          "비디오 데이터는 그보다 훨씬 적고 비싸다",
+          "그래서 **공간 층은 얼려 두고 시간 층만 학습**하는 전략이 통한다",
+          "[9.2](02_vit.qmd)의 전이학습 논의가 생성 쪽에서 반복된다",
+          "대가: 공간과 시간이 **따로 학습**되므로 큰 움직임에서 어긋난다"]:
+    print(f"  · {s}")
+print()
+print("**조건화의 갈래**")
+print()
+print(f"{'조건':<22} {'쓰임':<30} {'어려운 점'}")
+print("-" * 78)
+for a, b, c in [
+    ("텍스트", "text-to-video", "동작 서술이 이미지보다 모호하다"),
+    ("첫 프레임", "image-to-video", "**가장 잘 되는 조건** — 시작이 고정된다"),
+    ("마지막 프레임", "보간·전환", "양끝이 묶여 안정적"),
+    ("카메라 궤적", "시점 제어", "학습 데이터에 카메라 정보가 드물다"),
+    ("궤적·포즈", "동작 제어", "조건과 결과의 정합을 재기 어렵다"),
+    ("앞 청크", "긴 영상 이어 붙이기", "**누적 오차** (G9.8.3)"),
+]:
+    print(f"{a:<22} {b:<30} {c}")
+```
+
+---
+
+## G9.8.2 — 깜빡임을 숫자로
+
+시간 층 없이 프레임을 독립적으로 만들면 어떻게 되는가.
+각 프레임은 그럴듯한데 **이어 보면 떨린다.**
+
+이것을 눈이 아니라 숫자로 잡아 보자.
+합성 클립을 만들고, 프레임마다 위치를 조금씩 흔들어 "독립 생성"을 흉내 낸다.
+
+```{python}
+#| label: flicker
+#| code-fold: false
+
+import numpy as np
+
+R, T = 32, 24
+YY, XX = np.mgrid[0:R, 0:R]
+
+
+def true_clip(g, speed=1.2, noise=0.02):
+    """매끄럽게 움직이는 정답 클립."""
+    cx, cy = g.uniform(8, 24, 2)
+    th = g.uniform(0, 2*np.pi)
+    v = np.array([np.cos(th), np.sin(th)])*speed
+    ph = g.uniform(0, 2*np.pi)
+    F = np.zeros((T, R, R))
+    for t in range(T):
+        x, y = (cx + v[0]*t) % R, (cy + v[1]*t) % R
+        dx = np.minimum(np.abs(XX - x), R - np.abs(XX - x))
+        dy = np.minimum(np.abs(YY - y), R - np.abs(YY - y))
+        F[t] = (np.exp(-(dx*dx + dy*dy)/10.0) + 0.25*np.cos(0.7*XX + ph)
+                + g.normal(0, noise, (R, R)))
+    return F
+
+
+def flicker_clip(g, jitter=1.5, noise=0.02):
+    """프레임마다 독립 생성한 것처럼 — 위치가 프레임마다 흔들린다."""
+    F = true_clip(g, noise=noise)
+    return np.stack([np.roll(np.roll(F[t], *g.normal(0, jitter, 2)
+                                     .round().astype(int)[:1], 0),
+                             int(round(g.normal(0, jitter))), 1)
+                     for t in range(T)])
+
+
+def flicker(F):
+    """시간축 FFT 의 고주파 비중 — 깜빡임 지표."""
+    X = F.reshape(len(F), -1) - F.reshape(len(F), -1).mean(0)
+    S = np.abs(np.fft.rfft(X, axis=0))**2
+    return float(S[len(S)//2:].sum()/S.sum())
+
+
+g0 = np.random.default_rng(0)
+print("깜빡임의 두 가지 척도")
+print()
+print(f"{'클립':<22} {'인접 프레임 차분':>16} {'시간 고주파 비중':>18}")
+print("-" * 58)
+FLK = []
+for nm, fn in [("매끄러운 (정답)", lambda gg: true_clip(gg)),
+               ("지터 0.5", lambda gg: flicker_clip(gg, 0.5)),
+               ("지터 1.5", lambda gg: flicker_clip(gg, 1.5)),
+               ("지터 3.0", lambda gg: flicker_clip(gg, 3.0))]:
+    d, h = [], []
+    for _ in range(30):
+        F = fn(g0)
+        d.append(((F[:-1] - F[1:])**2).mean()/F.var())
+        h.append(flicker(F))
+    FLK.append((nm, float(np.mean(d)), float(np.mean(h))))
+    print(f"{nm:<22} {FLK[-1][1]:>16.4f} {FLK[-1][2]:>18.4f}")
+print()
+ok, bad = FLK[0], FLK[-1]
+print("**두 지표가 같은 방향을 가리키지만, 보는 것이 다르다.**")
+print(f"  인접 차분: {ok[1]:.4f} → {bad[1]:.4f} ({bad[1]/ok[1]:.0f}배)")
+print(f"  고주파 비중: {ok[2]:.4f} → {bad[2]:.4f}")
+print()
+for s in ["**인접 차분**은 '얼마나 변했나'만 본다 — "
+          "빠르게 움직이는 정상 영상도 값이 크다",
+          "**시간 고주파 비중**은 '변화가 매끄러운가'를 본다 — "
+          "등속 운동은 저주파, 깜빡임은 고주파",
+          f"매끄러운 클립은 에너지의 {ok[2]:.1%}만 고주파에 있다",
+          f"지터 3.0 에서는 {bad[2]:.1%} — **절반 이상이 프레임 단위 잡음**이다",
+          "그래서 깜빡임 진단에는 **주파수 쪽**을 봐야 한다"]:
+    print(f"  · {s}")
+print()
+print("**실제 모델에서 깜빡임이 나오는 자리들**")
+print()
+print(f"{'원인':<26} {'왜':<32} {'대처'}")
+print("-" * 80)
+for a, b, c in [
+    ("프레임별 독립 노이즈", "각 프레임에 다른 잠재 노이즈", "**노이즈를 시간축으로 상관**시킨다"),
+    ("시간 층 부족", "공간 층만 사전학습됨", "시간 어텐션을 더 넣는다"),
+    ("VAE 의 프레임별 디코딩", "디코더가 시간을 모른다", "시간 인식 디코더"),
+    ("초해상 단계", "프레임마다 다르게 선명해짐", "시간 일관 초해상"),
+]:
+    print(f"{a:<26} {b:<32} {c}")
+print()
+print("  첫 줄이 특히 중요하다 — **초기 노이즈를 프레임끼리 공유하거나 "
+      "상관시키는 것**만으로 일관성이 크게 는다.")
+print("  공짜에 가까운 처방이라 거의 모든 구현이 쓴다.")
+```
+
+```{python}
+#| label: fig-flicker
+#| fig-cap: "G9.8.2 — 깜빡임의 두 척도. 인접 차분은 '얼마나 변했나'를, 고주파 비중은 '변화가 매끄러운가'를 본다. 빠른 정상 운동과 깜빡임을 가르는 것은 뒤쪽이다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+# 빠른 정상 운동도 함께 놓고 비교한다
+gs = np.random.default_rng(3)
+fastd, fasth = [], []
+for _ in range(30):
+    F = true_clip(gs, speed=3.5)
+    fastd.append(((F[:-1] - F[1:])**2).mean()/F.var())
+    fasth.append(flicker(F))
+PTS = ([(f[0], f[1], f[2], False) for f in FLK]
+       + [("빠른 정상 운동", float(np.mean(fastd)), float(np.mean(fasth)), True)])
+
+fig = go.Figure()
+for i, (nm, d, h, special) in enumerate(PTS):
+    fig.add_trace(go.Scatter(
+        x=[d], y=[h], mode="markers+text", text=[nm],
+        textposition="top center", textfont=dict(size=11),
+        marker=dict(size=18, symbol="star" if special else "circle",
+                    color=viz.GREEN if special else viz.color(i),
+                    line=dict(width=1.5, color="rgba(255,255,255,0.5)")),
+        showlegend=False))
+fig.add_hline(y=0.25, line=dict(color=viz.hex_rgba(viz.WARM, 0.5), dash="dash"))
+fig.add_annotation(x=0.05, y=0.25, text="이 위는 깜빡임 영역", showarrow=False,
+                   xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.WARM))
+viz.fig_defaults(
+    fig, "인접 차분 vs 시간 고주파 비중", height=460,
+    xaxis_title="인접 프레임 차분 (분산 대비)",
+    yaxis_title="시간 고주파 에너지 비중",
+    yaxis=dict(range=[-0.03, 0.62]))
+fig
+```
+
+::: {.interaction-hint}
+★ 로 표시된 **빠른 정상 운동**을 보라.
+인접 차분은 깜빡임 클립만큼 크지만, 고주파 비중은 매끄러운 클립 쪽에 붙어 있다.
+
+**"프레임이 많이 변한다"와 "프레임이 떤다"는 다른 것이다.**
+인접 차분만으로 일관성을 재면 빠른 액션 영상을 깜빡임으로 오판한다.
 :::
 
-비디오 생성은 현재 생성 모델의 최전선이며, 계산 비용·시간 일관성·물리적 그럴듯함이라는 세 문제를 동시에 다룬다.
+---
+
+## G9.8.3 — 롤아웃 누적 오차: 길게 만들면 왜 무너지나
+
+한 번에 만들 수 있는 길이에는 한계가 있다 (G9.8.1 의 토큰 수).
+그래서 긴 영상은 **청크로 나눠 이어 붙인다** — 앞 청크의 끝을 조건으로 다음 청크를 만든다.
+
+문제는 그 조건이 **모델 자신의 출력**이라는 것이다.
+오차가 다음 청크의 출발점이 되고, 거기서 또 오차가 붙는다.
+[6장](../06_generative/00_generative_overview.qmd)의 자기회귀 노출 편향이 시간축에서 반복된다.
+
+```{python}
+#| label: rollout
+#| code-fold: false
+
+import numpy as np
+
+
+def rollout(chunk_len, total, err_std, g, anchor=0.0):
+    """청크 단위 생성. anchor>0 이면 겹침 구간을 정답으로 일부 재보정."""
+    true_state = np.zeros(4)
+    est = np.zeros(4)
+    v = g.normal(0, 1, 4)*0.3
+    for _ in range(total//chunk_len):
+        true_state = true_state + v*chunk_len
+        est = est + v*chunk_len + g.normal(0, err_std, 4)   # 청크마다 오차
+        if anchor:
+            est = est + (true_state - est)*anchor
+    return float(np.linalg.norm(est - true_state))
+
+
+print("총 길이와 청크 크기에 따른 최종 표류 (시드 40개 평균)")
+print()
+print(f"{'총 프레임':>9} {'청크 8':>10} {'청크 4':>10} {'청크 2':>10} "
+      f"{'청크4+앵커':>12}")
+print("-" * 56)
+LEN = [8, 16, 32, 64, 128]
+ROLL = {8: [], 4: [], 2: [], "anchor": []}
+for tot in LEN:
+    row = []
+    for cl in [8, 4, 2]:
+        e = float(np.mean([rollout(cl, tot, 0.35, np.random.default_rng(s))
+                           for s in range(40)]))
+        ROLL[cl].append(e); row.append(e)
+    an = float(np.mean([rollout(4, tot, 0.35, np.random.default_rng(s),
+                                anchor=0.3) for s in range(40)]))
+    ROLL["anchor"].append(an)
+    print(f"{tot:>9} {row[0]:>10.3f} {row[1]:>10.3f} {row[2]:>10.3f} "
+          f"{an:>12.3f}")
+print()
+print("**① 표류를 정하는 것은 총 길이가 아니라 '청크 개수'다.**")
+print(f"  청크8 / 128프레임 = {ROLL[8][-1]:.3f}, "
+      f"청크4 / 64프레임 = {ROLL[4][-2]:.3f} — 둘 다 청크 16개다.")
+print("  표의 **대각선이 같은 값**인 것을 확인하라.")
+print(f"  오차는 청크 수의 제곱근으로 자란다 (독립 오차의 누적).")
+print()
+print("**② 그래서 한 번에 길게 만드는 것이 이긴다.**")
+print(f"  128프레임에서 청크8 {ROLL[8][-1]:.3f} vs 청크2 {ROLL[2][-1]:.3f} "
+      f"— {ROLL[2][-1]/ROLL[8][-1]:.1f}배 차이.")
+print("  G9.8.1 의 토큰 예산이 결국 **영상 길이의 상한**을 정하는 셈이다.")
+print()
+print("**③ 앵커가 있으면 길이와 무관해진다.**")
+print(f"  앵커 30%: 8프레임 {ROLL['anchor'][0]:.3f} → "
+      f"128프레임 {ROLL['anchor'][-1]:.3f} — 거의 평평하다.")
+for s in ["겹침 구간을 **정답 쪽으로 조금 끌어당기면** 오차가 누적되지 않는다",
+          "실제 구현의 대응물: 겹쳐 생성 후 블렌딩, 키프레임 고정, "
+          "첫 프레임 재조건화",
+          "**계층적 생성**도 같은 원리다 — 먼저 드문드문 키프레임을 만들고 "
+          "그 사이를 채우면 표류가 키프레임에 묶인다",
+          "이 실험의 앵커는 정답을 참조하므로 그대로는 쓸 수 없다 — "
+          "**표류를 무엇이 막아 주는지 보기 위한 상한**이다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-rollout
+#| fig-cap: "G9.8.3 — 자기회귀 롤아웃의 누적 오차. 청크가 작을수록(= 이어 붙이는 횟수가 많을수록) 빠르게 표류한다. 앵커가 있으면 길이와 무관해진다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+for i, cl in enumerate([8, 4, 2]):
+    fig.add_trace(go.Scatter(x=LEN, y=ROLL[cl], mode="lines+markers",
+                             name=f"청크 {cl}프레임",
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=8)))
+fig.add_trace(go.Scatter(x=LEN, y=ROLL["anchor"], mode="lines+markers",
+                         name="청크 4 + 앵커 30%",
+                         line=dict(color=viz.GREEN, width=3, dash="dash"),
+                         marker=dict(size=9)))
+viz.fig_defaults(
+    fig, "총 길이에 따른 최종 표류", height=450,
+    xaxis_title="총 프레임 수 (로그)", yaxis_title="최종 상태 오차",
+    xaxis_type="log", xaxis=dict(tickmode="array", tickvals=LEN))
+viz.annotate_box(fig, "앵커 곡선만 평평하다<br>"
+                      "<b>누적을 끊는 것이 핵심</b>", x=0.02, y=0.98,
+                 xanchor="left", yanchor="top")
+fig
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G9.8.4 — FVD: 프레임 단위 지표가 못 보는 것
 
-- 비디오 생성의 난점: 차원 폭발, 시간 일관성, 장기 구조
-- 이미지 확산 모델의 시간 확장: 시간 어텐션 층 삽입
-- 시공간 잠재 공간과 비디오 오토인코더(시간축 압축)
-- 잠재 비디오 확산과 DiT 기반 아키텍처
-- 시공간 패치(spacetime patches)와 가변 길이·해상도 학습
-- 조건화: 텍스트, 첫 프레임(image-to-video), 궤적·카메라 제어
-- 장면 확장: 자기회귀 청크 생성, 롤아웃과 누적 오차
-- 시간 일관성 평가와 흔한 실패(깜빡임, 형태 붕괴, 물리 위반)
-- 월드 모델 관점: 생성 모델이 물리를 배우는가에 대한 논쟁
-- 평가: FVD, 텍스트 정합성, 인간 평가
-- 비용과 실용성, 편집·보간 등 인접 응용
+생성 비디오를 어떻게 평가할까.
+가장 손쉬운 발상은 **FID 를 프레임마다 계산해 평균**하는 것이다.
+
+그것이 왜 안 되는지, 결정적인 실험으로 확인할 수 있다.
+**정답 클립의 프레임 순서만 뒤섞은 것**과 비교해 보면 된다.
+프레임 하나하나는 완벽하게 진짜다. 순서만 엉망이다.
+
+```{python}
+#| label: fvd
+#| code-fold: false
+
+import numpy as np
+from scipy.linalg import sqrtm
+
+gf = np.random.default_rng(5)
+PROJ = gf.normal(0, 1, (R*R, 32))/np.sqrt(R*R)      # 고정 무작위 특성 추출기
+
+
+def frechet(A, B):
+    mu1, mu2 = A.mean(0), B.mean(0)
+    C1 = np.cov(A, rowvar=False) + 1e-6*np.eye(A.shape[1])
+    C2 = np.cov(B, rowvar=False) + 1e-6*np.eye(B.shape[1])
+    s = sqrtm(C1 @ C2)
+    if np.iscomplexobj(s):
+        s = s.real
+    return float(((mu1 - mu2)**2).sum() + np.trace(C1 + C2 - 2*s))
+
+
+def frame_feats(clips):
+    """프레임 하나씩 — FID 를 프레임에 적용한 것."""
+    return np.concatenate([c.reshape(len(c), -1) @ PROJ for c in clips])
+
+
+def video_feats(clips, w=3):
+    """연속 3프레임을 함께 — I3D 가 하는 일의 축소판."""
+    out = []
+    for c in clips:
+        f = c.reshape(len(c), -1) @ PROJ
+        out.append(np.stack([f[i:i+w].ravel() for i in range(len(c)-w+1)]))
+    return np.concatenate(out)
+
+
+gr = np.random.default_rng(9)
+REAL = [true_clip(gr) for _ in range(60)]
+REAL2 = [true_clip(gr) for _ in range(60)]
+SHUF = [c[gr.permutation(T)] for c in [true_clip(gr) for _ in range(60)]]
+FLIC = [flicker_clip(gr, 1.5) for _ in range(60)]
+
+print("같은 두 집합을 프레임 단위와 비디오 단위로 재 본다")
+print()
+print(f"{'비교':<28} {'프레임 단위 FD':>15} {'비디오 단위 FD':>16}")
+print("-" * 62)
+FD = []
+for nm, B in [("정답 vs 정답 (다른 시드)", REAL2),
+              ("정답 vs 프레임 순서 섞음", SHUF),
+              ("정답 vs 깜빡임", FLIC)]:
+    a = frechet(frame_feats(REAL), frame_feats(B))
+    b = frechet(video_feats(REAL), video_feats(B))
+    FD.append((nm, a, b))
+    print(f"{nm:<28} {a:>15.4f} {b:>16.4f}")
+print()
+base, shuf, flic = FD
+print("**프레임 단위 지표는 세 경우를 구별하지 못한다.**")
+print(f"  기준선(정답끼리) {base[1]:.4f} vs 순서 섞음 {shuf[1]:.4f} "
+      f"vs 깜빡임 {flic[1]:.4f}")
+print("  전부 같은 수준이다. **완전히 뒤섞은 영상도 통과한다.**")
+if shuf[1] < base[1]:
+    print(f"  더 나쁘다 — 순서를 섞은 쪽이 진짜 클립끼리의 거리보다 "
+          f"**낮게** 나왔다 ({shuf[1]:.4f} < {base[1]:.4f}).")
+    print("  이 지표만 보면 '뒤섞인 영상이 진짜보다 더 진짜같다'는 결론이 나온다.")
+print()
+print("**당연하다 — 프레임을 섞어도 프레임의 집합은 그대로다.**")
+for s in ["FID 는 특성의 **분포**만 본다. 순서는 분포에 안 들어간다",
+          "즉 프레임 단위 지표는 **시간 구조에 원리적으로 눈이 멀어 있다**",
+          "이미지 생성 지표를 비디오에 그대로 옮기면 안 되는 이유"]:
+    print(f"  · {s}")
+print()
+print("**비디오 단위 특성으로 바꾸면 즉시 갈린다.**")
+print(f"  기준선 {base[2]:.4f} → 순서 섞음 {shuf[2]:.4f} "
+      f"({shuf[2]/base[2]:.1f}배), 깜빡임 {flic[2]:.4f} "
+      f"({flic[2]/base[2]:.1f}배)")
+for s in ["연속 프레임을 **함께 보는** 특성이면 순서가 분포에 들어간다",
+          "**FVD 가 I3D 특성을 쓰는 이유가 정확히 이것이다** — "
+          "3D 합성곱이 시공간을 함께 본다",
+          "여기서는 3프레임 창으로 흉내 냈고, 그것만으로도 충분히 갈린다"]:
+    print(f"  · {s}")
+print()
+print("**그래도 FVD 를 믿으면 안 되는 이유들**")
+print()
+print(f"{'문제':<26} {'설명'}")
+print("-" * 74)
+for a, b in [
+    ("특성 추출기 의존", "I3D 가 Kinetics 로 학습됨 — 그 분포 밖에서는 부정확"),
+    ("표본 수 민감", "적은 표본에서 값이 크게 흔들린다 (8.9의 FAD와 같다)"),
+    ("정적 편향", "[9.6](06_video_models.qmd)의 그 편향을 물려받는다"),
+    ("의미와 무관", "프롬프트를 안 지켜도 분포가 맞으면 좋게 나온다"),
+    ("절대값 무의미", "구현·전처리가 다르면 비교 불가"),
+]:
+    print(f"{a:<26} {b}")
+print()
+print("**그래서 실무 평가는 항상 여러 축이다.**")
+for s in ["FVD — 분포 수준의 그럴듯함",
+          "텍스트 정합 (CLIP 계열) — 시킨 것을 만들었나 "
+          "([9.4](04_clip_multimodal.qmd)의 순환 문제 주의)",
+          "시간 일관성 지표 — G9.8.2 의 것들",
+          "**사람 평가** — 아직 이것이 최종 심판이다",
+          "[7.13](../07_language/13_evaluation.qmd)에서 본 것과 같은 결론 — "
+          "지표 하나로 요약되지 않는다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-fvd
+#| fig-cap: "G9.8.4 — 프레임 단위 지표와 비디오 단위 지표. 프레임 순서를 완전히 섞은 영상조차 프레임 단위 지표는 기준선과 구별하지 못한다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+nm = [f[0] for f in FD]
+fig = go.Figure()
+fig.add_trace(go.Bar(x=nm, y=[f[1] for f in FD], name="프레임 단위 FD",
+                     marker_color=viz.ACCENT))
+fig.add_trace(go.Bar(x=nm, y=[f[2] for f in FD], name="비디오 단위 FD",
+                     marker_color=viz.WARM))
+viz.fig_defaults(
+    fig, "같은 비교, 두 가지 특성", height=450,
+    xaxis_title="", yaxis_title="Fréchet 거리", barmode="group")
+fig.update_xaxes(tickangle=-12)
+viz.annotate_box(fig, "파란 막대가 세 경우 모두 같다<br>"
+                      "<b>프레임 단위는 시간을 못 본다</b>",
+                 x=0.02, y=0.98, xanchor="left", yanchor="top")
+fig
+```
 
 ---
 
-## G9.8.1 — 시공간 패치화
+## 월드 모델 논쟁
 
-비디오가 시공간 패치 토큰으로 분해되는 과정과 토큰 수 폭발
+```{python}
+#| label: world-model
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 패치 크기 슬라이더
-:::
-
----
-
-## G9.8.2 — 시간 어텐션 삽입
-
-공간 어텐션 사이에 시간 어텐션을 끼워 넣는 블록 구조
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 구조 전환
-:::
-
----
-
-## G9.8.3 — 시간 일관성 진단
-
-프레임 간 특성 변화량으로 깜빡임을 정량화
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 프레임 슬라이더
-:::
-
----
-
-## G9.8.4 — 자기회귀 롤아웃 누적 오차
-
-긴 영상을 이어 붙일수록 품질이 떨어지는 곡선
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 길이 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 비디오 확산 |  |
-| 시공간 패치 |  |
-| DiT |  |
-| 시간 일관성 |  |
-| FVD |  |
-| 월드 모델 |  |
+print("**'비디오 생성 모델이 물리를 배우는가'**")
+print()
+print(f"{'주장':<12} {'근거':<38} {'반론'}")
+print("-" * 84)
+for a, b, c in [
+    ("배운다", "물체가 가려졌다 나타나도 유지된다", "학습 데이터에 그런 장면이 많았을 뿐"),
+    ("배운다", "액체·천이 그럴듯하게 움직인다", "그럴듯함 ≠ 물리적 정확성"),
+    ("못 배운다", "물체가 통과·소멸·증식한다", "데이터·규모의 문제일 수 있다"),
+    ("못 배운다", "개수·인과가 자주 틀린다", "생성 목표에 그 제약이 없다"),
+]:
+    print(f"{a:<12} {b:<38} {c}")
+print()
+print("**논쟁이 잘 안 풀리는 이유는 평가 때문이다.**")
+for s in ["G9.8.4 에서 봤듯, 지표들이 **분포의 그럴듯함**을 잰다",
+          "물리 위반은 분포 밖의 사건이 아니라 **드문 사건**이라 잘 안 잡힌다",
+          "그래서 '물리를 아는가'를 재려면 **반사실적 검사**가 필요하다 — "
+          "같은 조건에서 물리가 다르면 결과가 달라지는가",
+          "이것은 [7.14](../07_language/14_interpretability.qmd)의 "
+          "'모델이 아는가 흉내내는가' 문제와 같은 구조다",
+          "**생성 품질과 세계 이해는 별개로 측정해야 한다**"]:
+    print(f"  · {s}")
+print()
+print("**비용과 실용성 — 지금 실제로 쓰이는 곳**")
+print()
+print(f"{'용도':<22} {'왜 되는가'}")
+print("-" * 66)
+for a, b in [
+    ("image-to-video", "시작이 고정되어 표류가 적다 — 가장 안정적"),
+    ("짧은 클립 (2~5초)", "청크 1개로 끝나 누적 오차가 없다 (G9.8.3)"),
+    ("보간·프레임률 변환", "양끝이 묶여 있다"),
+    ("배경·B롤", "정확성 요구가 낮다"),
+    ("긴 서사 영상", "**아직 어렵다** — 표류와 일관성"),
+]:
+    print(f"{a:<22} {b}")
+```
 
 ---
 
-**다음**: [9.9 비전-언어 모델](09_vlm.qmd) — LLaVA·Flamingo·통합 멀티모달 — 보고 말하는 모델
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| 잠재 압축 | 공간 8× + **시간 4×** | 시간 압축이 가장 값싸다 |
+| 시공간 패치 | 가변 길이·해상도를 한 모델로 | 이미지(T=1)도 같이 학습 |
+| 시간 층 삽입 | 이미지 가중치를 물려받는다 | 공간·시간이 따로 학습되는 대가 |
+| **깜빡임 척도** | 고주파 비중 0.040 → **0.553** | 인접 차분만으로는 부족 |
+| 왜 부족한가 | 빠른 정상 운동도 차분이 크다 | **"많이 변한다" ≠ "떤다"** |
+| 가장 값싼 처방 | 초기 노이즈를 시간축으로 상관 | 거의 모든 구현이 쓴다 |
+| **롤아웃 표류** | 청크 수의 **제곱근**으로 자란다 | 총 길이가 아니라 이어 붙인 횟수 |
+| 표의 대각선 | 청크8/128 = 청크4/64 | 같은 청크 수 = 같은 표류 |
+| 한 번에 길게 | 128프레임에서 2.5 vs 5.1 | 토큰 예산이 곧 길이 상한 |
+| 앵커 | 길이와 **무관**해진다 | 계층적 생성의 원리 |
+| **프레임 단위 FD** | 기준선 0.061 vs 순서 섞음 **0.029** | 뒤섞은 쪽이 오히려 낮다 |
+| 비디오 단위 FD | 0.205 / 0.547 / **2.049** | 즉시 갈린다 |
+| 그래서 FVD | I3D 특성을 쓰는 이유 | 3D 합성곱이 시공간을 함께 본다 |
+| FVD의 한계 | 추출기 의존, 정적 편향, 의미 무관 | 여러 축으로 봐야 한다 |
+| 월드 모델 논쟁 | 분포 지표로는 물리 위반을 못 잡는다 | 반사실적 검사가 필요 |
+
+보고, 이해하고, 만들었다.
+남은 것은 그 모든 것을 **말과 잇는** 일이다.
+
+---
+
+**다음**: [9.9 비전-언어 모델](09_vlm.qmd) — 보고 말하는 모델
 
 **이전**: [9.7 추적과 시간적 연관](07_tracking.qmd)
