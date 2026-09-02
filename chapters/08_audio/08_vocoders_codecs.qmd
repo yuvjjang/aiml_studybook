@@ -4,91 +4,752 @@ subtitle: "WaveNet·HiFi-GAN·EnCodec — 스펙트로그램을 다시 소리로
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[8.7](07_tts.qmd)에서 결론 하나를 냈다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> 멜에서 파형을 만드는 것은 **역변환이 아니라 생성**이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+멜 80대역은 선형 스펙트럼을 32% 오차로만 되돌리고, 위상은 아예 없다.
+Griffin-Lim은 크기 스펙트로그램에 수렴하면서도 파형 오차는 1.5에 머물렀다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+그러면 신경망에 맡기면 되는가. **그냥 맡기면 안 된다** —
+이 장은 그것부터 확인하고, 무엇을 더해야 하는지 본다.
+
+그리고 그 과정에서 오디오가 **토큰**이 된다. [8.9](09_audio_generation.qmd)로 가는 다리다.
+
+---
+
+## 준비
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import signal
+from scipy.fft import dct, idct
+from src import audio, nn
+
+SR, N_FFT, HOP, NMEL = 16000, 512, 128, 80
+FB, CEN, _ = audio.mel_filterbank(NMEL, N_FFT, SR)
+VOW = {"a": (730, 1090, 2440), "i": (270, 2290, 3010),
+       "u": (300, 870, 2240), "e": (530, 1840, 2480),
+       "o": (570, 840, 2410)}
+FRIC = {"s": (4500, 7500), "f": (1200, 4000), "S": (2200, 5200)}
+PHONES = list(VOW) + list(FRIC) + ["_"]
+
+
+def fc(fs, bws=(80, 90, 120)):
+    b, a = np.array([1.0]), np.array([1.0])
+    for f, bw in zip(fs, bws):
+        r = np.exp(-np.pi*bw/SR)
+        th = 2*np.pi*f/SR
+        b = np.convolve(b, [1 - 2*r*np.cos(th) + r**2])
+        a = np.convolve(a, [1, -2*r*np.cos(th), r**2])
+    return b, a
+
+
+def render(p, n, g, f0):
+    if p == "_":
+        return g.normal(0, 0.005, n)
+    if p in VOW:
+        s = np.zeros(n)
+        s[::max(1, int(round(SR/f0)))] = 1.0
+        b, a = fc(VOW[p])
+        y = signal.lfilter(b, a, s)
+    else:
+        lo, hi = FRIC[p]
+        b, a = signal.butter(4, [lo/(SR/2), min(hi, SR/2 - 1)/(SR/2)], "band")
+        y = signal.lfilter(b, a, g.normal(0, 1, n))
+    return y/(np.max(np.abs(y)) + 1e-9)
+
+
+def utter(g, n_ph=14):
+    f0 = float(g.uniform(100, 230))
+    xs = []
+    for _ in range(n_ph):
+        p = PHONES[int(g.integers(len(PHONES)))]
+        xs.append(render(p, int(g.uniform(0.06, 0.12)*SR), g, f0))
+    x = np.concatenate(xs)
+    return x/np.max(np.abs(x))
+
+
+def melctx(x):
+    S = np.abs(audio.stft(x, N_FFT, HOP))**2
+    return np.log(FB @ S + 1e-10)
+
+
+g0 = np.random.default_rng(0)
+TR = [utter(g0) for _ in range(40)]
+TE = [utter(g0) for _ in range(10)]
+print(f"합성 음성 — 학습 {len(TR)} 발화 / 테스트 {len(TE)} 발화")
+print(f"  샘플레이트 {SR}, 멜 {NMEL}대역, 홉 {HOP}샘플 ({HOP/SR*1000:.0f} ms)")
+print(f"  즉 멜 프레임 하나가 파형 {HOP}샘플을 담당한다")
+```
+
+---
+
+## G8.8.1 — 파형을 MSE로 회귀하면
+
+가장 소박한 시도부터 한다. 멜 문맥을 입력으로, 그 구간의 **파형 샘플**을 출력으로 회귀한다.
+
+```{python}
+#| label: collapse
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+W, CH = 4, HOP
+
+
+def make_xy(sigs):
+    Xs, Ys = [], []
+    for x in sigs:
+        M = melctx(x)
+        P = np.pad(M, ((0, 0), (W, W)), mode="edge")
+        for t in range(M.shape[1]):
+            st = t*HOP
+            if st + CH > len(x):
+                break
+            Xs.append(P[:, t:t + 2*W + 1].T.ravel())
+            Ys.append(x[st:st + CH])
+    return np.array(Xs), np.array(Ys)
+
+
+Xtr, Ytr = make_xy(TR)
+Xte, Yte = make_xy(TE)
+print(f"입력 {Xtr.shape[1]}차원 (멜 {NMEL} x 문맥 {2*W+1}프레임) "
+      f"→ 출력 {CH}샘플")
+print(f"학습 쌍 {len(Xtr):,}개")
+print()
+
+VOC = nn.MLP([Xtr.shape[1], 512, 512, CH], activation="relu",
+             out_activation="identity", seed=0)
+nn.train(VOC, Xtr, Ytr, loss="mse", opt=nn.Optimizer("adam", lr=1e-3),
+         steps=800, batch_size=256, lr=1e-3, schedule="cosine", seed=1)
+P = VOC.predict(Xte)
+
+mse_p = float(np.mean((P - Yte)**2))
+mse_0 = float(np.mean(Yte**2))
+snr = float(10*np.log10(np.sum(Yte**2)/np.sum((P - Yte)**2)))
+mp = np.abs(np.fft.rfft(P, axis=1))
+mt = np.abs(np.fft.rfft(Yte, axis=1))
+relmag = float(np.linalg.norm(mp - mt)/np.linalg.norm(mt))
+
+print(f"{'지표':<34} {'값':>12}")
+print("-" * 50)
+print(f"{'예측 RMS / 정답 RMS':<34} {float(P.std()/Yte.std()):>12.4f}")
+print(f"{'MSE (모델)':<34} {mse_p:>12.6f}")
+print(f"{'MSE (항상 0 을 출력)':<34} {mse_0:>12.6f}")
+print(f"{'파형 SNR':<34} {snr:>11.2f}dB")
+print(f"{'크기 스펙트럼 상대 오차':<34} {relmag:>12.4f}")
+print()
+print(f"**SNR 이 {snr:+.2f} dB 다 — 무음을 내는 것과 다를 바 없다.**")
+print(f"  실제로 MSE 가 '항상 0' 보다 "
+      f"{'크다' if mse_p > mse_0 else '작다'} ({mse_p:.5f} vs {mse_0:.5f}).")
+print(f"  출력 진폭도 정답의 {float(P.std()/Yte.std()):.0%} 로 눌려 있다.")
+print()
+print("**이유는 [8.7](07_tts.qmd)의 과평활화와 같은데, 훨씬 심하다.**")
+for s in ["멜은 **위상을 담지 않는다**. 같은 멜에 대응하는 파형이 무수히 많다",
+          "  그 파형들은 서로 부호가 반대이기도 하다 — 평균 내면 **상쇄된다**",
+          "8.7의 멜 회귀는 9.4%만 못 맞혔지만, 파형은 **거의 전부**가 불확정이다",
+          "그래서 MSE 의 최적해가 0 에 가깝다 — 모델은 정확히 그것을 배웠다"]:
+    print(f"  · {s}")
+print()
+print("**크기 스펙트럼조차 못 맞춘다** "
+      f"(상대 오차 {relmag:.3f}).")
+print("  출력이 0 이니 당연하다. 회귀가 아니라 **다른 손실**이 필요하다.")
+print()
+print(f"{'접근':<22} {'무엇으로 불확정성을 다루나':<30} {'대표'}")
+print("-" * 80)
+for a, b, c in [
+    ("자기회귀", "샘플 하나씩, **이전 샘플을 조건으로**", "WaveNet, WaveRNN"),
+    ("정규화 흐름", "가역 변환으로 분포를 직접 모델링", "WaveGlow, Parallel WaveNet"),
+    ("적대 학습", "**판별자가 평균 낸 출력을 잡아낸다**", "MelGAN, HiFi-GAN"),
+    ("확산", "잡음에서 반복 제거 (6.5)", "DiffWave, WaveGrad"),
+]:
+    print(f"{a:<22} {b:<30} {c}")
+print()
+print("**공통점: 어느 것도 '평균을 맞히려' 하지 않는다.**")
+print("  자기회귀는 조건을 붙여 불확정성을 없애고,")
+print("  나머지 셋은 **분포**를 모델링한다. 위 표는 6장의 계열 그대로다.")
+```
+
+```{python}
+#| label: fig-collapse
+#| fig-cap: "멜에서 파형을 MSE로 회귀하면 출력이 0으로 붕괴합니다 — 위상이 불확정이기 때문입니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+k = 40
+seg_t = Yte[k]
+seg_p = P[k]
+tt = np.arange(CH)/SR*1000
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("한 프레임의 파형 (8 ms)",
+                                    "출력 진폭 분포"))
+fig.add_trace(go.Scatter(x=tt, y=seg_t, mode="lines", name="정답",
+                         line=dict(color=viz.GREEN, width=2)), row=1, col=1)
+fig.add_trace(go.Scatter(x=tt, y=seg_p, mode="lines", name="MSE 회귀 출력",
+                         line=dict(color=viz.WARM, width=2)), row=1, col=1)
+fig.update_xaxes(title_text="시간 (ms)", row=1, col=1)
+fig.update_yaxes(title_text="진폭", row=1, col=1)
+
+sub = np.random.default_rng(0).choice(Yte.size, 4000, replace=False)
+fig.add_trace(go.Histogram(x=Yte.ravel()[sub], name="정답", opacity=0.6,
+                           marker_color=viz.GREEN, nbinsx=60), row=1, col=2)
+fig.add_trace(go.Histogram(x=P.ravel()[sub], name="예측", opacity=0.6,
+                           marker_color=viz.WARM, nbinsx=60), row=1, col=2)
+fig.update_xaxes(title_text="샘플 값", row=1, col=2)
+fig.update_yaxes(title_text="빈도", type="log", row=1, col=2)
+fig.update_layout(barmode="overlay")
+viz.fig_defaults(fig, height=380, title="")
+fig.update_layout(margin=dict(l=60, r=30, t=60, b=60),
+                  legend=dict(x=0.01, y=1.16, orientation="h"))
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽에서 초록(정답)은 크게 진동하는데 주황(예측)은 0 근처에 붙어 있습니다. 오른쪽 히스토그램에서도 예측 분포가 훨씬 좁습니다. **모델이 실패한 것이 아니라, MSE의 최적해가 실제로 0에 가깝습니다.**
 :::
 
-신경 코덱이 오디오를 '토큰'으로 바꾸면서, 언어모델이 오디오를 생성할 수 있게 되었다. 이 장은 오디오와 LLM을 잇는 다리다.
+---
+
+## G8.8.2 — WaveNet의 두 장치
+
+WaveNet은 자기회귀로 이 문제를 피했다. 샘플 하나씩 만들되,
+**이전 샘플 전부를 조건으로** 준다. 그러면 다음 샘플의 불확정성이 크게 줄어든다.
+
+그런데 그러려면 두 가지가 필요했다.
+
+### ① 팽창 인과 합성곱 — 긴 문맥을 싸게 보기
+
+```{python}
+#| label: dilation
+#| code-fold: false
+
+import numpy as np
+
+print("팽창(dilated) 합성곱의 수용영역: 커널 k, 층 L, 팽창률 2^i")
+print()
+print(f"{'블록 층수':>9} {'스택 수':>8} {'수용영역(샘플)':>15} {'시간':>10} "
+      f"{'같은 크기를 일반 합성곱으로':>24}")
+print("-" * 74)
+DIL = []
+for L in [6, 8, 10]:
+    for nstack in [1, 2, 3]:
+        rf = nstack*(2**L - 1)*(2 - 1) + 1
+        plain = nstack*L*(2 - 1) + 1
+        DIL.append((L, nstack, rf))
+        print(f"{L:>9} {nstack:>8} {rf:>15,} {rf/SR*1000:>9.0f}ms "
+              f"{plain:>24,}")
+print()
+print("**층을 하나 더 쌓을 때마다 수용영역이 두 배가 된다.**")
+print(f"  10층 3스택이면 {3*(2**10-1)+1:,}샘플 = "
+      f"{(3*(2**10-1)+1)/SR*1000:.0f} ms 를 본다.")
+print(f"  같은 층수의 일반 합성곱은 {3*10+1}샘플뿐이다.")
+print()
+print("**왜 이렇게 넓어야 하는가**")
+for s in ["F0 가 100 Hz 면 한 주기가 160샘플이다 — 여러 주기를 봐야 피치를 안다",
+          "포먼트 전이는 수십 ms 단위로 일어난다",
+          "그리고 **인과적**이어야 한다 — 미래 샘플을 보면 생성할 수 없다",
+          "  ([8.6](06_asr_modern.qmd)의 스트리밍 제약과 같은 이유)"]:
+    print(f"  · {s}")
+```
+
+### ② µ-law — 8비트로 샘플을 분류 문제로 만들기
+
+WaveNet은 샘플 값을 **256개 범주로 분류**한다.
+회귀가 아니라 분류이므로 다봉 분포를 표현할 수 있다 — G8.8.1의 붕괴를 피하는 장치다.
+
+그런데 16비트를 8비트로 줄이면 [8.0](00_sound_and_sampling.qmd)에서 본 대로 SNR이 떨어진다.
+µ-law 압신(companding)이 그 손해를 다루는 방식을 재 본다.
+
+$$F(x) = \mathrm{sgn}(x)\,\frac{\ln(1 + \mu|x|)}{\ln(1 + \mu)}, \qquad \mu = 255$$
+
+```{python}
+#| label: mulaw
+#| code-fold: false
+
+import numpy as np
+
+
+def mulaw_enc(x, mu=255):
+    return np.sign(x)*np.log1p(mu*np.abs(x))/np.log1p(mu)
+
+
+def mulaw_dec(y, mu=255):
+    return np.sign(y)*((1 + mu)**np.abs(y) - 1)/mu
+
+
+def quant(x, bits):
+    L = 2**bits
+    xx = np.clip(x, -1, 1)
+    return np.round((xx + 1)/2*(L - 1))/(L - 1)*2 - 1
+
+
+x = np.concatenate(TE)
+print("전체 SNR로 보면")
+print()
+print(f"{'비트':>5} {'선형':>11} {'µ-law':>11} {'차이':>9}")
+print("-" * 40)
+MU = []
+for b in [4, 6, 8, 10]:
+    lin, mu = quant(x, b), mulaw_dec(quant(mulaw_enc(x), b))
+    s1 = float(10*np.log10(np.sum(x**2)/np.sum((lin - x)**2)))
+    s2 = float(10*np.log10(np.sum(x**2)/np.sum((mu - x)**2)))
+    MU.append((b, s1, s2))
+    print(f"{b:>5} {s1:>10.2f}dB {s2:>10.2f}dB {s2-s1:>+8.2f}")
+print()
+m8 = [m for m in MU if m[0] == 8][0]
+print(f"**µ-law 가 진다** — 8비트에서 {m8[2]-m8[1]:+.1f} dB.")
+print("  전체 SNR 은 MSE 를 재는 것이고, 균등 양자화가 MSE 를 최소화하기 때문이다.")
+print()
+print("**그런데 µ-law 가 파는 것은 평균이 아니다.** 구간별로 나눠 보자.")
+print()
+
+SEG = 320       # 20 ms
+
+
+def seg_snr(x, y, seg=SEG):
+    k = len(x)//seg
+    a = x[:k*seg].reshape(k, seg)
+    e = (y - x)[:k*seg].reshape(k, seg)
+    p, q = (a**2).sum(1), (e**2).sum(1)
+    m = p > 1e-12
+    return 10*np.log10(p[m]/np.maximum(q[m], 1e-20))
+
+
+lin8, mu8 = quant(x, 8), mulaw_dec(quant(mulaw_enc(x), 8))
+print(f"8비트, 20 ms 구간별 SNR 의 분포 (구간 {len(seg_snr(x, lin8))}개)")
+print()
+print(f"{'방식':<10} {'평균':>10} {'중앙값':>10} {'하위 10%':>11} "
+      f"{'하위 1%':>10} {'표준편차':>11}")
+print("-" * 66)
+SEGS = {}
+for nm, y in [("선형", lin8), ("µ-law", mu8)]:
+    ss = seg_snr(x, y)
+    SEGS[nm] = ss
+    print(f"{nm:<10} {ss.mean():>9.1f}dB {np.median(ss):>9.1f}dB "
+          f"{np.percentile(ss, 10):>10.1f}dB {np.percentile(ss, 1):>9.1f}dB "
+          f"{ss.std():>11.2f}")
+print()
+sl, sm = SEGS["선형"], SEGS["µ-law"]
+print(f"**표준편차가 {sl.std():.2f} → {sm.std():.2f} 로 "
+      f"{sl.std()/sm.std():.0f}분의 1이 된다.**")
+print(f"  하위 1% 구간의 SNR 은 {np.percentile(sl, 1):.1f} dB → "
+      f"{np.percentile(sm, 1):.1f} dB — **{np.percentile(sm,1)-np.percentile(sl,1):.0f} dB 개선**이다.")
+print()
+env = np.abs(signal.lfilter(np.ones(SEG)/SEG, 1, np.abs(x)))
+k = len(x)//SEG
+lev = env[:k*SEG].reshape(k, SEG).mean(1)
+n = min(len(lev), len(sl))
+quiet = lev[:n] < np.percentile(env, 20)
+print(f"조용한 구간(하위 20%, {int(quiet.sum())}개)만 보면")
+print(f"  선형   {sl[:n][quiet].mean():>6.1f} dB")
+print(f"  µ-law {sm[:n][quiet].mean():>6.1f} dB  "
+      f"(**{sm[:n][quiet].mean()-sl[:n][quiet].mean():+.1f} dB**)")
+print()
+print("**이것이 압신의 정체다 — 평균 SNR 을 팔아 SNR 의 균일함을 산다.**")
+for s in ["귀는 절대 오차가 아니라 **신호 대비 오차**를 듣는다",
+          "조용한 구간에서 SNR 이 6 dB 인 것이, 큰 구간에서 42 dB 인 것보다 훨씬 거슬린다",
+          "µ-law 는 작은 값에 양자화 단계를 몰아준다 — 로그가 하는 일이다",
+          "**[8.0](00_sound_and_sampling.qmd)의 dB 이야기와 같은 원리**",
+          "**측정 지표를 잘못 고르면 정반대 결론이 난다** — 위의 첫 표가 그 예다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G8.8.3 — 자기회귀의 대가
 
-- 보코더의 역할: 멜 스펙트로그램 → 파형 (위상 복원 문제)
-- 고전 보코더: Griffin-Lim, WORLD, STRAIGHT
-- WaveNet: 팽창 인과 합성곱과 자기회귀 파형 생성, 느린 추론
-- 병렬 생성: Parallel WaveNet, WaveGlow(흐름 기반)
-- GAN 보코더: MelGAN, HiFi-GAN의 다중 스케일·다중 주기 판별자
-- 확산 보코더(DiffWave, WaveGrad)
-- 신경 오디오 코덱: SoundStream, EnCodec, DAC
-- 잔차 벡터 양자화(RVQ)와 다단계 코드북
-- 코덱 토큰 = 오디오 언어모델의 어휘
-- 의미 토큰 vs 음향 토큰의 분리
-- 비트레이트·품질·지연 트레이드오프
+WaveNet은 품질을 얻었지만 속도를 잃었다. **샘플마다 순차적으로** 한 번씩 돌아야 한다.
+
+```{python}
+#| label: arcost
+#| code-fold: false
+
+import numpy as np
+
+print("1초 오디오를 만드는 데 필요한 **순차** 스텝 수")
+print()
+print(f"{'모델 종류':<26} {'스텝 수 / 초':>14} {'비고'}")
+print("-" * 66)
+for a, b, c in [
+    ("WaveNet (샘플 단위)", SR, "16,000 — 병렬화 불가"),
+    ("WaveRNN (샘플 단위)", SR, "구조를 줄여 스텝을 싸게"),
+    ("**HiFi-GAN (병렬)**", 1, "**한 번의 순전파**"),
+    ("DiffWave (확산 50스텝)", 50, "전체를 50번 훑는다"),
+    ("Griffin-Lim (150회)", 150, "8.7에서 잰 것"),
+]:
+    print(f"{a:<26} {b:>14,} {c}")
+print()
+print(f"**샘플 단위 자기회귀는 24 kHz 면 초당 24,000번 순차 실행이다.**")
+print("  GPU 의 병렬성을 전혀 못 쓴다. 실시간의 수십~수백 배가 걸렸다.")
+print()
+print("이 문제를 푼 방법들")
+print(f"{'방법':<24} {'아이디어':<34} {'대가'}")
+print("-" * 78)
+for a, b, c in [
+    ("Parallel WaveNet", "역흐름 증류 — 교사의 분포를 학생이", "학습이 복잡"),
+    ("WaveGlow", "가역 흐름 — 한 번에 역변환", "모델이 크다"),
+    ("**GAN 보코더**", "**판별자만 있으면 생성자는 단순**", "학습이 불안정"),
+    ("확산", "잡음에서 반복 제거", "스텝 수만큼 느리다"),
+    ("증류된 확산", "스텝을 1~4로 줄인다 (6.8)", "품질 손실"),
+]:
+    print(f"{a:<24} {b:<34} {c}")
+print()
+print("**HiFi-GAN 이 사실상 표준이 된 이유**")
+for s in ["생성자는 **전치 합성곱 몇 층**뿐이다 — 아주 빠르고 작다",
+          "품질은 판별자가 만든다. 생성자를 키울 필요가 없었다",
+          "**다중 스케일 판별자** — 원본·1/2·1/4 배속에서 각각 본다",
+          "**다중 주기 판별자** — 파형을 주기 2,3,5,7,11 로 접어서 본다",
+          "  주기적 구조(F0 하모닉)를 잡기 위한 것이다. 소수를 쓰는 이유는 겹침을 피하려고",
+          "멜 재구성 손실을 함께 걸어 학습을 안정화한다"]:
+    print(f"  · {s}")
+print()
+print("**판별자가 G8.8.1의 붕괴를 정확히 막는다.**")
+print("  0 을 출력하면 판별자가 즉시 가짜로 판정한다.")
+print("  즉 '평균을 내면 손해' 라는 신호를 손실이 직접 준다 —")
+print("  MSE 에는 없던 것이다.")
+```
 
 ---
 
-## G8.8.1 — 팽창 합성곱 수용영역
+## G8.8.4 — 신경 오디오 코덱과 RVQ
 
-지수적으로 넓어지는 수용영역으로 긴 파형 문맥을 보는 구조
+보코더는 멜을 파형으로 바꾼다. **코덱**은 한 걸음 더 간다 —
+파형을 **이산 코드**로 압축하고 다시 파형으로 되돌린다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 팽창률·층 수 슬라이더
+핵심 장치가 **잔차 벡터 양자화(RVQ)** 다. 코드북 하나로 부족하니, 남은 **잔차**를 또 양자화한다.
+
+$$\hat z = \sum_{s=1}^{S} c^{(s)}_{k_s}, \qquad
+k_s = \arg\min_k \left\| \Big(z - \sum_{j<s} c^{(j)}_{k_j}\Big) - c^{(s)}_k \right\|$$
+
+직접 구현해 **비트레이트-품질 곡선**을 그려 본다.
+
+```{python}
+#| label: rvq
+#| code-fold: false
+
+import numpy as np
+
+FR = 160                    # 10 ms 프레임
+K, NSTAGE = 256, 6
+
+
+def frames(sig, n=FR):
+    k = len(sig)//n
+    return sig[:k*n].reshape(k, n)
+
+
+def nearest(X, C):
+    """||x-c||² 를 전개해 (N,k,d) 텐서를 만들지 않는다."""
+    d = (X**2).sum(1)[:, None] - 2*X @ C.T + (C**2).sum(1)[None]
+    return d.argmin(1)
+
+
+def kmeans_fast(X, k, n_iter=15, seed=0):
+    g = np.random.default_rng(seed)
+    C = X[g.choice(len(X), k, replace=False)].copy()
+    for _ in range(n_iter):
+        lab = nearest(X, C)
+        for j in range(k):
+            m = lab == j
+            if m.any():
+                C[j] = X[m].mean(0)
+    return C
+
+
+def fit_rvq(Z, n_stage=NSTAGE, k=K, seed=0, n_sub=4000):
+    sub = np.random.default_rng(seed).choice(
+        len(Z), min(n_sub, len(Z)), replace=False)
+    res = Z[sub].copy()
+    books = []
+    for s in range(n_stage):
+        cen = kmeans_fast(res, k, n_iter=15, seed=seed + s)
+        books.append(cen)
+        res = res - cen[nearest(res, cen)]
+    return books
+
+
+def apply_rvq(Z, books):
+    r, out, codes = Z.copy(), np.zeros_like(Z), []
+    for cen in books:
+        idx = nearest(r, cen)
+        out += cen[idx]
+        r = r - cen[idx]
+        codes.append(idx)
+    return out, np.stack(codes)
+
+
+def code_entropy(codes, k=K):
+    e = []
+    for row in codes:
+        c = np.bincount(row, minlength=k)
+        p = c[c > 0]/c.sum()
+        e.append(float(-(p*np.log2(p)).sum()))
+    return float(np.mean(e))
+
+
+# ① 원시 파형 프레임 (DCT 로 직교 변환만)
+TRF = np.concatenate([frames(x) for x in TR])
+TEF = np.concatenate([frames(x) for x in TE])
+TRC = dct(TRF, type=2, axis=1, norm="ortho")
+TEC = dct(TEF, type=2, axis=1, norm="ortho")
+BOOK_W = fit_rvq(TRC, seed=3)
+
+# ② 로그 멜 프레임 (표준화)
+TRM = np.concatenate([melctx(x).T for x in TR])
+TEM = np.concatenate([melctx(x).T for x in TE])
+mu_, sd_ = TRM.mean(0), TRM.std(0) + 1e-9
+TRMz, TEMz = (TRM - mu_)/sd_, (TEM - mu_)/sd_
+BOOK_M = fit_rvq(TRMz, seed=5)
+
+print(f"코드북 {NSTAGE}단계 x {K}코드 = 단계당 {int(np.log2(K))}비트")
+print(f"  ① 원시 파형 프레임 {FR}샘플 (DCT 직교 변환만)")
+print(f"  ② 로그 멜 프레임 {NMEL}차원 (홉 {HOP}샘플)")
+print()
+print(f"{'단계':>4} {'① 비트레이트':>13} {'① 파형 SNR':>12} "
+      f"{'② 비트레이트':>13} {'② 멜 SNR':>11} {'코드 엔트로피':>13}")
+print("-" * 74)
+RVQ = []
+for ns in range(1, NSTAGE + 1):
+    rw, cw = apply_rvq(TEC, BOOK_W[:ns])
+    recw = idct(rw, type=2, axis=1, norm="ortho")
+    snr_w = float(10*np.log10(np.sum(TEF**2)/np.sum((recw - TEF)**2)))
+    br_w = ns*np.log2(K)*SR/FR/1000
+
+    rm, cm = apply_rvq(TEMz, BOOK_M[:ns])
+    snr_m = float(10*np.log10(np.sum(TEMz**2)/np.sum((rm - TEMz)**2)))
+    br_m = ns*np.log2(K)*SR/HOP/1000
+    RVQ.append((ns, br_w, snr_w, br_m, snr_m, code_entropy(cm)))
+    print(f"{ns:>4} {br_w:>11.1f}k {snr_w:>11.2f}dB {br_m:>11.1f}k "
+          f"{snr_m:>10.2f}dB {code_entropy(cm):>13.2f}")
+print()
+r1, r6 = RVQ[0], RVQ[-1]
+print(f"**단계를 쌓을수록 좋아지지만 수확이 체감한다** — "
+      f"① {r1[2]:.2f} → {r6[2]:.2f} dB, ② {r1[4]:.2f} → {r6[4]:.2f} dB.")
+print("  첫 단계가 큰 구조를 잡고, 뒤 단계는 잔차의 세부를 다듬는다.")
+print()
+print(f"**그런데 ①과 ②의 격차가 훨씬 크다.**")
+print(f"  비슷한 비트레이트에서 원시 파형은 {r6[2]:.1f} dB, "
+      f"로그멜은 {RVQ[3][4]:.1f} dB.")
+print()
+print("**왜 원시 파형은 양자화가 안 되는가**")
+for s in ["같은 소리라도 프레임 경계가 어디 걸리느냐에 따라 **위상이 제각각**이다",
+          "  10 ms 프레임 안의 파형은 사실상 무한히 많은 모양을 가진다",
+          "코드북 256개로는 그 다양성을 도저히 못 덮는다",
+          "로그멜은 위상을 버렸으므로 **덮어야 할 다양성이 훨씬 작다**",
+          "**그래서 신경 코덱은 인코더를 먼저 학습한다** —",
+          "  양자화하기 좋은 표현으로 옮긴 다음 RVQ 를 건다"]:
+    print(f"  · {s}")
+print()
+print(f"**코드북 사용률도 문제다** — 엔트로피가 {r6[5]:.2f} 비트인데 "
+      f"상한은 {np.log2(K):.0f} 비트다.")
+print(f"  코드의 {(1 - r6[5]/np.log2(K)):.0%} 만큼이 낭비되고 있다.")
+print("  실제 코덱은 이것을 막는 장치를 둔다:")
+for s in ["**EMA 코드북 갱신** — 죽은 코드를 살린다",
+          "**코드북 재시작** — 안 쓰이는 코드를 자주 쓰이는 코드 근처로 옮긴다",
+          "다양성 손실 ([8.5](05_ssl_speech.qmd)의 wav2vec 2.0 과 같은 문제)",
+          "**엔트로피 부호화** — 사용 빈도가 불균등하면 그만큼 더 압축한다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-rvq
+#| fig-cap: "RVQ는 단계를 쌓을수록 좋아지지만, 무엇을 양자화하느냐가 훨씬 크게 좌우합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("RVQ 비트레이트-품질",
+                                    "µ-law: 구간별 SNR 분포"))
+fig.add_trace(go.Scatter(x=[r[1] for r in RVQ], y=[r[2] for r in RVQ],
+                         mode="lines+markers", name="① 원시 파형 프레임",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=[r[3] for r in RVQ], y=[r[4] for r in RVQ],
+                         mode="lines+markers", name="② 로그 멜 프레임",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.update_xaxes(title_text="비트레이트 (kbps)", row=1, col=1)
+fig.update_yaxes(title_text="SNR (dB)", row=1, col=1)
+
+for nm, c in [("선형", viz.WARM), ("µ-law", viz.ACCENT)]:
+    fig.add_trace(go.Histogram(x=SEGS[nm], name=nm, opacity=0.6,
+                               marker_color=c, nbinsx=45), row=1, col=2)
+fig.update_xaxes(title_text="20 ms 구간의 SNR (dB)", row=1, col=2)
+fig.update_yaxes(title_text="구간 수", row=1, col=2)
+fig.update_layout(barmode="overlay")
+viz.fig_defaults(fig, height=400, title="")
+fig.update_layout(margin=dict(l=60, r=30, t=60, b=60),
+                  legend=dict(x=0.01, y=1.16, orientation="h"))
+fig.show()
+```
+
+::: {.interaction-hint}
+오른쪽 히스토그램에서 주황(선형)은 넓게 퍼져 있고 왼쪽으로 긴 꼬리가 있습니다 — **조용한 구간에서 SNR이 무너지는 것**입니다. 파랑(µ-law)은 좁은 봉우리 하나입니다. 평균은 주황이 높은데도 µ-law를 쓰는 이유가 이 모양에 있습니다.
 :::
 
 ---
 
-## G8.8.2 — 위상 복원 문제
+## G8.8.5 — 오디오가 토큰이 된다
 
-Griffin-Lim 반복에 따른 음질 개선과 한계
+RVQ의 출력은 **정수 인덱스 열**이다. 그 순간 오디오는 언어모델이 다룰 수 있는 것이 된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 반복 횟수 슬라이더
-:::
+```{python}
+#| label: tokens
+#| code-fold: false
+
+import numpy as np
+
+print("코덱 토큰의 규모 — 1초 오디오가 토큰 몇 개인가")
+print()
+print(f"{'설정':<30} {'프레임/초':>10} {'단계':>6} {'토큰/초':>10} "
+      f"{'비트레이트':>11}")
+print("-" * 74)
+for nm, fps, ns, k in [("여기 ② (홉 128, 6단계)", SR/HOP, 6, K),
+                       ("EnCodec 24kHz 풍 (75fps, 8단계)", 75, 8, 1024),
+                       ("EnCodec 저비트 (75fps, 2단계)", 75, 2, 1024),
+                       ("SoundStream 풍 (50fps, 12단계)", 50, 12, 1024)]:
+    tok = fps*ns
+    br = tok*np.log2(k)/1000
+    print(f"{nm:<30} {fps:>10.0f} {ns:>6} {tok:>10.0f} {br:>9.1f}k")
+print()
+print("**비교: 텍스트는 초당 3~5 토큰이다.**")
+print(f"  오디오 토큰은 그보다 **100배 이상** 많다.")
+print("  그래서 오디오 LM 은 시퀀스 길이가 곧바로 문제가 된다 (7.14의 KV 캐시).")
+print()
+print("**다단계 구조가 또 다른 문제를 만든다.**")
+for s in ["한 시점에 토큰이 S개다 — 시퀀스를 어떻게 펼칠 것인가?",
+          "  **평탄화**: 시간x단계를 일렬로 → 시퀀스가 S배 길어진다",
+          "  **병렬 헤드**: 한 스텝에 S개를 동시에 → 단계 간 의존을 잃는다",
+          "  **지연 패턴**: 단계마다 한 스텝씩 밀어 넣는다 (MusicGen)",
+          "  **계층**: 1단계만 자기회귀로, 나머지는 조건부로 (VALL-E)"]:
+    print(f"  · {s}")
+print()
+print("**의미 토큰 vs 음향 토큰**")
+print(f"{'구분':<16} {'무엇에서':<28} {'담는 것'}")
+print("-" * 72)
+for a, b, c in [
+    ("의미 토큰", "**자기지도 표현의 군집** (8.5)", "음운·내용. 화자 정보가 적다"),
+    ("음향 토큰", "**코덱 RVQ**", "화자·음색·녹음 환경까지 전부"),
+]:
+    print(f"{a:<16} {b:<28} {c}")
+print()
+print("[8.5](05_ssl_speech.qmd)에서 만든 k-means 코드가 바로 의미 토큰이다.")
+print(f"  거기서 음소 순도 0.87 을 쟀다 — 내용은 담고 화자는 덜 담는다.")
+print()
+print("**둘을 나누는 이유**")
+for s in ["의미 토큰으로 **무엇을 말할지**를 먼저 정한다 (긴 문맥, 적은 토큰)",
+          "음향 토큰으로 **어떻게 들릴지**를 채운다 (짧은 문맥, 많은 토큰)",
+          "AudioLM 이 이 2단계 구조를 제안했고 이후 표준이 됐다",
+          "**음성 복제**가 여기서 나온다 — 의미는 텍스트에서, 음향은 참조 음성에서",
+          "  ([8.7](07_tts.qmd)의 제로샷 TTS 가 이 구조다)"]:
+    print(f"  · {s}")
+print()
+print("**코덱이 LLM 시대에 다시 중요해진 이유가 이것이다.**")
+print("  압축률이 아니라 **'토큰으로 만들 수 있는가'** 가 설계 기준이 됐다.")
+print("  DAC 같은 최신 코덱이 코드북 사용률을 중시하는 것도 같은 맥락이다 —")
+print("  안 쓰이는 코드는 LM 어휘에서 낭비다.")
+```
 
 ---
 
-## G8.8.3 — RVQ 다단계 양자화
+## 계보와 비트레이트
 
-잔차를 단계별로 양자화하며 정밀도가 올라가는 과정
+```{python}
+#| label: lineage
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 코드북 단계 슬라이더
-:::
+print("보코더 계보")
+print()
+print(f"{'모델':<20} {'방식':<26} {'남긴 것'}")
+print("-" * 76)
+for a, b, c in [
+    ("Griffin-Lim", "반복 위상 추정", "학습 없이 되지만 금속성 (8.7)"),
+    ("WORLD / STRAIGHT", "소스-필터 파라메트릭 (8.0)", "빠르고 제어 가능, 음질 한계"),
+    ("WaveNet", "샘플 단위 자기회귀", "**음질의 도약**, 실시간 불가"),
+    ("WaveRNN / LPCNet", "경량 자기회귀 + 신호처리 결합", "CPU 실시간"),
+    ("Parallel WaveNet / WaveGlow", "증류 / 흐름", "병렬 생성"),
+    ("**HiFi-GAN**", "GAN, 다중 스케일·주기 판별자", "**사실상 표준**"),
+    ("DiffWave / WaveGrad", "확산", "품질 좋으나 스텝 비용"),
+    ("**BigVGAN**", "GAN + 주기 활성화 함수", "범용(음악·환경음)까지"),
+]:
+    print(f"{a:<20} {b:<26} {c}")
+print()
+print("오디오 코덱 — 고전과 신경망")
+print()
+print(f"{'코덱':<16} {'비트레이트':<14} {'방식':<24} {'특징'}")
+print("-" * 78)
+for a, b, c, d in [
+    ("MP3 / AAC", "128 kbps", "심리음향 + 변환 부호화", "음악용 표준"),
+    ("Opus", "6~510 kbps", "CELT + SILK", "저지연, 통신 표준"),
+    ("**SoundStream**", "3~18 kbps", "인코더 + RVQ + GAN", "신경 코덱의 원형"),
+    ("**EnCodec**", "1.5~24 kbps", "SoundStream + 트랜스포머 엔트로피", "널리 쓰인다"),
+    ("**DAC**", "~8 kbps", "코드북 사용률 개선", "고품질 범용"),
+]:
+    print(f"{a:<16} {b:<14} {c:<24} {d}")
+print()
+print("**신경 코덱이 고전 코덱을 이기는 지점은 저비트레이트다.**")
+for s in ["3 kbps 에서 Opus 는 알아듣기 어렵지만 신경 코덱은 자연스럽다",
+          "이유: 고전 코덱은 **파형을 근사**하고, 신경 코덱은 **재생성**한다",
+          "  G8.8.4에서 원시 파형 양자화가 왜 어려운지 본 그대로다",
+          "대가: 모델이 크고, 학습 도메인 밖에서 이상해질 수 있다",
+          "그리고 **원본과 파형이 다르다** — 측정 지표로 SNR 을 쓸 수 없다",
+          "  그래서 지각 지표(ViSQOL, POLQA)나 사람 평가를 쓴다 (8.7의 MOS)"]:
+    print(f"  · {s}")
+print()
+print("**평가 지표에 대한 경고 — 이 장의 반복된 주제**")
+print("  G8.8.1: SNR 로 보면 '무음' 이 좋은 보코더다")
+print("  G8.8.2: SNR 로 보면 µ-law 가 나쁘다")
+print("  신경 코덱: SNR 로 보면 고전 코덱이 낫다")
+print("  **셋 다 SNR 이 지각과 다른 것을 재기 때문이다.**")
+print("  [7.13](../07_language/13_evaluation.qmd)의 결론이 오디오에서도 같다 —")
+print("  **최적화하는 지표와 원하는 것이 다르면 지표가 이긴다.**")
+```
 
 ---
 
-## G8.8.4 — 비트레이트와 품질
+## 요약
 
-코덱별 비트레이트 대비 재구성 품질 곡선
+| 개념 | 수치·핵심 | |
+|------|----------|---|
+| 출발점 | 멜→파형은 역변환이 아니라 **생성** (8.7) | 위상이 없다 |
+| **MSE 회귀** | 파형 SNR **−0.02 dB** | 무음을 내는 것과 같다 |
+| 왜 붕괴하나 | 같은 멜에 대응하는 파형이 **부호까지 다르다** | 평균 내면 상쇄된다 |
+| 출력 진폭 | 정답의 **10%** | 모델이 MSE 최적해를 정확히 배웠다 |
+| 네 가지 대안 | 자기회귀·흐름·GAN·확산 | 모두 **분포**를 다룬다 (6장 계열) |
+| 팽창 합성곱 | 10층 3스택 → **3,070샘플(192 ms)** | 층당 두 배, 일반 합성곱은 31샘플 |
+| **µ-law (전체 SNR)** | 8비트에서 **−4.9 dB** — 진다 | 균등 양자화가 MSE를 최소화 |
+| **µ-law (구간별)** | 표준편차 9.10 → **1.28** | 하위 1%가 6.5 → **33.0 dB** |
+| 조용한 구간 | 27.7 → **36.1 dB** | 평균을 팔아 **균일함**을 산다 |
+| 자기회귀 비용 | 1초에 **16,000 순차 스텝** | HiFi-GAN은 **1번** |
+| GAN 보코더 | 판별자가 평균 출력을 잡아낸다 | G8.8.1의 붕괴를 직접 막는 손실 |
+| **RVQ (원시 파형)** | 4.8 kbps에서 **4.81 dB** | 프레임 위상이 제각각이라 못 덮는다 |
+| **RVQ (로그 멜)** | 4.0 kbps에서 **18.16 dB** | **무엇을 양자화하느냐**가 좌우한다 |
+| 그래서 | 신경 코덱은 **인코더를 먼저 학습** | 양자화하기 좋은 표현으로 옮긴다 |
+| 코드북 사용률 | 엔트로피 6.77 / 상한 8비트 | 15% 낭비 — EMA·재시작·다양성 손실 |
+| 오디오 토큰 | 초당 **150~750개** | 텍스트(3~5개)의 수십~수백 배 |
+| 다단계 펼치기 | 평탄화·병렬헤드·지연·계층 | 시퀀스 길이와 의존성의 절충 |
+| 의미 vs 음향 토큰 | 8.5의 군집 vs 코덱 RVQ | 무엇을 말할지 / 어떻게 들릴지 |
+| 저비트레이트 | 신경 코덱이 고전을 이긴다 | 근사가 아니라 **재생성**이므로 |
+| **반복된 경고** | SNR로 재면 세 번 다 틀린 답 | 지표와 목적이 다르면 지표가 이긴다 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 비트레이트 슬라이더
-:::
+오디오가 토큰이 되었다. 다음은 그 토큰으로 **소리를 만드는** 이야기다.
 
 ---
 
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 보코더 |  |
-| WaveNet |  |
-| HiFi-GAN |  |
-| EnCodec |  |
-| 잔차 벡터 양자화 (RVQ) |  |
-| 오디오 토큰 |  |
-
----
-
-**다음**: [8.9 오디오·음악 생성](09_audio_generation.qmd) — AudioLM·MusicGen·오디오 LLM — 소리를 언어처럼 생성하기
+**다음**: [8.9 오디오 생성](09_audio_generation.qmd) — 음악·효과음·오디오 LM
 
 **이전**: [8.7 음성 합성(TTS)](07_tts.qmd)
