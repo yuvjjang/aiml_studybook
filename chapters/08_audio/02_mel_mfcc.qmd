@@ -4,89 +4,783 @@ subtitle: "인간 청각을 흉내낸 특성 — 딥러닝 이전과 이후"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[8.1](01_fourier_stft.qmd)에서 스펙트로그램을 만들었다. 그런데 그것을 그대로 쓰는 모델은 거의 없다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+주파수 축을 **휘어서** 40~128개 대역으로 묶은 다음 로그를 씌운다.
+그 결과물인 **로그 멜 스펙트로그램**이 2026년의 TTS·ASR에서도 표준 입력이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+왜 그런가. 이 장은 두 가지를 구분해서 답한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+| 질문 | 답이 있는 곳 |
+|------|------------|
+| 왜 **선형 주파수가 아니라 멜**인가 | 청각의 분해능 + 음소 정보가 어디 있는가 |
+| 왜 **MFCC가 밀려나고 로그멜이 남았나** | DCT가 무엇을 위해 있었는지 |
+
+그리고 [8.0](00_sound_and_sampling.qmd)에서 미뤄 둔 약속을 여기서 지킨다 —
+**소스와 필터를 실제로 분리해 보인다.**
+
+---
+
+## 멜 스케일
+
+인간의 주파수 분해능은 균일하지 않다.
+저주파에서는 몇 Hz 차이도 구별하지만, 고주파에서는 수백 Hz가 벌어져야 구별한다.
+
+이 비선형성을 담은 것이 **멜 스케일**이다.
+
+$$m = 2595 \log_{10}\!\left(1 + \frac{f}{700}\right), \qquad
+f = 700\left(10^{m/2595} - 1\right)$$
+
+1 kHz 아래에서는 거의 선형이고, 그 위에서는 로그에 가깝다.
+같은 원리의 다른 척도로 **바크(Bark)** 스케일이 있고,
+청각 필터의 폭을 직접 모형화한 **ERB** 도 쓰인다.
+
+멜 축에 **등간격**으로 삼각 필터를 놓으면, Hz 축에서는 저주파에 촘촘하고 고주파에 성기게 놓인다.
+
+---
+
+## G8.2.1 — 멜 필터뱅크의 구조
+
+```{python}
+#| label: filterbank
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import audio
+
+SR, N_FFT, HOP = 16000, 512, 160
+N_MELS = 40
+FB, CENTERS, FREQS = audio.mel_filterbank(N_MELS, N_FFT, SR)
+
+print(f"멜 필터뱅크 {N_MELS}개, 0~{SR//2} Hz, n_fft={N_FFT}")
+print()
+print(f"{'필터':>6} {'중심 Hz':>10} {'대역폭 Hz':>11} {'FFT 빈 수':>11}")
+print("-" * 42)
+BW = []
+for i in range(N_MELS):
+    nz = np.where(FB[i] > 0)[0]
+    bw = float(FREQS[nz[-1]] - FREQS[nz[0]]) if len(nz) > 1 else 0.0
+    BW.append(bw)
+    if i in (0, 4, 9, 19, 29, 39):
+        print(f"{i:>6} {CENTERS[i]:>10.0f} {bw:>11.0f} {len(nz):>11}")
+print()
+print(f"**1 kHz 아래에 필터 {(CENTERS < 1000).sum()}개, "
+      f"4 kHz 위에 {(CENTERS > 4000).sum()}개.**")
+print(f"  대역폭은 {BW[0]:.0f} Hz 에서 {BW[-1]:.0f} Hz 로 "
+      f"{BW[-1]/BW[0]:.0f}배 넓어진다.")
+print()
+print("**즉 저주파에 해상도를 몰아준다.** 그런데 왜 그것이 옳은가?")
+print()
+print(f"{'무엇이 어디 있는가':<26} {'주파수 대역'}")
+print("-" * 60)
+for a, b in [("모음의 F1", "약 250 ~ 900 Hz"),
+             ("모음의 F2 — 모음 구별의 핵심", "약 800 ~ 2,500 Hz"),
+             ("F3, 비음·유음 단서", "약 2,200 ~ 3,500 Hz"),
+             ("치찰음(/s/, /ʃ/)의 에너지", "4,000 Hz 이상"),
+             ("음높이 F0", "약 80 ~ 350 Hz")]:
+    print(f"{a:<26} {b}")
+print()
+print("**음소를 구별하는 정보는 대부분 3 kHz 아래에 있다.**")
+n_lo = int((CENTERS < 3000).sum())
+print(f"  멜 필터뱅크는 {N_MELS}개 중 {n_lo}개({n_lo/N_MELS:.0%})를 그곳에 놓는다.")
+print(f"  선형으로 {N_MELS}개를 놓으면 3 kHz 아래에는 "
+      f"{int(3000/(SR/2)*N_MELS)}개뿐이다.")
+```
+
+```{python}
+#| label: fig-filterbank
+#| fig-cap: "멜 축에서는 등간격인 삼각 필터가 Hz 축에서는 저주파에 몰립니다. 슬라이더로 필터 수를 바꿔 보세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import audio, viz
+
+NS = [12, 20, 40, 64, 80]
+banks = {}
+for n in NS:
+    fb, ce, fr = audio.mel_filterbank(n, N_FFT, SR)
+    banks[n] = (fb, ce, fr)
+
+MAXN = max(NS)
+init = NS.index(20)
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("삼각 필터 (Hz 축)", "필터 중심 주파수"))
+
+# 트레이스 자리를 최대 개수만큼 미리 잡아 둔다 (슬라이더가 값만 바꾼다)
+def tri(n):
+    """삼각 필터는 (왼끝, 중심, 오른끝) 세 점이면 정확히 그려진다."""
+    mp = np.linspace(audio.hz_to_mel(0), audio.hz_to_mel(SR/2), n + 2)
+    hz = audio.mel_to_hz(mp)
+    return [(hz[i], hz[i+1], hz[i+2]) for i in range(n)]
+
+
+TRI = {n: tri(n) for n in NS}
+t0 = TRI[NS[init]]
+_, ce0, _ = banks[NS[init]]
+for i in range(MAXN):
+    xs_, ys_ = ((list(t0[i]), [0.0, 1.0, 0.0]) if i < NS[init]
+                else ([0.0], [0.0]))
+    fig.add_trace(go.Scatter(x=xs_, y=ys_, mode="lines", showlegend=False,
+                             line=dict(color=viz.color(i % 5), width=1.3)),
+                  row=1, col=1)
+fig.add_trace(go.Scatter(x=np.arange(1, NS[init] + 1), y=ce0,
+                         mode="lines+markers", name="멜 등간격",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=6)), row=1, col=2)
+fig.add_trace(go.Scatter(x=np.arange(1, NS[init] + 1),
+                         y=np.linspace(SR/2/NS[init], SR/2, NS[init]),
+                         mode="lines", name="선형 등간격이라면",
+                         line=dict(color=viz.WARM, width=2, dash="dash")),
+              row=1, col=2)
+
+steps = []
+for n in NS:
+    _, ce, _ = banks[n]
+    t = TRI[n]
+    xs = [list(t[i]) if i < n else [0.0] for i in range(MAXN)]
+    ys = [[0.0, 1.0, 0.0] if i < n else [0.0] for i in range(MAXN)]
+    xs += [np.arange(1, n + 1), np.arange(1, n + 1)]
+    ys += [ce, np.linspace(SR/2/n, SR/2, n)]
+    steps.append((f"{n}", {"x": xs, "y": ys}))
+fig.update_layout(sliders=[viz.slider(steps, prefix="필터 수 = ", active=init,
+                                      pad_t=45)])
+fig.update_xaxes(title_text="주파수 (Hz)", row=1, col=1)
+fig.update_yaxes(title_text="가중치", row=1, col=1)
+fig.update_xaxes(title_text="필터 번호", row=1, col=2)
+fig.update_yaxes(title_text="중심 주파수 (Hz)", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="")
+fig.update_layout(margin=dict(l=60, r=30, t=60, b=90),
+                  legend=dict(x=0.55, y=1.14, orientation="h"))
+fig.show()
+```
+
+::: {.interaction-hint}
+오른쪽 파란 곡선(멜 등간격)이 주황 점선(선형 등간격) 아래로 크게 휘어 있습니다. **필터 번호 절반 지점에서 파란 곡선은 아직 2kHz 부근**인데, 선형이라면 이미 4kHz입니다. 필터 수를 늘려도 이 휘어짐의 모양은 그대로입니다.
 :::
 
-멜 스펙트로그램은 2026년의 TTS·ASR에서도 여전히 표준 입력이다. 왜 선형 주파수가 아니라 멜인지가 이 장의 요점이다.
+---
+
+## G8.2.2 — 멜이 실제로 무엇을 사는가
+
+"청각을 닮았다"는 것만으로는 근거가 약하다. **모음을 구별하는 능력**으로 재 본다.
+
+[8.0](00_sound_and_sampling.qmd)의 소스-필터 모델로 모음을 합성한다.
+포먼트를 우리가 정했으므로 **정답을 알고 있다.**
+
+```{python}
+#| label: melvalue
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import signal
+from src import audio
+
+
+def formant_coeffs(fs, bws, sr=SR):
+    """포먼트마다 2차 공명기를 직렬로 (8.0과 동일)."""
+    b, a = np.array([1.0]), np.array([1.0])
+    for f, bw in zip(fs, bws):
+        r = np.exp(-np.pi*bw/sr)
+        th = 2*np.pi*f/sr
+        b = np.convolve(b, [1 - 2*r*np.cos(th) + r**2])
+        a = np.convolve(a, [1, -2*r*np.cos(th), r**2])
+    return b, a
+
+
+def pulse_train(f0, dur, sr=SR):
+    x = np.zeros(int(dur*sr))
+    x[::max(1, int(round(sr/f0)))] = 1.0
+    return x
+
+
+VOWELS = {"아": (730, 1090, 2440), "이": (270, 2290, 3010),
+          "우": (300, 870, 2240), "에": (530, 1840, 2480),
+          "오": (570, 840, 2410)}
+BWS = [80, 90, 120]
+V = list(VOWELS)
+
+
+def vowel(nm, f0=140, dur=0.4):
+    b, a = formant_coeffs(VOWELS[nm], BWS)
+    y = signal.lfilter(b, a, pulse_train(f0, dur))
+    return y/np.max(np.abs(y))
+
+
+def zscore(v):
+    return (v - v.mean())/(v.std() + 1e-9)
+
+
+lin, mel = {}, {}
+for nm in V:
+    x = vowel(nm)
+    S = np.abs(audio.stft(x, N_FFT, HOP))**2
+    lin[nm] = np.log(S + 1e-10).mean(1)
+    mel[nm] = audio.log_mel(x, SR, N_FFT, HOP, fb=FB).mean(1)
+
+
+def pair_dists(d):
+    out = []
+    for i in range(len(V)):
+        for j in range(i + 1, len(V)):
+            out.append(float(np.sqrt(np.mean(
+                (zscore(d[V[i]]) - zscore(d[V[j]]))**2))))
+    return np.array(out)
+
+
+dl, dm = pair_dists(lin), pair_dists(mel)
+print("모음 5개를 서로 비교한다 (표준화 후 RMS 거리 — 스케일 효과 제거)")
+print()
+print(f"{'표현':<26} {'차원':>7} {'모음쌍 평균 거리':>17} {'최소 거리':>12}")
+print("-" * 66)
+print(f"{'로그 선형 스펙트럼':<26} {len(FREQS):>7} {dl.mean():>17.3f} "
+      f"{dl.min():>12.3f}")
+print(f"{'로그 멜 스펙트럼':<26} {N_MELS:>7} {dm.mean():>17.3f} "
+      f"{dm.min():>12.3f}")
+print()
+print(f"**차원은 {len(FREQS)/N_MELS:.1f}배 줄었는데 변별 거리는 "
+      f"{dm.mean()/dl.mean():.2f}배로 커졌다.**")
+print(f"  가장 헷갈리는 모음쌍의 거리도 {dl.min():.3f} → {dm.min():.3f} 로 늘었다.")
+print()
+print("**왜 줄였는데 좋아지는가**")
+for s in ["선형 스펙트럼의 257개 빈 중 절반 이상이 **4 kHz 위**다 — "
+          "모음 구별에 거의 안 쓰인다",
+          "그 빈들은 하모닉 잔결(F0 에 따라 흔들리는 값)로 채워져 있다",
+          "  → **화자가 바뀌면 통째로 달라지는** 성분이다",
+          "멜은 그것을 넓은 대역으로 평균해 지워 버린다",
+          "동시에 F1·F2 대역에는 해상도를 남긴다"]:
+    print(f"  · {s}")
+print()
+print("**즉 멜은 압축이 아니라 선택이다.** 버릴 축을 고르는 일이다.")
+print()
+print("주의: 이 실험은 합성 모음이고 화자 변이·잡음이 없다.")
+print("  실제 이득의 크기는 데이터에 따라 다르다. 여기서 확인한 것은 **방향**이다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 켑스트럼: 곱을 합으로
 
-- 인간 청각의 주파수 분해능과 임계 대역
-- 멜 스케일·바크 스케일 변환 공식
-- 멜 필터뱅크 설계: 삼각 필터, 개수, 주파수 범위
-- 로그 멜 스펙트로그램과 동적 범위 압축
-- MFCC: DCT로 켑스트럼 계수 뽑기
-- 켑스트럼의 의미: 소스와 필터의 분리
-- 델타·델타-델타 특성
-- 정규화: CMVN, per-channel energy normalization
-- 딥러닝 시대에 MFCC가 밀려나고 로그멜이 남은 이유
-- 학습 가능한 프론트엔드(SincNet, LEAF)와 원시 파형 입력
+[8.0](00_sound_and_sampling.qmd)에서 관측 스펙트럼이 소스와 필터의 **곱**이라고 했다.
 
----
+$$|X(f)| = |S(f)| \cdot |H(f)|$$
 
-## G8.2.1 — 멜 필터뱅크
+로그를 씌우면 **합**이 된다.
 
-삼각 필터들이 저주파에 촘촘히, 고주파에 성기게 배치되는 모습
+$$\log|X(f)| = \log|S(f)| + \log|H(f)|$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 필터 수 슬라이더
-:::
+여기서 두 항의 성질이 완전히 다르다.
 
----
+| 항 | 주파수 축에서의 모양 | 켑스트럼에서 나타나는 곳 |
+|----|-------------------|----------------------|
+| $\log\|S(f)\|$ (소스) | $f_0$ 간격의 **빠른 톱니** | 높은 케프렌시 (= $1/f_0$) |
+| $\log\|H(f)\|$ (필터) | 완만한 **포락** | 낮은 케프렌시 |
 
-## G8.2.2 — 선형 vs 멜 스펙트로그램
+$\log|X(f)|$ 를 다시 한 번 역푸리에 변환하면 두 성분이 **다른 위치로 갈라진다.**
+그 결과가 **켑스트럼(cepstrum)** 이고, 가로축을 **케프렌시(quefrency)** 라 부른다.
 
-같은 음성이 두 주파수 축에서 어떻게 다르게 보이는지
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 축 전환
-:::
+$$c[n] = \mathcal{F}^{-1}\{\log|X(f)|\}$$
 
 ---
 
-## G8.2.3 — MFCC 계산 단계
+## G8.2.3 — 소스와 필터를 실제로 분리한다
 
-STFT → 멜 → 로그 → DCT 로 이어지는 변환 파이프라인
+```{python}
+#| label: cepstrum
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단계 재생
-:::
+import sys; sys.path.append("../..")
+import numpy as np
+from src import audio
+
+NW = 1024
+print("① 켑스트럼의 높은 케프렌시 봉우리 = 피치 주기")
+print()
+print(f"{'참 F0':>8} {'참 주기':>10} {'켑스트럼 피크':>14} {'추정 F0':>10} "
+      f"{'오차':>9}")
+print("-" * 58)
+PITCH = []
+lo, hi = int(0.002*SR), int(0.015*SR)
+for f0 in [90, 120, 140, 160, 200, 260]:
+    y = vowel("아", f0, 0.5)
+    c = audio.cepstrum(y[2000:2000 + NW])
+    p = lo + int(np.argmax(c[lo:hi]))
+    est = SR/p
+    PITCH.append((f0, p/SR*1000, est))
+    print(f"{f0:>8} {1000/f0:>9.2f}ms {p/SR*1000:>13.2f}ms {est:>10.1f} "
+          f"{est - f0:>+9.1f}")
+print()
+bad = [p for p in PITCH if abs(p[2] - p[0]) > 5]
+print("**대부분 정확하다** — 스펙트럼의 하모닉 간격이 켑스트럼에서는 봉우리 하나가 된다.")
+if bad:
+    b = bad[0]
+    print(f"**그런데 F0={b[0]} 에서 {b[2]:.0f} Hz 로 틀렸다 — "
+          f"정확히 절반이다.**")
+    print("  2주기짜리 봉우리가 더 강해서 그것을 집었다. **옥타브 오류**라고 부른다.")
+    print("  켑스트럼 피치 추정의 대표적인 실패 양식이고, 실무에서는")
+    print("  연속성 제약(이전 프레임과 가깝게)이나 자기상관과의 결합으로 막는다.")
+else:
+    print()
+    print("**이 설정에서는 옥타브 오류가 나오지 않았다.**")
+    print("  다만 켑스트럼 피치 추정의 대표적 실패 양식이므로 적어 둔다 —")
+    print("  2주기짜리 봉우리가 더 강하면 F0 의 **절반**을 답으로 내놓는다.")
+    print("  여기서 안 나온 이유는 합성 신호라 하모닉이 완벽하기 때문이다.")
+    print("  실제 음성에서는 흔하고, 연속성 제약이나 자기상관과의 결합으로 막는다.")
+```
+
+낮은 케프렌시만 남기면 **포락**, 즉 성도 필터가 나온다.
+이것을 **리프터링(liftering)** 이라 한다.
+얼마나 남겨야 하는가? **정답을 알고 있으므로 정확히 잴 수 있다.**
+
+```{python}
+#| label: lifter
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import signal
+from src import audio
+
+
+def envelope_rmse(nm, f0, L):
+    """리프터 L 로 얻은 포락과 **참 필터 응답**의 RMSE (로그 단위)."""
+    y = vowel(nm, f0, 0.5)
+    seg = y[2000:2000 + NW]
+    env = (audio.cepstral_envelope(seg, L) if L else
+           np.log(np.abs(np.fft.rfft(seg*audio.window("hann", NW))) + 1e-12))
+    b, a = formant_coeffs(VOWELS[nm], BWS)
+    w, h = signal.freqz(b, a, worN=NW//2 + 1, fs=SR)
+    true = np.log(np.abs(h) + 1e-12)
+    m = (w > 100) & (w < 6000)
+    e = (env[m] - env[m].mean()) - (true[m] - true[m].mean())
+    return float(np.sqrt(np.mean(e**2)))
+
+
+LS = [4, 8, 13, 20, 30, 50, 80, 120, 200]
+print("리프터 길이별 포락 오차 (모음 5개 평균, 낮을수록 좋다)")
+print("  ※ 셀 뒤의 * 는 리프터가 **피치 주기를 넘었다**는 표시")
+print()
+print(f"{'F0':>6} {'주기(샘플)':>11} " +
+      " ".join(f"{'L=' + str(L):>8}" for L in LS) + f" {'리프터 없음':>12}")
+print("-" * 104)
+LIFT = {}
+for f0 in [100, 140, 200, 300]:
+    per = SR/f0
+    row = [float(np.mean([envelope_rmse(nm, f0, L) for nm in V])) for L in LS]
+    raw = float(np.mean([envelope_rmse(nm, f0, 0) for nm in V]))
+    LIFT[f0] = (per, row, raw)
+    cells = " ".join(f"{v:>7.3f}{'*' if L > per else ' '}"
+                     for L, v in zip(LS, row))
+    print(f"{f0:>6} {per:>11.0f} {cells} {raw:>12.3f}")
+print()
+print("**세 가지가 한꺼번에 읽힌다.**")
+print()
+print("① **리프터링이 없으면 쓸 수 없다.**")
+print(f"   오른쪽 끝 열이 {LIFT[100][2]:.2f}~{LIFT[300][2]:.2f} — "
+       "하모닉 잔결이 그대로 남는다.")
+print()
+print("② **리프터가 피치 주기를 넘으면 무너진다** (별표 붙은 칸).")
+for f0 in [100, 140, 300]:
+    per, row, _ = LIFT[f0]
+    over = [(L, v) for L, v in zip(LS, row) if L > per]
+    under = [(L, v) for L, v in zip(LS, row) if L <= per]
+    print(f"   F0={f0} (주기 {per:.0f}): "
+          f"주기 아래 최선 {min(v for _, v in under):.3f} → "
+          f"주기 위 최악 {max(v for _, v in over):.3f}")
+print("   당연하다 — 주기를 넘으면 **소스 성분을 포락에 끌어들이는 것**이다.")
+print()
+print("③ **상한이 피치 주기와 함께 낮아진다.**")
+print(f"{'F0':>6} {'주기(샘플)':>11} {'주기 이하 최선 L':>17} {'그 오차':>10} "
+      f"{'L=80 일 때':>12}")
+print("-" * 62)
+for f0 in [100, 140, 200, 300]:
+    per, row, _ = LIFT[f0]
+    under = [(L, v) for L, v in zip(LS, row) if L <= per]
+    bl, bv = min(under, key=lambda t: t[1])
+    v80 = row[LS.index(80)]
+    print(f"{f0:>6} {per:>11.0f} {bl:>17} {bv:>10.3f} {v80:>12.3f}")
+print()
+print("   같은 L=80 이 F0=140 에서는 최선(0.403)이고 "
+      "F0=300 에서는 붕괴(2.378)다.")
+print("   최선의 L 자체는 이 격자에서 단조롭지 않다 — "
+      "확실한 것은 **상한**이 주기라는 것이다.")
+print()
+print("**이것이 켑스트럼 포락 추정의 근본 한계다.**")
+for s in ["고음일수록 상한이 낮아 포락을 거칠게밖에 못 잰다 "
+          "(아동·고음 화자에서 문제가 된다)",
+          "포먼트가 가까이 붙어 있으면 하나로 뭉개진다",
+          "그래서 [8.3](03_classical_speech.qmd)의 **LPC** 가 병행해 쓰였다 — "
+          "성도를 전극 필터로 **모형화**해서 푸는 방식이다",
+          "신경망은 이 분리를 명시적으로 하지 않고 **필요하면 스스로 배운다**"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G8.2.4 — 계수 수와 정보량
+## MFCC: 멜 위에서 같은 일을 하기
 
-MFCC 계수를 몇 개까지 쓰면 스펙트럼 포락이 재구성되는가
+지금까지는 선형 주파수 스펙트럼에 켑스트럼을 걸었다.
+**멜 필터뱅크 출력에** 같은 일을 하면 MFCC가 된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 계수 개수 슬라이더
-:::
+$$\text{MFCC} = \mathrm{DCT}\!\left[\log\left(\text{Mel} \cdot |X|^2\right)\right]$$
+
+| 단계 | 하는 일 | 왜 |
+|------|--------|-----|
+| STFT | 시간 → 주파수 | 8.1 |
+| 멜 필터뱅크 | 주파수 축을 휘고 묶는다 | 청각 + 정보가 있는 곳 |
+| 로그 | 곱 → 합, 동적 범위 압축 | 8.0의 dB와 같은 이유 |
+| **DCT** | 낮은 계수 = 포락 | 켑스트럼과 같은 원리 |
+
+DCT는 실수 신호에 대한 푸리에 변환의 사촌이다.
+**낮은 계수가 완만한 포락**, 높은 계수가 잔결이다.
+
+관례적으로 **13개**를 쓴다. 왜 13개인가?
 
 ---
 
-## 핵심 용어
+## G8.2.4 — 계수 몇 개면 되는가
 
-| 용어 | 비고 |
-|------|------|
-| 멜 스케일 |  |
-| 필터뱅크 |  |
-| MFCC |  |
-| 켑스트럼 |  |
-| 로그멜 스펙트로그램 |  |
+```{python}
+#| label: ncoef
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import signal
+from scipy.fft import dct, idct
+from src import audio
+
+# 다양한 소리를 모아 통계를 낸다 — 무작위 모음 + 마찰음
+gm = np.random.default_rng(0)
+chunks = []
+for _ in range(60):
+    f1 = gm.uniform(250, 800)
+    f2 = gm.uniform(max(f1 + 200, 800), 2600)
+    f3 = gm.uniform(max(f2 + 300, 2200), 3400)
+    b, a = formant_coeffs([f1, f2, f3], BWS)
+    y = signal.lfilter(b, a, pulse_train(gm.uniform(90, 260), 0.25))
+    chunks.append(audio.log_mel(y/np.max(np.abs(y)), SR, N_FFT, HOP, fb=FB))
+for _ in range(20):
+    n = gm.normal(0, 1, int(0.25*SR))
+    b, a = signal.butter(4, gm.uniform(2500, 5000)/(SR/2), btype="high")
+    y = signal.lfilter(b, a, n)
+    chunks.append(audio.log_mel(y/np.max(np.abs(y)), SR, N_FFT, HOP, fb=FB))
+F = np.concatenate(chunks, axis=1)
+C = dct(F, type=2, axis=0, norm="ortho")
+
+print(f"프레임 {F.shape[1]:,}개 (무작위 모음 60 + 마찰음 20), 멜 대역 {N_MELS}개")
+print()
+print("앞 n개 계수만 남기고 로그멜을 복원해 본다")
+print()
+print(f"{'계수 수':>8} {'재구성 RMSE':>13} {'설명된 분산':>13}")
+print("-" * 38)
+NC = []
+for n in [1, 2, 4, 8, 13, 20, 26, 40]:
+    Cn = np.zeros_like(C)
+    Cn[:n] = C[:n]
+    rec = idct(Cn, type=2, axis=0, norm="ortho")
+    rmse = float(np.sqrt(np.mean((rec - F)**2)))
+    var = float(1 - np.sum((rec - F)**2)/np.sum((F - F.mean())**2))
+    NC.append((n, rmse, var))
+    print(f"{n:>8} {rmse:>13.4f} {var:>13.4f}")
+print()
+n13 = [r for r in NC if r[0] == 13][0]
+n26 = [r for r in NC if r[0] == 26][0]
+print(f"**13개로 분산의 {n13[2]:.1%} 를 설명한다.** "
+      f"26개로 늘려도 {n26[2]:.1%} 다.")
+print("  나머지는 하모닉 잔결 — **화자·음높이 정보이지 음소 정보가 아니다.**")
+print()
+print("**13이라는 숫자의 출처는 셋이 겹친 것이다.**")
+for s in ["위 표처럼 포락은 십여 개면 거의 재현된다",
+          "GMM-HMM 시절에는 **차원이 곧 비용**이었다 (8.3)",
+          "높은 계수는 F0 에 따라 흔들려 화자 간 일반화를 방해했다",
+          "관례적으로 계수 0(에너지)을 빼거나 따로 두고 1~12 를 쓴다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-**다음**: [8.3 고전 음성 인식](03_classical_speech.qmd) — HMM-GMM·음소·발음사전 — 딥러닝 이전의 30년
+## G8.2.5 — DCT는 무엇을 위해 있었는가
+
+여기가 이 장의 핵심 질문이다.
+멜 필터는 서로 **겹쳐 있으므로** 인접 대역의 값이 강하게 상관된다.
+
+```{python}
+#| label: decorrelate
+#| code-fold: false
+
+import numpy as np
+
+
+def offdiag_mean(M):
+    m = ~np.eye(M.shape[0], dtype=bool)
+    return float(np.abs(M[m]).mean())
+
+
+def eff_dim(M):
+    ev = np.linalg.eigvalsh(M)[::-1]
+    return float((ev.sum()**2)/(ev**2).sum())
+
+
+R_mel = np.corrcoef(F)
+R_mfcc = np.corrcoef(C[:13])
+adj = float(np.mean([abs(R_mel[i, i + 1]) for i in range(N_MELS - 1)]))
+
+print(f"{'표현':<20} {'차원':>6} {'비대각 |r| 평균':>16} {'실효 차원':>12}")
+print("-" * 58)
+print(f"{'로그 멜':<20} {N_MELS:>6} {offdiag_mean(R_mel):>16.3f} "
+      f"{eff_dim(R_mel):>12.2f}")
+print(f"{'MFCC (13)':<20} {13:>6} {offdiag_mean(R_mfcc):>16.3f} "
+      f"{eff_dim(R_mfcc):>12.2f}")
+print()
+print(f"**인접한 멜 대역끼리의 상관은 {adj:.3f} 다.** "
+      "삼각 필터가 겹치니 당연하다.")
+print(f"  DCT 를 걸면 비대각 상관이 {offdiag_mean(R_mel):.3f} → "
+      f"{offdiag_mean(R_mfcc):.3f} 로 떨어진다.")
+print()
+print("**그래서 이것이 왜 중요했는가**")
+print()
+print(f"{'시대':<16} {'모델':<26} {'상관된 입력이 문제인가'}")
+print("-" * 76)
+for a, b, c in [
+    ("1980~2010", "GMM-HMM, **대각 공분산**", "**치명적** — 상관을 표현할 수 없다"),
+    ("~2015", "DNN-HMM", "덜 문제. 그래도 관례로 MFCC 사용"),
+    ("2016~", "CNN / Transformer", "**문제 아님** — 상관을 스스로 쓴다"),
+]:
+    print(f"{a:<16} {b:<26} {c}")
+print()
+print("**DCT 는 대각 공분산 가정을 살리기 위한 장치였다.**")
+print("  GMM 이 각 차원을 독립으로 다뤄야 했으므로, 입력을 미리 탈상관시켜 준 것이다.")
+print("  그 제약이 사라지자 DCT 도 사라졌다.")
+print()
+print("**그리고 DCT 는 손해도 끼친다.**")
+v13 = [r for r in NC if r[0] == 13][0]
+for s in [f"잘라내는 순간 **정보를 버린다** "
+          f"(위 표: 13개면 분산의 {1-v13[2]:.1%} 손실)",
+          "**국소성을 깬다** — 멜 대역 하나의 변화가 모든 계수에 퍼진다",
+          "  CNN 은 주파수 축의 국소 패턴을 보는데, DCT 후에는 그 축이 없다",
+          "잡음에 강해지지도 않는다 — 잡음도 함께 변환될 뿐이다"]:
+    print(f"  · {s}")
+print()
+print("**현재의 표준**")
+print(f"{'입력':<28} {'쓰는 곳'}")
+print("-" * 66)
+for a, b in [("로그 멜 스펙트로그램", "**대부분의 ASR·TTS** (Whisper, Tacotron 계열)"),
+             ("원시 파형", "wav2vec 2.0, SincNet — 프론트엔드까지 학습 (8.5)"),
+             ("MFCC", "가벼운 임베디드, 화자 인식 일부, 고전 파이프라인"),
+             ("학습형 필터뱅크", "LEAF 등 — 멜을 초기값으로 두고 미세조정")]:
+    print(f"{a:<28} {b}")
+print()
+print("**로그멜이 남은 이유는 '충분히 좋고 충분히 싸서'다.**")
+print("  원시 파형 학습이 더 나은 경우가 있지만, 데이터와 연산이 많이 필요하다.")
+print("  로그멜은 **공짜로 얻는 좋은 귀납 편향**이다.")
+```
+
+```{python}
+#| label: fig-mfcc
+#| fig-cap: "13개 계수면 포락이 거의 재현되고, DCT는 멜 대역의 강한 상관을 풀어 줍니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import audio, viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("계수 수와 로그멜 재구성",
+                                    "상관 행렬 — 로그멜 40대역"))
+fig.add_trace(go.Scatter(x=[r[0] for r in NC], y=[r[2] for r in NC],
+                         mode="lines+markers", name="설명된 분산",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_vline(x=13, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              annotation_text="관례값 13", row=1, col=1)
+fig.update_xaxes(title_text="남긴 DCT 계수 수", row=1, col=1)
+fig.update_yaxes(title_text="설명된 분산", range=[0, 1.05], row=1, col=1)
+
+fig.add_trace(go.Heatmap(z=R_mel, colorscale="RdBu", zmid=0, zmin=-1, zmax=1,
+                         colorbar=dict(len=0.85, x=1.005, title="r")),
+              row=1, col=2)
+fig.update_xaxes(title_text="멜 대역", row=1, col=2)
+fig.update_yaxes(title_text="멜 대역", row=1, col=2)
+viz.fig_defaults(fig, height=420, title="")
+fig.update_layout(margin=dict(l=60, r=70, t=60, b=60))
+fig.show()
+```
+
+---
+
+## G8.2.6 — 정규화: 채널을 지우기
+
+마이크가 바뀌면 스펙트럼에 **필터 하나가 곱해진다.**
+로그 영역에서는 그것이 **덧셈**이고, 시간에 대해 거의 일정하다.
+
+$$\log|X_\text{ch}(f,t)| = \log|X(f,t)| + \underbrace{\log|C(f)|}_{\text{시간에 무관}}$$
+
+시간 평균을 빼면 사라진다. 이것이 **CMN(켑스트럼 평균 정규화)** 이다.
+
+```{python}
+#| label: cmvn
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import signal
+from scipy.fft import dct
+from src import audio
+
+
+def utterance(seed=3, n_seg=8, f0=140):
+    """여러 모음이 이어진 '발화'. 정상 신호 하나로는 CMN 을 잴 수 없다."""
+    g = np.random.default_rng(seed)
+    segs, labels = [], []
+    for _ in range(n_seg):
+        nm = V[int(g.integers(len(V)))]
+        segs.append(vowel(nm, f0, 0.25))
+        labels.append(nm)
+    return np.concatenate(segs), labels
+
+
+u, labs = utterance()
+ch_b, ch_a = signal.butter(4, [300/(SR/2), 3400/(SR/2)], btype="band")
+u_ch = signal.lfilter(ch_b, ch_a, u)
+u_ch /= np.max(np.abs(u_ch))
+
+
+def mf(x):
+    return dct(audio.log_mel(x, SR, N_FFT, HOP, fb=FB), type=2, axis=0,
+               norm="ortho")[:13]
+
+
+M_clean, M_ch = mf(u), mf(u_ch)
+print(f"발화: 모음 {len(labs)}개 연결 ({' '.join(labs)}), "
+      f"프레임 {M_clean.shape[1]}개")
+print("채널: 300~3400 Hz 대역통과 (전화 회선 흉내)")
+print()
+print(f"{'조건':<24} {'깨끗한 것과의 RMSE':>22}")
+print("-" * 50)
+r0 = float(np.sqrt(np.mean((M_clean - M_ch)**2)))
+r1 = float(np.sqrt(np.mean((audio.cmvn(M_clean) - audio.cmvn(M_ch))**2)))
+print(f"{'그대로':<24} {r0:>22.4f}")
+print(f"{'CMN 적용':<24} {r1:>22.4f}")
+print()
+print(f"**채널이 만든 왜곡이 {r0/r1:.0f}분의 1로 줄었다.**")
+print()
+d = M_ch - M_clean
+ratio = float(np.mean(d.std(1)/(np.abs(d.mean(1)) + 1e-9)))
+print(f"완전히 지워지지는 않는 이유: 채널 효과가 정확히 상수는 아니다.")
+print(f"  프레임별 차이의 (표준편차 / 평균 크기) = {ratio:.2f}")
+print("  0 이면 순수한 상수 이동이고, CMN 으로 완전히 지워진다.")
+print()
+print("**중요한 것은 음소 정보가 살아남는가다.**")
+seg_len = M_clean.shape[1]//len(labs)
+print()
+print(f"{'조건':<16} {'같은 모음 거리':>15} {'다른 모음 거리':>15} {'비':>8}")
+print("-" * 58)
+for tag, Mx in [("CMN 없음", M_ch), ("CMN 적용", audio.cmvn(M_ch))]:
+    within, between = [], []
+    for i in range(len(labs)):
+        a = Mx[:, i*seg_len + 3:(i + 1)*seg_len - 3].mean(1)
+        for j in range(len(labs)):
+            b = Mx[:, j*seg_len + 3:(j + 1)*seg_len - 3].mean(1)
+            dd = float(np.sqrt(np.mean((a - b)**2)))
+            (within if labs[i] == labs[j] else between).append(dd)
+    print(f"{tag:<16} {np.mean(within):>15.3f} {np.mean(between):>15.3f} "
+          f"{np.mean(between)/max(np.mean(within), 1e-9):>8.1f}")
+print()
+print("**변별비가 그대로다.** CMN 은 발화 전체에 같은 상수를 빼므로,")
+print("  발화 **안에서의** 차이는 한 치도 건드리지 않는다.")
+print("  잃는 것은 '이 발화 전체가 어떤 톤인가' 뿐이다 — 채널이 대부분 거기 있다.")
+print()
+print(f"{'정규화':<20} {'무엇을 지우는가':<28} {'주의'}")
+print("-" * 78)
+for a, b, c in [
+    ("CMN", "채널·마이크 (덧셈 성분)", "발화가 짧으면 음소 정보까지 지운다"),
+    ("CVN (분산까지)", "이득·다이내믹 차이", "짧은 발화에서 불안정"),
+    ("PCEN", "느린 배경 변화 (곱셈)", "원거리 마이크에서 효과적"),
+    ("SpecAugment", "(정규화 아님) 증강", "시간·주파수 마스킹 (8.5)"),
+]:
+    print(f"{a:<20} {b:<28} {c}")
+print()
+print("**실무 함정**: 온라인 인식에서는 미래 프레임을 못 본다.")
+print("  전체 평균 대신 **누적 평균**이나 이동 평균을 쓰고,")
+print("  그러면 발화 앞부분의 정규화가 부정확해진다 — 스트리밍의 고전적 문제다.")
+```
+
+---
+
+## 델타 특성
+
+MFCC는 한 프레임의 스냅숏이다. **변화**는 담기지 않는다.
+그래서 시간 미분을 근사해 함께 넣는다.
+
+$$\Delta c_t = \frac{\sum_{\tau=1}^{W} \tau\,(c_{t+\tau} - c_{t-\tau})}
+{2\sum_{\tau=1}^{W}\tau^2}$$
+
+```{python}
+#| label: deltas
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import audio
+
+D1 = audio.deltas(M_clean)
+D2 = audio.deltas(D1)
+print(f"MFCC {M_clean.shape[0]} + Δ {D1.shape[0]} + ΔΔ {D2.shape[0]} "
+      f"= {M_clean.shape[0]*3} 차원 — 고전 ASR 의 표준 입력")
+print()
+print(f"{'특성':<12} {'프레임 간 자기상관(lag 1)':>26} {'해석'}")
+print("-" * 66)
+for nm, X in [("MFCC", M_clean), ("Δ", D1), ("ΔΔ", D2)]:
+    ac = float(np.mean([np.corrcoef(X[i, :-1], X[i, 1:])[0, 1]
+                        for i in range(X.shape[0])]))
+    note = ("느리게 변한다 (정적 정보)" if ac > 0.9 else
+            "빠르게 변한다 (전이 정보)")
+    print(f"{nm:<12} {ac:>26.3f}  {note}")
+print()
+print("**Δ 는 MFCC 보다 훨씬 빨리 변한다** — 다른 시간 스케일의 정보다.")
+print()
+print("**지금은 왜 잘 안 쓰는가**")
+for s in ["Δ 는 **고정 커널 1차원 합성곱**이다 — CNN 이 학습으로 대신한다",
+          "Transformer 는 어텐션으로 임의의 시간 관계를 본다",
+          "HMM 은 프레임을 조건부 독립으로 가정했기 때문에 (8.3)",
+          "  **문맥을 특성에 직접 넣어 주는 것 외에 방법이 없었다**",
+          "그 가정이 사라지자 Δ 도 필요 없어졌다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 요약
+
+| 개념 | 수식·수치 | 핵심 |
+|------|----------|------|
+| 멜 스케일 | $2595\log_{10}(1+f/700)$ | 저주파에 해상도를 몰아준다 |
+| 필터뱅크 구조 | 대역폭 31 Hz → 1,000 Hz | 40개 중 **14개가 1 kHz 아래** |
+| 왜 옳은가 | 음소 정보는 대부분 3 kHz 아래 | 멜은 40개 중 **27개(68%)** 를 그곳에 |
+| **멜의 이득** | 차원 6.4배 ↓, 변별 거리 **1.53배 ↑** | 압축이 아니라 **선택** |
+| 무엇을 버리나 | 고주파의 하모닉 잔결 | **화자가 바뀌면 달라지는** 성분 |
+| 켑스트럼 | $\mathcal{F}^{-1}\{\log\|X\|\}$ | 곱 → 로그 → 합 → 분리 |
+| 피치 추정 | 봉우리 위치 $=1/f_0$ | 오차 2 Hz 이내. 옥타브 오류는 **여기선 안 나옴** |
+| **리프터 상한** | $L <$ 피치 주기(샘플) | 넘으면 소스가 포락에 섞인다 |
+| 고음의 대가 | F0=300이면 상한 53샘플 | L=80이 F0=140엔 최선, F0=300엔 붕괴 |
+| MFCC | $\mathrm{DCT}[\log(\text{Mel}\cdot\|X\|^2)]$ | 멜 위에서 하는 켑스트럼 |
+| 계수 13개 | 분산의 **95.4%** | 26개로 늘려도 99.0% — 나머지는 잔결 |
+| **DCT의 목적** | 비대각 \|r\| 0.706 → **0.240** | **대각 공분산 GMM을 위한 장치** |
+| 왜 밀려났나 | CNN·Transformer는 상관을 쓴다 | 그리고 DCT는 **국소성을 깬다** |
+| 현재 표준 | 로그 멜 스펙트로그램 | 공짜로 얻는 좋은 귀납 편향 |
+| CMN | 로그 영역의 상수 이동 제거 | 채널 왜곡 **8.3 → 1.04 (8배)** |
+| CMN이 안전한 이유 | 발화 내 변별비 10.8 그대로 | 발화 전체에 같은 상수를 뺀다 |
+| 델타 | 고정 커널 1차원 합성곱 | HMM의 조건부 독립을 메우던 장치 |
+
+특성은 만들었다. 다음 장은 이 특성으로 **30년 동안 음성을 인식하던 방법**을 본다.
+
+---
+
+**다음**: [8.3 고전 음성 인식](03_classical_speech.qmd) — HMM·GMM·발음사전
 
 **이전**: [8.1 푸리에 변환과 스펙트로그램](01_fourier_stft.qmd)

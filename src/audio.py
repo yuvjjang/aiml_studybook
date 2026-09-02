@@ -120,3 +120,91 @@ def quantize(x, bits):
     x_norm = np.clip(x, -1.0, 1.0)
     q = np.round((x_norm + 1) / 2 * (levels - 1))
     return q / (levels - 1) * 2 - 1
+
+
+# ══════════════════════════════════════════════════════════════════
+# 멜 스케일과 켑스트럼 특성 (8.2 이후)
+# ══════════════════════════════════════════════════════════════════
+
+def hz_to_mel(f):
+    """Hz -> mel (O'Shaughnessy 근사)."""
+    return 2595.0 * np.log10(1.0 + np.asarray(f, float) / 700.0)
+
+
+def mel_to_hz(m):
+    """mel -> Hz."""
+    return 700.0 * (10.0 ** (np.asarray(m, float) / 2595.0) - 1.0)
+
+
+def mel_filterbank(n_filters=40, n_fft=512, sr=16000, fmin=0.0, fmax=None):
+    """삼각 멜 필터뱅크.
+
+    Returns
+    -------
+    fb      : (n_filters, n_fft//2+1) 필터 행렬
+    centers : (n_filters,) 각 필터의 중심 주파수 Hz
+    freqs   : (n_fft//2+1,) FFT 빈의 주파수 Hz
+    """
+    fmax = fmax if fmax else sr / 2
+    mpts = np.linspace(hz_to_mel(fmin), hz_to_mel(fmax), n_filters + 2)
+    hz = mel_to_hz(mpts)
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sr)
+    fb = np.zeros((n_filters, len(freqs)))
+    for i in range(n_filters):
+        lo, ce, hi = hz[i], hz[i + 1], hz[i + 2]
+        left = (freqs - lo) / max(ce - lo, 1e-9)
+        right = (hi - freqs) / max(hi - ce, 1e-9)
+        fb[i] = np.clip(np.minimum(left, right), 0, None)
+    return fb, hz[1:-1], freqs
+
+
+def log_mel(x, sr=16000, n_fft=512, hop=160, n_mels=40, fb=None):
+    """로그 멜 스펙트로그램 (n_mels, n_frames)."""
+    if fb is None:
+        fb, _, _ = mel_filterbank(n_mels, n_fft, sr)
+    S = np.abs(stft(x, n_fft, hop)) ** 2
+    return np.log(fb @ S + 1e-10)
+
+
+def mfcc(x, n_mfcc=13, sr=16000, n_fft=512, hop=160, n_mels=40, fb=None):
+    """로그 멜에 DCT-II 를 걸어 앞 n_mfcc 개를 취한다."""
+    from scipy.fft import dct
+    lm = log_mel(x, sr, n_fft, hop, n_mels, fb)
+    return dct(lm, type=2, axis=0, norm="ortho")[:n_mfcc]
+
+
+def cepstrum(x, window_name="hann"):
+    """실수 켑스트럼 — 로그 크기 스펙트럼의 역변환."""
+    seg = x * window(window_name, len(x))
+    return np.fft.irfft(np.log(np.abs(np.fft.rfft(seg)) + 1e-12))
+
+
+def cepstral_envelope(x, lifter=30, window_name="hann"):
+    """낮은 케프렌시만 남겨 얻은 로그 스펙트럼 포락.
+
+    lifter 는 **피치 주기(샘플)보다 작아야** 한다 — 넘으면 하모닉 구조가
+    포락에 섞여 들어온다 (8.2에서 측정).
+    """
+    c = cepstrum(x, window_name)
+    c2 = c.copy()
+    c2[lifter:-lifter] = 0
+    return np.fft.rfft(c2).real
+
+
+def cmvn(F, var_norm=False):
+    """켑스트럼 평균(·분산) 정규화. F: (n_coef, n_frames)"""
+    out = F - F.mean(axis=1, keepdims=True)
+    if var_norm:
+        out = out / (F.std(axis=1, keepdims=True) + 1e-9)
+    return out
+
+
+def deltas(F, width=2):
+    """델타 특성 — 회귀식 기반 시간 미분. F: (n_coef, n_frames)"""
+    d = np.zeros_like(F)
+    denom = 2 * sum(t * t for t in range(1, width + 1))
+    P = np.pad(F, ((0, 0), (width, width)), mode="edge")
+    for t in range(1, width + 1):
+        d += t * (P[:, width + t: P.shape[1] - width + t]
+                  - P[:, width - t: P.shape[1] - width - t])
+    return d / denom
