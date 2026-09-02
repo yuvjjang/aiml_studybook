@@ -4,90 +4,632 @@ subtitle: "few-shot·CoT·구조화 프롬프트 — 가중치를 건드리지 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+GPT-3 논문의 제목은 "Language Models are Few-Shot Learners"였다.
+그 주장의 핵심은 이것이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> 프롬프트에 예시 몇 개를 넣으면 **가중치를 바꾸지 않고** 과제가 바뀐다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이것은 예상된 능력이 아니었다. 사전학습 목표는 다음 토큰 예측뿐이었고,
+"예시를 보고 규칙을 추론하라"고 가르친 적이 없다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 장은 두 가지를 한다.
+
+1. **ICL을 계산 가능한 모델로 세워** 그 곡선이 어떤 모양인지 본다
+2. 프롬프팅의 **취약성**을 정량화한다 — 순서, 예시 선택, 자기일관성
+
+실제 LLM을 돌릴 수는 없으니, **계산 가능한 대리 모델**로 메커니즘을 본다.
+그 대리 모델이 무엇을 설명하고 무엇을 설명하지 못하는지도 함께 밝힌다.
+
+---
+
+## G7.8.1 — ICL을 베이즈 갱신으로 보기
+
+가장 잘 알려진 설명은 **암묵적 베이즈 추론**이다 (Xie et al. 2022).
+
+> 사전학습 말뭉치에는 여러 "과제"의 데이터가 섞여 있다.
+> 모델은 문맥을 보고 **어느 과제인지 추론**한 뒤 그에 맞게 예측한다.
+> 예시는 새 능력을 가르치는 것이 아니라 **과제를 특정**한다.
+
+이 설명이 맞다면 ICL 곡선은 **사후분포가 좁아지는 속도**를 따라야 한다.
+직접 계산해 본다.
+
+```{python}
+#| label: icl-bayes
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+NT, NX, NY = 20, 12, 4        # 과제 20종, 입력 12종, 라벨 4종
+NOISE = 0.10                  # 라벨 잡음
+rg = np.random.default_rng(1)
+TASKS = rg.integers(0, NY, (NT, NX))     # 각 과제 = 입력→라벨 사상
+
+
+def predict(xs, ys, xq, recency=None):
+    """예시 (xs, ys) 로 과제 사후분포를 구하고 xq 의 라벨을 예측한다."""
+    k = len(xs)
+    w = np.ones(k) if recency is None else recency**np.arange(k-1, -1, -1)
+    logp = np.zeros(NT)
+    for i in range(k):
+        match = TASKS[:, xs[i]] == ys[i]
+        logp += w[i]*np.log(np.where(match, 1-NOISE+NOISE/NY, NOISE/NY))
+    post = np.exp(logp - logp.max())
+    post /= post.sum()
+    scores = np.array([post[TASKS[:, xq] == c].sum() for c in range(NY)])
+    return int(scores.argmax()), post
+
+
+def icl_accuracy(k, n_trial=4000, seed=0, recency=None):
+    g = np.random.default_rng(seed)
+    ok = 0
+    for _ in range(n_trial):
+        t = g.integers(NT)
+        xs = g.integers(0, NX, k+1)
+        ys = TASKS[t, xs].copy()
+        flip = g.random(k+1) < NOISE
+        ys[flip] = g.integers(0, NY, flip.sum())
+        p, _ = predict(xs[:k], ys[:k], xs[k], recency)
+        ok += (p == TASKS[t, xs[k]])
+    return ok/n_trial
+
+
+print(f"설정: 과제 {NT}종, 입력 {NX}종, 라벨 {NY}종, 라벨 잡음 {NOISE:.0%}")
+print("모델은 과제 목록을 '알고' 있고(=사전학습), 어느 과제인지만 추론한다")
+print()
+print(f"{'예시 수 k':>10} {'정확도':>10} {'무작위 대비':>12} {'사후분포 엔트로피':>18}")
+print("-" * 56)
+ICL = []
+gg = np.random.default_rng(5)
+for k in [0, 1, 2, 4, 8, 16, 32]:
+    a = icl_accuracy(k)
+    # 사후분포가 얼마나 좁아졌는지
+    ents = []
+    for _ in range(300):
+        t = gg.integers(NT)
+        xs = gg.integers(0, NX, max(k, 1))
+        ys = TASKS[t, xs]
+        _, post = predict(xs[:k], ys[:k], 0)
+        ents.append(-(post*np.log2(np.maximum(post, 1e-300))).sum())
+    ICL.append((k, a, float(np.mean(ents))))
+    print(f"{k:>10} {a:>10.4f} {a/(1/NY):>11.2f}x {np.mean(ents):>18.4f}")
+print("-" * 56)
+print(f"{'상한':>10} {1.0:>10.4f} {NY:>11.2f}x {0.0:>18.4f}")
+print()
+print("**정확도가 오르는 속도와 사후분포가 좁아지는 속도가 함께 간다.**")
+print(f"  k=0 에서 엔트로피 {ICL[0][2]:.2f} bits (과제 {NT}종 = "
+      f"{np.log2(NT):.2f} bits 의 불확실성)")
+print(f"  k=8 에서 {ICL[4][2]:.3f} bits — 과제가 거의 특정되었다")
+print()
+print("**곡선이 포화한다.** 과제를 알아낸 뒤에는 예시를 더 줘도 소용없다.")
+print("실제 few-shot 곡선이 보통 5~10개에서 포화하는 것과 같은 모양이다.")
+```
+
+::: {.callout-warning}
+### 이 모델이 설명하지 못하는 것
+
+베이즈 모델은 ICL 곡선의 **모양**을 잘 설명한다. 그런데 실제 LLM에서 관측된
+다음 현상들은 설명하지 못한다.
+
+- **라벨을 무작위로 바꿔도 성능이 크게 안 떨어진다** (Min et al. 2022)
+  → 베이즈 모델이라면 잘못된 라벨이 사후분포를 망쳐야 한다
+- **형식만 맞으면 된다** — 입력-라벨 대응보다 "예시가 있다"는 사실이 더 중요할 때가 있다
+- **모델이 클수록 라벨 정보를 실제로 쓴다** (Wei et al. 2023) — 크기에 따라 달라진다
+
+즉 ICL은 **하나의 메커니즘이 아니다.** 과제 인식(task recognition)과
+과제 학습(task learning)이 섞여 있고, 비중은 모델 크기와 과제에 따라 다르다.
+
+다른 유력 가설도 있다:
+
+- **암묵적 경사하강** — 어텐션이 문맥 예시로 선형회귀를 수행한다는 구성적 증명 (von Oswald 2023)
+- **인덕션 헤드** — `[A][B]...[A]` 패턴을 보고 `[B]`를 복사하는 회로 (Olsson 2022).
+  이 회로가 형성되는 시점과 ICL 능력이 나타나는 시점이 일치한다
 :::
 
-문맥 내 학습은 사전학습에서 창발한 능력이며, 실무에서 가장 빠르고 저렴한 성능 개선 수단이다.
+---
+
+## G7.8.2 — 예시 순서가 왜 답을 바꾸는가
+
+베이즈 학습자는 **교환가능(exchangeable)** 하다 — 예시 순서가 결과를 바꾸지 않는다.
+그런데 실제 LLM은 순서에 민감하다. 왜인가.
+
+가설: **최근 토큰에 더 큰 가중치가 실린다.** 그 효과를 모델에 넣어 본다.
+
+```{python}
+#| label: order
+#| code-fold: false
+
+import numpy as np
+
+print("같은 예시 집합을 12가지 순서로 섞어 본다 (예시 6개, 문제 800개)")
+print()
+print(f"{'최근성 가중 γ':>16} {'평균 정확도':>12} {'문제별 표준편차':>16} "
+      f"{'순서에 따라 답이 바뀐 비율':>26}")
+print("-" * 76)
+ORDER = []
+for rec in [None, 0.95, 0.85, 0.7, 0.5]:
+    g = np.random.default_rng(7)
+    accs, changed, n = [], 0, 800
+    for _ in range(n):
+        t = g.integers(NT)
+        k = 6
+        xs = g.integers(0, NX, k)
+        ys = TASKS[t, xs].copy()
+        fl = g.random(k) < NOISE
+        ys[fl] = g.integers(0, NY, fl.sum())
+        xq = g.integers(NX)
+        gold = TASKS[t, xq]
+        preds = []
+        for _ in range(12):
+            pm = g.permutation(k)
+            preds.append(predict(xs[pm], ys[pm], xq, rec)[0])
+        preds = np.array(preds)
+        accs.append((preds == gold).mean())
+        changed += len(set(preds.tolist())) > 1
+    lbl = "없음 (교환가능)" if rec is None else f"γ = {rec}"
+    ORDER.append((lbl, float(np.mean(accs)), float(np.std(accs)),
+                  changed/n))
+    print(f"{lbl:>16} {np.mean(accs):>12.4f} {np.std(accs):>16.4f} "
+          f"{changed/n:>25.1%}")
+print()
+print("**교환가능한 학습자는 순서에 전혀 흔들리지 않는다 (0.0%).**")
+print(f"**최근성 가중을 넣으면 흔들린다** — γ=0.5 에서 "
+      f"{ORDER[-1][3]:.1%} 의 문제에서 답이 바뀐다.")
+print(f"평균 정확도도 {ORDER[0][1]:.4f} → {ORDER[-1][1]:.4f} 로 떨어진다.")
+print()
+print("**이것이 실제로 보고된 현상의 한 가지 설명이다.**")
+print("  Lu et al.(2022): 같은 예시 집합의 순열만 바꿔도")
+print("  일부 과제에서 SOTA 부터 무작위 추측까지 흔들린다고 보고했다.")
+print()
+print("**다만 최근성만으로 전부 설명되지는 않는다.** 다른 요인들:")
+for s in ["**다수 라벨 편향** — 예시에 많이 나온 라벨을 더 예측한다",
+          "**최빈 라벨 편향** — 마지막 예시의 라벨을 따라가는 경향",
+          "표면 형식 — 구분자·줄바꿈·공백이 결과를 바꾼다",
+          "위치 인코딩의 특성 — 긴 문맥에서 중간이 묻힌다 (lost in the middle)"]:
+    print(f"  · {s}")
+print()
+print("**실무 대응:**")
+for s in ["예시 순서를 **여러 개 시도해 보고** 검증셋으로 고른다",
+          "라벨 분포를 균형 있게 배치한다",
+          "**보정(calibration)** — 빈 입력의 예측 분포로 편향을 빼준다 (Zhao 2021)",
+          "결정적 순서를 고정한다 (재현성)",
+          "**프롬프트도 하이퍼파라미터다** — 튜닝하고 기록해야 한다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-icl
+#| fig-cap: "예시를 늘리면 사후분포가 좁아지고 정확도가 포화합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
+                    specs=[[{"secondary_y": True}, {"type": "xy"}]],
+                    subplot_titles=("예시 수와 정확도 / 사후분포 엔트로피",
+                                    "순서 민감도"))
+ks = [c[0] for c in ICL]
+fig.add_trace(go.Scatter(x=ks, y=[c[1] for c in ICL], mode="lines+markers",
+                         name="정확도", line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.add_trace(go.Scatter(x=ks, y=[c[2] for c in ICL], mode="lines+markers",
+                         name="사후분포 엔트로피 (bits)",
+                         line=dict(color=viz.WARM, width=2.5, dash="dash"),
+                         marker=dict(size=9)), row=1, col=1, secondary_y=True)
+fig.add_hline(y=1/NY, line=dict(color=viz.YELLOW, dash="dot"),
+              annotation_text="무작위 추측", row=1, col=1)
+fig.update_xaxes(title_text="예시 수 k", row=1, col=1)
+fig.update_yaxes(title_text="정확도", row=1, col=1)
+fig.update_yaxes(title_text="엔트로피 (bits)", row=1, col=1, secondary_y=True)
+
+fig.add_trace(go.Bar(x=[o[0] for o in ORDER], y=[o[3] for o in ORDER],
+                     showlegend=False, marker_color=viz.PINK,
+                     text=[f"{o[3]:.1%}" for o in ORDER],
+                     textposition="outside"), row=1, col=2)
+fig.update_yaxes(title_text="순서에 따라 답이 바뀐 비율",
+                 tickformat=".0%", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G7.8.3 — 사고 연쇄와 자기일관성
 
-- 문맥 내 학습(ICL)의 발견과 few-shot 프롬프팅
-- ICL이 왜 작동하는가에 대한 가설들(암묵적 경사하강, 과제 인식, induction head)
-- 예시 선택·순서·형식의 민감성
-- 사고 연쇄(Chain-of-Thought)와 추론 유도
-- zero-shot CoT, self-consistency, least-to-most
-- ReAct: 추론과 도구 사용의 교차
-- 역할·구조·구획화 프롬프트 설계 원칙
-- 출력 형식 강제: JSON 스키마, 제약 디코딩, 문법 기반 샘플링
-- 프롬프트 자동 최적화(APE, DSPy 류)
-- 프롬프트 주입과 신뢰 경계 (안전 장에서 심화)
-- 프롬프팅 실험을 제대로 평가하는 법
+**Chain-of-Thought**: "단계별로 생각해 보자"를 붙이면 추론 과제 성능이 오른다.
+
+왜 작동하는가에 대한 설명은 두 층이다.
+
+```{python}
+#| label: cot
+#| code-fold: false
+
+print("CoT 가 작동하는 이유 — 두 가지 층위")
+print()
+print("**① 계산량 층위**")
+print("  Transformer 한 번의 순전파는 **고정된 깊이**의 계산이다.")
+print("  깊이 L 인 모델은 L 단계 이상의 순차 계산을 한 번에 할 수 없다.")
+print("  **중간 결과를 토큰으로 뱉으면 그것이 다음 순전파의 입력이 된다** —")
+print("  즉 CoT 는 시퀀스 길이를 계산 깊이로 바꾸는 장치다.")
+print()
+print("  이론적으로도 뒷받침된다: Merrill & Sabharwal(2023) 등은")
+print("  중간 단계를 허용하면 Transformer 의 표현 가능한 계산 종류가 넓어짐을 보였다.")
+print()
+print("**② 분포 층위**")
+print("  사전학습 말뭉치에서 '풀이 과정이 있는 텍스트' 는")
+print("  '답만 있는 텍스트' 보다 정답률이 높다.")
+print("  풀이를 유도하면 **그 더 신뢰할 만한 분포**로 옮겨간다.")
+print()
+print("토큰 비용")
+print()
+print(f"{'방식':<26} {'출력 토큰':>10} {'상대 비용':>10} {'지연':>10}")
+print("-" * 60)
+for nm, tok in [("답만", 5), ("간단한 CoT", 80), ("상세한 CoT", 300),
+                ("self-consistency ×8", 300*8), ("긴 추론 (7.12)", 3000)]:
+    print(f"{nm:<26} {tok:>10,} {tok/5:>9.0f}x {tok/5:>9.0f}x")
+print()
+print("**CoT 는 공짜가 아니다.** 출력 토큰이 비용이자 지연이다.")
+print("  간단한 과제에 붙이면 손해다 — 정확도는 그대로인데 비용만 오른다.")
+print("  **어떤 과제에 붙일지가 설계 결정이다.**")
+```
+
+```{python}
+#| label: self-consistency
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+print("self-consistency — 추론 경로 n개의 다수결")
+print()
+print("각 경로가 **독립적으로** 확률 p 로 맞는다고 하자.")
+print("정답이 최다득표를 받을 확률은 이항분포로 정확히 계산된다.")
+print()
+NS = [1, 3, 5, 11, 21, 41]
+print(f"{'p (경로 1개)':>13} " + " ".join(f"{'n='+str(n):>9}" for n in NS))
+print("-" * 70)
+SC = []
+for p in [0.3, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 0.9]:
+    row = [float(1 - stats.binom.cdf((n-1)//2, n, p)) for n in NS]
+    SC.append((p, row))
+    mark = "  ← 고정점" if p == 0.5 else ""
+    print(f"{p:>13.2f} " + " ".join(f"{a:>9.4f}" for a in row) + mark)
+print()
+print("**p > 0.5 이면 다수결이 정확도를 올린다.**")
+p7 = [s for s in SC if s[0] == 0.7][0]
+print(f"  p=0.7: n=1 에서 {p7[1][0]:.3f} → n=41 에서 {p7[1][-1]:.3f}")
+print()
+print("**p < 0.5 이면 다수결이 정확도를 내린다.**")
+p3 = [s for s in SC if s[0] == 0.3][0]
+print(f"  p=0.3: n=1 에서 {p3[1][0]:.3f} → n=41 에서 {p3[1][-1]:.4f}")
+print("  **틀린 답에 수렴한다.** 샘플을 늘릴수록 확실하게 틀린다.")
+print()
+print("**그런데 여기에 중요한 단서가 있다.**")
+print("위 계산은 '오답이 하나뿐'이라고 가정했다. 실제로는 여러 갈래로 틀린다.")
+```
+
+```{python}
+#| label: dispersion
+#| code-fold: false
+
+import numpy as np
+
+N_PATH = 21
+KW = [1, 2, 4, 10]
+rng_d = np.random.default_rng(0)
+
+print(f"오답이 여러 종류로 흩어지면? (경로 {N_PATH}개, 몬테카를로 20,000회)")
+print()
+print(f"{'p (정답 확률)':>14} " + " ".join(f"{'오답 '+str(k)+'종':>12}"
+                                       for k in KW))
+print("-" * 66)
+DISP = []
+for p in [0.2, 0.3, 0.4, 0.5]:
+    row = []
+    for k in KW:
+        probs = np.array([p] + [(1-p)/k]*k)
+        draws = rng_d.choice(k+1, size=(20000, N_PATH), p=probs)
+        cnt = np.apply_along_axis(
+            lambda r: np.bincount(r, minlength=k+1), 1, draws)
+        row.append(float((cnt.argmax(1) == 0).mean()))
+    DISP.append((p, row))
+    print(f"{p:>14.2f} " + " ".join(f"{v:>12.4f}" for v in row))
+print()
+d3 = [d for d in DISP if d[0] == 0.3][0]
+print(f"**p=0.3 (단일 경로로는 30%밖에 못 맞히는 과제)에서도**")
+print(f"  오답이 1종이면 다수결 정확도 {d3[1][0]:.3f} — **크게 나빠진다**")
+print(f"  오답이 10종이면 {d3[1][-1]:.3f} — **3배로 좋아진다**")
+print()
+print("**이것이 self-consistency 가 실제로 작동하는 이유다.**")
+print("  추론 과제에서 정답은 하나인데 **틀리는 방식은 여러 가지다.**")
+print("  오답이 흩어지면 정답이 상대 다수가 되기 쉽다.")
+print()
+print("**그래서 self-consistency 가 잘 듣는 조건이 있다:**")
+for s in ["**답이 이산적이고 비교 가능해야 한다** (수치·객관식) — 자유 서술은 어렵다",
+          "경로가 실제로 다양해야 한다 (온도를 0 으로 두면 의미가 없다 — 7.9)",
+          "오답이 한 곳으로 몰리는 체계적 오류에는 무력하다",
+          "  → 모델이 같은 오개념을 가지고 있으면 다수결이 그것을 확증한다",
+          "비용이 n 배다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-sc
+#| fig-cap: "다수결은 p>0.5에서만 도움이 되지만, 오답이 흩어지면 조건이 완화됩니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
+                    subplot_titles=("경로 수와 다수결 정확도 (오답 1종)",
+                                    "오답이 흩어질 때 (경로 21개)"))
+for i, (p, row) in enumerate(SC):
+    if p not in (0.3, 0.4, 0.5, 0.6, 0.7, 0.9):
+        continue
+    fig.add_trace(go.Scatter(x=NS, y=np.round(row, 4), mode="lines+markers",
+                             name=f"p={p}", line=dict(color=viz.color(i//1 % 8),
+                                                      width=2.2),
+                             marker=dict(size=7)), row=1, col=1)
+fig.add_hline(y=0.5, line=dict(color=viz.YELLOW, dash="dot"), row=1, col=1)
+fig.update_xaxes(title_text="추론 경로 수 n", type="log", row=1, col=1)
+fig.update_yaxes(title_text="다수결 정확도", row=1, col=1)
+
+for i, (p, row) in enumerate(DISP):
+    fig.add_trace(go.Scatter(x=KW, y=np.round(row, 4), mode="lines+markers",
+                             name=f"p={p}", showlegend=False,
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)), row=1, col=2)
+fig.update_xaxes(title_text="오답 종류 수", type="log", row=1, col=2)
+fig.update_yaxes(title_text="다수결 정확도", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
 
 ---
 
-## G7.8.1 — few-shot 예시 수
+## G7.8.4 — 출력 형식 강제
 
-예시를 늘릴 때 성능이 오르다 포화되는 곡선
+프롬프트로 "JSON으로만 답하라"고 해도 어길 때가 있다.
+**디코딩 단계에서 막으면** 확률이 아니라 **보장**이 된다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 예시 개수 슬라이더
-:::
+```{python}
+#| label: constrained
+#| code-fold: false
+
+import numpy as np
+
+# 아주 작은 문법: {"a": <숫자>}
+VOCAB = ['{', '}', '"', 'a', ':', '0', '1', '2', ',', ' ', 'x', 'EOS']
+V2I = {c: i for i, c in enumerate(VOCAB)}
+
+
+def allowed(state):
+    """상태별 허용 토큰 — 유한 상태 기계로 문법을 표현한다."""
+    return {
+        0: ['{'], 1: ['"'], 2: ['a'], 3: ['"'], 4: [':'],
+        5: [' '], 6: ['0', '1', '2'], 7: ['0', '1', '2', '}'],
+        8: ['EOS'],
+    }[state]
+
+
+def step(state, tok):
+    if state == 7 and tok == '}':
+        return 8
+    if state == 7:
+        return 7
+    return state + 1
+
+
+rng_c = np.random.default_rng(0)
+LOGITS = rng_c.normal(0, 1.5, (9, len(VOCAB)))     # '모델' 의 로짓 (무작위)
+
+
+def softmax(z):
+    e = np.exp(z - z.max())
+    return e/e.sum()
+
+
+def generate(constrained, seed, max_tok=200):
+    g = np.random.default_rng(seed)
+    s, out = 0, []
+    for _ in range(max_tok):
+        if constrained and s == 8:        # 문법이 완성되면 종료
+            break
+        p = softmax(LOGITS[s])
+        if constrained:
+            mask = np.zeros(len(VOCAB))
+            for t in allowed(s):
+                mask[V2I[t]] = 1.0
+            p = p*mask
+            p = p/p.sum()
+        tok = VOCAB[int(g.choice(len(VOCAB), p=p))]
+        if tok == 'EOS':
+            break
+        out.append(tok)
+        if constrained:
+            s = step(s, tok)
+        else:
+            s = min(s+1, 8)
+    return "".join(out)
+
+
+def valid(s):
+    import re
+    return bool(re.fullmatch(r'\{"a": [012]+\}', s))
+
+
+print('목표 문법:  {"a": <숫자>}')
+print()
+for tag, con in [("제약 없음", False), ("**문법 제약 디코딩**", True)]:
+    outs = [generate(con, i) for i in range(200)]
+    ok = sum(valid(o) for o in outs)
+    print(f"{tag}")
+    print(f"  유효 출력 {ok}/200 = {ok/200:.1%}")
+    print(f"  예시: {outs[:3]}")
+    print()
+print("(제약 없는 쪽의 출력은 문법과 아무 관계가 없다 — 로짓이 무작위이므로)")
+print()
+print("**한 가지 미묘한 점: 제약은 '유효한 접두사' 만 보장한다.**")
+print("  문법이 종료 토큰을 강제하지는 않는다 — 샘플러가 언젠가 '}' 를 뽑아야 한다.")
+print("  최대 길이에서 잘리면 미완성 출력이 나온다.")
+print("  실무에서는 최대 길이를 넉넉히 두거나, 길이에 따라 종료를 유도한다.")
+print()
+print("**제약 디코딩은 확률이 아니라 보장이다.**")
+print("  문법이 허용하지 않는 토큰의 확률을 0 으로 만들고 재정규화한다.")
+print("  100% 유효한 출력이 나온다 — 프롬프트로는 얻을 수 없는 성질이다.")
+print()
+print(f"{'방법':<24} {'유효성':<14} {'비용':<20} {'주의'}")
+print("-" * 78)
+for a, b, c, d in [
+    ("프롬프트로 요청", "확률적", "없음", "긴 출력에서 자주 깨진다"),
+    ("**정규식/문법 제약**", "**보장**", "마스킹 오버헤드", "문법 작성이 필요"),
+    ("JSON 스키마", "보장", "동일", "라이브러리 지원 많음"),
+    ("재시도 + 검증", "높음", "실패 시 n배", "가장 단순, 지연 편차 큼"),
+    ("함수 호출 API", "보장", "제공자 의존", "모델이 그 형식으로 학습됨"),
+]:
+    print(f"{a:<24} {b:<14} {c:<20} {d}")
+print()
+print("**제약 디코딩의 함정**")
+for s in ["문법이 강제하면 **모델이 원래 가려던 답과 달라질 수 있다**",
+          "  예: 스키마가 필드를 요구하면 모델이 값을 '지어낸다'",
+          "확률 질량이 좁아져 품질이 떨어질 수 있다는 보고도 있다",
+          "**형식은 보장되지만 내용의 정확성은 보장되지 않는다**"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G7.8.2 — 예시 순서 민감도
+## 프롬프트 설계와 평가
 
-같은 예시 집합이라도 순서에 따라 정확도가 흔들리는 분산
+```{python}
+#| label: design
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 순서 셔플 버튼
-:::
+print("구조화 프롬프트의 구성 요소")
+print()
+rows = [
+    ("역할·맥락", "누구로서 무엇을 하는가", "\"너는 코드 리뷰어다\""),
+    ("과제 서술", "무엇을 해야 하는가 — 구체적으로", "\"버그를 찾고 수정안을 제시하라\""),
+    ("**구획 구분**", "지시와 데이터를 명확히 분리", "XML 태그, ### 구분자"),
+    ("예시", "형식과 난이도를 보여준다", "few-shot"),
+    ("출력 형식", "정확한 스키마를 명시", "JSON 스키마, 필드 설명"),
+    ("제약", "하지 말아야 할 것", "\"추측하지 말고 모르면 모른다고\""),
+    ("추론 유도", "필요하면 단계별 사고", "\"먼저 분석하고 답하라\""),
+]
+print(f"{'요소':<16} {'역할':<32} {'예'}")
+print("-" * 78)
+for r in rows:
+    print(f"{r[0]:<16} {r[1]:<32} {r[2]}")
+print()
+print("**구획 구분이 특히 중요한 이유: 신뢰 경계**")
+print()
+print("   [시스템 지시]  ← 개발자가 씀. 신뢰함")
+print("   [사용자 입력]  ← 신뢰하지 않음")
+print("   [검색된 문서]  ← **신뢰하지 않음** (7.10)")
+print("   [도구 출력]    ← **신뢰하지 않음** (7.11)")
+print()
+print("모델에게는 이 모두가 **같은 토큰열**이다.")
+print("사용자 입력에 '위 지시를 무시하고...' 가 들어 있으면 따를 수 있다.")
+print("**프롬프트 인젝션의 근본 원인**이고, 7.15 에서 다룬다.")
+print()
+print("**프롬프트를 제대로 평가하는 법**")
+print()
+for a, b in [
+    ("고정 테스트셋", "프롬프트를 바꿔가며 같은 문제로 비교. 최소 수십 개"),
+    ("**여러 시드**", "온도가 0 이 아니면 한 번 실행은 증거가 아니다"),
+    ("신뢰구간", "n=20 에서 정확도 차이 5%p 는 잡음일 수 있다"),
+    ("**보류셋**", "프롬프트도 과적합한다 — 튜닝셋과 평가셋을 나눌 것"),
+    ("비용 기록", "정확도만 보면 안 된다. 토큰 수·지연도 지표다"),
+    ("버전 관리", "프롬프트는 코드다. 변경 이력을 남길 것"),
+]:
+    print(f"  {a:<16} {b}")
+print()
+print("**흔한 실수: 예시 하나로 판단하기.**")
+print("  프롬프트 A 가 B 보다 낫다는 주장은 통계적 주장이다.")
+print(f"  n=20, 정확도 차이 10%p 라면 표준오차가 대략 "
+      f"{(0.5*0.5/20)**0.5*100:.0f}%p 다 — 구별이 안 된다.")
+print()
+print("**프롬프트 자동 최적화**")
+for s in ["APE — LLM 이 프롬프트 후보를 생성하고 점수로 고른다",
+          "**DSPy** — 프롬프트를 '컴파일'한다. 예시 선택·지시문을 자동 탐색",
+          "OPRO — 최적화 궤적을 프롬프트에 넣어 LLM 이 개선하게 한다",
+          "공통점 — **평가 지표가 있어야 작동한다.** 그것이 없으면 자동화도 없다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G7.8.3 — CoT 유무 비교
+## 언제 프롬프팅이고 언제 아닌가
 
-추론 과제에서 CoT가 만드는 성능 격차와 토큰 비용
+```{python}
+#| label: when
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 과제 선택
-:::
+rows = [
+    ("빠른 시제품", "**프롬프팅**", "몇 분. 학습 불필요"),
+    ("과제가 자주 바뀜", "**프롬프팅**", "재학습 비용이 없다"),
+    ("예시가 10개 미만", "프롬프팅", "학습하기엔 너무 적다"),
+    ("형식을 항상 지켜야 함", "제약 디코딩", "프롬프트로는 보장 안 됨"),
+    ("예시가 1,000개 이상", "미세조정 (7.6)", "문맥에 다 못 넣는다"),
+    ("지연·비용이 중요", "미세조정", "긴 프롬프트는 매 요청 비용"),
+    ("최신 사실이 필요", "RAG (7.10)", "프롬프트에 넣을 것을 찾아야 한다"),
+    ("복잡한 다단계 추론", "CoT + self-consistency", "또는 추론 모델 (7.12)"),
+]
+print(f"{'상황':<24} {'권장':<22} {'이유'}")
+print("-" * 74)
+for r in rows:
+    print(f"{r[0]:<24} {r[1]:<22} {r[2]}")
+print()
+print("**프롬프팅의 진짜 이점은 반복 속도다.**")
+print("  미세조정 한 번 = 몇 시간. 프롬프트 수정 = 몇 초.")
+print("  **먼저 프롬프팅으로 상한을 확인하고**, 그 다음에 학습을 고려한다.")
+print()
+print("**긴 프롬프트의 숨은 비용**")
+n_tok = 2000
+print(f"  예시가 많은 프롬프트가 {n_tok:,} 토큰이라면")
+print(f"    · 매 요청마다 그만큼 처리한다 (프리필 비용)")
+print(f"    · 문맥 창을 그만큼 차지한다")
+print(f"    · 프롬프트 캐싱이 있으면 크게 줄지만, 공통 접두사여야 한다 (7.14)")
+print(f"  같은 능력을 미세조정으로 넣으면 요청당 0 토큰이다.")
+print("  **요청 수가 많아지면 어느 시점에 미세조정이 싸진다.**")
+```
 
 ---
 
-## G7.8.4 — self-consistency
+## 요약
 
-여러 추론 경로의 다수결이 정확도를 올리는 정도
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플 수 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 문맥 내 학습 (ICL) |  |
-| few-shot |  |
-| Chain-of-Thought |  |
-| self-consistency |  |
-| 제약 디코딩 |  |
+| ICL | 가중치를 바꾸지 않고 프롬프트로 과제를 바꾼다 |
+| 베이즈 모델 | 예시가 **과제를 특정**한다 — 사후분포가 좁아진다 |
+| 측정된 곡선 | k=0에서 0.38 → k=8에서 0.99, 엔트로피 4.3 → 0.0 bits |
+| 포화 | 과제를 알아낸 뒤에는 예시를 더 줘도 소용없다 |
+| **모델의 한계** | 라벨을 무작위로 해도 성능이 유지된다는 관측은 설명 못 함 |
+| 다른 가설 | 암묵적 경사하강, 인덕션 헤드 — ICL은 단일 메커니즘이 아니다 |
+| 순서 민감도 | 교환가능 학습자는 0%, 최근성 γ=0.5면 **38%가 답이 바뀐다** |
+| 대응 | 순서를 튜닝하고, 보정하고, **프롬프트를 하이퍼파라미터로 다룬다** |
+| CoT | 시퀀스 길이를 **계산 깊이**로 바꾸는 장치 |
+| CoT의 비용 | 출력 토큰이 60배, self-consistency면 480배 |
+| self-consistency | $p > 0.5$면 도움, $p < 0.5$면 **해가 된다** |
+| 측정 | p=0.3, n=41이면 정확도가 0.30 → **0.0036** |
+| 결정적 단서 | **오답이 흩어지면** p=0.3에서도 0.027 → 0.903 |
+| 조건 | 답이 이산적이고, 경로가 다양하고, 오류가 체계적이지 않을 것 |
+| 제약 디코딩 | 확률이 아니라 **보장** — 100% 유효 출력 |
+| 제약의 함정 | 형식은 보장되지만 **내용의 정확성은 아니다** |
+| 신뢰 경계 | 모델에게는 지시·입력·문서·도구 출력이 전부 같은 토큰열 |
+| 평가 | n=20에서 10%p 차이는 표준오차 11%p — **구별 불가** |
+
+프롬프트로 무엇을 요청할지는 정했다.
+이제 모델이 그 확률 분포에서 **실제로 토큰을 꺼내는 방법**이다.
 
 ---
 
-**다음**: [7.9 디코딩 전략](09_decoding.qmd) — greedy·beam·top-p·온도 — 확률 분포에서 문장을 꺼내는 법
+**다음**: [7.9 디코딩 전략](09_decoding.qmd)
 
 **이전**: [7.7 지시 조정과 정렬](07_alignment.qmd)
