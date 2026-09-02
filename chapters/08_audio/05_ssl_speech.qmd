@@ -4,89 +4,747 @@ subtitle: "wav2vec 2.0·HuBERT·WavLM — 레이블 없이 음성 표현 배우�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[8.4](04_ctc_rnnt.qmd)에서 정렬 문제를 풀었다. 그런데 **전사는 여전히 필요하다.**
+1시간 음성을 전사하는 데 사람이 5~10시간을 쓴다. 저자원 언어에서는 그것이 아예 없다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+원시 음성은 반대로 무한하다. 그래서 질문이 생긴다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+> 전사 없이 음성에서 무엇을 배울 수 있는가?
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+[7.4](../07_language/04_pretraining_paradigms.qmd)에서 텍스트는 이 문제를 이미 풀었다.
+다음 토큰을 맞히거나 마스크를 복원하면 된다. 그런데 음성에는 **토큰이 없다.**
 
-전사 데이터는 비싸고 원시 음성은 무한하다. 자기지도 사전학습은 필요 전사량을 100분의 1로 줄였고, 이는 저자원 언어에 결정적이었다.
-
----
-
-## 이 장에서 다루는 것
-
-- 음성에서 자기지도 목표를 설계하기 어려운 이유(연속 신호, 이산 단위 부재)
-- CPC: 대조 예측 부호화
-- wav2vec 2.0: 양자화된 잠재 + 마스크 대조 학습
-- Gumbel-softmax 코드북과 다양성 손실
-- HuBERT: 오프라인 클러스터링으로 만든 가짜 레이블 + 반복 정제
-- WavLM: 잡음·중첩 화자까지 다루는 확장
-- 데이터2vec 계열의 통합 목표
-- 사전학습 표현의 층별 특성(음향 vs 음운 vs 의미)
-- 미세조정: CTC 헤드 부착, 저자원 시나리오
-- SUPERB 등 표현 평가 벤치마크
+이 장은 그 차이에서 시작해, 실제로 사전학습을 돌려 보고,
+**무엇이 전이되는지**를 프로브로 분리해 낸다.
 
 ---
 
-## G8.5.1 — 마스크 예측 목표
+## 왜 음성이 더 어려운가
 
-시간축 일부를 가리고 그 구간 표현을 맞히는 학습 신호
+| | 텍스트 | 음성 |
+|---|---|---|
+| 단위 | 토큰이 **이미 이산** | 연속 파형. 이산 단위가 없다 |
+| 목표 | 어휘 위의 분류 | 무엇을 맞히게 할 것인가? |
+| 길이 | 문장당 수십 토큰 | 1초에 100프레임 — **훨씬 길다** |
+| 잉여 | 낮다 | 높다 — 이웃 프레임이 거의 같다 |
+| 무관한 변이 | 거의 없다 | 화자·채널·잡음이 신호의 대부분 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 마스크 비율 슬라이더
-:::
-
----
-
-## G8.5.2 — 코드북 양자화
-
-연속 잠재가 이산 코드로 묶이며 음운 단위처럼 정렬되는 현상
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 코드북 크기 슬라이더
-:::
+마지막 두 줄이 핵심이다. "다음 프레임을 맞혀라"는 **너무 쉽다** —
+직전 프레임을 복사하면 거의 맞는다. 그러면 아무것도 안 배운다.
 
 ---
 
-## G8.5.3 — 층별 표현 특성
+## G8.5.1 — 연속 목표로 회귀하면
 
-층 깊이에 따라 음향 정보에서 음운·의미 정보로 옮겨가는 프로브 성능
+가장 단순한 발상은 마스크된 프레임의 **MFCC 자체를 회귀**하는 것이다.
+실제로 해 보고, 무엇을 배우는지 재 본다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 층 선택
-:::
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+from scipy import signal
+from scipy.fft import dct
+from src import audio, nn, clustering
+
+SR, N_FFT, HOP = 16000, 400, 160
+FB, _, _ = audio.mel_filterbank(26, N_FFT, SR)
+VOW = {"a": (730, 1090, 2440), "i": (270, 2290, 3010),
+       "u": (300, 870, 2240), "e": (530, 1840, 2480),
+       "o": (570, 840, 2410)}
+FRIC = {"s": (4500, 7500), "f": (1200, 4000), "S": (2200, 5200)}
+PHONES = list(VOW) + list(FRIC) + ["_"]
+LEX = {"ai": "a i", "us": "u s", "of": "o f", "ea": "e a",
+       "si": "s i", "fo": "f o", "aSu": "a S u", "ies": "i e s",
+       "ou": "o u", "sea": "s e a", "fi": "f i", "uSo": "u S o"}
+WORDS = list(LEX)
+OUT_PH = [p for p in PHONES if p != "_"]
+O2I = {p: i + 1 for i, p in enumerate(OUT_PH)}
+NC = len(OUT_PH) + 1
+NEG = -1e30
+
+
+def logsumexp(a, axis=None):
+    m = np.max(a, axis=axis, keepdims=True)
+    m = np.where(np.isfinite(m), m, 0.0)
+    return np.squeeze(m, axis=axis) + np.log(np.exp(a - m).sum(axis=axis))
+
+
+def formant_coeffs(fs, bws=(80, 90, 120), sr=SR):
+    b, a = np.array([1.0]), np.array([1.0])
+    for f, bw in zip(fs, bws):
+        r = np.exp(-np.pi*bw/sr)
+        th = 2*np.pi*f/sr
+        b = np.convolve(b, [1 - 2*r*np.cos(th) + r**2])
+        a = np.convolve(a, [1, -2*r*np.cos(th), r**2])
+    return b, a
+
+
+def render_phone(p, n, g, f0):
+    if p == "_":
+        return g.normal(0, 0.01, n)
+    if p in VOW:
+        src = np.zeros(n)
+        src[::max(1, int(round(SR/f0)))] = 1.0
+        b, a = formant_coeffs(VOW[p])
+        y = signal.lfilter(b, a, src)
+    else:
+        lo, hi = FRIC[p]
+        b, a = signal.butter(4, [lo/(SR/2), min(hi, SR/2 - 1)/(SR/2)], "band")
+        y = signal.lfilter(b, a, g.normal(0, 1, n))
+    return y/(np.max(np.abs(y)) + 1e-9)*g.uniform(0.7, 1.0)
+
+
+def make_utt(g, n_words=4):
+    f0 = g.uniform(100, 200)
+    xs, labs = [], []
+    for w in [WORDS[int(g.integers(len(WORDS)))] for _ in range(n_words)]:
+        for p in LEX[w].split():
+            n = int(g.uniform(0.06, 0.14)*SR)
+            xs.append(render_phone(p, n, g, f0))
+            labs.append((p, n))
+        n = int(g.uniform(0.03, 0.07)*SR)
+        xs.append(render_phone("_", n, g, f0))
+        labs.append(("_", n))
+    x = np.concatenate(xs)
+    return x/np.max(np.abs(x)) + g.normal(0, 0.01, len(x)), labs
+
+
+def feats(x):
+    lm = audio.log_mel(x, SR, N_FFT, HOP, fb=FB)
+    return dct(lm, type=2, axis=0, norm="ortho")[:13]
+
+
+def stack(X, w=4):
+    T = X.shape[1]
+    P = np.pad(X, ((0, 0), (w, w)), mode="edge")
+    return np.concatenate([P[:, i:i+T] for i in range(2*w+1)], axis=0).T
+
+
+def frame_ph(labs):
+    edges, acc = [], 0
+    for p, n in labs:
+        edges.append((acc, acc + n, p))
+        acc += n
+    nf = 1 + (acc - N_FFT)//HOP
+    out = []
+    for i in range(nf):
+        c = i*HOP + N_FFT//2
+        lab = labs[-1][0]
+        for s, e, p in edges:
+            if s <= c < e:
+                lab = p
+                break
+        out.append(PHONES.index(lab))
+    return np.array(out)
+
+
+gU = np.random.default_rng(100)
+UNLAB = [make_utt(gU) for _ in range(250)]
+gL = np.random.default_rng(0)
+LAB = [make_utt(gL) for _ in range(50)]
+TESTU = [make_utt(gL) for _ in range(25)]
+
+URAW = [feats(x) for x, _ in UNLAB]
+UX = [stack(r) for r in URAW]
+UPH = [frame_ph(l) for _, l in UNLAB]
+LX = [stack(feats(x)) for x, _ in LAB]
+EX = [stack(feats(x)) for x, _ in TESTU]
+LY = [[O2I[p] for p, _ in l if p != "_"] for _, l in LAB]
+EY = [[O2I[p] for p, _ in l if p != "_"] for _, l in TESTU]
+D = UX[0].shape[1]
+
+print(f"라벨 **없는** 발화 {len(UX)}개 ({sum(x.shape[0] for x in UX):,} 프레임)")
+print(f"라벨 있는 발화 {len(LX)}개, 테스트 {len(EX)}개")
+print(f"입력 {D}차원 (MFCC 13 x 문맥 9프레임)")
+print()
+print("음소 라벨(UPH)은 **평가할 때만** 쓴다 — 학습에는 절대 넣지 않는다.")
+```
+
+```{python}
+#| label: regression
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+def masked_input(raw, rng, mask_p=0.35, span=3):
+    """원시 MFCC 에서 구간을 가린 뒤 stack 한다.
+    가리기를 **stack 이전에** 해야 창 안에 살아남은 이웃이 생긴다."""
+    T = raw.shape[1]
+    m = np.zeros(T, bool)
+    for s0 in range(0, T, span):
+        if rng.random() < mask_p:
+            m[s0:s0 + span] = True
+    r = raw.copy()
+    r[:, m] = 0.0
+    return stack(r), m
+
+
+def pretrain_mse(epochs=6, seed=0):
+    m = nn.MLP([D, 128, 128, 13], activation="relu",
+               out_activation="identity", seed=seed)
+    o = nn.Optimizer("adam", lr=3e-3)
+    pr = m.params()
+    rng = np.random.default_rng(seed)
+    for _ in range(epochs):
+        for i in rng.permutation(len(URAW)):
+            Xm, mask = masked_input(URAW[i], rng)
+            if mask.sum() < 2:
+                continue
+            tgt = URAW[i].T
+            out, cache = m.forward(Xm, training=True)
+            dout = np.zeros_like(out)
+            dout[mask] = 2*(out[mask] - tgt[mask])/max(mask.sum(), 1)
+            o.step(pr, m.backward(cache, dout))
+    return m
+
+
+mse_m = pretrain_mse()
+rng = np.random.default_rng(7)
+P_, T_ = [], []
+for i in range(60):
+    Xm, mask = masked_input(URAW[i], rng)
+    P_.append(mse_m.forward(Xm, training=False)[0][mask])
+    T_.append(URAW[i].T[mask])
+P_, T_ = np.concatenate(P_), np.concatenate(T_)
+ratio = float(np.mean(P_.std(0)/(T_.std(0) + 1e-9)))
+mse_pred = float(np.mean((P_ - T_)**2))
+mse_mean = float(np.mean((T_.mean(0) - T_)**2))
+
+print("마스크된 프레임의 MFCC 를 직접 회귀했을 때")
+print()
+print(f"{'지표':<40} {'값':>10}")
+print("-" * 54)
+print(f"{'예측 표준편차 / 정답 표준편차':<40} {ratio:>10.3f}")
+print(f"{'MSE (모델)':<40} {mse_pred:>10.3f}")
+print(f"{'MSE (항상 전체 평균을 예측)':<40} {mse_mean:>10.3f}")
+print(f"{'비율':<40} {mse_pred/mse_mean:>10.3f}")
+print()
+print(f"**흔히 말하는 '평균으로 붕괴'는 여기서 일어나지 않았다** — "
+      f"예측 분산이 정답의 {ratio:.0%} 이고,")
+print(f"  MSE 도 평균 예측 대비 {mse_pred/mse_mean:.0%} 로 실제 정보를 담고 있다.")
+print()
+print("**합성 음성이라 이웃 프레임으로 마스크 구간이 상당히 예측되기 때문이다.**")
+print("  실제 음성에서는 화자·잡음 성분이 예측 불가능해서 그 부분이 평균으로 눌린다.")
+print()
+print("그런데 붕괴가 없어도 **회귀 목표에는 구조적 문제가 남는다.**")
+for s in ["MSE 는 **지각적으로 중요한 차이와 중요하지 않은 차이를 구별하지 않는다**",
+          "  화자 특성(F0, 성도 길이)의 오차와 음소 오차가 같은 무게로 들어간다",
+          "예측 가능한 성분(에너지 포락)에 손실이 지배되어 음운 정보는 뒷전이 된다",
+          "**그래서 목표를 이산화한다** — 무엇을 맞힐지 고르는 것이 곧 무엇을 배울지 고르는 것"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G8.5.4 — 레이블 효율
+## 세 가지 설계
 
-사전학습 유무에 따라 필요한 전사량 대비 WER 곡선
+이산 목표를 만드는 방법이 갈린다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 전사 시간 슬라이더
-:::
+| 방법 | 목표를 어떻게 만드나 | 대표 모델 |
+|------|-------------------|---------|
+| **대조 학습** | 목표를 만들지 않는다. **진짜 프레임 vs 방해 프레임** 구별 | CPC, wav2vec 2.0 |
+| **온라인 양자화** | 잠재를 코드북에 붙여 목표로 (학습과 동시에) | wav2vec 2.0 |
+| **오프라인 군집** | **k-means 로 가짜 라벨**을 만들고 분류로 학습 | HuBERT |
+
+wav2vec 2.0의 대조 손실은 이렇게 생겼다.
+
+$$\mathcal{L} = -\log \frac{\exp(\mathrm{sim}(c_t, q_t)/\kappa)}
+{\sum_{\tilde q \in Q_t} \exp(\mathrm{sim}(c_t, \tilde q)/\kappa)}$$
+
+$q_t$ 는 마스크된 위치의 **양자화된 참 잠재**, $Q_t$ 는 같은 발화의 다른 시점에서 뽑은
+방해 후보들이다. **같은 발화에서 뽑는 것**이 중요하다 —
+다른 발화에서 뽑으면 화자만 구별해도 문제가 풀려 버린다.
+
+HuBERT는 훨씬 단순하다. 여기서는 **HuBERT 방식을 직접 구현한다.**
 
 ---
 
-## 핵심 용어
+## G8.5.2 — k-means 코드가 음소와 얼마나 맞는가
 
-| 용어 | 비고 |
-|------|------|
-| wav2vec 2.0 |  |
-| HuBERT |  |
-| 대조 학습 |  |
-| 코드북 양자화 |  |
-| SUPERB |  |
+```{python}
+#| label: kmeans
+#| code-fold: false
+
+import numpy as np
+from src import clustering
+
+K = 50
+Xall = np.concatenate(UX, axis=0)
+Yph = np.concatenate(UPH)
+sub = np.random.default_rng(1).choice(len(Xall), 6000, replace=False)
+_, CEN0, _ = clustering.kmeans(Xall[sub], K, n_iter=25, seed=0)
+
+
+def assign(X, cen):
+    return ((X[:, None, :] - cen[None])**2).sum(-1).argmin(1)
+
+
+def purity(codes, phones):
+    return sum(np.bincount(phones[codes == k]).max()
+               for k in np.unique(codes))/len(codes)
+
+
+def nmi(codes, phones):
+    def H(z):
+        _, c = np.unique(z, return_counts=True)
+        p = c/c.sum()
+        return float(-(p*np.log(p)).sum())
+    hz, hy = H(codes), H(phones)
+    joint = collections.Counter(zip(codes.tolist(), phones.tolist()))
+    n = len(codes)
+    hzy = -sum(v/n*np.log(v/n) for v in joint.values())
+    return 2*(hz + hy - hzy)/(hz + hy)
+
+
+C0 = assign(Xall, CEN0)
+p0, n0 = purity(C0, Yph), nmi(C0, Yph)
+print(f"MFCC 에 k-means (코드 {K}개) — 음소 라벨은 쓰지 않았다")
+print()
+print(f"{'지표':<28} {'값':>10}")
+print("-" * 42)
+print(f"{'음소 순도':<28} {p0:>10.4f}")
+print(f"{'정규화 상호정보량 (NMI)':<28} {n0:>10.4f}")
+print(f"{'가장 흔한 음소만 찍었다면':<28} "
+      f"{float(np.bincount(Yph).max()/len(Yph)):>10.4f}")
+print()
+print("코드별로 어떤 음소가 몰려 있는지 (상위 6개 코드)")
+print(f"{'코드':>6} {'프레임 수':>10} {'최빈 음소':>10} {'그 비율':>9}")
+print("-" * 40)
+for k in np.argsort(-np.bincount(C0, minlength=K))[:6]:
+    m = C0 == k
+    cnt = np.bincount(Yph[m])
+    print(f"{k:>6} {int(m.sum()):>10,} {PHONES[int(cnt.argmax())]:>10} "
+          f"{cnt.max()/m.sum():>9.3f}")
+print()
+print(f"**라벨 없이 만든 코드가 음소와 {p0:.0%} 맞는다.**")
+print("  '음성에는 이산 단위가 없다' 는 문제를 **일단 통계로 만들어 낸 것**이다.")
+print("  이 가짜 라벨을 목표로 삼으면 분류 문제가 되고, 텍스트와 같은 틀이 된다.")
+```
 
 ---
 
-**다음**: [8.6 현대 음성 인식](06_asr_modern.qmd) — Whisper·다국어·스트리밍 — 실전 ASR 시스템
+## G8.5.3 — 마스크 예측과 HuBERT의 반복 정제
+
+HuBERT의 핵심 주장은 **반복**에 있다.
+1차 코드는 MFCC에서 만들어 거칠지만, 그것으로 학습한 모델의 **표현**에
+다시 k-means를 걸면 더 나은 코드가 나온다.
+
+```{python}
+#| label: pretrain
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+def pretrain(targets, epochs=8, seed=0):
+    """마스크된 위치에서만 코드 분류 손실을 건다."""
+    m = nn.MLP([D, 128, 128, K], activation="relu",
+               out_activation="softmax", seed=seed)
+    o = nn.Optimizer("adam", lr=3e-3)
+    pr = m.params()
+    rng = np.random.default_rng(seed)
+    for _ in range(epochs):
+        for i in rng.permutation(len(URAW)):
+            Xm, mask = masked_input(URAW[i], rng)
+            if mask.sum() < 2:
+                continue
+            out, cache = m.forward(Xm, training=True)
+            pb = np.exp(out - out.max(1, keepdims=True))
+            pb /= pb.sum(1, keepdims=True)
+            dout = np.zeros_like(pb)
+            dout[mask] = pb[mask]
+            dout[mask, targets[i][mask]] -= 1.0
+            dout /= max(mask.sum(), 1)
+            o.step(pr, m.backward(cache, dout))
+    return m
+
+
+def hidden(m, X):
+    return m.forward(X, training=False)[1]["a"][-2]
+
+
+TGT = [assign(X, CEN0) for X in UX]
+ENC = pretrain(TGT, epochs=8)
+
+H = np.concatenate([hidden(ENC, X) for X in UX], axis=0)
+sub2 = np.random.default_rng(2).choice(len(H), 6000, replace=False)
+_, CEN1, _ = clustering.kmeans(H[sub2], K, n_iter=25, seed=0)
+C1 = assign(H, CEN1)
+p1, n1 = purity(C1, Yph), nmi(C1, Yph)
+
+print("마스크 비율 35%, 구간 3프레임. 손실은 **마스크된 위치에만** 건다.")
+print()
+print(f"{'군집 대상':<32} {'음소 순도':>11} {'NMI':>9}")
+print("-" * 56)
+print(f"{'1차: MFCC 원시 특성':<32} {p0:>11.4f} {n0:>9.4f}")
+print(f"{'2차: 학습된 표현':<32} {p1:>11.4f} {n1:>9.4f}")
+print(f"{'변화':<32} {p1-p0:>+11.4f} {n1-n0:>+9.4f}")
+print()
+if p1 > p0:
+    print(f"**반복이 코드를 개선했다** — 순도 {p0:.4f} → {p1:.4f}.")
+    print("  모델이 마스크 구간을 맞히려면 **문맥에서 음운 정보를 뽑아야** 하고,")
+    print("  그 표현은 원시 MFCC 보다 음소에 가깝게 정렬된다.")
+    print("  이것이 HuBERT 가 실제로 하는 일이고, 여기서 재현된다.")
+else:
+    print(f"**이 설정에서는 반복이 코드를 개선하지 못했다** "
+          f"({p0:.4f} → {p1:.4f}).")
+print()
+print("실제 HuBERT 는 이 반복을 2~3회 돌리고, 회차마다 코드 수를 늘린다.")
+print("  1차 100코드(MFCC) → 2차 500코드(6층 표현) → 3차(9층 표현) 식이다.")
+```
+
+---
+
+## G8.5.4 — 라벨 효율
+
+이 분야의 핵심 주장은 하나다. **사전학습하면 전사가 훨씬 적게 필요하다.**
+wav2vec 2.0은 10분 전사로 쓸 만한 인식기를 만들었다고 보고했다.
+
+여기서 확인해 본다. 사전학습한 인코더의 앞 두 층을 가져와
+[8.4](04_ctc_rnnt.qmd)의 CTC 헤드를 붙이고, 전사 발화 수를 바꿔 가며 미세조정한다.
+
+```{python}
+#| label: label-efficiency
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+def extend(target, blank=0):
+    ext = [blank]
+    for l in target:
+        ext += [l, blank]
+    return np.array(ext)
+
+
+def ctc_forward(logp, target, blank=0):
+    T = logp.shape[0]
+    ext = extend(target, blank)
+    S = len(ext)
+    a = np.full((T, S), NEG)
+    a[0, 0] = logp[0, ext[0]]
+    if S > 1:
+        a[0, 1] = logp[0, ext[1]]
+    for t in range(1, T):
+        prev = a[t-1]
+        cur = prev.copy()
+        cur[1:] = np.logaddexp(cur[1:], prev[:-1])
+        skip = np.full(S, NEG)
+        ok = np.zeros(S, bool)
+        ok[2:] = (ext[2:] != blank) & (ext[2:] != ext[:-2])
+        skip[2:] = np.where(ok[2:], prev[:-2], NEG)
+        a[t] = np.logaddexp(cur, skip) + logp[t, ext]
+    return np.logaddexp(a[T-1, S-1], a[T-1, S-2] if S > 1 else NEG), a, ext
+
+
+def ctc_backward(logp, target, blank=0):
+    T = logp.shape[0]
+    ext = extend(target, blank)
+    S = len(ext)
+    b = np.full((T, S), NEG)
+    b[T-1, S-1] = logp[T-1, ext[S-1]]
+    if S > 1:
+        b[T-1, S-2] = logp[T-1, ext[S-2]]
+    for t in range(T-2, -1, -1):
+        nxt = b[t+1]
+        cur = nxt.copy()
+        cur[:-1] = np.logaddexp(cur[:-1], nxt[1:])
+        skip = np.full(S, NEG)
+        ok = np.zeros(S, bool)
+        ok[:-2] = (ext[:-2] != blank) & (ext[:-2] != ext[2:])
+        skip[:-2] = np.where(ok[:-2], nxt[2:], NEG)
+        b[t] = np.logaddexp(cur, skip) + logp[t, ext]
+    return b
+
+
+def ctc_loss_grad(logits, target, blank=0):
+    logp = logits - logsumexp(logits, axis=1)[:, None]
+    logZ, a, ext = ctc_forward(logp, target, blank)
+    b = ctc_backward(logp, target, blank)
+    acc = np.full(logits.shape, NEG)
+    for s, k in enumerate(ext):
+        acc[:, k] = np.logaddexp(acc[:, k], a[:, s] + b[:, s])
+    return -logZ, np.exp(logp) - np.exp(acc - logp - logZ)
+
+
+def greedy(lg):
+    out, prev = [], -1
+    for k in lg.argmax(1):
+        if k != prev and k != 0:
+            out.append(int(k))
+        prev = k
+    return out
+
+
+def edist(r, h):
+    a, b = len(r), len(h)
+    Dm = np.zeros((a+1, b+1), int)
+    Dm[:, 0], Dm[0, :] = np.arange(a+1), np.arange(b+1)
+    for i in range(1, a+1):
+        for j in range(1, b+1):
+            Dm[i, j] = min(Dm[i-1, j] + 1, Dm[i, j-1] + 1,
+                           Dm[i-1, j-1] + (r[i-1] != h[j-1]))
+    return int(Dm[a, b])
+
+
+def finetune(init, n_lab, epochs=25, seed=0):
+    m = nn.MLP([D, 128, 128, NC], activation="relu",
+               out_activation="identity", seed=seed)
+    if init is not None:
+        for i in range(2):
+            m.W[i] = init.W[i].copy()
+            m.b[i] = init.b[i].copy()
+    o = nn.Optimizer("adam", lr=3e-3)
+    pr = m.params()
+    rng = np.random.default_rng(seed + 17)
+    for _ in range(epochs):
+        for i in rng.permutation(n_lab):
+            out, cache = m.forward(LX[i], training=True)
+            _, G = ctc_loss_grad(out, LY[i])
+            o.step(pr, m.backward(cache, G))
+    return m
+
+
+def perr(m):
+    t = n = 0
+    for X, y in zip(EX, EY):
+        t += edist(y, greedy(m.forward(X, training=False)[0]))
+        n += len(y)
+    return t/n
+
+
+SEEDS = [0, 1, 2]
+print(f"시드 {len(SEEDS)}개의 평균과 범위로 보고한다 "
+      f"(7.13에서 배운 대로 — 값 하나로는 아무것도 말할 수 없다)")
+print()
+print(f"{'전사 발화':>10} {'무작위 초기화':>22} {'사전학습 후':>22} {'차이(평균)':>12}")
+print("-" * 72)
+EFF = []
+for n_lab in [3, 5, 10, 25, 50]:
+    a = [perr(finetune(None, n_lab, seed=s)) for s in SEEDS]
+    b = [perr(finetune(ENC, n_lab, seed=s)) for s in SEEDS]
+    EFF.append((n_lab, np.mean(a), np.min(a), np.max(a),
+                np.mean(b), np.min(b), np.max(b)))
+    print(f"{n_lab:>10} {np.mean(a):>10.3f} [{np.min(a):.3f}~{np.max(a):.3f}] "
+          f"{np.mean(b):>10.3f} [{np.min(b):.3f}~{np.max(b):.3f}] "
+          f"{np.mean(b)-np.mean(a):>+12.3f}")
+print()
+wins = sum(1 for e in EFF if e[4] < e[1])
+big = [e for e in EFF if e[1] - e[4] > 0.1]
+print(f"**{len(EFF)}개 설정 중 사전학습이 이긴 것은 {wins}개다.**")
+if big:
+    print("  전사가 적을수록 격차가 크다:")
+    for e in big:
+        print(f"    {e[0]:>2}발화: {e[1]:.3f} → {e[4]:.3f} "
+              f"({(e[1]-e[4])/e[1]:.0%} 감소)")
+print()
+print("**라벨 효율 주장이 이 작은 규모에서도 재현된다.**")
+print()
+print("**다만 시드 간 범위를 보라.** 예를 들어 10발화의 사전학습 구간이")
+te10 = [e for e in EFF if e[0] == 10]
+if te10:
+    e = te10[0]
+    print(f"  [{e[5]:.3f}~{e[6]:.3f}] 이다 — 폭이 평균 차이만큼 넓다.")
+print("  실제로 이 실험을 처음 시드 하나로 돌렸을 때는 **반대 결론**이 나왔다.")
+print("  [7.13](../07_language/13_evaluation.qmd)에서 잰 그대로다 —")
+print("  **값 하나로는 방향조차 알 수 없다.**")
+```
+
+---
+
+## G8.5.5 — 무엇이 전이되었는가
+
+사전학습이 도움이 됐다. 그런데 **무엇을** 준 것인가?
+표준적인 설명은 '더 좋은 표현'이다. 프로브로 그것을 확인할 수 있다.
+
+```{python}
+#| label: probe
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+def probe(feat_list, phones, seed=0):
+    """선형(단층 softmax) 프로브 — 표현에 음소 정보가 얼마나 선형으로 있는가."""
+    Xp = np.concatenate(feat_list, axis=0)
+    idx = np.random.default_rng(seed).permutation(len(Xp))
+    ntr = int(0.7*len(idx))
+    tr, te = idx[:ntr], idx[ntr:]
+    clf = nn.MLP([Xp.shape[1], len(PHONES)], activation="relu",
+                 out_activation="softmax", seed=0)
+    nn.train(clf, Xp[tr], phones[tr], loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=5e-3), steps=400, batch_size=512,
+             lr=5e-3, schedule="cosine", seed=1)
+    return float((clf.predict(Xp[te]).argmax(1) == phones[te]).mean())
+
+
+SUB = list(range(80))
+ph = np.concatenate([UPH[i] for i in SUB])
+print(f"{'표현':<30} {'차원':>6} {'선형 프로브 음소 정확도':>22}")
+print("-" * 62)
+raw_p = probe([UX[i] for i in SUB], ph)
+print(f"{'MFCC (입력, 문맥 9프레임)':<30} {D:>6} {raw_p:>22.4f}")
+PR = [("입력", raw_p)]
+for li, nm in [(0, "사전학습 인코더 1층"), (1, "사전학습 인코더 2층")]:
+    f = [ENC.forward(UX[i], training=False)[1]["a"][li] for i in SUB]
+    v = probe(f, ph)
+    PR.append((nm, v))
+    print(f"{nm:<30} {f[0].shape[1]:>6} {v:>22.4f}")
+print()
+print(f"**세 표현의 프로브 성능이 거의 같다** "
+      f"({raw_p:.4f} / {PR[1][1]:.4f} / {PR[2][1]:.4f}).")
+print("  원시 MFCC 만으로도 음소 정보가 이미 선형으로 거의 다 읽힌다.")
+print()
+print("**그러면 사전학습이 준 것은 '더 많은 음소 정보' 가 아니다.**")
+print("  프레임 단위 정보량은 그대로인데 라벨 효율은 크게 좋아졌다.")
+print()
+print("남는 설명은 **최적화**다.")
+for s in ["CTC 는 프레임 분류가 아니라 **정렬을 포함한 시퀀스 문제**다 (8.4)",
+          "  전사 3개로 그 지형을 무작위 초기값에서 찾아가는 것은 어렵다",
+          "사전학습된 가중치는 이미 **음운 구조로 조직된 은닉 공간**을 준다",
+          "  CTC 헤드는 그 위에 얇은 결정 경계만 얹으면 된다",
+          "**즉 여기서 전이된 것은 정보가 아니라 초기값의 질이다**",
+          "실제 대규모 모델에서는 두 가지가 함께 온다 — "
+          "정보(긴 문맥·화자 불변성)와 초기값 모두"]:
+    print(f"  · {s}")
+print()
+print("**프레임 프로브가 좋아지지 않았다고 사전학습이 무용한 것은 아니다.**")
+print("  이것이 SUPERB 같은 얼린-표현 평가의 한계이기도 하다 —")
+print("  미세조정에서 오는 이득을 프로브가 놓칠 수 있다.")
+print()
+print("**그래도 이 실험은 실제 조건과 크게 다르다**")
+print(f"{'축':<20} {'여기':<26} {'실제 (wav2vec 2.0 등)'}")
+print("-" * 74)
+for a, b, c in [
+    ("음소 수", f"{len(PHONES)}개, 합성", "40~50개, 실제 발화"),
+    ("화자 변이", "F0 만 다르다", "성도·억양·속도·감정"),
+    ("채널 변이", "없다", "마이크·거리·잔향·코덱"),
+    ("원시 특성의 충분성", f"선형 프로브 **{raw_p:.2f}**", "훨씬 낮다 — 배울 것이 많다"),
+    ("인코더", "밀집 2층, 문맥 ±40ms", "트랜스포머 12~48층, 발화 전체"),
+    ("사전학습 데이터", "250 발화 (약 8분)", "**53,000~1,000,000 시간**"),
+    ("사전학습 목표", "MFCC k-means 코드", "학습된 코드북 + 대조 손실"),
+]:
+    print(f"{a:<20} {b:<26} {c}")
+print()
+print("**네 번째 줄이 이 장의 결과를 제한한다.**")
+print(f"  여기서는 프레임 정보의 간극이 {1-raw_p:.1%} 밖에 없어서,")
+print("  사전학습이 '정보' 로 기여할 여지가 처음부터 거의 없었다.")
+print("  실제 음성에서는 그 간극이 크고, 그래서 이득의 성격도 다르다.")
+print()
+print("**그리고 규모가 본질이다.**")
+for s in ["트랜스포머는 발화 전체를 보고 **긴 문맥 의존**을 학습한다 — "
+          "±40ms 창으로는 배울 수 없는 것",
+          "53,000시간에서 배우는 것은 음소 경계가 아니라 **음성이라는 신호의 구조**다",
+          "그 규모에서만 화자·채널 불변성이 나온다",
+          "**작은 규모의 자기지도 실험이 음성일 때 잘 안 되는 것은 알려진 사실이다**"]:
+    print(f"  · {s}")
+print()
+print("**이 장에서 재현된 것 세 가지**")
+print(f"  · k-means 코드가 음소와 {p0:.0%} 맞는다 — 이산 단위를 통계로 만들 수 있다")
+if p1 > p0:
+    print(f"  · 학습된 표현으로 다시 군집하면 {p0:.4f} → {p1:.4f} "
+          f"(HuBERT 반복 정제)")
+print("  · 전사가 적을 때 사전학습이 실제로 크게 돕는다")
+print()
+print("**재현되지 않은 것 하나** — 사전학습이 프레임 단위 표현을 개선한다는 부분.")
+print("  이 규모에서는 개선할 여지가 없었고, 이득은 다른 경로로 왔다.")
+```
+
+---
+
+## 실제 모델들이 더 하는 것
+
+```{python}
+#| label: models
+#| code-fold: false
+
+print("주요 모델의 설계 차이")
+print()
+print(f"{'모델':<16} {'목표':<30} {'특징'}")
+print("-" * 78)
+for a, b, c in [
+    ("CPC (2018)", "미래 잠재를 대조 예측", "자기회귀 문맥, 여러 스텝 앞"),
+    ("wav2vec 2.0", "마스크 + 대조 + 양자화", "**원시 파형 입력**, Gumbel 코드북"),
+    ("HuBERT", "마스크 + k-means 가짜 라벨 분류", "반복 정제. 구현이 단순"),
+    ("WavLM", "HuBERT + 잡음·중첩 화자 합성", "**여러 화자가 겹친 입력**으로 강건성"),
+    ("data2vec", "교사(EMA)의 잠재를 회귀", "음성·이미지·텍스트 통합 목표"),
+]:
+    print(f"{a:<16} {b:<30} {c}")
+print()
+print("**wav2vec 2.0 의 코드북에는 장치가 두 개 더 있다.**")
+for s in ["**Gumbel-softmax** — 이산 선택을 미분 가능하게 만든다 (6.x 의 재매개변수화)",
+          "**다양성 손실** — 코드북 붕괴를 막는다",
+          "  붕괴하면 모든 프레임이 코드 하나로 가고 대조 문제가 자명해진다",
+          "  코드 사용 분포의 엔트로피를 최대화하는 항을 손실에 더한다",
+          "**곱 양자화(product quantization)** — 코드북을 여러 그룹으로 쪼갠다",
+          "  G개 그룹 x V개 코드 → V^G 개 조합. 적은 파라미터로 큰 코드북"]:
+    print(f"  · {s}")
+print()
+print("**층별 특성 — 실제 모델에서 보고되는 것**")
+print(f"{'층 깊이':<14} {'담고 있는 정보':<28} {'프로브 성능이 최고인 과제'}")
+print("-" * 76)
+for a, b, c in [
+    ("얕은 층", "음향적 세부, 화자 특성", "화자 인식"),
+    ("중간 층", "**음운 단위**", "음소 인식, ASR"),
+    ("깊은 층", "단어·의미에 가까운 정보", "의도 분류, 슬롯 채우기"),
+    ("최상단", "사전학습 목표에 특화", "(과제에 따라 다름)"),
+]:
+    print(f"{a:<14} {b:<28} {c}")
+print()
+print("  그래서 **최상단이 아니라 중간 층을 쓰거나 층들을 가중합**하는 것이 관례다.")
+print("  SUPERB 벤치마크는 이 가중치를 과제마다 학습하게 한다.")
+print()
+print("**평가: SUPERB**")
+for s in ["표현을 **얼리고** 가벼운 헤드만 붙여 여러 과제를 평가한다",
+          "음소 인식, ASR, 화자 인식, 감정, 의도, 화자 분할 등",
+          "목적: '이 표현이 범용인가' 를 재는 것 — 특정 과제 성능이 아니라",
+          "**주의**: 얼린 표현 평가와 전체 미세조정 성능의 순위가 다를 수 있다"]:
+    print(f"  · {s}")
+print()
+print("**저자원 언어에서의 실제 의미**")
+for s in ["다국어 사전학습(XLSR)은 **전사가 거의 없는 언어**에 표현을 넘겨준다",
+          "언어 간 공유되는 것은 음운 자체가 아니라 **음성 신호의 구조**다",
+          "그래서 계통이 먼 언어 사이에도 전이가 일어난다",
+          "이것이 자기지도 학습이 음성에서 가장 크게 기여한 지점이다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|---|
+| 문제 | 음성에는 **이산 단위가 없다** | 텍스트와 결정적으로 다른 점 |
+| 연속 회귀 | 예측 분산이 정답의 **0.76배** | **'평균 붕괴'는 재현 안 됨** |
+| 그래도 문제 | MSE가 화자 오차와 음소 오차를 동일 취급 | 목표 선택 = 학습 내용 선택 |
+| 세 가지 설계 | 대조 / 온라인 양자화 / 오프라인 군집 | CPC·wav2vec2·HuBERT |
+| 방해 후보 | **같은 발화**에서 뽑는다 | 아니면 화자 구별로 풀린다 |
+| **k-means 코드** | 음소 순도 **0.775** | 이산 단위를 통계로 만들어 낸다 |
+| **HuBERT 반복** | 순도 0.775 → **0.873** | 학습된 표현으로 다시 군집 |
+| **라벨 효율** | 10발화에서 0.743 → **0.323** | 5개 설정 중 4개에서 이긴다 |
+| 시드 분산 | 범위가 평균 차이만큼 넓다 | **시드 하나로는 반대 결론이 났었다** |
+| **무엇이 전이됐나** | 프로브 0.986 → 0.986 (변화 없음) | 정보가 아니라 **초기값의 질** |
+| 규모의 차이 | 250발화 vs **53,000시간** | 인코더도 2층 vs 트랜스포머 24층 |
+| 프로브의 한계 | 미세조정 이득을 놓칠 수 있다 | SUPERB 류 평가의 약점 |
+| 코드북 장치 | Gumbel-softmax, 다양성 손실 | 붕괴 방지가 필수 |
+| 층별 특성 | 중간 층이 음운 정보를 담는다 | 최상단이 아니라 가중합을 쓴다 |
+| SUPERB | 표현을 얼리고 헤드만 학습 | 범용성 측정 — 미세조정 순위와 다를 수 있다 |
+| 실제 기여 | 저자원 언어 (XLSR) | 언어 간에 **신호의 구조**가 전이된다 |
+
+표현은 배웠다. 이제 그것으로 만든 **실제 시스템**을 본다.
+
+---
+
+**다음**: [8.6 현대 음성 인식](06_asr_modern.qmd) — Whisper·다국어·스트리밍
 
 **이전**: [8.4 CTC와 RNN-T](04_ctc_rnnt.qmd)
