@@ -4,91 +4,637 @@ subtitle: "화자 인식·음원 분리·이벤트 검출 — 음성 인식 바�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[8.6](06_asr_modern.qmd)에서 파이프라인 표를 하나 만들었다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+$$\text{VAD} \to \text{화자 분할} \to \text{ASR} \to \text{정규화} \to \text{문맥 편향}$$
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+ASR은 그중 한 칸이었다. 이 장은 나머지 칸들을 본다 —
+그리고 그 칸들이 **ASR과 전혀 다른 종류의 문제**라는 것을 확인한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+| 과제 | 무엇을 묻는가 | 이 장에서 재는 것 |
+|------|-------------|-----------------|
+| 화자 검증 | **누가** 말했는가 | EER, 그리고 무엇이 EER을 정하는가 |
+| 음원 분리 | 섞인 것을 **어떻게 나누는가** | 마스킹의 상한 |
+| 키워드 스포팅 | 그 말이 **나왔는가** | 시간당 오경보 |
+
+---
+
+## 준비: 화자가 있는 합성 음성
+
+[8.0](00_sound_and_sampling.qmd)의 소스-필터에서 화자는 두 손잡이로 표현된다 —
+**성도 길이**(포먼트 배율)와 **음높이**(F0).
+
+```{python}
+#| label: corpus
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import signal
+from src import audio
+
+SR, N_FFT, HOP, NMEL = 16000, 400, 160, 40
+FB, _, _ = audio.mel_filterbank(NMEL, N_FFT, SR)
+VOW = {"a": (730, 1090, 2440), "i": (270, 2290, 3010), "u": (300, 870, 2240),
+       "e": (530, 1840, 2480), "o": (570, 840, 2410)}
+FRIC = {"s": (4500, 7500), "f": (1200, 4000), "S": (2200, 5200)}
+PH = list(VOW) + list(FRIC)
+
+
+def fc(fs, bws=(80, 90, 120)):
+    b, a = np.array([1.0]), np.array([1.0])
+    for f, bw in zip(fs, bws):
+        r = np.exp(-np.pi*bw/SR)
+        th = 2*np.pi*f/SR
+        b = np.convolve(b, [1 - 2*r*np.cos(th) + r**2])
+        a = np.convolve(a, [1, -2*r*np.cos(th), r**2])
+    return b, a
+
+
+def make_speaker(g):
+    """화자 = 성도 길이 배율 + F0 중심. 실제로도 이 둘이 큰 축이다."""
+    return dict(scale=float(g.uniform(0.82, 1.22)),
+                f0=float(g.uniform(95, 240)))
+
+
+def utter(spk, g, n_ph=20):
+    xs = []
+    for _ in range(n_ph):
+        p = PH[int(g.integers(len(PH)))]
+        n = int(g.uniform(0.07, 0.13)*SR)
+        f0 = spk["f0"]*g.uniform(0.93, 1.07)      # 발화마다 조금씩 흔들린다
+        if p in VOW:
+            src = np.zeros(n)
+            src[::max(1, int(round(SR/f0)))] = 1.0
+            b, a = fc(tuple(f*spk["scale"] for f in VOW[p]))
+            y = signal.lfilter(b, a, src)
+        else:
+            lo, hi = FRIC[p]
+            b, a = signal.butter(
+                4, [lo/(SR/2), min(hi, SR/2 - 1)/(SR/2)], "band")
+            y = signal.lfilter(b, a, g.normal(0, 1, n))
+        xs.append(y/(np.max(np.abs(y)) + 1e-9))
+    x = np.concatenate(xs)
+    return x/np.max(np.abs(x)) + g.normal(0, 0.01, len(x))
+
+
+def logmel(x):
+    S = np.abs(audio.stft(x, N_FFT, HOP))**2
+    return np.log(FB @ S + 1e-10)
+
+
+NSPK, NUTT = 30, 8
+g0 = np.random.default_rng(0)
+SPKS = [make_speaker(g0) for _ in range(NSPK)]
+UTTS = [[utter(s, g0) for _ in range(NUTT)] for s in SPKS]
+SID = np.repeat(np.arange(NSPK), NUTT)
+
+print(f"화자 {NSPK}명 x 발화 {NUTT}개 = {NSPK*NUTT}개 발화")
+print(f"  발화 길이 평균 "
+      f"{np.mean([len(u)/SR for spk in UTTS for u in spk]):.1f}초, "
+      f"음소 20개")
+print(f"  화자 F0 {min(s['f0'] for s in SPKS):.0f}~"
+      f"{max(s['f0'] for s in SPKS):.0f} Hz, "
+      f"성도 배율 {min(s['scale'] for s in SPKS):.2f}~"
+      f"{max(s['scale'] for s in SPKS):.2f}")
+print()
+print("**발화마다 음소 내용이 다르다.** 그것이 뒤에서 문제가 된다.")
+```
+
+---
+
+## G8.10.1 — 화자 검증: 무엇이 EER을 정하는가
+
+두 발화가 같은 화자인지 판정한다. 임베딩을 뽑아 **코사인 점수**로 비교하고,
+문턱을 옮겨 가며 오수락률(FAR)과 오거부율(FRR)이 같아지는 지점이 **EER**이다.
+
+```{python}
+#| label: eer
+#| code-fold: false
+
+import numpy as np
+
+
+def eer(scores, labels):
+    """동일 오류율. labels=True 가 같은 화자."""
+    o = np.argsort(-scores)
+    l = labels[o]
+    P, N = l.sum(), (~l).sum()
+    far = np.cumsum(~l)/N
+    frr = 1 - np.cumsum(l)/P
+    i = int(np.argmin(np.abs(far - frr)))
+    return float((far[i] + frr[i])/2)
+
+
+def score_all(embs, sid=SID):
+    sc, lab = [], []
+    for i in range(len(embs)):
+        for j in range(i + 1, len(embs)):
+            sc.append(float(embs[i] @ embs[j]))
+            lab.append(sid[i] == sid[j])
+    return np.array(sc), np.array(lab, bool)
+
+
+def emb_mean(x):
+    """가장 단순한 임베딩 — 로그멜의 평균과 표준편차."""
+    M = logmel(x)
+    v = np.concatenate([M.mean(1), M.std(1)])
+    return v/np.linalg.norm(v)
+
+
+E0 = np.stack([emb_mean(u) for spk in UTTS for u in spk])
+sc0, lab0 = score_all(E0)
+print(f"시행 {len(sc0):,}개 "
+      f"(같은 화자 {int(lab0.sum()):,} / 다른 화자 {int((~lab0).sum()):,})")
+print()
+print(f"{'':<24} {'같은 화자':>10} {'다른 화자':>10} {'EER':>9}")
+print("-" * 58)
+print(f"{'로그멜 평균+표준편차':<24} {sc0[lab0].mean():>10.4f} "
+      f"{sc0[~lab0].mean():>10.4f} {eer(sc0, lab0):>9.4f}")
+print()
+print(f"**EER {eer(sc0, lab0):.3f} — 사실상 동전 던지기에 가깝다.**")
+print("  같은 화자 점수와 다른 화자 점수가 "
+      f"{sc0[lab0].mean() - sc0[~lab0].mean():.4f} 밖에 차이 나지 않는다.")
+print()
+print("**왜인가 — 평균이 화자가 아니라 '무슨 말을 했는지'를 담는다.**")
+print("  발화마다 음소 구성이 다르므로, 로그멜 평균의 변동을")
+print("  화자 차이가 아니라 **내용 차이**가 지배한다.")
+```
+
+발화가 길어지면 내용 차이가 평균으로 씻긴다. 그것부터 확인한다.
+
+```{python}
+#| label: duration
+#| code-fold: false
+
+import numpy as np
+
+print("발화 길이에 따른 EER")
+print()
+print(f"{'음소 수':>7} {'평균 길이':>10} {'같은 화자':>10} {'다른 화자':>10} "
+      f"{'EER':>9}")
+print("-" * 52)
+DUR = []
+for n_ph in [5, 10, 20, 40, 80]:
+    g = np.random.default_rng(0)
+    sp = [make_speaker(g) for _ in range(NSPK)]
+    uu = [[utter(s, g, n_ph=n_ph) for _ in range(NUTT)] for s in sp]
+    E = np.stack([emb_mean(u) for spk in uu for u in spk])
+    sc, lab = score_all(E)
+    d = float(np.mean([len(u)/SR for spk in uu for u in spk]))
+    DUR.append((n_ph, d, eer(sc, lab)))
+    print(f"{n_ph:>7} {d:>9.1f}초 {sc[lab].mean():>10.4f} "
+          f"{sc[~lab].mean():>10.4f} {eer(sc, lab):>9.4f}")
+print()
+print(f"**0.5초에서 {DUR[0][2]:.3f}, 8초에서 {DUR[-1][2]:.3f}** — "
+      "길수록 좋아진다.")
+print("  이것이 실무의 **짧은 발화 화자 검증** 문제다.")
+print("  '오케이 구글' 두 마디로 사람을 가려내는 것이 어려운 이유다.")
+print()
+print("**그런데 8초를 줘도 여전히 나쁘다.** 길이만으로는 안 된다.")
+```
+
+내용이 문제라면, **같은 내용끼리 비교**하면 된다.
+프레임을 음소 비슷한 것끼리 묶고(UBM), 묶음마다 평균을 내어 이어 붙인다.
+이것이 GMM-UBM 슈퍼벡터, 곧 i-vector의 조상이다.
+
+```{python}
+#| label: supervector
+#| code-fold: false
+
+import numpy as np
+
+
+def nearest(X, C):
+    return ((X**2).sum(1)[:, None] - 2*X @ C.T + (C**2).sum(1)[None]).argmin(1)
+
+
+def kmeans_fast(X, k, n_iter=15, seed=0):
+    g = np.random.default_rng(seed)
+    C = X[g.choice(len(X), k, replace=False)].copy()
+    for _ in range(n_iter):
+        lab = nearest(X, C)
+        for j in range(k):
+            m = lab == j
+            if m.any():
+                C[j] = X[m].mean(0)
+    return C
+
+
+ALL = np.concatenate([logmel(u).T for spk in UTTS for u in spk])
+SUB = np.random.default_rng(1).choice(len(ALL), 6000, replace=False)
+
+print("UBM 군집 수를 바꿔 가며 (군집 = '음소 비슷한 프레임들')")
+print()
+print(f"{'군집 수':>7} {'임베딩 차원':>11} {'군집당 프레임':>13} {'EER':>9}")
+print("-" * 46)
+SUPER = []
+for nc in [1, 2, 4, 8, 16, 32]:
+    ubm = kmeans_fast(ALL[SUB], nc, seed=0)
+
+    def superv(x, ubm=ubm, nc=nc):
+        M = logmel(x).T
+        lab = nearest(M, ubm)
+        v = np.concatenate([M[lab == c].mean(0) if (lab == c).any() else ubm[c]
+                            for c in range(nc)])
+        return v/np.linalg.norm(v)
+
+    E = np.stack([superv(u) for spk in UTTS for u in spk])
+    sc, lab = score_all(E)
+    per = float(np.mean([len(logmel(u).T) for spk in UTTS for u in spk]))/nc
+    SUPER.append((nc, E.shape[1], per, eer(sc, lab)))
+    print(f"{nc:>7} {E.shape[1]:>11} {per:>13.0f} {eer(sc, lab):>9.4f}")
+print()
+best = min(SUPER, key=lambda r: r[3])
+one = [r for r in SUPER if r[0] == 1][0]
+print(f"**군집 1개(= 그냥 평균) {one[3]:.4f} → "
+      f"군집 {best[0]}개 {best[3]:.4f}.** 거의 절반이다.")
+print("  같은 음소끼리 비교하니 내용 차이가 상쇄된 것이다.")
+print()
+worst = SUPER[-1]
+print(f"**그런데 군집을 더 늘리면 다시 나빠진다** "
+      f"({best[0]}개 {best[3]:.4f} → {worst[0]}개 {worst[3]:.4f}).")
+print(f"  군집당 프레임이 {best[2]:.0f}개에서 {worst[2]:.0f}개로 줄어")
+print("  각 군집의 평균 추정이 불안정해지기 때문이다.")
+print("  **[8.3](03_classical_speech.qmd)의 트라이폰 폭발과 같은 구조다** —")
+print("  단위를 잘게 쪼개면 정밀해지지만 추정이 흔들린다.")
+print()
+print("**여기서 화자 임베딩의 설계 원리가 나온다.**")
+for s in ["화자 안에서 변하는 것(내용·채널)은 **상쇄해야** 한다",
+          "화자 사이에서 변하는 것(성도·F0·습관)은 **살려야** 한다",
+          "슈퍼벡터는 그것을 **음소 정렬**로 했다 (GMM-UBM)",
+          "i-vector 는 그 위에 저차원 전체변이 공간을 학습했다",
+          "**x-vector·ECAPA 는 그것을 신경망이 배우게 했다** — "
+          "화자 분류로 학습하고 중간 층을 임베딩으로 쓴다"]:
+    print(f"  · {s}")
+print()
+print("::: 이 실험의 한계 :::")
+print(f"  손으로 만든 임베딩이라 최선이 {best[3]:.3f} 에 머문다.")
+print("  실제 x-vector·ECAPA 시스템은 같은 과제에서 EER 1~3% 를 낸다.")
+print("  여기서 확인한 것은 절대 성능이 아니라 **무엇이 EER 을 좌우하는가**다.")
+```
+
+```{python}
+#| label: fig-speaker
+#| fig-cap: "화자 검증은 발화 길이와 '무엇을 상쇄하는가'에 좌우됩니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("발화 길이와 EER", "UBM 군집 수와 EER"))
+fig.add_trace(go.Scatter(x=[d[1] for d in DUR], y=[d[2] for d in DUR],
+                         mode="lines+markers", name="로그멜 평균",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)), row=1, col=1)
+fig.update_xaxes(title_text="발화 길이 (초)", type="log", row=1, col=1)
+fig.update_yaxes(title_text="EER", row=1, col=1)
+
+fig.add_trace(go.Scatter(x=[s[0] for s in SUPER], y=[s[3] for s in SUPER],
+                         mode="lines+markers", name="UBM 슈퍼벡터",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_vline(x=best[0], line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              row=1, col=2)
+fig.update_xaxes(title_text="UBM 군집 수", type="log", row=1, col=2)
+fig.update_yaxes(title_text="EER", row=1, col=2)
+viz.fig_defaults(fig, height=390, title="")
+fig.update_layout(margin=dict(l=60, r=30, t=60, b=60),
+                  legend=dict(x=0.01, y=1.16, orientation="h"))
+fig.show()
+```
+
+::: {.interaction-hint}
+왼쪽은 길이를 늘리는 것만으로는 한계가 있다는 것을, 오른쪽은 **무엇을 상쇄하느냐**가 더 크게 작용한다는 것을 보여 줍니다. 오른쪽 곡선이 U자인 것도 중요합니다 — 단위를 너무 잘게 쪼개면 추정이 흔들립니다.
 :::
 
-실제 오디오 제품은 ASR 하나로 끝나지 않는다. 분리·검출·식별이 앞뒤로 붙어야 파이프라인이 완성된다.
+---
+
+## G8.10.2 — 음원 분리: 마스킹의 상한
+
+두 사람이 동시에 말한다. 스펙트로그램에서 **마스크를 곱해** 한 사람만 꺼낸다.
+
+$$\hat{S}_a(f,t) = M(f,t) \cdot X(f,t)$$
+
+마스크를 완벽하게 안다고 가정하면 얼마나 나올까 — **상한**을 잰다.
+
+```{python}
+#| label: masking
+#| code-fold: false
+
+import numpy as np
+
+
+def istft(S, n_fft=N_FFT, hop=HOP):
+    w = audio.window("hann", n_fft)
+    nf = S.shape[1]
+    out = np.zeros((nf - 1)*hop + n_fft)
+    ws = np.zeros_like(out)
+    fr = np.fft.irfft(S, n=n_fft, axis=0)
+    for i in range(nf):
+        out[i*hop:i*hop + n_fft] += fr[:, i]*w
+        ws[i*hop:i*hop + n_fft] += w**2
+    return out/np.maximum(ws, 1e-3)
+
+
+def si_sdr(est, ref):
+    """스케일 불변 SDR — 분리 과제의 표준 지표."""
+    ref, est = ref - ref.mean(), est - est.mean()
+    t = (np.dot(est, ref)/np.dot(ref, ref))*ref
+    return float(10*np.log10(np.sum(t**2)/np.sum((est - t)**2)))
+
+
+gm = np.random.default_rng(3)
+RES = {"혼합 그대로 (아무것도 안 함)": [], "IBM — 이진 마스크": [],
+       "IRM — 비율 마스크": [], "정답 복소 스펙트럼 (위상까지)": []}
+for _ in range(12):
+    a = utter(SPKS[0], gm)
+    b = utter(SPKS[1], gm)
+    n = min(len(a), len(b))
+    a, b = a[:n]/np.std(a[:n]), b[:n]/np.std(b[:n])
+    mix = a + b
+    Sa, Sb, Sm = (audio.stft(v, N_FFT, HOP) for v in (a, b, mix))
+    Ma, Mb = np.abs(Sa), np.abs(Sb)
+    ibm = (Ma > Mb).astype(float)
+    irm = Ma/(Ma + Mb + 1e-9)
+    ph = Sm/(np.abs(Sm) + 1e-9)              # 혼합의 위상을 그대로 쓴다
+    L = min(len(a), len(istft(Sm)))
+    RES["혼합 그대로 (아무것도 안 함)"].append(si_sdr(mix[:L], a[:L]))
+    RES["IBM — 이진 마스크"].append(si_sdr(istft(ibm*np.abs(Sm)*ph)[:L], a[:L]))
+    RES["IRM — 비율 마스크"].append(si_sdr(istft(irm*np.abs(Sm)*ph)[:L], a[:L]))
+    RES["정답 복소 스펙트럼 (위상까지)"].append(si_sdr(istft(Sa)[:L], a[:L]))
+
+print("화자 2명을 같은 세기로 섞고, 한 명을 꺼낸다 (12회 평균)")
+print()
+print(f"{'방법':<30} {'SI-SDR':>10} {'혼합 대비':>10}")
+print("-" * 54)
+base = float(np.mean(RES["혼합 그대로 (아무것도 안 함)"]))
+MASK = []
+for k, v in RES.items():
+    m = float(np.mean(v))
+    MASK.append((k, m))
+    print(f"{k:<30} {m:>9.2f}dB {m - base:>+9.2f}dB")
+print()
+ibm_, irm_, orc = MASK[1][1], MASK[2][1], MASK[3][1]
+print(f"**이상적인 크기 마스크만으로 {irm_:.1f} dB 까지 간다.**")
+print(f"  IBM({ibm_:.1f}) 보다 IRM({irm_:.1f}) 이 나은 것은 "
+      "겹치는 지점을 나눠 갖기 때문이다.")
+print()
+print(f"**그런데 위상까지 정답을 쓰면 {orc:.1f} dB 다.** "
+      f"{orc - irm_:.1f} dB 가 더 있다.")
+print("  즉 **크기 마스킹의 상한이 존재하고, 그 위는 전부 위상이다.**")
+print("  [8.7](07_tts.qmd)·[8.8](08_vocoders_codecs.qmd)에서 본 위상 문제가")
+print("  분리 과제에서도 똑같이 천장을 만든다.")
+print()
+print("**그래서 분리 모델이 간 방향**")
+print(f"{'접근':<24} {'무엇을 바꾸나'}")
+print("-" * 68)
+for a_, b_ in [("크기 마스킹", "위 표의 IRM 이 상한. 위상은 혼합 것을 쓴다"),
+               ("복소 마스킹 (cIRM)", "마스크를 복소수로 — 위상도 고친다"),
+               ("**시간영역 (Conv-TasNet)**", "STFT 를 버리고 **학습된 변환** 위에서 마스킹"),
+               ("  ", "위상 개념 자체가 사라진다 — 상한도 사라진다"),
+               ("Demucs 계열", "파형을 직접 만든다 (U-Net + 트랜스포머)")]:
+    print(f"{a_:<24} {b_}")
+print()
+print("**Conv-TasNet 이 STFT 를 버린 이유가 이 표에 있다.**")
+print("  STFT 위에서 크기만 다루면 구조적으로 천장이 생긴다.")
+print("  학습된 변환 위에서는 '크기와 위상'이라는 구분 자체가 없다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G8.10.3 — 순열 문제: 출력 순서를 누가 정하는가
 
-- 화자 인식·검증: d-vector, x-vector, ECAPA-TDNN
-- 화자 임베딩과 코사인 점수, EER·minDCF 지표
-- 화자 분할(diarization): 클러스터링 기반과 종단간(EEND)
-- 음원 분리: 시간-주파수 마스킹, Conv-TasNet, 순열 불변 학습(PIT)
-- 음악 소스 분리(보컬·드럼·베이스)와 Demucs
-- 칵테일 파티 문제와 목표 화자 추출
-- 키워드 스포팅과 웨이크워드: 저전력·저지연 설계
-- 음향 이벤트 검출과 태깅(AudioSet)
-- 음성 향상·잡음 제거·잔향 제거
-- 이상 소리 탐지(산업 설비 등)
-- 데이터 증강: SpecAugment, 잡음/잔향 시뮬레이션, RIR
+분리 모델은 출력이 두 개다. 그런데 **어느 쪽이 누구인지** 정해져 있지 않다.
+학습 데이터의 라벨 순서는 임의다.
+
+고정 순서로 손실을 걸면 무슨 일이 일어나는지 계산으로 확인할 수 있다.
+
+```{python}
+#| label: pit
+#| code-fold: false
+
+import numpy as np
+
+gp = np.random.default_rng(11)
+COL = {"정답 a 를 그대로": [], "두 소스의 평균 (= 혼합/2)": [],
+       "IRM 분리 결과": []}
+for _ in range(12):
+    a = utter(SPKS[3], gp)
+    b = utter(SPKS[7], gp)
+    n = min(len(a), len(b))
+    a, b = a[:n]/np.std(a[:n]), b[:n]/np.std(b[:n])
+    mix = a + b
+    Sa, Sb, Sm = (audio.stft(v, N_FFT, HOP) for v in (a, b, mix))
+    irm = np.abs(Sa)/(np.abs(Sa) + np.abs(Sb) + 1e-9)
+    ph = Sm/(np.abs(Sm) + 1e-9)
+    L = min(len(a), len(istft(Sm)))
+    COL["정답 a 를 그대로"].append(si_sdr(a[:L], a[:L]))
+    COL["두 소스의 평균 (= 혼합/2)"].append(si_sdr((mix/2)[:L], a[:L]))
+    COL["IRM 분리 결과"].append(si_sdr(istft(irm*np.abs(Sm)*ph)[:L], a[:L]))
+
+print("라벨 순서가 임의일 때, 고정 순서 손실이 모델을 어디로 보내는가")
+print()
+print("  같은 입력에 대해 정답이 절반은 (a, b), 절반은 (b, a) 로 온다.")
+print("  MSE 를 최소화하는 출력은 **두 정답의 평균**이다 — 그것이 혼합의 절반이다.")
+print()
+print(f"{'출력':<28} {'SI-SDR (소스 a 기준)':>22}")
+print("-" * 54)
+for k, v in COL.items():
+    m = float(np.mean(v))
+    cell = "∞ (완벽)" if not np.isfinite(m) else f"{m:.2f}dB"
+    print(f"{k:<28} {cell:>22}")
+print()
+print("**두 소스의 평균은 소스 a 에 대해 "
+      f"{np.mean(COL['두 소스의 평균 (= 혼합/2)']):.2f} dB 다 — "
+      "분리가 전혀 안 된 것이다.**")
+print("  (SI-SDR 은 스케일 불변이므로 혼합/2 는 혼합과 같은 점수다)")
+print()
+print("**즉 고정 순서 손실은 모델을 '아무것도 분리하지 않는' 해로 보낸다.**")
+print("  [8.7](07_tts.qmd)의 과평활화, "
+      "[8.8](08_vocoders_codecs.qmd)의 파형 회귀 붕괴와 **같은 병**이다 —")
+print("  여러 정답의 평균이 어느 정답도 아닌데, MSE 는 그것을 시킨다.")
+print()
+print("**PIT (순열 불변 학습)** 가 이것을 푼다.")
+print()
+print("$$\\mathcal{L} = \\min_{\\pi \\in \\mathcal{P}} "
+      "\\sum_i \\ell(\\hat{y}_i,\\; y_{\\pi(i)})$$")
+print()
+for s in ["가능한 모든 짝짓기를 시도하고 **가장 낮은 손실을 택한다**",
+          "출력 2개면 순열 2가지, 3개면 6가지 — 실용적인 범위다",
+          "**utterance-level PIT** — 프레임마다 다른 순열을 고르면 화자가 뒤바뀐다",
+          "  발화 전체에 하나의 순열을 고정해야 한다",
+          "화자 수를 모르면 더 어렵다 → 출력 슬롯을 넉넉히 두고 빈 슬롯을 허용",
+          "**목표 화자 추출**은 이 문제를 우회한다 — "
+          "화자 임베딩(G8.10.1)을 조건으로 줘서 '누구를' 꺼낼지 지정한다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G8.10.1 — 화자 임베딩 공간
+## G8.10.4 — 검출 과제: 기저율이 지배한다
 
-같은 화자 발화가 임베딩 공간에서 뭉치는 모습
+키워드 스포팅("헤이 시리")은 분류가 아니라 **검출**이다.
+그리고 검출의 실제 지표는 정확도가 아니라 **시간당 오경보**다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 화자 선택
-:::
+```{python}
+#| label: kws
+#| code-fold: false
+
+import numpy as np
+
+FPS = SR/HOP
+print(f"프레임 {FPS:.0f}/초 — 하루 종일 켜 두면 "
+      f"{FPS*3600*24/1e6:.1f}M 프레임을 판정한다")
+print()
+print("웨이크워드가 하루 10번 나온다고 하자. 프레임 기준으로는")
+print(f"  양성 프레임 비율 = 10회 x 1초 / 하루 = "
+      f"{10*1/(3600*24):.2e}")
+print()
+print(f"{'프레임 오탐률':>14} {'시간당 오경보':>14} {'하루 오경보':>13} {'쓸 만한가'}")
+print("-" * 60)
+KWS = []
+for fpr in [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7]:
+    per_h = fpr*FPS*3600
+    ok = "**쓸 만하다**" if per_h <= 1 else ("아슬아슬" if per_h <= 12 else "쓸 수 없다")
+    KWS.append((fpr, per_h))
+    print(f"{fpr:>14.0e} {per_h:>14.1f} {per_h*24:>13.0f}  {ok}")
+print()
+target = [k for k in KWS if k[1] <= 1][0]
+print(f"**시간당 오경보 1회 아래로 내리려면 프레임 오탐률이 "
+      f"{target[0]:.0e} 이어야 한다.**")
+print(f"  프레임 {1/target[0]:,.0f}개에 하나도 틀리면 안 된다는 뜻이다.")
+print("  일반적인 분류 벤치마크에서 말하는 '정확도 99%' 와는 차원이 다른 요구다.")
+print()
+print("**[7.15](../07_language/15_safety.qmd)의 기저율 논의와 같은 구조다.**")
+print("  양성이 극히 드물면, 성능을 정하는 것은 탐지율이 아니라 **오탐률**이다.")
+print()
+print("실무의 대응")
+print(f"{'기법':<26} {'무엇을 하는가'}")
+print("-" * 66)
+for a, b in [("2단계 구조", "저전력 1차 검출 → 정밀 2차 확인"),
+             ("  ", "1차는 오탐을 허용하고, 2차가 걸러낸다"),
+             ("연속 프레임 요구", "N 프레임 연속 양성일 때만 발화 (평활화)"),
+             ("사용자 적응", "등록한 목소리에만 반응 (화자 검증 결합)"),
+             ("**하드 네거티브 수집**", "실제 오경보를 모아 학습에 넣는다"),
+             ("문턱 개인화", "사용자별로 오경보/미검출 균형을 조정")]:
+    print(f"{a:<26} {b}")
+print()
+print("**음향 이벤트 검출도 같은 문제를 겪는다.**")
+for s in ["AudioSet 은 527개 클래스 — 대부분이 극히 드물다",
+          "그래서 클래스별 **평균 정밀도(mAP)** 로 평가한다",
+          "약지도(weak label) 문제 — '개 짖는 소리가 있다' 는 알지만 **언제인지는 모른다**",
+          "  [8.4](04_ctc_rnnt.qmd)의 정렬 문제와 같은 구조다",
+          "이상 소리 탐지는 더 극단적이다 — **정상 데이터만 있고 이상은 본 적이 없다**"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G8.10.2 — 시간-주파수 마스킹
+## 증강과 나머지 과제
 
-혼합 스펙트로그램에 마스크를 곱해 한 소스를 꺼내는 과정
+```{python}
+#| label: rest
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 마스크 선택
-:::
+print("데이터 증강 — [8.6](06_asr_modern.qmd)에서 잰 '다양성' 을 값싸게 만드는 법")
+print()
+print(f"{'기법':<22} {'무엇을 흉내내나':<26} {'주의'}")
+print("-" * 76)
+for a, b, c in [
+    ("**SpecAugment**", "시간·주파수 마스킹", "가장 값싸고 효과가 크다"),
+    ("속도 변화", "발화 속도·성도 길이", "F0 도 함께 변한다"),
+    ("잡음 합성 (MUSAN)", "배경 잡음", "SNR 을 무작위화한다"),
+    ("RIR 합성", "잔향·마이크 거리", "실측 임펄스 응답을 쓴다"),
+    ("코덱 통과", "전화·통신 압축", "배포 환경과 맞춘다 (8.0)"),
+    ("Mixup / 소스 혼합", "겹쳐 말하기", "분리·분할 학습에 쓴다"),
+]:
+    print(f"{a:<22} {b:<26} {c}")
+print()
+print("**SpecAugment 가 특이한 점** — 물리적으로 말이 안 되는 증강이다.")
+for s in ["주파수 대역을 통째로 지우는 소리는 실제로 존재하지 않는다",
+          "그런데도 잘 듣는다 — **모델이 한 단서에만 의존하지 못하게** 만들기 때문",
+          "정규화에 가깝다 ([3.6](../03_deep_learning/06_regularization_dl.qmd)의 드롭아웃과 같은 계열)",
+          "그래서 데이터가 적을 때 특히 효과가 크다"]:
+    print(f"  · {s}")
+print()
+print("=" * 72)
+print("이 장에서 다 다루지 못한 과제들")
+print()
+print(f"{'과제':<22} {'핵심':<32} {'어디서 이어지나'}")
+print("-" * 78)
+for a, b, c in [
+    ("화자 분할", "누가 언제 말했는가", "중첩 발화가 가장 어렵다 (8.5 WavLM)"),
+    ("음성 향상", "잡음·잔향 제거", "분리와 같은 마스킹 틀"),
+    ("음악 소스 분리", "보컬·드럼·베이스", "Demucs — 파형 직접 생성 (8.8)"),
+    ("목표 화자 추출", "지정한 사람만 꺼내기", "화자 임베딩을 조건으로 (G8.10.1)"),
+    ("언어 식별", "무슨 언어인가", "Whisper 는 토큰으로 흡수 (8.6)"),
+    ("감정·의도 인식", "어떻게 말했는가", "SSL 표현의 상위 층이 강하다 (8.5)"),
+    ("이상 소리 탐지", "정상만 알고 이상을 찾기", "12.3의 이상 탐지와 같은 문제"),
+]:
+    print(f"{a:<22} {b:<32} {c}")
+print()
+print("**공통 구조가 보인다.**")
+for s in ["대부분이 **표현 하나로 여러 과제**를 푼다 — SSL 표현(8.5)이 그 자리다",
+          "평가 지표가 과제마다 완전히 다르다 — EER, SI-SDR, mAP, WER",
+          "**그리고 거의 전부 기저율·불균형 문제를 안고 있다**",
+          "실서비스는 이들을 파이프라인으로 엮는다 — 앞단 실패가 뒤로 전파된다 (7.11)"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G8.10.3 — 순열 불변 학습
+## 요약
 
-출력 순서가 임의일 때 손실을 최소 순열로 계산하는 방식
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 출력 순서 전환
-:::
-
----
-
-## G8.10.4 — SpecAugment
-
-시간·주파수 마스킹이 적용된 스펙트로그램
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 마스킹 폭 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 화자 검증 |  |
-| x-vector |  |
-| 음원 분리 |  |
-| 순열 불변 학습 (PIT) |  |
-| 키워드 스포팅 |  |
-| SpecAugment |  |
+| 개념 | 수치·핵심 | |
+|------|----------|---|
+| 화자 검증 | 코사인 점수 + EER | 문턱을 옮겨 FAR=FRR 이 되는 지점 |
+| **순진한 임베딩** | 로그멜 평균 → EER **0.394** | 화자가 아니라 **내용**을 담는다 |
+| 발화 길이 | 0.5초 0.470 → 8초 **0.221** | 짧은 발화 검증이 어려운 이유 |
+| 길이만으로는 | 8초에도 0.221 | 상쇄할 것을 상쇄해야 한다 |
+| **UBM 슈퍼벡터** | 군집 1개 0.388 → 8개 **0.202** | 같은 음소끼리 비교하면 절반 |
+| 너무 잘게 쪼개면 | 32개에서 **0.306** | 8.3의 트라이폰 폭발과 같은 구조 |
+| 설계 원리 | 화자 내 변이는 상쇄, 화자 간은 보존 | x-vector 는 그것을 학습으로 |
+| **마스킹의 상한** | IRM **+8.7 dB** | IBM(+8.6)보다 나은 것은 겹침을 나눠서 |
+| 그 위는 위상 | 정답 복소 스펙트럼 **+27.5 dB** | **18.8 dB** 가 위상에 남아 있다 |
+| Conv-TasNet | STFT 를 버린다 | 학습된 변환에는 위상 구분이 없다 |
+| **순열 문제** | 두 정답의 평균 = **0.0 dB** | 고정 순서 손실은 분리를 아예 못 한다 |
+| 같은 병 | 8.7 과평활화, 8.8 파형 붕괴 | 평균이 어느 정답도 아니다 |
+| PIT | $\min_\pi \sum_i \ell(\hat y_i, y_{\pi(i)})$ | 발화 단위로 순열을 고정해야 한다 |
+| **검출의 기저율** | 시간당 오경보 1회 = 프레임 오탐률 **1e-6** | 100만 프레임에 하나도 안 틀려야 |
+| 7.15와 같은 구조 | 양성이 드물면 오탐률이 지배한다 | 정확도는 무의미한 지표 |
+| SpecAugment | 물리적으로 불가능한 증강 | 그래서 **정규화**에 가깝다 |
+| 공통점 | 표현 하나로 여러 과제 | 평가 지표는 전부 다르다 |
 
 ---
 
-**다음**: [9.0 이미지의 표현과 처리](../09_vision_video/00_image_basics.qmd) — 픽셀·색공간·필터·주파수 — 비전의 기초 어휘
+## Part 8을 마치며
+
+파형에서 시작해 ASR·TTS·코덱·생성·주변 과제까지 왔다.
+Part 7과 마찬가지로, 되돌아보면 같은 형태의 발견이 반복됐다.
+
+| 장 | 통념 | 측정 결과 |
+|----|------|----------|
+| 8.0 | 리샘플링은 그냥 뽑으면 된다 | 5,000Hz가 3,000Hz로 접힌다 — 되돌릴 수 없다 |
+| 8.2 | DCT가 대각 공분산을 살린다 | 탈상관은 맞는데(0.35→0.15) 정확도는 안 따라온다 |
+| 8.3 | 강제 정렬은 여러 번 반복해야 | **한 번**에 22.3→5.8 ms |
+| 8.4 | 빔 서치가 정확도를 준다 | 이득은 거의 전부 **LM**에서 온다 |
+| 8.5 | 사전학습이 더 나은 표현을 준다 | 프로브는 그대로. 전이된 것은 **초기값** |
+| 8.5 | (시드 하나) 도움이 안 된다 | 세 시드로 재니 뒤집혔다 |
+| 8.7 | Griffin-Lim이 파형을 되살린다 | 크기는 맞추고 파형 오차는 1.5에 머문다 |
+| 8.8 | µ-law가 SNR을 높인다 | 평균 SNR은 **떨어진다**. 파는 것은 균일함 |
+| 8.9 | 가이던스를 키우면 다양성이 준다 | 이 설정에선 둘 다 안 움직인다 — 못 잰 것 |
+| 8.10 | 마스킹으로 소리를 나눌 수 있다 | 위상 때문에 **18.8 dB**의 천장이 있다 |
+
+그리고 Part 8 전체를 관통하는 것이 하나 있다 — **위상**.
+8.1에서 버렸고, 8.7에서 Griffin-Lim이 못 되찾았고,
+8.8에서 보코더가 만들어 냈고, 8.10에서 분리의 천장이 되었다.
+
+---
+
+**다음**: [9.0 이미지의 기초](../09_vision_video/00_image_basics.qmd) — 픽셀에서 시작하기
 
 **이전**: [8.9 오디오·음악 생성](09_audio_generation.qmd)
