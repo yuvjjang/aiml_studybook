@@ -4,89 +4,617 @@ subtitle: "추론 시간 스케일링·검증 가능한 보상 — 생각할 시
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[7.11](11_agents.qmd)에서 스텝을 **모델 밖에서** 늘렸다. 곱셈이 따라왔다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장은 스텝을 **모델 안에서** 늘린다. 사고 연쇄를 길게 뽑고,
+여러 번 뽑고, 좋은 것을 고른다. 새로운 축이 하나 생긴 셈이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+$$\text{성능} \;\approx\; f(\underbrace{\text{학습 연산}}_{\text{한 번}},\;
+\underbrace{\text{추론 연산}}_{\text{매 질의마다}})$$
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+두 축의 성질이 완전히 다르다는 점이 중요하다.
+학습 연산은 한 번 쓰고 끝이지만, **추론 연산은 질의마다 다시 낸다.**
 
-모델을 더 키우는 대신 더 오래 생각하게 하는 축이 열렸다. 이것은 최근 몇 년 사이 가장 큰 패러다임 변화다.
+그리고 이 장의 핵심 질문은 하나다.
+
+> 여러 개를 뽑았다. **어느 것이 맞는지 어떻게 아는가?**
+
+이 질문의 답이 있는 도메인(수학·코드)에서만 최근의 성과가 나왔다.
+우연이 아니다. 아래에서 그 이유를 숫자로 확인한다.
 
 ---
 
-## 이 장에서 다루는 것
+## 준비: 난이도가 다양한 문제 집합
 
-- 추론 시간 연산(test-time compute)이라는 새로운 축
-- 긴 사고 연쇄와 자기 수정 능력
-- 검증 가능한 보상 기반 RL(RLVR): 수학·코드처럼 채점 가능한 도메인
-- 결과 보상(ORM) vs 과정 보상(PRM)
-- 탐색 결합: best-of-n, 트리 탐색, 검증자 기반 재순위
-- 추론 시간 스케일링 법칙과 학습 시간과의 교환
-- 긴 추론의 비용·지연 문제와 적응적 사고 예산
-- 증류: 큰 추론 모델의 사고 과정을 작은 모델로
-- 사고 과정의 충실성(faithfulness) 문제 — 쓴 대로 생각하는가
-- 추론 모델 평가와 오염 문제
+```{python}
+#| label: problems
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+
+NPROB, MCAND = 400, 40
+rg = np.random.default_rng(0)
+
+# p_i = 문제 i 에서 한 번 샘플했을 때 정답일 확률
+P_CORRECT = rg.beta(0.9, 1.8, NPROB)
+P_CORRECT[rg.random(NPROB) < 0.12] = 0.0        # 아예 못 푸는 문제
+# 오답 질량은 소수의 '매력적인 오답'에 몰린다 (Zipf)
+z = 1.0/np.arange(1, MCAND)**1.3
+WRONG = z/z.sum()
+
+
+def sample_answers(i, n, g):
+    """문제 i 에서 답 n개를 뽑는다. 0 = 정답, 1.. = 오답 id"""
+    hit = g.random(n) < P_CORRECT[i]
+    return np.where(hit, 0, g.choice(np.arange(1, MCAND), n, p=WRONG))
+
+
+CEIL = float((P_CORRECT > 0).mean())
+print(f"문제 {NPROB}개, 답 후보 {MCAND}개")
+print(f"  단일 샘플 평균 정확도 = {P_CORRECT.mean():.3f}")
+print(f"  p = 0 인 문제 {int((P_CORRECT == 0).sum())}개 "
+      f"({(P_CORRECT == 0).mean():.0%}) — 몇 번을 뽑아도 정답이 안 나온다")
+print(f"  **따라서 어떤 샘플링 방법도 {CEIL:.3f} 을 넘을 수 없다**")
+print()
+print("오답이 균등하지 않다는 점이 중요하다.")
+print(f"  가장 매력적인 오답 하나가 오답 질량의 {WRONG[0]:.1%} 를 차지한다.")
+print("  실제 모델의 오답도 그렇다 — 틀릴 때 **다들 같은 방식으로** 틀린다.")
+```
 
 ---
 
 ## G7.12.1 — 추론 시간 스케일링
 
-생각 토큰을 늘릴수록 정확도가 오르는 로그 곡선
+$n$ 개를 뽑았다. 셋 중 하나를 해야 한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플·길이 슬라이더
+| 방법 | 무엇이 필요한가 | 실제 대응물 |
+|------|---------------|-----------|
+| **pass@n** | 완벽한 검증자 | 단위 테스트, 정답 대조 |
+| **다수결** | 아무것도 필요 없다 | self-consistency |
+| **best-of-n** | 점수를 매기는 보상 모델 | 학습된 검증자, PRM |
+
+```{python}
+#| label: scaling
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'n':>6} {'pass@n':>9} {'다수결':>9} {'RM σ=0.5':>10} "
+      f"{'RM σ=1.0':>10} {'RM σ=2.0':>10}")
+print("-" * 60)
+SCALE = []
+for n in [1, 4, 16, 64, 256, 1024, 4096]:
+    g = np.random.default_rng(1)
+    pas = maj = 0
+    bo = {0.5: 0, 1.0: 0, 2.0: 0}
+    for i in range(NPROB):
+        a = sample_answers(i, n, g)
+        pas += (a == 0).any()
+        maj += collections.Counter(a).most_common(1)[0][0] == 0
+        for s in bo:
+            sc = (a == 0)*1.0 + g.normal(0, s, n)      # 잡음 섞인 보상 모델
+            bo[s] += a[int(np.argmax(sc))] == 0
+    row = (n, pas/NPROB, maj/NPROB, bo[0.5]/NPROB, bo[1.0]/NPROB,
+           bo[2.0]/NPROB)
+    SCALE.append(row)
+    print(f"{n:>6} {row[1]:>9.3f} {row[2]:>9.3f} {row[3]:>10.3f} "
+          f"{row[4]:>10.3f} {row[5]:>10.3f}")
+print()
+s1, sl = SCALE[0], SCALE[-1]
+print(f"**pass@n: {s1[1]:.3f} → {sl[1]:.3f}** — 상한 {CEIL:.3f} 에 거의 도달했다.")
+print("  n을 4096배 늘려 정확도를 3.8배 올렸다. 로그 스케일의 이득이다.")
+print()
+print(f"**다수결은 0.44 근처에서 멈춘다** (n=4096 에서 {sl[2]:.3f}). "
+      f"이유는 오답 분포에 있다 —")
+print("  틀릴 때 다들 같은 오답을 내므로 그 오답이 최빈값이 된다.")
+print("  다수결은 **모델이 정답 쪽으로 기울어 있을 때만** 작동한다.")
+print()
+print(f"**보상 모델의 잡음이 곧바로 천장이 된다:**")
+for lbl, v in [("σ=0.5", sl[3]), ("σ=1.0", sl[4]), ("σ=2.0", sl[5])]:
+    print(f"  {lbl}: {v:.3f}   (완벽한 검증자면 {sl[1]:.3f})")
+print()
+print("**여기서 추론 시간 스케일링의 진짜 조건이 보인다.**")
+print("  '더 많이 생각하기'가 아니라 **'생각한 것 중 고르기'** 가 병목이다.")
+print("  그래서 채점 가능한 도메인 — 수학, 코드 — 에서만 크게 통했다.")
+```
+
+::: {.callout-note}
+## 과최적화로 인한 **하락**은 여기서 재현되지 않았다
+
+RLHF 문헌에서 자주 보이는 "best-of-n 이 어느 지점에서 꺾인다"는 곡선은
+이 실험에서 나오지 않았다. σ=2.0 에서도 계속 (느리게) 올랐다.
+
+이유는 명확하다. 여기서 참 점수는 이진값이고 격차가 1로 **고정**되어 있다.
+n이 커지면 오답 쪽 잡음의 최댓값도 커지지만 정답 후보 수도 함께 늘어난다.
+정답이 충분히 많으면 그 둘이 상쇄된다.
+
+**하락이 나오려면 정답 후보가 희소해야 한다.** 아래 난이도별 표에서 그 구간을 본다.
+그리고 [7.7](07_alignment.qmd)에서 본 진짜 보상 해킹은 이것과 다른 메커니즘이었다 —
+학습된 보상 모델의 **오차가 정책이 파고드는 방향과 상관**되어 있을 때 일어난다.
 :::
 
 ---
 
-## G7.12.2 — best-of-n과 검증자
+## G7.12.2 — 검증자 품질은 어디서 중요한가
 
-후보 수와 검증자 품질이 결합해 만드는 성능
+난이도별로 쪼개 보면 훨씬 선명하다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: n 슬라이더
-:::
+```{python}
+#| label: bydiff
+#| code-fold: false
+
+import numpy as np
+
+band = np.digitize(P_CORRECT, [1e-12, 0.10, 0.35])
+NAMES = ["p = 0 (불가)", "0 < p < 0.10 (어려움)", "0.10~0.35 (중간)",
+         "p > 0.35 (쉬움)"]
+NS = [1, 8, 64, 512, 4096]
+
+for title, sigma in [("완벽한 검증자 (pass@n)", None),
+                     ("잡음 있는 보상 모델 (σ=1.0)", 1.0)]:
+    print(title)
+    print(f"{'난이도':>22} {'문제수':>6} " +
+          " ".join(f"{'n='+str(n):>8}" for n in NS))
+    print("-" * 74)
+    for b in range(4):
+        idx = np.where(band == b)[0]
+        row = []
+        for n in NS:
+            g = np.random.default_rng(1)
+            ok = 0
+            for i in idx:
+                a = sample_answers(i, n, g)
+                if sigma is None:
+                    ok += (a == 0).any()
+                else:
+                    sc = (a == 0)*1.0 + g.normal(0, sigma, n)
+                    ok += a[int(np.argmax(sc))] == 0
+            row.append(ok/len(idx))
+        if sigma is None:
+            globals().setdefault("PASS_BY_BAND", {})[b] = row
+        else:
+            globals().setdefault("RM_BY_BAND", {})[b] = row
+        print(f"{NAMES[b]:>22} {len(idx):>6} " +
+              " ".join(f"{v:>8.3f}" for v in row))
+    print()
+
+hard = 1
+print("**어려운 문제에서 격차가 벌어진다.**")
+print(f"  0 < p < 0.10 구간, n=4096:")
+print(f"    완벽한 검증자 {PASS_BY_BAND[hard][-1]:.3f}  "
+      f"vs  잡음 있는 RM {RM_BY_BAND[hard][-1]:.3f}")
+print(f"  p > 0.35 구간, n=4096:")
+print(f"    완벽한 검증자 {PASS_BY_BAND[3][-1]:.3f}  "
+      f"vs  잡음 있는 RM {RM_BY_BAND[3][-1]:.3f}")
+print()
+print("**검증자 품질은 정확히 추가 연산이 필요한 곳에서 가장 중요하다.**")
+print("  쉬운 문제는 아무 방법이나 써도 된다.")
+print("  어려운 문제는 정답이 희소하므로 검증자가 잡음에 파묻힌다.")
+print("  이것이 '추론 모델은 검증자만큼만 좋다' 는 말의 정량적 내용이다.")
+print()
+print("**RLVR(검증 가능한 보상 기반 RL)이 수학·코드에 갇혀 있는 이유:**")
+for s in ["수학 — 최종 답을 문자열 비교로 채점할 수 있다 (σ ≈ 0)",
+          "코드 — 단위 테스트를 돌려 채점할 수 있다 (σ ≈ 0)",
+          "형식 증명 — 증명 검사기가 있다 (σ = 0)",
+          "**에세이·요약·상담 — 검증자가 곧 또 다른 LLM이다** (σ 가 크다)",
+          "그리고 검증자가 나쁜 도메인에서는 추론 연산을 늘려도 천장이 낮다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-scaling
+#| fig-cap: "추론 시간 스케일링은 로그 곡선이고, 검증자의 잡음이 천장을 정합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("선택 방법별 스케일링",
+                                    "난이도별 (n=1 → 4096)"))
+ns = [r[0] for r in SCALE]
+for i, (nm, idx) in enumerate([("pass@n (완벽한 검증자)", 1), ("다수결", 2),
+                               ("RM σ=0.5", 3), ("RM σ=1.0", 4),
+                               ("RM σ=2.0", 5)]):
+    fig.add_trace(go.Scatter(x=ns, y=[r[idx] for r in SCALE],
+                             mode="lines+markers", name=nm,
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=7)), row=1, col=1)
+fig.add_hline(y=CEIL, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              row=1, col=1)
+fig.update_xaxes(title_text="샘플 수 n", type="log", row=1, col=1)
+fig.update_yaxes(title_text="정확도", range=[0, 1], row=1, col=1)
+
+for b, dash in [(1, "solid"), (3, "dot")]:
+    fig.add_trace(go.Scatter(x=NS, y=PASS_BY_BAND[b], mode="lines+markers",
+                             name=f"{NAMES[b]} · 완벽",
+                             line=dict(color=viz.GREEN, width=2.5, dash=dash),
+                             marker=dict(size=8)), row=1, col=2)
+    fig.add_trace(go.Scatter(x=NS, y=RM_BY_BAND[b], mode="lines+markers",
+                             name=f"{NAMES[b]} · σ=1.0",
+                             line=dict(color=viz.WARM, width=2.5, dash=dash),
+                             marker=dict(size=8)), row=1, col=2)
+fig.update_xaxes(title_text="샘플 수 n", type="log", row=1, col=2)
+fig.update_yaxes(title_text="정확도", range=[0, 1.05], row=1, col=2)
+viz.fig_defaults(fig, height=430, title="")
+fig.show()
+```
 
 ---
 
-## G7.12.3 — ORM vs PRM
+## G7.12.3 — 적응적 사고 예산
 
-최종 답만 채점할 때와 단계별로 채점할 때의 학습 신호 차이
+모든 문제에 같은 예산을 쓸 이유가 없다. 쉬운 문제는 한 번에 풀리고,
+못 푸는 문제는 몇 번을 해도 안 풀린다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 보상 방식 전환
-:::
+검증자가 있다면 **통과할 때까지만 뽑으면 된다.**
+
+```{python}
+#| label: budget
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'방식':>24} {'정확도':>9} {'평균 샘플':>11} {'고정 대비':>10}")
+print("-" * 58)
+BUD = []
+for n in [1, 4, 16, 64]:
+    g = np.random.default_rng(1)
+    ok = sum(bool((sample_answers(i, n, g) == 0).any()) for i in range(NPROB))
+    BUD.append(("고정", n, ok/NPROB, float(n)))
+    print(f"{'고정 n=' + str(n):>24} {ok/NPROB:>9.3f} {float(n):>11.1f} "
+          f"{'—':>10}")
+print()
+for cap in [4, 16, 64]:
+    g = np.random.default_rng(1)
+    ok = tot = 0
+    for i in range(NPROB):
+        a = sample_answers(i, cap, g)
+        w = np.where(a == 0)[0]
+        tot += (int(w[0]) + 1) if len(w) else cap    # 첫 정답에서 멈춘다
+        ok += len(w) > 0
+    BUD.append(("적응", cap, ok/NPROB, tot/NPROB))
+    print(f"{'적응 (상한 ' + str(cap) + ')':>24} {ok/NPROB:>9.3f} "
+          f"{tot/NPROB:>11.1f} {cap/(tot/NPROB):>9.1f}x")
+print()
+ad = [b for b in BUD if b[0] == "적응" and b[1] == 64][0]
+print(f"**정확도는 같고 비용은 {64/ad[3]:.1f}배 싸다** "
+      f"({ad[2]:.3f}, 평균 {ad[3]:.1f} 샘플).")
+print("  쉬운 문제가 1~2번에 끝나기 때문이다.")
+print()
+print("**그런데 비용의 대부분은 못 푸는 문제가 쓴다.**")
+g = np.random.default_rng(1)
+spent_solved = spent_failed = n_s = n_f = 0
+for i in range(NPROB):
+    a = sample_answers(i, 64, g)
+    w = np.where(a == 0)[0]
+    if len(w):
+        spent_solved += int(w[0]) + 1
+        n_s += 1
+    else:
+        spent_failed += 64
+        n_f += 1
+tot = spent_solved + spent_failed
+print(f"  푼 문제  {n_s:>3}개: 샘플 {spent_solved:>6,} ({spent_solved/tot:.0%})")
+print(f"  못 푼 문제 {n_f:>3}개: 샘플 {spent_failed:>6,} ({spent_failed/tot:.0%})")
+print()
+print(f"  **문제의 {n_f/NPROB:.0%} 가 연산의 {spent_failed/tot:.0%} 를 쓴다.**")
+print("  상한을 낮추면 비용이 크게 줄고 정확도는 조금만 준다.")
+print()
+print("실제 추론 모델의 대응물:")
+for s in ["**사고 예산 파라미터** — 사용자가 지연/비용을 직접 고른다",
+          "난이도 추정 후 배분 — 추정 자체가 또 다른 예측 문제다",
+          "조기 종료 — 답이 안정되면 멈춘다 (검증자 없이도 가능)",
+          "**어려운 질의를 큰 모델로 라우팅** — 예산을 모델 크기로도 쓴다",
+          "못 푸는 문제를 빨리 포기하는 것이 실제로 가장 큰 절약이다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G7.12.4 — 학습 vs 추론 연산 교환
+## G7.12.4 — RLVR: 결과 보상만으로 학습이 되는가
 
-같은 총 연산에서 두 축의 배분에 따른 성능 등고선
+여기서 방향이 바뀐다. 지금까지는 **추론 시간에** 여러 개를 뽑았다.
+RLVR은 그 신호로 **모델 자체를 학습**한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 예산 배분 슬라이더
-:::
+$k$ 단계 문제를 만들고, 단계마다 $A$ 개 행동 중 하나가 맞다.
+정책은 단계별 로짓이고 REINFORCE로 학습한다. 두 보상을 비교한다.
+
+- **ORM (결과 보상)** — 모든 단계가 맞을 때만 1
+- **PRM (과정 보상)** — 맞은 단계마다 1
+
+```{python}
+#| label: rlvr
+#| code-fold: false
+
+import numpy as np
+
+A = 4
+
+
+def train(mode, k, steps=4000, batch=32, lr=0.6, seed=0, init=0.0,
+          thresh=0.5):
+    """단계별 로짓을 REINFORCE 로 학습. 정답 행동은 0."""
+    g = np.random.default_rng(seed)
+    logit = np.zeros((k, A))
+    logit[:, 0] = init
+    hit_at = None
+    for t in range(steps):
+        pr = np.exp(logit - logit.max(1, keepdims=True))
+        pr /= pr.sum(1, keepdims=True)
+        acts = np.stack([g.choice(A, batch, p=pr[s]) for s in range(k)], 1)
+        ok = (acts == 0)
+        R = (ok.all(1).astype(float)[:, None].repeat(k, 1) if mode == "ORM"
+             else ok.astype(float))
+        b = R.mean(0, keepdims=True)                  # 베이스라인
+        for s in range(k):
+            oh = np.zeros((batch, A))
+            oh[np.arange(batch), acts[:, s]] = 1
+            logit[s] += lr*((R[:, s] - b[0, s])[:, None]*(oh - pr[s])).mean(0)
+        if hit_at is None:
+            q = np.exp(logit - logit.max(1, keepdims=True))
+            q /= q.sum(1, keepdims=True)
+            if float(np.prod(q[:, 0])) > thresh:
+                hit_at = (t + 1)*batch
+    q = np.exp(logit - logit.max(1, keepdims=True))
+    q /= q.sum(1, keepdims=True)
+    return float(np.prod(q[:, 0])), hit_at
+
+
+print(f"단계마다 행동 {A}개. 학습 전 성공률은 (1/{A})^k 다.")
+print()
+print(f"{'k':>4} {'학습 전 성공률':>14} {'ORM 최종':>10} {'ORM 샘플':>12} "
+      f"{'PRM 최종':>10} {'PRM 샘플':>12}")
+print("-" * 68)
+RLVR = []
+for k in [3, 4, 6, 8, 10]:
+    o, oh = train("ORM", k)
+    p_, ph = train("PRM", k)
+    RLVR.append((k, (1/A)**k, o, oh, p_, ph))
+    print(f"{k:>4} {(1/A)**k:>14.2e} {o:>10.3f} "
+          f"{(f'{oh:,}' if oh else '도달 못함'):>12} {p_:>10.3f} "
+          f"{(f'{ph:,}' if ph else '도달 못함'):>12}")
+print()
+print("**ORM 은 k=8 부터 아예 학습되지 않는다.**")
+print("  보상이 0 이면 그래디언트도 0 이다. 성공을 한 번도 못 보면 시작이 안 된다.")
+r6 = [r for r in RLVR if r[0] == 6][0]
+print(f"  k=6 에서도 ORM 은 샘플 {r6[3]:,}개, PRM 은 {r6[5]:,}개 — "
+      f"{r6[3]/r6[5]:.0f}배 차이다.")
+print()
+print("**PRM 은 k에 거의 영향받지 않는다.** 단계마다 독립적인 신호가 있기 때문이다.")
+print("  이것이 과정 보상의 본질이다 — **신용 할당 문제를 없애 버린다.**")
+```
+
+그런데 실제 RLVR은 수십~수백 스텝짜리 사고 연쇄에서 **결과 보상만으로** 작동한다.
+왜 여기서는 안 되는가? 답은 **기본 모델**에 있다.
+
+```{python}
+#| label: rlvr-init
+#| code-fold: false
+
+import numpy as np
+
+print("k=10 고정. 학습 전 단계 정확도를 바꿔 가며 ORM 만으로 학습한다.")
+print()
+print(f"{'초기 단계 정확도':>16} {'학습 전 성공률':>15} {'ORM 최종':>10} "
+      f"{'ORM 샘플':>12}")
+print("-" * 56)
+INIT = []
+for init in [0.0, 1.5, 2.5, 3.5]:
+    e = np.exp(np.array([init, 0.0, 0.0, 0.0]))
+    p0 = float(e[0]/e.sum())
+    f, h = train("ORM", 10, init=init)
+    INIT.append((p0, p0**10, f, h))
+    print(f"{p0:>16.3f} {p0**10:>15.2e} {f:>10.3f} "
+          f"{(f'{h:,}' if h else '도달 못함'):>12}")
+print()
+print("**기본 모델이 가끔이라도 성공하면 ORM 이 작동한다.**")
+i2 = INIT[1]
+print(f"  단계 정확도 {i2[0]:.3f} 이면 전체 성공률이 {i2[1]:.1e} 에 불과한데도")
+print(f"  샘플 {i2[3]:,}개로 학습이 된다. 배치마다 가끔 성공이 나오기 때문이다.")
+print()
+print("**이것이 RLVR 의 전제조건이다.**")
+for s in ["RLVR 은 **없는 능력을 만들지 않는다** — 이미 가끔 하는 것을 안정화한다",
+          "그래서 강한 사전학습 모델 위에서만 통한다",
+          "탐색이 통하려면 pass@n 이 0 보다 커야 한다 (위 G7.12.1의 상한과 같은 이야기)",
+          "**커리큘럼** — 쉬운 문제부터 주면 성공 신호가 생긴다",
+          "PRM 은 이 전제를 완화한다. 대신 단계 라벨을 만드는 비용이 든다"]:
+    print(f"  · {s}")
+print()
+print("PRM 라벨을 만드는 실제 방법:")
+for s in ["사람이 단계마다 채점 (PRM800K) — 정확하지만 비싸다",
+          "**몬테카를로 롤아웃** — 그 단계에서 이어서 여러 번 풀어 성공률로 라벨",
+          "  결과 보상만으로 과정 라벨을 만드는 셈이다. 비용은 롤아웃 수만큼",
+          "PRM 은 탐색에도 쓰인다 — 나쁜 접두사를 일찍 가지치기"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 핵심 용어
+## G7.12.5 — 결과만 채점하면 과정은 어떻게 되는가
 
-| 용어 | 비고 |
+수학에서는 같은 답에 이르는 풀이가 여럿이다. 결과 보상은 그것들을 구분하지 않는다.
+
+행동 0(의도한 풀이)과 행동 1(다른 풀이)이 **둘 다 정답 결과**를 내게 만들고,
+과정 라벨은 행동 0만 맞다고 본다.
+
+```{python}
+#| label: faithful
+#| code-fold: false
+
+import numpy as np
+
+
+def train_equiv(mode, k=6, steps=4000, batch=32, lr=0.6, seed=0):
+    g = np.random.default_rng(seed)
+    logit = np.zeros((k, A))
+    for t in range(steps):
+        pr = np.exp(logit - logit.max(1, keepdims=True))
+        pr /= pr.sum(1, keepdims=True)
+        acts = np.stack([g.choice(A, batch, p=pr[s]) for s in range(k)], 1)
+        R = ((acts <= 1).all(1).astype(float)[:, None].repeat(k, 1)
+             if mode == "ORM" else (acts == 0).astype(float))
+        b = R.mean(0, keepdims=True)
+        for s in range(k):
+            oh = np.zeros((batch, A))
+            oh[np.arange(batch), acts[:, s]] = 1
+            logit[s] += lr*((R[:, s] - b[0, s])[:, None]*(oh - pr[s])).mean(0)
+    pr = np.exp(logit - logit.max(1, keepdims=True))
+    pr /= pr.sum(1, keepdims=True)
+    return float(np.prod(pr[:, :2].sum(1))), float(pr[:, 0].mean())
+
+
+print(f"{'학습 신호':>10} {'최종 정답률':>12} {'과정이 의도대로일 확률':>22}")
+print("-" * 48)
+FAITH = []
+for m in ["ORM", "PRM"]:
+    a, f = train_equiv(m)
+    FAITH.append((m, a, f))
+    print(f"{m:>10} {a:>12.3f} {f:>22.3f}")
+print()
+orm, prm = FAITH[0], FAITH[1]
+print(f"**두 정책의 정답률은 같다** — {orm[1]:.3f} vs {prm[1]:.3f}.")
+print(f"**과정은 완전히 다르다** — {orm[2]:.3f} vs {prm[2]:.3f}.")
+print()
+print("ORM 정책은 두 풀이 사이에서 거의 동전 던지기를 한다.")
+print("  결과 보상이 둘을 구분하지 않으므로 **구분할 이유가 없다.**")
+print()
+print("**이것이 사고 충실성(faithfulness) 문제의 골격이다.**")
+print("  결과만 최적화하면 '보여 주는 과정'과 '실제로 답을 정하는 것'이 분리된다.")
+print("  분리되어도 최종 점수는 떨어지지 않으므로 학습이 막을 이유가 없다.")
+print()
+print("**이 실험이 보여 주지 못하는 것**")
+for s in ["실제 모델에서 사고 연쇄가 **사후 합리화**인지는 여기서 알 수 없다",
+          "  문헌의 방법: 프롬프트에 힌트를 몰래 넣고 답이 바뀌는지 본다.",
+          "  답은 바뀌는데 사고 연쇄가 힌트를 언급하지 않으면 불충실한 것이다",
+          "여기서는 '결과 보상이 과정을 결정하지 못한다'는 **구조**만 보였다",
+          "실제 모델의 충실성은 별도 측정이 필요하고, 결과는 대체로 부정적이다"]:
+    print(f"  · {s}")
+print()
+print("**모니터링 관점에서 이것이 중요한 이유:**")
+print("  사고 연쇄를 읽어 모델의 의도를 감시하려는 시도가 많다.")
+print("  그런데 사고 연쇄에 **보상을 걸면** 그것은 감시 대상이 아니라 최적화 대상이 된다.")
+print("  '사고 과정에 압력을 주지 말 것' 이라는 권고가 여기서 나온다.")
+```
+
+```{python}
+#| label: fig-rlvr
+#| fig-cap: "결과 보상만으로는 단계가 늘면 학습이 멈추고, 과정 라벨은 충실성까지 결정합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("학습에 필요한 샘플 수",
+                                    "정답률과 과정 충실성"))
+ks = [r[0] for r in RLVR]
+BIG = 4000*32
+fig.add_trace(go.Bar(x=ks, y=[r[3] if r[3] else BIG for r in RLVR],
+                     name="ORM (결과 보상)", marker_color=viz.WARM,
+                     text=["도달 못함" if r[3] is None else f"{r[3]:,}"
+                           for r in RLVR], textposition="outside"),
+              row=1, col=1)
+fig.add_trace(go.Bar(x=ks, y=[r[5] for r in RLVR], name="PRM (과정 보상)",
+                     marker_color=viz.GREEN), row=1, col=1)
+fig.update_xaxes(title_text="단계 수 k", row=1, col=1)
+fig.update_yaxes(title_text="0.5 도달까지의 샘플 수", type="log", row=1, col=1)
+
+fig.add_trace(go.Bar(x=["ORM", "PRM"], y=[f[1] for f in FAITH],
+                     name="최종 정답률", marker_color=viz.ACCENT,
+                     text=[f"{f[1]:.3f}" for f in FAITH],
+                     textposition="outside"), row=1, col=2)
+fig.add_trace(go.Bar(x=["ORM", "PRM"], y=[f[2] for f in FAITH],
+                     name="과정이 의도대로", marker_color=viz.PINK,
+                     text=[f"{f[2]:.3f}" for f in FAITH],
+                     textposition="outside"), row=1, col=2)
+fig.update_yaxes(range=[0, 1.2], row=1, col=2)
+viz.fig_defaults(fig, height=430, title="")
+fig.show()
+```
+
+---
+
+## 학습 연산과 추론 연산의 교환
+
+두 축은 같은 화폐로 살 수 있지만, **지불 방식이 다르다.**
+
+```{python}
+#| label: tradeoff
+#| code-fold: false
+
+print("같은 성능을 학습으로 살 것인가, 추론으로 살 것인가")
+print()
+print(f"{'축':<16} {'언제 내는가':<20} {'질의 Q개의 총 비용'}")
+print("-" * 68)
+print(f"{'학습 연산 C_t':<16} {'한 번':<20} C_t")
+print(f"{'추론 연산 C_i':<16} {'질의마다':<20} Q × C_i")
+print()
+print("따라서 손익분기는 **질의 수**가 정한다.")
+print()
+print(f"{'상황':<26} {'유리한 쪽'}")
+print("-" * 62)
+for a, b in [
+    ("질의가 아주 많다 (제품)", "**학습에 투자** — 추론 비용이 Q배로 곱해진다"),
+    ("질의가 적다 (연구·평가)", "**추론에 투자** — 학습은 비싸고 되돌릴 수 없다"),
+    ("어려운 질의가 소수", "**적응적 배분** — 위 G7.12.3"),
+    ("지연이 중요하다", "학습 — 추론 시간 스케일링은 곧 지연이다"),
+    ("도메인이 자주 바뀐다", "추론 — 재학습 없이 예산만 올린다"),
+]:
+    print(f"{a:<26} {b}")
+print()
+print("**증류가 이 교환을 한 번 더 접는다.**")
+for s in ["큰 추론 모델로 사고 연쇄를 대량 생성한다 (추론 연산)",
+          "정답인 것만 걸러 작은 모델에 SFT 한다 (학습 연산)",
+          "결과: 작은 모델이 짧은 추론으로 비슷한 성능을 낸다",
+          "**추론 연산을 한 번 써서 학습 연산으로 바꾼 것**이다",
+          "한계: 증류된 모델은 원본이 못 푸는 문제를 여전히 못 푼다"]:
+    print(f"  · {s}")
+print()
+print("**추론 모델 평가에서 특히 조심할 것**")
+for s in ["오염 — 수학·코드 벤치마크는 웹에 그대로 있다. 발표 후 벤치마크를 쓴다",
+          "**연산량을 고정하지 않은 비교는 무의미하다** — n을 밝히지 않은 점수",
+          "pass@1 과 pass@n 과 best-of-n 은 전혀 다른 숫자다",
+          "사고 길이가 늘면 지연·비용이 함께 는다 — 점수만 보면 안 된다",
+          "정답 추출 방식(마지막 숫자? 박스 안?)이 점수를 몇 %p 씩 바꾼다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| 추론 시간 스케일링 |  |
-| RLVR |  |
-| 과정 보상 모델 (PRM) |  |
-| best-of-n |  |
-| 사고 충실성 |  |
+| 새 축 | 추론 연산. 학습은 한 번, **추론은 질의마다** 낸다 |
+| pass@n | 0.223 → **0.855** (n=4096). 상한은 p>0 인 문제 비율 |
+| 상한의 정체 | 정답에 확률 질량이 0인 문제는 몇 번을 뽑아도 안 나온다 |
+| **다수결의 한계** | 0.44에서 정체 — 오답이 몰려 있으면 오답이 최빈값이다 |
+| 보상 모델 잡음 | σ=0.5 → 0.835, σ=1.0 → 0.710, σ=2.0 → 0.560 |
+| **핵심 병목** | 많이 생각하기가 아니라 **고르기**. 검증자가 천장을 정한다 |
+| 어디서 중요한가 | 어려운 문제(0<p<0.10): 완벽 1.000 vs σ=1.0 **0.395** |
+| RLVR의 도메인 | 수학·코드·형식증명은 σ≈0. 그래서 거기서만 크게 통했다 |
+| 과최적화 하락 | 이 설정에선 **재현되지 않았다** — 포화일 뿐. 이유를 본문에 |
+| 적응적 예산 | 같은 정확도(0.810)를 **3.7배 싸게** (평균 17.3 샘플) |
+| 비용의 소재 | 못 푼 문제 19%가 연산의 **70%** 를 쓴다 — 빨리 포기하는 게 절약 |
+| **ORM vs PRM** | k=6에서 이미 **97배** 차, k=8부터는 학습 자체가 안 된다 |
+| ORM이 살아나는 조건 | 기본 모델이 **가끔이라도 성공**하면 된다 (성공률 6e-3이면 충분) |
+| RLVR의 전제 | 없는 능력을 만들지 않는다. **이미 하는 것을 안정화**한다 |
+| **충실성** | ORM은 정답률 0.998에 과정 충실성 0.525 — 구분할 이유가 없다 |
+| 모니터링 함의 | 사고 연쇄에 보상을 걸면 감시 대상이 최적화 대상이 된다 |
+| 증류 | 추론 연산을 써서 학습 연산으로 바꾸는 것 |
+| 평가 | **연산량을 고정하지 않은 점수 비교는 무의미하다** |
+
+성능을 올리는 법을 봤다. 그런데 그 성능을 **어떻게 잰다는 말인가?**
 
 ---
 
-**다음**: [7.13 LLM 평가](13_evaluation.qmd) — 벤치마크·LLM-as-judge·오염 — 무엇을 측정하고 있는가
+**다음**: [7.13 LLM 평가](13_evaluation.qmd)
 
 **이전**: [7.11 에이전트와 도구 사용](11_agents.qmd)
