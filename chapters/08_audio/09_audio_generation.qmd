@@ -4,89 +4,699 @@ subtitle: "AudioLM·MusicGen·오디오 LLM — 소리를 언어처럼 생성하
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[8.8](08_vocoders_codecs.qmd)에서 오디오가 **토큰**이 되었다.
+그 순간 [Part 7](../07_language/00_text_representation.qmd)에서 쌓은 것이 전부 재사용된다 —
+자기회귀 생성, 샘플링 전략, 조건부 생성, 그리고 그 실패 양식까지.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그런데 오디오 토큰은 텍스트 토큰과 두 가지가 다르다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+| | 텍스트 | 오디오 코덱 토큰 |
+|---|---|---|
+| 초당 개수 | 3~5개 | **150~750개** (8.8) |
+| 한 시점의 토큰 | 1개 | **여러 개** (RVQ 단계마다 하나) |
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 두 줄에서 이 장의 문제가 거의 다 나온다.
+
+---
+
+## 준비: 두 종류의 소리
+
+음악처럼 **반복 구조가 있는** 신호와, 음성처럼 없는 신호를 만든다.
+
+```{python}
+#| label: corpus
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+from scipy import signal, linalg
+from src import audio
+
+SR, N_FFT, HOP, NMEL = 16000, 512, 128, 64
+FB, CEN, _ = audio.mel_filterbank(NMEL, N_FFT, SR)
+FPS = SR/HOP
+
+
+def note(f0, n, g, decay=3.0):
+    t = np.arange(n)/SR
+    y = sum(np.sin(2*np.pi*f0*k*t)/k**1.4 for k in range(1, 7))
+    return y*np.exp(-decay*t)
+
+
+def music_clip(g, dur=4.0, base=220.0):
+    """4음 프레이즈를 반복한다 — **장기 구조가 있는** 신호."""
+    n = int(dur*SR)
+    x = np.zeros(n)
+    scale = base*2**(np.array([0, 2, 4, 5, 7, 9, 11, 12])/12)
+    phrase = [int(g.integers(len(scale))) for _ in range(4)]
+    step = int(0.25*SR)
+    for i in range(n//step):
+        seg = note(scale[phrase[i % 4]], step, g)
+        x[i*step:i*step + len(seg)] += seg[:n - i*step]
+    return x/np.max(np.abs(x)) + g.normal(0, 0.005, n)
+
+
+VOW = [(730, 1090, 2440), (270, 2290, 3010), (300, 870, 2240),
+       (530, 1840, 2480), (570, 840, 2410)]
+
+
+def speech_clip(g, dur=4.0):
+    """8.0 의 소스-필터 — 프레이즈 반복이 없다."""
+    f0 = g.uniform(110, 200)
+    xs = []
+    while sum(len(v) for v in xs) < int(dur*SR):
+        fs = VOW[int(g.integers(len(VOW)))]
+        n = int(g.uniform(0.08, 0.15)*SR)
+        src = np.zeros(n)
+        src[::max(1, int(round(SR/f0)))] = 1.0
+        b, a = np.array([1.0]), np.array([1.0])
+        for f, bw in zip(fs, (80, 90, 120)):
+            r = np.exp(-np.pi*bw/SR)
+            th = 2*np.pi*f/SR
+            b = np.convolve(b, [1 - 2*r*np.cos(th) + r**2])
+            a = np.convolve(a, [1, -2*r*np.cos(th), r**2])
+        y = signal.lfilter(b, a, src)
+        xs.append(y/(np.max(np.abs(y)) + 1e-9))
+    x = np.concatenate(xs)[:int(dur*SR)]
+    return x/np.max(np.abs(x)) + g.normal(0, 0.005, len(x))
+
+
+def logmel(x):
+    S = np.abs(audio.stft(x, N_FFT, HOP))**2
+    return np.log(FB @ S + 1e-10)
+
+
+g0 = np.random.default_rng(0)
+MUSIC = [music_clip(g0) for _ in range(50)]
+SPEECH = [speech_clip(g0) for _ in range(50)]
+PHRASE = int(4*0.25*FPS)          # 4음 x 0.25초 = 프레임 수
+
+print(f"음악 풍 {len(MUSIC)}개 / 음성 풍 {len(SPEECH)}개, 각 4초")
+print(f"  프레임 {FPS:.0f}/초, 프레이즈 주기 = {PHRASE} 프레임 (1.0초)")
+print()
+print("**음악 쪽에만 1초 주기의 반복이 심어져 있다.** 그것이 뒤에서 쓰인다.")
+```
+
+```{python}
+#| label: tokens
+#| code-fold: false
+
+import numpy as np
+
+K = 64                              # 토큰 어휘
+
+
+def nearest(X, C):
+    d = (X**2).sum(1)[:, None] - 2*X @ C.T + (C**2).sum(1)[None]
+    return d.argmin(1)
+
+
+def kmeans_fast(X, k, n_iter=12, seed=0):
+    g = np.random.default_rng(seed)
+    C = X[g.choice(len(X), k, replace=False)].copy()
+    for _ in range(n_iter):
+        lab = nearest(X, C)
+        for j in range(k):
+            m = lab == j
+            if m.any():
+                C[j] = X[m].mean(0)
+    return C
+
+
+FIT = np.concatenate([logmel(x).T for x in MUSIC[:20] + SPEECH[:20]], axis=0)
+MU_, SD_ = FIT.mean(0), FIT.std(0) + 1e-9
+CEN_T = kmeans_fast((FIT - MU_)/SD_, K, seed=0)
+
+
+def toks(x):
+    return nearest((logmel(x).T - MU_)/SD_, CEN_T)
+
+
+print(f"로그멜 프레임을 k-means 로 이산화 — 어휘 {K}")
+print(f"  (8.8의 RVQ 1단계와 같은 구조. 여기서는 단계 하나만 쓴다)")
+print(f"  4초 클립 하나 = {len(toks(MUSIC[0]))} 토큰")
+```
+
+---
+
+## G8.9.1 — 토큰이 너무 많다
+
+먼저 규모를 본다. 오디오 LM의 첫 번째 벽은 **시퀀스 길이**다.
+
+```{python}
+#| label: length
+#| code-fold: false
+
+import numpy as np
+
+print("코덱 토큰으로 오디오를 만들 때의 시퀀스 길이")
+print()
+print(f"{'길이':<12} {'프레임/초':>9} {'RVQ 단계':>9} {'평탄화 토큰 수':>15} "
+      f"{'어텐션 비용(상대)':>18}")
+print("-" * 70)
+LEN = []
+for lbl, sec, fps, ns in [("발화 10초", 10, 75, 8),
+                          ("노래 30초", 30, 75, 8),
+                          ("노래 3분", 180, 75, 8),
+                          ("노래 3분 (2단계)", 180, 75, 2)]:
+    n = int(sec*fps*ns)
+    LEN.append((lbl, n))
+    print(f"{lbl:<12} {fps:>9} {ns:>9} {n:>15,} {n**2/1e9:>17.1f}G")
+print()
+print("**텍스트와 비교하면** — 3분 노래의 토큰 수가")
+n3 = [l for l in LEN if l[0] == "노래 3분"][0][1]
+print(f"  {n3:,}개다. 같은 길이의 텍스트라면 책 한 권 분량이다.")
+print("  어텐션은 길이의 제곱이므로 이대로는 감당이 안 된다 (7.14).")
+print()
+print("**그래서 '한 시점의 여러 토큰'을 어떻게 펼치느냐가 설계 문제가 된다.**")
+print()
+S, T = 8, 75*30
+print(f"{'배치 전략':<22} {'시퀀스 길이':>14} {'단계 간 의존':>14} {'비고'}")
+print("-" * 74)
+for a, n, dep, c in [
+    ("평탄화 (flatten)", T*S, "완전", "가장 길다. T x S"),
+    ("병렬 헤드", T, "**없음**", "한 스텝에 S개를 동시에"),
+    ("지연 패턴 (delay)", T + S, "부분", "단계마다 한 스텝씩 밀어 넣는다"),
+    ("계층 (coarse→fine)", f"{T} + {T*(S-1)}", "부분", "1단계만 AR, 나머지는 조건부"),
+]:
+    print(f"{a:<22} {str(n):>14} {dep:>14}  {c}")
+print()
+print("**MusicGen 이 쓰는 지연 패턴이 절충의 좋은 예다.**")
+for s in ["단계 s 의 토큰을 s 스텝만큼 뒤로 민다",
+          "그러면 한 스텝에서 **이미 생성된 앞 단계 토큰을 볼 수 있다**",
+          f"시퀀스는 {T*S:,} 대신 {T+S:,} — 평탄화의 {(T+S)/(T*S):.1%} 다",
+          "완전한 의존은 아니지만 병렬 헤드보다 낫다"]:
+    print(f"  · {s}")
+print()
+print("**계층 구조는 다른 축으로 자른다** (AudioLM 의 방식)")
+print(f"{'단계':<16} {'토큰 종류':<20} {'초당':>8} {'담는 것'}")
+print("-" * 68)
+for a, b, c, d in [("1단계", "의미 토큰 (8.5)", "25~50", "무엇을 말/연주하는가"),
+                   ("2단계", "거친 음향 토큰", "150", "음색·화자의 큰 틀"),
+                   ("3단계", "세밀한 음향 토큰", "600", "세부 — 조건부로 채운다")]:
+    print(f"{a:<16} {b:<20} {c:>8} {d}")
+print()
+print("  **긴 문맥이 필요한 것은 1단계뿐이다.** 3분이 의미 토큰으로는 "
+      f"{180*35:,}개 정도다.")
+print("  뒤 단계는 짧은 문맥만 보면 되므로 비용이 감당 가능해진다.")
+```
+
+---
+
+## G8.9.2 — 음악의 진짜 문제는 장기 구조다
+
+음악에는 **1초, 8초, 30초** 규모의 반복이 있다. 모티프, 마디, 후렴.
+그것을 만들 수 있는지 측정한다.
+
+토큰 열의 **자기일치율**(lag만큼 떨어진 토큰이 같은 비율)을 재면
+반복 구조가 그대로 보인다.
+
+```{python}
+#| label: structure
+#| code-fold: false
+
+import numpy as np
+import collections
+
+MAXLAG = 260
+
+
+def autocorr(seq, maxlag=MAXLAG):
+    return np.array([float(np.mean(seq[:-l] == seq[l:]))
+                     for l in range(1, maxlag + 1)])
+
+
+TRAIN = [toks(x) for x in MUSIC[:30]]
+REAL = [toks(x) for x in MUSIC[30:]]
+AC_REAL = np.mean([autocorr(s) for s in REAL], axis=0)
+AC_SPE = np.mean([autocorr(toks(x)) for x in SPEECH[:20]], axis=0)
+
+# 토큰 위에서 3-gram 언어모델을 학습해 생성한다
+CNT = collections.defaultdict(lambda: np.full(K, 0.1))
+for s in TRAIN:
+    for i in range(2, len(s)):
+        CNT[(int(s[i-2]), int(s[i-1]))][s[i]] += 1
+
+
+def gen_ngram(n, seed=0):
+    g = np.random.default_rng(seed)
+    s = list(TRAIN[0][:2])
+    for _ in range(n):
+        c = CNT[(int(s[-2]), int(s[-1]))]
+        s.append(int(g.choice(K, p=c/c.sum())))
+    return np.array(s)
+
+
+AC_GEN = np.mean([autocorr(gen_ngram(len(REAL[0]), seed=i))
+                  for i in range(15)], axis=0)
+
+print(f"{'lag (프레임)':>12} {'실제 음악':>11} {'3-gram 생성':>13} "
+      f"{'실제 음성':>11}  {'비고'}")
+print("-" * 68)
+for lag in [1, 10, 31, 62, PHRASE, 2*PHRASE]:
+    note_ = ("**프레이즈 주기**" if lag == PHRASE else
+             "**2주기**" if lag == 2*PHRASE else
+             "(한 음 길이)" if lag == 31 else "")
+    print(f"{lag:>12} {AC_REAL[lag-1]:>11.3f} {AC_GEN[lag-1]:>13.3f} "
+          f"{AC_SPE[lag-1]:>11.3f}  {note_}")
+print()
+base_r = float(np.median(AC_REAL[40:]))
+base_g = float(np.median(AC_GEN[40:]))
+peak = int(np.argmax(AC_REAL[20:])) + 21
+print(f"긴 lag 의 기준선: 실제 {base_r:.3f} / 생성 {base_g:.3f}")
+print(f"프레이즈 주기에서의 초과분: 실제 **{AC_REAL[PHRASE-1]-base_r:+.3f}** / "
+      f"생성 **{AC_GEN[PHRASE-1]-base_g:+.3f}**")
+print(f"실제 음악의 자기일치율 최대 피크(lag>20): **{peak} 프레임** "
+      f"= {peak/FPS:.2f}초")
+print()
+print("**실제 음악에는 프레이즈 주기에 뚜렷한 봉우리가 있다.**")
+print("  1초 전 토큰과 지금 토큰이 같을 확률이 기준선의 "
+      f"{AC_REAL[PHRASE-1]/base_r:.0f}배다.")
+print()
+print("**3-gram 생성에는 그 봉우리가 없다.** 초과분이 사실상 0이다.")
+for s in ["3-gram 은 **직전 2 프레임**만 본다 — 1초 전은 문맥에 없다",
+          "국소 통계(음색, 음의 이어짐)는 그럴듯하게 만든다",
+          "그런데 **같은 프레이즈를 다시 연주하는 것**은 못 한다",
+          "들으면 '음악 같은 소리인데 곡이 아닌' 것이 이 차이다"]:
+    print(f"  · {s}")
+print()
+print("**필요한 문맥 길이를 계산해 보면**")
+print(f"{'구조':<20} {'시간':>8} {'의미 토큰(35/s)':>16} {'음향 토큰(600/s)':>18}")
+print("-" * 68)
+for a, sec in [("모티프", 1), ("악구", 4), ("마디 묶음", 8),
+               ("절-후렴 구조", 30), ("곡 전체", 180)]:
+    print(f"{a:<20} {sec:>7}초 {int(sec*35):>16,} {int(sec*600):>18,}")
+print()
+print("**절-후렴 구조를 보려면 음향 토큰 18,000개를 문맥에 넣어야 한다.**")
+print("  의미 토큰이면 1,050개다 — 그래서 계층 구조가 필요하다 (G8.9.1).")
+print("  긴 문맥 어텐션(7.14)과 오디오 LM 이 같은 문제를 푸는 셈이다.")
+```
+
+```{python}
+#| label: fig-structure
+#| fig-cap: "실제 음악은 프레이즈 주기에 뚜렷한 봉우리가 있고, 국소 모델의 생성물에는 없습니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
+                    subplot_titles=("토큰 자기일치율", "시퀀스 길이 (30초 기준)"))
+lags = np.arange(1, MAXLAG + 1)
+for nm, v, c in [("실제 음악", AC_REAL, viz.GREEN),
+                 ("3-gram 생성", AC_GEN, viz.WARM),
+                 ("실제 음성", AC_SPE, viz.ACCENT)]:
+    fig.add_trace(go.Scatter(x=lags, y=v, mode="lines", name=nm,
+                             line=dict(color=c, width=2)), row=1, col=1)
+for m in (1, 2):
+    fig.add_vline(x=PHRASE*m, line=dict(color=viz.YELLOW, width=1.4,
+                                        dash="dash"), row=1, col=1)
+fig.update_xaxes(title_text="lag (프레임)", row=1, col=1)
+fig.update_yaxes(title_text="같은 토큰일 확률", row=1, col=1)
+
+names = ["평탄화", "지연 패턴", "병렬 헤드", "의미 토큰만"]
+vals = [T*S, T + S, T, int(30*35)]
+fig.add_trace(go.Bar(x=names, y=vals, marker_color=viz.ACCENT,
+                     text=[f"{v:,}" for v in vals], textposition="outside",
+                     showlegend=False), row=1, col=2)
+fig.update_yaxes(title_text="토큰 수", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="")
+fig.update_layout(margin=dict(l=60, r=30, t=60, b=60),
+                  legend=dict(x=0.01, y=1.16, orientation="h"))
+fig.show()
+```
+
+::: {.interaction-hint}
+초록(실제 음악)은 125프레임과 250프레임(노란 선)에서 솟아오릅니다 — 프레이즈가 1초마다 돌아온다는 뜻입니다. 주황(3-gram 생성)은 그 자리에서 평평합니다. 파랑(음성)은 전체적으로 높지만 **주기적인 봉우리가 없습니다** — 모음이 길게 이어져서 생기는 국소 유사성일 뿐입니다.
 :::
 
-오디오를 토큰으로 바꾸는 순간 Transformer 스택이 그대로 적용된다. 텍스트에서 배운 모든 것이 여기서 재사용된다.
+---
+
+## G8.9.3 — 조건 강도: 재현되지 않은 트레이드오프
+
+텍스트 조건부 생성에서는 **분류자 없는 가이던스(CFG)** 로 조건 충실도를 올린다.
+
+$$\log p_w(x \mid c) = \log p(x \mid c) + (w - 1)\big[\log p(x\mid c) - \log p(x)\big]$$
+
+$w$ 를 키우면 조건에 더 충실해지고 다양성을 잃는다 — 는 것이 표준 설명이다.
+토큰 LM에서 직접 재 본다.
+
+```{python}
+#| label: cfg
+#| code-fold: false
+
+import numpy as np
+import collections
+
+
+def fit_ngram(seqs, alpha=0.2):
+    c = collections.defaultdict(lambda: np.full(K, alpha))
+    for s in seqs:
+        for i in range(2, len(s)):
+            c[(int(s[i-2]), int(s[i-1]))][s[i]] += 1
+    return c
+
+
+TR_M = [toks(x) for x in MUSIC[:40]]
+TR_S = [toks(x) for x in SPEECH[:40]]
+M_MUS, M_SPE, M_UNC = fit_ngram(TR_M), fit_ngram(TR_S), fit_ngram(TR_M + TR_S)
+
+
+def logp(model, ctx):
+    c = model[ctx]
+    return np.log(c/c.sum())
+
+
+def generate(cond, w, n=250, seed=0):
+    g = np.random.default_rng(seed)
+    cm = M_MUS if cond == "music" else M_SPE
+    s = list((TR_M if cond == "music" else TR_S)[0][:2])
+    for _ in range(n):
+        ctx = (int(s[-2]), int(s[-1]))
+        lc, lu = logp(cm, ctx), logp(M_UNC, ctx)
+        z = lc + (w - 1.0)*(lc - lu)
+        z -= z.max()
+        pr = np.exp(z)
+        s.append(int(g.choice(K, p=pr/pr.sum())))
+    return np.array(s[2:])
+
+
+def seq_logp(model, s):
+    return float(np.mean([logp(model, (int(s[i-2]), int(s[i-1])))[s[i]]
+                          for i in range(2, len(s))]))
+
+
+def distinct(s, n=3):
+    grams = [tuple(s[i:i+n]) for i in range(len(s) - n + 1)]
+    return len(set(grams))/max(len(grams), 1)
+
+
+print(f"{'가이던스 w':>11} {'조건 분류 정확도':>17} {'distinct-3':>12} "
+      f"{'토큰 엔트로피':>14}")
+print("-" * 60)
+CFG = []
+for w in [0.0, 1.0, 2.0, 3.0, 5.0, 8.0]:
+    acc, div, ent = [], [], []
+    for cond in ["music", "speech"]:
+        for i in range(10):
+            s = generate(cond, w, seed=100*i + (0 if cond == "music" else 1))
+            pred = ("music" if seq_logp(M_MUS, s) > seq_logp(M_SPE, s)
+                    else "speech")
+            acc.append(pred == cond)
+            div.append(distinct(s))
+            c = np.bincount(s, minlength=K)
+            pp = c[c > 0]/c.sum()
+            ent.append(float(-(pp*np.log2(pp)).sum()))
+    CFG.append((w, float(np.mean(acc)), float(np.mean(div)),
+                float(np.mean(ent))))
+    print(f"{w:>11.1f} {np.mean(acc):>17.3f} {np.mean(div):>12.3f} "
+          f"{np.mean(ent):>14.2f}")
+print()
+w0, w1, w8 = CFG[0], CFG[1], CFG[-1]
+print(f"**w=0 (조건 무시) 에서 {w1[0]:.0f} 로 갈 때는 효과가 뚜렷하다** — "
+      f"분류 정확도 {w0[1]:.3f} → {w1[1]:.3f}.")
+print()
+print(f"**그런데 w 를 더 키워도 아무 일도 일어나지 않는다.**")
+print(f"  정확도 {w1[1]:.3f} → {w8[1]:.3f}, "
+      f"다양성 {w1[2]:.3f} → {w8[2]:.3f}.")
+print("  **교과서적인 '충실도↑ 다양성↓' 트레이드오프가 재현되지 않았다.**")
+print()
+
+# 왜 그런가 — 조건부와 무조건부가 얼마나 다른지 직접 잰다
+ctxs = list(M_MUS.keys())[:400]
+kl = []
+for ctx in ctxs:
+    p = M_MUS[ctx]/M_MUS[ctx].sum()
+    q = M_UNC[ctx]/M_UNC[ctx].sum()
+    kl.append(float((p*np.log(p/q)).sum()))
+agree = float(np.mean([M_MUS[c].argmax() == M_UNC[c].argmax() for c in ctxs]))
+print("진단 ① — 조건부와 무조건부가 한 스텝에서 얼마나 다른가")
+print(f"  KL(p(x|c) || p(x)) 평균 = {np.mean(kl):.3f} nats")
+print(f"  최빈 토큰이 일치하는 문맥 비율 = {agree:.3f}")
+print()
+print("  **차이가 아주 작다.** 그러면 (w-1) 을 곱해도 밀어낼 것이 별로 없다.")
+print()
+print("진단 ② — 가이던스가 실제로 분포를 뾰족하게 만드는가")
+print(f"{'w':>6} {'다음 토큰 분포의 평균 엔트로피 (bits)':>36}")
+print("-" * 46)
+for w in [1.0, 2.0, 5.0, 8.0]:
+    es = []
+    for ctx in ctxs:
+        lc, lu = logp(M_MUS, ctx), logp(M_UNC, ctx)
+        z = lc + (w - 1.0)*(lc - lu)
+        z -= z.max()
+        pr = np.exp(z)
+        pr /= pr.sum()
+        pp = pr[pr > 1e-12]
+        es.append(float(-(pp*np.log2(pp)).sum()))
+    print(f"{w:>6.1f} {np.mean(es):>36.3f}")
+print()
+print("**두 진단이 같은 곳을 가리킨다.**")
+for s in ["한 스텝의 조건부-무조건부 차이가 KL "
+          f"{np.mean(kl):.3f} nats 로 아주 작다",
+          "그래서 w 를 8까지 올려도 분포가 거의 뾰족해지지 않는다 "
+          "→ **다양성이 안 줄어든다**",
+          "한편 분류 지표는 토큰 250개의 증거가 쌓여 w=1 에서 이미 포화된다 "
+          "→ **충실도 향상도 안 보인다**",
+          "**즉 트레이드오프의 양쪽 끝이 모두 이 설정에서는 안 보인다.**",
+          "  CFG 가 작동하지 않는다는 뜻이 아니라, **이 실험으로는 못 잰다**는 뜻이다"]:
+    print(f"  · {s}")
+print()
+print("**어디서 재야 보이는가**")
+for s in ["조건이 **모호할 때** — '잔잔한 피아노' 같은 텍스트는 "
+          "무조건부와 훨씬 가깝고, 가이던스가 실제로 분포를 바꾼다",
+          "확산 모델에서는 연속 점수장을 밀어내므로 성질이 또 다르다 (6.5)",
+          "지표도 포화되지 않는 것을 써야 한다 — "
+          "분류 정확도 대신 **CLAP 정합성 점수**처럼 연속적인 것"]:
+    print(f"  · {s}")
+print()
+print("**실제 오디오 생성에서 보고되는 가이던스의 대가**")
+for s in ["과하면 **똑같은 것만 만든다** — 프롬프트가 같으면 결과도 거의 같다",
+          "음악에서는 **화성이 단조로워지고** 리듬이 기계적이 된다",
+          "텍스트-오디오 정합성 점수는 오르는데 사람 평가는 떨어지는 구간이 있다",
+          "**7.12에서 본 것과 같은 구조다** — 지표를 밀면 지표만 오른다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G8.9.4 — FAD를 직접 만들어 보면
 
-- 오디오 생성의 계층: 의미 토큰 → 음향 토큰 → 파형
-- AudioLM: 계층적 토큰 언어모델링
-- 텍스트 조건부 오디오 생성(AudioGen, AudioLDM)
-- 음악 생성: MusicLM, MusicGen, 조건(텍스트·멜로디·장르)
-- 확산 기반 오디오 생성과 잠재 확산
-- 음악의 구조 문제: 장기 형식, 반복, 화성
-- 실시간 음성 대화 모델: 전이중(full-duplex), 저지연 설계
-- 음성-음성 모델과 텍스트 우회 없는 처리
-- 평가: FAD, 주관 평가, 텍스트 정합성
-- 저작권·학습 데이터·아티스트 동의 문제
+오디오 생성의 표준 자동 지표가 **FAD(Fréchet Audio Distance)** 다.
+[6장](../06_generative/00_generative_overview.qmd)의 FID와 같은 발상이다 —
+임베딩 분포를 가우시안으로 보고 두 분포 사이 거리를 잰다.
+
+$$\mathrm{FAD} = \|\mu_r - \mu_g\|^2
++ \mathrm{tr}\!\left(\Sigma_r + \Sigma_g - 2(\Sigma_r\Sigma_g)^{1/2}\right)$$
+
+```{python}
+#| label: fad
+#| code-fold: false
+
+import numpy as np
+from scipy import linalg
+
+
+def embed(clips):
+    """임베딩. 실제 FAD 는 VGGish/PANN 을 쓰지만 여기서는 로그멜 프레임."""
+    return np.concatenate([logmel(x).T for x in clips], axis=0)
+
+
+def frechet(A, B):
+    mu1, mu2 = A.mean(0), B.mean(0)
+    s1 = np.cov(A, rowvar=False) + 1e-6*np.eye(A.shape[1])
+    s2 = np.cov(B, rowvar=False) + 1e-6*np.eye(B.shape[1])
+    cm = linalg.sqrtm(s1 @ s2)
+    if np.iscomplexobj(cm):
+        cm = cm.real
+    return float(((mu1 - mu2)**2).sum() + np.trace(s1 + s2 - 2*cm))
+
+
+REF = embed(MUSIC[:25])
+gn = np.random.default_rng(5)
+b_lp, a_lp = signal.butter(4, 2000/(SR/2), "low")
+
+CASES = [("같은 분포 (다른 음악 25개)", embed(MUSIC[25:])),
+         ("음성 풍 (완전히 다른 소리)", embed(SPEECH[:25]))]
+for sg in [0.02, 0.08]:
+    CASES.append((f"음악 + 잡음 σ={sg}",
+                  embed([x + gn.normal(0, sg, len(x)) for x in MUSIC[25:]])))
+CASES.append(("음악 + 저역통과 2 kHz",
+              embed([signal.lfilter(b_lp, a_lp, x) for x in MUSIC[25:]])))
+
+print(f"{'비교 대상':<32} {'FAD':>10}")
+print("-" * 46)
+FAD = []
+for nm, E in CASES:
+    v = frechet(REF, E)
+    FAD.append((nm, v))
+    print(f"{nm:<32} {v:>10.2f}")
+print()
+same, diff = FAD[0][1], FAD[1][1]
+print(f"**같은 분포끼리는 {same:.1f}, 다른 종류의 소리는 {diff:.0f}** — "
+      f"{diff/same:.0f}배 차이다.")
+print("  열화(잡음·저역통과)도 크기 순서대로 잡아낸다. 지표로서 작동한다.")
+print()
+print("**그런데 함정이 있다.** 같은 분포끼리 재도 0이 나오지 않는다.")
+print()
+print(f"{'클립 수':>8} {'같은 분포끼리의 FAD':>22}")
+print("-" * 34)
+SAMPLE = []
+for k in [3, 5, 10, 15, 25]:
+    v = frechet(embed(MUSIC[:k]), embed(MUSIC[25:25 + k]))
+    SAMPLE.append((k, v))
+    print(f"{k:>8} {v:>22.2f}")
+print()
+s3, s25 = SAMPLE[0][1], SAMPLE[-1][1]
+print(f"**클립 3개면 {s3:.0f}, 25개면 {s25:.1f} 다.** 같은 분포인데도.")
+print("  (표본이 적을 때는 값 자체도 크게 흔들린다 — 위 표가 단조롭지 않다)")
+print("  공분산 추정이 표본 수에 편향되어 있기 때문이다 —")
+print("  차원이 높을수록 심해진다 (여기서는 임베딩이 "
+      f"{REF.shape[1]}차원).")
+print()
+print("**그래서 FAD 를 읽을 때 지켜야 할 것**")
+for s in ["**표본 수를 맞추지 않은 FAD 비교는 무의미하다** — 위 표가 그 이유다",
+          "논문마다 임베딩 모델이 다르면 값을 비교할 수 없다 (VGGish vs PANN vs CLAP)",
+          "절대값이 아니라 **같은 설정에서의 상대 비교**로만 쓴다",
+          "지각과 완전히 일치하지도 않는다 — 8.8에서 SNR 이 그랬던 것처럼",
+          "**사람 평가(MOS)와 텍스트 정합성을 함께 본다** (8.7, 7.13)"]:
+    print(f"  · {s}")
+print()
+print(f"{'지표':<22} {'무엇을 재나':<28} {'한계'}")
+print("-" * 74)
+for a, b, c in [
+    ("FAD", "생성 분포 vs 실제 분포", "표본 수·임베딩에 민감"),
+    ("CLAP 점수", "텍스트-오디오 정합성", "CLAP 이 못 보는 축은 못 잰다"),
+    ("MOS / MUSHRA", "사람의 절대·상대 평가", "비싸고 느리다 (8.7)"),
+    ("음악성 지표", "조성·박자 일관성", "장르마다 기준이 다르다"),
+    ("**다양성**", "같은 프롬프트의 결과 분산", "**거의 보고되지 않는다**"),
+]:
+    print(f"{a:<22} {b:<28} {c}")
+print()
+print("**마지막 줄이 중요하다.** FAD 는 분포를 재므로 다양성 붕괴에 반응해야")
+print("  하지만, 실제로는 프롬프트별 다양성을 따로 보고하는 논문이 드물다.")
+print("  G8.9.3의 가이던스 대가가 그래서 잘 안 보인다.")
+```
 
 ---
 
-## G8.9.1 — 계층적 토큰 생성
+## 실시간 음성 대화
 
-의미 토큰이 먼저 생성되고 음향 토큰이 채워지는 2단계 구조
+```{python}
+#| label: duplex
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단계 재생
-:::
+print("음성 대화의 지연 예산 — 사람이 어색함을 느끼기 전까지")
+print()
+print("  자연스러운 대화의 응답 간격: 약 200 ms")
+print("  500 ms 를 넘으면 '느리다'고 느끼기 시작한다")
+print()
+print(f"{'구성':<26} {'지연 (ms)':>10} {'비고'}")
+print("-" * 62)
+casc = [("VAD 로 발화 끝 판정", 200, "**끝났는지 기다려야 한다**"),
+        ("ASR (8.6)", 150, "스트리밍이어도 마무리 필요"),
+        ("LLM 첫 토큰 (TTFT)", 350, "7.14의 prefill"),
+        ("LLM 응답 생성", 400, "문장 하나 분량"),
+        ("TTS 첫 소리 (8.7)", 150, "음향 모델 + 보코더")]
+tot = 0
+for a, ms, c in casc:
+    tot += ms
+    print(f"{a:<26} {ms:>10} {c}")
+print(f"{'합계 (캐스케이드)':<26} {tot:>10}")
+print()
+print(f"**{tot} ms 다.** 목표의 {tot/200:.0f}배다.")
+print()
+print("**종단간 음성-음성 모델이 줄이는 것**")
+for a, b in [("텍스트 왕복 제거", "ASR·TTS 의 지연과 오류가 사라진다"),
+             ("발화 끝을 기다리지 않음", "**겹쳐 말하기(barge-in)** 가 가능해진다"),
+             ("준언어 정보 보존", "억양·웃음·망설임이 텍스트에서 지워지지 않는다"),
+             ("**전이중(full-duplex)**", "듣기와 말하기를 동시에 — 사람의 대화 구조")]:
+    print(f"  · **{a}** — {b}")
+print()
+print("**대신 잃는 것**")
+for s in ["텍스트 중간 표현이 없어 **무엇을 들었는지 검증하기 어렵다** (7.15)",
+          "도구 호출·검색 같은 텍스트 기반 기능과 결합이 까다롭다",
+          "학습 데이터가 훨씬 적다 — 대화 음성은 전사보다 구하기 어렵다",
+          "안전 필터를 어디에 걸지가 새 문제가 된다"]:
+    print(f"  · {s}")
+print()
+print("**전이중 모델의 구조적 요구**")
+for s in ["입력 스트림과 출력 스트림을 **동시에** 다뤄야 한다",
+          "  → 시간축을 공유하는 두 토큰 열을 인터리브하는 방식이 쓰인다",
+          "'지금 말할 차례인가'를 모델이 스스로 판단해야 한다 (turn-taking)",
+          "침묵도 **생성해야 하는 토큰**이다 — 아무것도 안 하는 것이 기본 상태",
+          "그래서 8.6의 VAD 가 모델 안으로 들어온 셈이다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G8.9.2 — 조건 강도
+## 저작권과 동의
 
-텍스트 조건 충실도와 다양성의 트레이드오프
+```{python}
+#| label: rights
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 가이던스 슬라이더
-:::
-
----
-
-## G8.9.3 — 생성 오디오 스펙트로그램
-
-프롬프트별 생성 결과의 시간-주파수 구조 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 프롬프트 선택
-:::
-
----
-
-## G8.9.4 — 대화 지연 예산
-
-ASR·LLM·TTS 파이프라인 대 종단간 모델의 지연 분해
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 구성요소 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| AudioLM |  |
-| MusicGen |  |
-| 의미/음향 토큰 |  |
-| 전이중 대화 |  |
-| FAD |  |
+print("음악 생성이 텍스트·이미지보다 더 첨예한 이유")
+print()
+print(f"{'쟁점':<24} {'구체적으로'}")
+print("-" * 70)
+for a, b in [
+    ("학습 데이터", "상업 음악은 거의 전부 권리가 있다"),
+    ("**목소리**", "가수의 음색은 8.7의 복제 기술로 그대로 재현된다"),
+    ("스타일 모방", "'○○ 스타일로' 프롬프트가 곧바로 분쟁이 된다"),
+    ("암기", "**7.15에서 잰 것** — 반복된 데이터는 그대로 나온다"),
+    ("수익 분배", "학습에 쓰인 곡의 권리자에게 어떻게 돌아가는가"),
+]:
+    print(f"{a:<24} {b}")
+print()
+print("**8.8의 코덱 토큰이 이 문제를 더 날카롭게 만든다.**")
+print("  코덱 토큰은 음향을 통째로 담으므로, 재현되는 것이")
+print("  '비슷한 스타일'이 아니라 **그 음색 자체**일 수 있다.")
+print()
+print("현재 쓰이는 대응")
+for s in ["**라이선스된 데이터만** 학습에 쓴다 (일부 상용 서비스의 선택)",
+          "학습 제외 요청(opt-out) 처리 — 실효성 논쟁이 있다",
+          "워터마킹 — 8.7에서 본 대로 재인코딩에 약하다",
+          "생성물 출처 표기(C2PA 등)",
+          "**아티스트 동의를 전제로 한 목소리 라이선싱** — 새로 생긴 시장",
+          "7.15의 결론이 여기서도 같다 — **탐지가 아니라 구조가 막는다**"]:
+    print(f"  · {s}")
+```
 
 ---
 
-**다음**: [8.10 그 밖의 오디오 과제](10_audio_tasks.qmd) — 화자 인식·음원 분리·이벤트 검출 — 음성 인식 바깥
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|---|
+| 출발점 | 오디오가 토큰이 되면 Part 7이 그대로 온다 | 8.8의 RVQ |
+| 다른 점 | 초당 150~750 토큰, 한 시점에 여러 개 | 텍스트는 3~5개, 하나 |
+| **시퀀스 길이** | 3분 노래 = **108,000 토큰** | 어텐션 비용 11.7G |
+| 배치 전략 | 평탄화 / 병렬 헤드 / 지연 / 계층 | 길이와 단계 간 의존의 절충 |
+| 지연 패턴 | 18,000 → **2,258** 토큰 | 평탄화의 12.5% |
+| 계층 구조 | 긴 문맥이 필요한 것은 **의미 토큰뿐** | 3분이 6,300개 |
+| **장기 구조** | 실제 음악: 프레이즈 주기 초과분 **+0.421** | 기준선의 11배 |
+| 국소 모델의 한계 | 3-gram 생성: **−0.009** | 봉우리가 아예 없다 |
+| 무엇이 필요한가 | 절-후렴(30초) = 음향 토큰 18,000개 | 의미 토큰이면 1,050개 |
+| **가이던스 (CFG)** | w=0→1은 0.550→1.000 | 그 뒤로는 **변화 없음** |
+| 재현 실패 | 다양성도 안 줄었다 | 교과서적 트레이드오프 **미재현** |
+| 진단 | KL 0.053 nats — **차이가 너무 작다** | 지표는 포화, 가이던스는 무력 |
+| **FAD** | 같은 분포 **42** vs 다른 소리 **917** | 지표로서 작동한다 |
+| FAD의 함정 | 클립 3개 **151** vs 25개 **42** | 같은 분포인데도 |
+| 읽는 법 | **표본 수를 맞추지 않으면 무의미** | 임베딩 모델이 다르면 비교 불가 |
+| 잘 안 재는 것 | 프롬프트별 **다양성** | 가이던스의 대가가 안 보이는 이유 |
+| 대화 지연 | 캐스케이드 합계 **1,250 ms** | 목표 200 ms의 6배 |
+| 종단간의 이득 | 겹쳐 말하기, 준언어 정보 보존 | 대신 검증이 어려워진다 |
+| 저작권 | 코덱 토큰은 **음색 자체**를 담는다 | 스타일 모방보다 날카롭다 |
+
+소리를 만들었다. 마지막으로 **ASR 바깥의 오디오 과제**를 본다.
+
+---
+
+**다음**: [8.10 그 밖의 오디오 과제](10_audio_tasks.qmd) — 화자·분리·검출
 
 **이전**: [8.8 보코더와 신경 오디오 코덱](08_vocoders_codecs.qmd)
