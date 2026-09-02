@@ -4,103 +4,614 @@ subtitle: "SFT·RLHF·DPO — 유능한 모델을 유용한 모델로"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+사전학습된 모델에 이렇게 물으면
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> "프랑스의 수도는?"
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이런 답이 나올 수 있다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+> "프랑스의 수도는? 이 질문은 초등학교 사회 시험에 자주 나옵니다.
+> 다음 문제도 풀어보세요. 독일의 수도는?"
+
+**틀린 것이 아니다.** 모델은 정확히 학습한 대로 하고 있다 — 문장을 이어 쓰는 것.
+그런데 우리가 원한 것은 "파리"다.
+
+[7.4](04_pretraining_paradigms.qmd)에서 봤듯 **능력은 이미 있다.**
+문제는 그 능력을 **꺼내는 형식**이다.
+
+이 장은 그 형식을 가르치는 세 단계를 다룬다.
+
+1. **SFT** — 지시-응답 쌍으로 형식을 가르친다
+2. **보상 모델** — "어느 답이 더 나은가"를 배운다
+3. **RLHF / DPO** — 그 선호를 정책에 반영한다
+
+그리고 이 장에는 검증 장치가 하나 있다.
+**KL 정규화 최적 정책의 닫힌 형태를 알고 있어서**, DPO가 정말 그 해에 도달하는지 확인할 수 있다.
+
+---
+
+## SFT: 형식을 가르친다
+
+```{python}
+#| label: sft
+#| code-fold: false
+
+print("SFT 데이터의 형태와 손실 마스킹")
+print()
+SAMPLE = [
+    ("<|user|>", "프랑스의 수도는?", False),
+    ("<|assistant|>", "파리입니다.", True),
+]
+print("  토큰 시퀀스와 손실 계산 여부")
+print(f"  {'구간':<16} {'내용':<24} {'손실 계산':>10}")
+print("  " + "-"*54)
+for tag, txt, loss in SAMPLE:
+    print(f"  {tag:<16} {txt:<24} {'예' if loss else '**아니오**':>10}")
+print()
+print("**프롬프트 부분에는 손실을 걸지 않는다.**")
+print("  · 사용자 입력을 예측하는 법을 배울 필요가 없다")
+print("  · 그 부분까지 학습하면 모델이 '질문을 만들어내는' 쪽으로 기운다")
+print("  · 구현 실수 1위 — 마스킹을 빼먹으면 성능이 조용히 나빠진다")
+print()
+print("지시 데이터를 어디서 얻는가")
+print()
+rows = [
+    ("사람이 직접 작성", "품질 최상", "비싸다 (건당 수 달러)",
+     "InstructGPT 초기, OpenAssistant"),
+    ("기존 데이터셋 변환", "값싸다", "형식이 단조롭다",
+     "FLAN, T0 — 분류 데이터를 지시문으로"),
+    ("**셀프 인스트럭트**", "확장 가능", "품질 편차, 필터링 필수",
+     "Self-Instruct, Alpaca"),
+    ("강한 모델에서 증류", "품질 대비 저렴", "**라이선스 문제**",
+     "Vicuna, WizardLM"),
+    ("실사용 로그", "실제 분포와 일치", "개인정보·동의 문제",
+     "상용 서비스"),
+]
+print(f"{'출처':<20} {'장점':<16} {'단점':<24} {'예'}")
+print("-" * 86)
+for r in rows:
+    print(f"{r[0]:<20} {r[1]:<16} {r[2]:<24} {r[3]}")
+print()
+print("**LIMA 가설(Zhou et al. 2023)**: 잘 만든 1,000개면 충분하다.")
+print("  근거 — 능력은 사전학습에서 나오고 SFT 는 형식만 정한다 ([7.4](04_pretraining_paradigms.qmd))")
+print("  단서 — '일반 대화' 에 한한 주장이다. 전문 과제·안전 정렬은 훨씬 많이 필요하다")
+print()
+print("**SFT 로는 안 되는 것**")
+print("  '좋은 답'이 하나가 아닌 과제가 많다:")
+for s in ["요약 — 어느 길이가 적절한가?",
+          "글쓰기 — 어느 문체가 나은가?",
+          "거절 — 어디까지 답하고 어디서 멈추는가?",
+          "**정답을 쓰기는 어려운데 비교는 쉽다**"]:
+    print(f"    · {s}")
+print()
+print("마지막 항목이 선호 학습의 출발점이다.")
+```
+
+---
+
+## G7.7.1 — 검증 장치: KL 정규화 최적 정책
+
+정렬의 목표를 수식으로 쓰면 이렇다.
+
+$$\max_\pi \; \mathbb{E}_{y\sim\pi}[r(x,y)] - \beta\, D_{KL}\big(\pi \,\|\, \pi_{\text{ref}}\big)$$
+
+보상은 올리되 참조 모델(SFT 모델)에서 너무 멀어지지 말라는 것이다.
+**이 문제의 해는 닫힌 형태로 알려져 있다.**
+
+$$\boxed{\;\pi^*(y\mid x) \;=\; \frac{1}{Z(x)}\,\pi_{\text{ref}}(y\mid x)\,\exp\!\Big(\frac{r(x,y)}{\beta}\Big)\;}$$
+
+```{python}
+#| label: closed-form
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+NX, NY = 24, 8
+rg = np.random.default_rng(0)
+R_TRUE = rg.normal(0, 1.0, (NX, NY))       # 참 보상 (사람의 진짜 선호)
+REF_LOGIT = rg.normal(0, 0.8, (NX, NY))
+
+
+def softmax(z):
+    e = np.exp(z - z.max(-1, keepdims=True))
+    return e/e.sum(-1, keepdims=True)
+
+
+PI_REF = softmax(REF_LOGIT)
+LOG_REF = np.log(PI_REF)
+
+
+def opt_policy(R, beta):
+    return softmax(LOG_REF + R/beta)
+
+
+def kl_to_ref(p):
+    return float((p*np.log(np.maximum(p, 1e-300)/PI_REF)).sum(1).mean())
+
+
+def exp_reward(p, R=None):
+    return float((p*(R_TRUE if R is None else R)).sum(1).mean())
+
+
+print(f"장난감 설정: 문맥 {NX}개, 응답 후보 {NY}개")
+print("참 보상 r*(x,y) 와 참조 정책 π_ref 를 우리가 정했으므로")
+print("**어떤 정렬 방법이든 정답과 비교할 수 있다.**")
+print()
+print(f"{'β':>8} {'E[참 보상]':>12} {'KL(π‖π_ref)':>14} {'목적함수 값':>13}")
+print("-" * 52)
+FRONT = []
+for beta in [10.0, 3.0, 1.0, 0.3, 0.1]:
+    p = opt_policy(R_TRUE, beta)
+    FRONT.append((beta, exp_reward(p), kl_to_ref(p)))
+    print(f"{beta:>8.2f} {exp_reward(p):>12.4f} {kl_to_ref(p):>14.4f} "
+          f"{exp_reward(p)-beta*kl_to_ref(p):>13.4f}")
+print("-" * 52)
+print(f"{'참조 모델':>8} {exp_reward(PI_REF):>12.4f} {0.0:>14.4f}")
+print(f"{'KL 무제한':>8} {float(R_TRUE.max(1).mean()):>12.4f} {'∞':>14}")
+print()
+print("**β 가 KL 예산을 정한다.**")
+print("  β 크다 → 참조 모델에 붙어 있다 → 보상 이득이 적다")
+print("  β 작다 → 멀리 간다 → 보상은 크지만 원래 능력을 잃을 수 있다")
+print()
+print("이것이 RLHF 에서 KL 페널티가 하는 일이다 —")
+print("**보상 모델이 틀린 방향으로 끌고 가는 것을 제한하는 안전장치.**")
+```
+
+---
+
+## G7.7.2 — 보상 모델: 비교에서 점수를 복원한다
+
+사람은 "이 답의 점수는 7.3점"이라고 말하기 어렵다.
+그런데 "A가 B보다 낫다"는 쉽다. **Bradley-Terry 모델**이 그 둘을 잇는다.
+
+$$P(y_w \succ y_l \mid x) = \sigma\big(r(x,y_w) - r(x,y_l)\big)$$
+
+```{python}
+#| label: bradley-terry
+#| code-fold: false
+
+import numpy as np
+
+
+def sample_prefs(n, seed):
+    """참 보상에 따라 확률적으로 선호를 만든다 (사람의 잡음을 모사)."""
+    g = np.random.default_rng(seed)
+    x = g.integers(0, NX, n)
+    a = g.integers(0, NY, n)
+    b = (a + 1 + g.integers(0, NY-1, n)) % NY
+    p_a = 1/(1 + np.exp(-(R_TRUE[x, a] - R_TRUE[x, b])))
+    pick = g.random(n) < p_a
+    return x, np.where(pick, a, b), np.where(pick, b, a)
+
+
+def fit_reward(x, w, l, steps=4000, lr=0.2, seed=0):
+    R = np.random.default_rng(seed).normal(0, 0.01, (NX, NY))
+    for _ in range(steps):
+        s = 1/(1 + np.exp(-(R[x, w] - R[x, l])))
+        g = np.zeros_like(R)
+        np.add.at(g, (x, w), -(1-s))
+        np.add.at(g, (x, l), (1-s))
+        R -= lr*g/len(x)
+    return R
+
+
+print("쌍 비교 데이터에서 참 보상을 얼마나 복원하는가")
+print()
+print(f"{'선호 쌍':>10} {'상관계수':>10} {'회귀 기울기':>12} {'순위 완전일치':>14}")
+print("-" * 50)
+RM_ROWS = []
+for n in [500, 2000, 10000, 50000]:
+    x, w, l = sample_prefs(n, 1)
+    Rh = fit_reward(x, w, l)
+    # BT 는 문맥마다 상수 이동에 불변 → 행 평균을 빼고 비교한다
+    A = R_TRUE - R_TRUE.mean(1, keepdims=True)
+    B = Rh - Rh.mean(1, keepdims=True)
+    corr = float(np.corrcoef(A.ravel(), B.ravel())[0, 1])
+    slope = float(np.polyfit(A.ravel(), B.ravel(), 1)[0])
+    acc = float(np.mean([(np.argsort(A[i]) == np.argsort(B[i])).mean()
+                         for i in range(NX)]))
+    RM_ROWS.append((n, Rh, corr, slope, acc))
+    print(f"{n:>10,} {corr:>10.4f} {slope:>12.4f} {acc:>14.3f}")
+print()
+print("**쌍 비교만으로 점수가 복원된다** — 상관 "
+      f"{RM_ROWS[0][2]:.3f} → {RM_ROWS[-1][2]:.3f}.")
+print()
+print(f"회귀 기울기가 1보다 작다 ({RM_ROWS[-1][3]:.3f}).")
+print("  유한 스텝 경사하강의 축소 효과다 — 추정값이 0 쪽으로 당겨진다.")
+print("  **순위는 보존되므로 정책 최적화에는 큰 문제가 아니다** (아래에서 확인).")
+print()
+print("**BT 모델의 구조적 성질 두 가지**")
+print("  1. **문맥마다 상수를 더해도 같은 모델이다** (차이만 관측하므로)")
+print("     → 보상의 절대값은 의미가 없다. 실무에서 보상 정규화를 하는 이유다.")
+print("  2. **전이성을 가정한다** — A≻B, B≻C 이면 A≻C")
+print("     실제 사람 선호는 그렇지 않을 때가 있다 (순환 선호)")
+print()
+print("실무에서 보상 모델이 어려운 이유:")
+for s in ["평가자 간 불일치 — 일치율이 60~75% 정도인 과제가 흔하다",
+          "**길이 편향** — 긴 답을 좋아하는 경향이 강하게 학습된다",
+          "형식 편향 — 목록·굵은 글씨가 있으면 높게 평가",
+          "분포 이동 — 정책이 개선되면 보상 모델이 본 적 없는 답이 나온다",
+          "  → 이것이 다음 절의 핵심 문제다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G7.7.3 — 보상 해킹: 대리 지표를 최적화하면
+
+보상 모델은 **사람 선호의 대리 지표**다. 완벽하지 않다.
+그것을 세게 최적화하면 어떻게 되는가.
+
+```{python}
+#| label: overopt
+#| code-fold: false
+
+import numpy as np
+
+print("불완전한 보상 모델을 β 를 낮춰가며 최적화한다")
+print("(β 를 낮추는 것 = KL 예산을 늘리는 것 = 더 세게 최적화)")
+print()
+CEIL = exp_reward(opt_policy(R_TRUE, 0.01))
+for n_pref, Rh, corr, _, _ in [RM_ROWS[0], RM_ROWS[1], RM_ROWS[3]]:
+    print(f"[선호 쌍 {n_pref:,}개로 학습한 보상 모델 — 참 보상과 상관 {corr:.3f}]")
+    print(f"  {'β':>7} {'KL':>8} {'대리 보상':>11} {'참 보상':>10} "
+          f"{'상한 대비':>10}")
+    print("  " + "-"*50)
+    rows = []
+    for beta in [3.0, 1.0, 0.3, 0.1, 0.03, 0.01]:
+        p = opt_policy(Rh, beta)
+        t = exp_reward(p)
+        rows.append((beta, exp_reward(p, Rh), t))
+        print(f"  {beta:>7.2f} {kl_to_ref(p):>8.3f} {exp_reward(p, Rh):>11.4f} "
+              f"{t:>10.4f} {t/CEIL:>9.1%}")
+    best = max(rows, key=lambda r: r[2])
+    print(f"  → 참 보상 최대 {best[2]:.4f} (β={best[0]}), "
+          f"참 보상으로 최적화했을 때의 상한은 {CEIL:.4f}")
+    print()
+
+print("**결과를 정직하게 보자.**")
+print()
+print("  재현된 것 — **천장 효과**")
+w_corr = RM_ROWS[0]
+print(f"    상관 {w_corr[2]:.3f} 인 보상 모델로는 아무리 세게 최적화해도")
+print(f"    참 보상이 상한의 {max(exp_reward(opt_policy(w_corr[1], b)) for b in [0.1,0.03,0.01])/CEIL:.0%} 에서 멈춘다.")
+print("    **보상 모델의 품질이 도달 가능한 성능의 상한을 정한다.**")
+print()
+print("  재현되지 **않은** 것 — 참 보상의 **하락**")
+print("    교과서적인 그림은 '보상은 오르는데 실제 품질은 떨어지는' 역U자다.")
+print("    우리 실험에서는 참 보상이 대체로 단조 증가하다 포화한다.")
+print()
+print("**왜 하락이 안 나오는가.**")
+print("  우리 보상 모델은 표 형태라, 데이터가 적으면 추정이 **0 쪽으로 축소**된다.")
+print("  축소는 순위를 흐릴 뿐 **없던 봉우리를 만들지 않는다.**")
+print("  실제 보상 모델은 신경망이라 **본 적 없는 영역에서 자신 있게 틀린다.**")
+print("  그 지점이 최적화로 도달 가능하면 그때 하락이 나타난다.")
+print()
+print("**그 메커니즘을 직접 심어서 확인해 보자.**")
+```
+
+```{python}
+#| label: hacking
+#| code-fold: false
+
+import numpy as np
+
+NX2, NY2 = 24, 16
+rg2 = np.random.default_rng(0)
+R2 = rg2.normal(0, 1.0, (NX2, NY2))
+REF2 = rg2.normal(0, 2.5, (NX2, NY2))         # 집중된 참조 정책
+PI2 = softmax(REF2)
+LOG2 = np.log(PI2)
+
+# 참조 정책 분포에서만 선호를 수집한다 (현실적)
+g2 = np.random.default_rng(1)
+n2 = 4000
+x2 = g2.integers(0, NX2, n2)
+cum = PI2.cumsum(1)
+a2 = (g2.random(n2)[:, None] > cum[x2]).sum(1).clip(0, NY2-1)
+b2 = (g2.random(n2)[:, None] > cum[x2]).sum(1).clip(0, NY2-1)
+ok = a2 != b2
+x2, a2, b2 = x2[ok], a2[ok], b2[ok]
+pa = 1/(1 + np.exp(-(R2[x2, a2] - R2[x2, b2])))
+pk = g2.random(len(x2)) < pa
+w2, l2 = np.where(pk, a2, b2), np.where(pk, b2, a2)
+
+RM2 = np.random.default_rng(0).normal(0, 0.01, (NX2, NY2))
+for _ in range(4000):
+    s = 1/(1 + np.exp(-(RM2[x2, w2] - RM2[x2, l2])))
+    g_ = np.zeros_like(RM2)
+    np.add.at(g_, (x2, w2), -(1-s))
+    np.add.at(g_, (x2, l2), (1-s))
+    RM2 -= 0.2*g_/len(x2)
+
+CNT = np.zeros((NX2, NY2))
+np.add.at(CNT, (x2, w2), 1)
+np.add.at(CNT, (x2, l2), 1)
+RARE = CNT.argmin(1)
+RM_HACK = RM2.copy()
+RM_HACK[np.arange(NX2), RARE] += 2.5          # ← 인위적으로 심은 허위 고평가
+
+print("**구성된 실험**: 보상 모델에 허위 고평가를 심는다")
+print(f"  문맥마다 가장 덜 관측된 응답(평균 관측 "
+      f"{CNT[np.arange(NX2), RARE].mean():.1f}회)에 +2.5 를 더한다.")
+print(f"  그 응답들의 참 보상 평균은 {R2[np.arange(NX2), RARE].mean():.3f} — "
+      f"평범하다.")
+print()
+
+
+def kl2(p):
+    return float((p*np.log(np.maximum(p, 1e-300)/PI2)).sum(1).mean())
+
+
+print(f"  {'β':>7} {'KL':>8} {'대리 보상':>11} {'참 보상':>10} "
+      f"{'허위 응답 확률':>14}")
+print("  " + "-"*54)
+HACK = []
+for beta in [3.0, 1.0, 0.5, 0.3, 0.2, 0.1, 0.05, 0.02]:
+    p = softmax(LOG2 + RM_HACK/beta)
+    proxy = float((p*RM_HACK).sum(1).mean())
+    true = float((p*R2).sum(1).mean())
+    prob = float(p[np.arange(NX2), RARE].mean())
+    HACK.append((beta, kl2(p), proxy, true, prob))
+    print(f"  {beta:>7.2f} {kl2(p):>8.3f} {proxy:>11.4f} {true:>10.4f} "
+          f"{prob:>13.1%}")
+print()
+peak = max(HACK, key=lambda h: h[3])
+print(f"**대리 보상은 단조 증가한다: {HACK[0][2]:.3f} → {HACK[-1][2]:.3f}.**")
+print(f"**참 보상은 β={peak[0]} 에서 {peak[3]:.4f} 로 정점을 찍고 "
+      f"{HACK[-1][3]:.4f} 로 무너진다.**")
+print(f"  허위 응답의 선택 확률: {HACK[0][4]:.1%} → {HACK[-1][4]:.1%}")
+print()
+print("**이것이 굿하트의 법칙이다.**")
+print("  '지표가 목표가 되면 좋은 지표이기를 멈춘다.'")
+print("  [6.0](../06_generative/00_generative_overview.qmd)에서 FID 가 순수 잡음에 속은 것과 같은 구조다.")
+print()
+print("**실무의 방어선:**")
+for s in ["**KL 페널티** — 위 표에서 β 를 너무 낮추지 않는 것 자체가 방어다",
+          "조기 종료 — 보류한 사람 평가로 정점을 찾는다",
+          "보상 모델 앙상블 — 여러 모델이 동시에 틀릴 확률은 낮다",
+          "**온라인 수집** — 정책이 움직이면 그 분포에서 선호를 다시 모은다",
+          "보상 정규화·화이트닝 — 스케일 폭주 방지",
+          "길이 페널티 — 가장 흔한 해킹 축을 명시적으로 막는다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-hacking
+#| fig-cap: "대리 보상은 계속 오르는데 참 보상은 정점을 지나 무너집니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    specs=[[{"secondary_y": True}, {"type": "xy"}]],
+                    subplot_titles=("KL 예산에 따른 두 보상 (구성된 실험)",
+                                    "보상-KL 프론티어 (참 보상 사용)"))
+kls = [h[1] for h in HACK]
+fig.add_trace(go.Scatter(x=kls, y=[h[2] for h in HACK], mode="lines+markers",
+                         name="대리 보상 (보상 모델)",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=kls, y=[h[3] for h in HACK], mode="lines+markers",
+                         name="참 보상 (실제 품질)",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=kls, y=[h[4] for h in HACK], mode="lines+markers",
+                         name="허위 응답 확률",
+                         line=dict(color=viz.PINK, width=2, dash="dot"),
+                         marker=dict(size=7)), row=1, col=1, secondary_y=True)
+pk = max(HACK, key=lambda h: h[3])
+fig.add_vline(x=pk[1], line=dict(color=viz.YELLOW, dash="dash"),
+              annotation_text="참 보상 정점", row=1, col=1)
+fig.update_xaxes(title_text="KL(π ‖ π_ref)", row=1, col=1)
+fig.update_yaxes(title_text="보상", row=1, col=1)
+fig.update_yaxes(title_text="허위 응답 확률", tickformat=".0%",
+                 row=1, col=1, secondary_y=True)
+
+fig.add_trace(go.Scatter(x=[f[2] for f in FRONT], y=[f[1] for f in FRONT],
+                         mode="lines+markers+text",
+                         text=[f"β={f[0]}" for f in FRONT],
+                         textposition="bottom right", textfont=dict(size=9),
+                         showlegend=False,
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.update_xaxes(title_text="KL(π ‖ π_ref)", row=1, col=2)
+fig.update_yaxes(title_text="E[참 보상]", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
+
+---
+
+## G7.7.4 — DPO: 보상 모델 없이
+
+::: {.key-concept}
+**DPO의 유도**
+
+닫힌 형태 해를 $r$ 에 대해 풀면
+
+$$r(x,y) = \beta \log\frac{\pi^*(y\mid x)}{\pi_{\text{ref}}(y\mid x)} + \beta\log Z(x)$$
+
+이것을 Bradley-Terry 확률에 대입하면 **$\log Z(x)$ 가 상쇄된다** (차이만 쓰므로).
+
+$$\mathcal{L}_{\text{DPO}} = -\log\sigma\!\left(\beta\log\frac{\pi(y_w|x)}{\pi_{\text{ref}}(y_w|x)}
+- \beta\log\frac{\pi(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)$$
+
+**보상 모델도, 강화학습도, 샘플링도 없다.** 그냥 지도학습 손실이다.
 :::
 
-사전학습된 모델은 문장을 이어 쓸 뿐 지시를 따르지 않는다. 우리가 쓰는 챗봇은 그 위에 얹힌 정렬 단계의 산물이다.
+```{python}
+#| label: dpo
+#| code-fold: false
+
+import numpy as np
+
+
+def train_dpo(x, w, l, beta, steps, lr):
+    """DPO 를 직접 구현한다. 정책은 로짓 표로 파라미터화."""
+    theta = REF_LOGIT.copy()                  # π ← π_ref 에서 출발
+    for _ in range(steps):
+        logp = np.log(softmax(theta))
+        h = beta*((logp[x, w] - LOG_REF[x, w]) - (logp[x, l] - LOG_REF[x, l]))
+        c = -beta*(1 - 1/(1 + np.exp(-h)))
+        # ∂logπ_a/∂θ_j = δ_aj − π_j 인데, w 항과 l 항의 −π_j 가 정확히 상쇄된다
+        #   ∂h/∂θ_j = β[(δ_wj − π_j) − (δ_lj − π_j)] = β(δ_wj − δ_lj)
+        g = np.zeros_like(theta)
+        np.add.at(g, (x, w), c)
+        np.add.at(g, (x, l), -c)
+        theta -= lr*g/len(x)
+    return softmax(theta)
+
+
+XP, WP, LP = sample_prefs(20000, 1)
+print("DPO 로 학습한 정책 vs 닫힌 형태 최적 정책")
+print("(β 가 작을수록 그래디언트가 β배 작아지므로 학습률을 보정했다)")
+print()
+print(f"{'β':>6} {'DPO E[r]':>11} {'최적 E[r]':>11} {'DPO KL':>9} "
+      f"{'최적 KL':>9} {'총변동거리':>12}")
+print("-" * 64)
+DPO_ROWS = []
+for beta, steps, lr in [(1.0, 6000, 0.5), (0.3, 15000, 2.0),
+                        (0.1, 30000, 6.0)]:
+    pd = train_dpo(XP, WP, LP, beta, steps, lr)
+    ps = opt_policy(R_TRUE, beta)
+    tv = float(0.5*np.abs(pd - ps).sum(1).mean())
+    DPO_ROWS.append((beta, exp_reward(pd), exp_reward(ps),
+                     kl_to_ref(pd), kl_to_ref(ps), tv))
+    print(f"{beta:>6.2f} {exp_reward(pd):>11.4f} {exp_reward(ps):>11.4f} "
+          f"{kl_to_ref(pd):>9.4f} {kl_to_ref(ps):>9.4f} {tv:>12.4f}")
+print()
+print("**DPO 가 닫힌 형태 해에 도달한다.**")
+for b, dr, sr, dk, sk, tv in DPO_ROWS:
+    print(f"  β={b}: 보상 {dr:.4f} vs {sr:.4f} (차이 {abs(dr-sr):.4f}), "
+          f"총변동거리 {tv:.4f}")
+print()
+print("**보상 모델을 만든 적이 없다.** 선호 쌍에서 바로 정책으로 갔다.")
+print()
+print(f"{'':<10} {'RLHF (PPO)':<30} {'DPO'}")
+print("-" * 70)
+for a, b_, c_ in [
+    ("단계", "보상 모델 학습 → PPO", "선호 쌍으로 바로"),
+    ("모델 수", "정책·참조·보상·가치 (4개)", "정책·참조 (2개)"),
+    ("샘플링", "학습 중 온라인 생성 필요", "**불필요**"),
+    ("안정성", "PPO 하이퍼파라미터에 민감", "지도학습 수준"),
+    ("메모리", "높음", "낮음"),
+    ("온라인 개선", "**가능** (분포에서 재수집)", "기본은 오프라인"),
+]:
+    print(f"{a:<10} {b_:<30} {c_}")
+print()
+print("**DPO 의 약점도 분명하다:**")
+for s in ["오프라인 — 고정된 선호 데이터에 갇힌다. 정책이 움직여도 데이터는 그대로",
+          "**분포 밖 과신** — 데이터에 없는 응답의 확률이 통제 없이 움직일 수 있다",
+          "선호 쌍의 품질에 직접 의존 (보상 모델의 평활화 효과가 없다)",
+          "→ 온라인 DPO, 반복 DPO 가 이 문제를 다룬다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 변형들과 정렬세
 
-- 사전학습 모델과 어시스턴트 모델의 차이
-- 지시 조정(SFT): 데이터 구성, 채팅 템플릿, 손실 마스킹
-- 지시 데이터 수집: 인간 작성, 셀프 인스트럭트, 증류
-- 선호 학습의 동기: 정답이 하나가 아닌 과제
-- 보상 모델: Bradley-Terry 모델과 쌍 비교 학습
-- RLHF 파이프라인과 PPO 적용, KL 페널티의 역할
-- 보상 해킹(reward hacking)과 과최적화
-- DPO: 보상 모델 없이 선호를 직접 최적화하는 유도
-- 변형: IPO, KTO, ORPO, SimPO, 온라인 DPO
-- RLAIF와 헌법적 AI(Constitutional AI)
-- 정렬세(alignment tax)와 능력 저하 측정
-- 다목적 정렬: 유용성·무해성·정직성의 균형
+```{python}
+#| label: variants
+#| code-fold: false
+
+rows = [
+    ("PPO (RLHF)", "보상 모델 + 강화학습", "온라인, 표준",
+     "InstructGPT, GPT-4 초기"),
+    ("**DPO**", "선호를 직접 최적화", "단순·안정",
+     "현재 오픈모델의 기본값"),
+    ("IPO", "DPO 의 과적합을 정칙화", "선호가 결정론적일 때 안전",
+     "σ 대신 제곱 손실"),
+    ("KTO", "쌍이 아니라 **단일 라벨**(좋다/나쁘다)", "데이터 수집이 쉽다",
+     "전망이론 기반"),
+    ("ORPO", "SFT 와 선호를 한 단계로", "참조 모델 불필요",
+     "odds ratio 페널티"),
+    ("SimPO", "참조 모델 없이 길이 정규화 보상", "메모리 절약",
+     "길이 편향 완화"),
+    ("GRPO", "가치망 없이 그룹 상대 이점", "추론 학습에 효과적",
+     "DeepSeek-R1 (7.12)"),
+    ("RLAIF / CAI", "사람 대신 **AI 가 선호를 매긴다**", "확장 가능",
+     "Constitutional AI"),
+]
+print(f"{'방법':<16} {'핵심':<34} {'특징':<24} {'비고'}")
+print("-" * 94)
+for r in rows:
+    print(f"{r[0]:<16} {r[1]:<34} {r[2]:<24} {r[3]}")
+print()
+print("**헌법적 AI (Constitutional AI)**")
+print("  1. 원칙(헌법)을 자연어로 쓴다")
+print("  2. 모델이 자기 응답을 그 원칙으로 비판하고 수정한다")
+print("  3. 수정 전/후를 선호 쌍으로 삼아 학습한다")
+print()
+print("  사람이 유해 내용을 직접 라벨링하지 않아도 된다는 것이 실무적 이점이고,")
+print("  **원칙이 명시적 문서로 남는다**는 것이 투명성 측면의 이점이다.")
+print("  한계 — 원칙을 누가 정하는가, 원칙 간 충돌은 어떻게 푸는가는 여전히 열려 있다.")
+print()
+print("**정렬세 (alignment tax)**")
+print()
+print("  정렬을 하면 일부 능력이 떨어지는 현상.")
+print(f"  {'증상':<26} {'원인'}")
+print("  " + "-"*66)
+for a, b_ in [
+    ("퍼플렉서티 상승", "분포가 좁아진다 (KL 페널티의 반대편)"),
+    ("다양성 감소", "고보상 응답으로 몰린다"),
+    ("**과도한 거절**", "안전 학습이 무해한 요청까지 막는다"),
+    ("장황해짐", "길이 편향이 학습된다"),
+    ("아첨(sycophancy)", "사용자에게 동조하는 답이 선호를 받는다"),
+]:
+    print(f"  {a:<26} {b_}")
+print()
+print("**완화 방법은 결국 균형 잡기다:**")
+for s in ["사전학습 데이터를 정렬 단계에 섞는다 (PPO-ptx)",
+          "KL 페널티 β 를 충분히 크게 (이 장 첫 실험의 β)",
+          "**여러 축을 함께 평가한다** — 유용성만 보면 안전이 무너지고 반대도 마찬가지",
+          "거절률을 별도로 측정한다 (과잉 거절도 실패다)"]:
+    print(f"  · {s}")
+print()
+print("**세 축의 긴장 (HHH: Helpful, Harmless, Honest)**")
+for a, b_ in [
+    ("유용성 vs 무해성", "위험할 수 있는 질문에 얼마나 답할 것인가"),
+    ("유용성 vs 정직성", "모를 때 '모른다'고 하면 덜 유용해 보인다"),
+    ("무해성 vs 정직성", "불편한 사실을 말할 것인가"),
+]:
+    print(f"  {a:<20} {b_}")
+print("  **셋 다 최대화하는 지점은 없다.** 어디에 설지가 제품 결정이다.")
+```
 
 ---
 
-## G7.7.1 — 정렬 파이프라인
+## 요약
 
-사전학습 → SFT → 보상모델 → RLHF/DPO 로 이어지는 전체 흐름
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단계 재생
-:::
-
----
-
-## G7.7.2 — Bradley-Terry 확률
-
-두 응답의 보상 차이가 선호 확률로 변환되는 곡선
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 점수 차 슬라이더
-:::
-
----
-
-## G7.7.3 — KL 페널티
-
-참조 모델에서 멀어질수록 커지는 벌점과 보상의 균형
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: β 슬라이더
-:::
-
----
-
-## G7.7.4 — 보상 해킹
-
-보상은 오르는데 실제 품질은 떨어지는 구간
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 학습 스텝 슬라이더
-:::
-
----
-
-## G7.7.5 — DPO 손실 지형
-
-선호 응답 확률은 올리고 비선호는 내리는 그래디언트 방향
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 선호 쌍 선택
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| SFT |  |
-| RLHF |  |
-| 보상 모델 |  |
-| DPO |  |
-| KL 페널티 |  |
-| 보상 해킹 |  |
-| 헌법적 AI |  |
+| 문제 | 사전학습 모델은 지시를 따르지 않는다 — 능력이 아니라 형식 |
+| SFT | 지시-응답 쌍. **프롬프트에 손실을 걸지 않는다** |
+| SFT의 한계 | 정답이 하나가 아닌 과제 — 쓰기는 어렵고 비교는 쉽다 |
+| 정렬의 목표 | $\max_\pi \mathbb{E}[r] - \beta\,\mathrm{KL}(\pi\|\pi_{\text{ref}})$ |
+| **닫힌 형태 해** | $\pi^* \propto \pi_{\text{ref}}\exp(r/\beta)$ — 검증 기준 |
+| Bradley-Terry | $P(y_w\succ y_l)=\sigma(r_w - r_l)$ |
+| 복원 성능 | 쌍 500개로 상관 0.68, 50,000개로 0.99 |
+| BT의 성질 | 문맥별 상수 이동에 불변 → 보상 절대값은 의미 없다 |
+| **천장 효과** | 보상 모델 품질이 도달 가능한 성능의 상한을 정한다 (재현됨) |
+| **하락은 재현 안 됨** | 표 형태 보상 모델은 축소될 뿐 허위 봉우리를 만들지 않는다 |
+| 구성된 실험 | 허위 고평가를 심으면 참 보상이 0.783 → −0.061 로 붕괴 |
+| 굿하트 | 대리 보상은 단조 증가하는데 참 보상은 정점을 지난다 |
+| KL 페널티 | 그 정점을 넘지 않게 하는 안전장치 |
+| **DPO 검증** | 닫힌 형태 해에 도달 (총변동거리 0.03~0.08) |
+| DPO의 이점 | 보상 모델·강화학습·샘플링 없이 지도학습 손실 하나 |
+| DPO의 약점 | 오프라인 — 정책이 움직여도 데이터는 그대로 |
+| 정렬세 | 다양성 감소·과잉 거절·장황함·아첨 |
+| HHH | 유용성·무해성·정직성 — 셋 다 최대인 지점은 없다 |
+
+정렬된 모델이 생겼다. 이제 **가중치를 건드리지 않고** 그 능력을 꺼내는 법이다.
 
 ---
 
-**다음**: [7.8 프롬프팅과 문맥 내 학습](08_prompting_icl.qmd) — few-shot·CoT·구조화 프롬프트 — 가중치를 건드리지 않는 프로그래밍
+**다음**: [7.8 프롬프팅과 문맥 내 학습](08_prompting_icl.qmd)
 
 **이전**: [7.6 미세조정과 PEFT](06_finetuning_peft.qmd)
