@@ -4,91 +4,712 @@ subtitle: "정렬 없이 학습하기 — 종단간 음성 인식의 문"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[8.3](03_classical_speech.qmd)에서 미니 인식기를 만들었다. 그런데 학습을 시작하려면
+**프레임마다 어느 상태인지**를 알아야 했고, 그것을 강제 정렬로 만들어 냈다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+문제는 그 정렬이 **닭과 달걀**이라는 것이다. 정렬하려면 모델이 필요하고,
+모델을 학습하려면 정렬이 필요하다. flat start로 시작해 번갈아 돌리는 것이 해법이었다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+CTC는 이 문제를 정면으로 다르게 푼다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+> 어느 정렬이 맞는지 **고르지 않는다.**
+> 가능한 **모든 정렬의 확률을 더한다.**
 
-'입력 1000프레임 → 출력 20글자'의 대응을 사람이 달아줄 수 없다는 문제를 CTC가 우아하게 푼다. 이 아이디어는 필기·립리딩까지 그대로 쓰인다.
+$$P(\ell \mid X) = \sum_{\pi \in \mathcal{B}^{-1}(\ell)} P(\pi \mid X)$$
 
----
-
-## 이 장에서 다루는 것
-
-- 정렬 문제: 입력·출력 길이가 다르고 대응을 모른다
-- CTC의 blank 토큰과 확장 경로 개념
-- 가능한 모든 정렬에 대한 주변화, forward-backward 계산
-- CTC 손실의 미분과 학습
-- CTC 디코딩: greedy(best path), prefix beam search
-- CTC의 조건부 독립 가정과 그 한계
-- 언어모델 융합(shallow fusion, 얕은/깊은 융합)
-- RNN-T: 예측 네트워크로 출력 의존성 복원
-- RNN-T 격자와 스트리밍 인식 적합성
-- 어텐션 기반 seq2seq ASR(LAS)과의 비교
-- 현재의 조합: Conformer 인코더 + CTC/RNN-T/어텐션 다중 목표
+경로가 천문학적으로 많은데 어떻게 더하는가 — 그것이 이 장의 첫 절반이다.
 
 ---
 
-## G8.4.1 — CTC 정렬 격자
+## 정렬 문제
 
-blank를 끼워 넣어 만들 수 있는 모든 정렬 경로 시각화
+입력은 1초에 100프레임, 출력은 열 몇 글자다. 대응을 아무도 달아 주지 않는다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 출력 시퀀스 입력
-:::
+| | 고전 HMM (8.3) | CTC |
+|---|---|---|
+| 프레임 라벨 | **필요** (강제 정렬로 생성) | 필요 없다 |
+| 발음 사전 | 필요 | 필요 없다 (문자·서브워드 직접) |
+| 학습 목표 | 상태별 우도 | **시퀀스 확률 직접** |
+| 정렬 | 하나를 고른다 (Viterbi) | **전부 더한다** |
 
----
+CTC의 장치는 두 개뿐이다.
 
-## G8.4.2 — CTC 출력 스파이크
+1. **blank 토큰** $\varnothing$ — "지금은 아무것도 내지 않는다"
+2. **축약 규칙** $\mathcal{B}$ — 연속 중복을 합치고, blank를 지운다
 
-프레임별 문자 확률이 특정 시점에 뾰족하게 몰리는 패턴
+$$\mathcal{B}(\texttt{a a} \varnothing \texttt{a b b}) = \texttt{a a b}$$
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 발화 선택
-:::
-
----
-
-## G8.4.3 — prefix beam search
-
-동일 문자열로 합쳐지는 경로들이 확률을 합산하는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 빔 크기 슬라이더
-:::
+중복 합치기가 먼저이므로, 같은 글자를 두 번 내려면 **사이에 blank가 있어야 한다.**
+이 규칙 하나가 뒤의 모든 점화식을 결정한다.
 
 ---
 
-## G8.4.4 — CTC vs RNN-T 격자
+## G8.4.1 — 정렬 경로는 몇 개인가
 
-두 모델의 격자 구조와 출력 의존성 차이
+```{python}
+#| label: count
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 전환
-:::
+import sys; sys.path.append("../..")
+import itertools
+import numpy as np
+
+NEG = -1e30
+
+
+def logsumexp(a, axis=None):
+    m = np.max(a, axis=axis, keepdims=True)
+    m = np.where(np.isfinite(m), m, 0.0)
+    return np.squeeze(m, axis=axis) + np.log(np.exp(a - m).sum(axis=axis))
+
+
+def extend(target, blank=0):
+    """타깃 사이사이에 blank 를 끼운다: l -> ∅ l1 ∅ l2 ∅ ..."""
+    ext = [blank]
+    for l in target:
+        ext += [l, blank]
+    return np.array(ext)
+
+
+def count_alignments(T, U):
+    """길이 T 프레임으로 길이 U 라벨을 만드는 경로 수 (정확한 정수)."""
+    S = 2*U + 1
+    ext = [0]*S
+    for i in range(U):
+        ext[2*i + 1] = i + 1
+    dp = np.zeros(S, dtype=object)
+    dp[0] = 1
+    if S > 1:
+        dp[1] = 1
+    for _ in range(1, T):
+        nd = dp.copy()
+        nd[1:] += dp[:-1]
+        for s in range(2, S):
+            if ext[s] != 0 and ext[s] != ext[s-2]:
+                nd[s] += dp[s-2]
+        dp = nd
+    return int(dp[S-1] + (dp[S-2] if S > 1 else 0))
+
+
+print("blank 를 끼워 만들 수 있는 정렬 경로의 수")
+print()
+print(f"{'프레임 T':>10} {'라벨 U':>8} {'경로 수':>30}")
+print("-" * 52)
+for T, U in [(10, 3), (20, 5), (50, 10), (100, 20)]:
+    n = count_alignments(T, U)
+    print(f"{T:>10} {U:>8} {n:>30,}")
+n300 = count_alignments(300, 40)
+print(f"{300:>10} {40:>8} {'약 1.9 x 10^' + str(len(str(n300))-1):>30}")
+print()
+print(f"**3초 발화에 40음소면 경로가 10의 {len(str(n300))-1}제곱 규모다.**")
+print("  하나하나 세는 것은 불가능하다. 그런데 **더하는 것**은 O(T·U) 에 된다.")
+print("  [8.3](03_classical_speech.qmd)의 Viterbi 가 max 를 취하던 자리에")
+print("  logsumexp 를 넣으면 된다 — 같은 격자, 다른 반환값이다.")
+```
 
 ---
 
-## 핵심 용어
+## 전방 알고리즘
 
-| 용어 | 비고 |
-|------|------|
-| CTC |  |
-| blank 토큰 |  |
-| forward-backward |  |
-| RNN-T |  |
-| 스트리밍 ASR |  |
-| Conformer |  |
+확장 라벨 $\ell' = \varnothing\, \ell_1 \varnothing\, \ell_2 \cdots \varnothing$ 위에서
+$\alpha_t(s)$ 를 "시각 $t$ 에 확장 위치 $s$ 에 있는 모든 경로의 확률 합"으로 정의한다.
+
+$$\alpha_t(s) = y^t_{\ell'_s}\Big[\alpha_{t-1}(s) + \alpha_{t-1}(s-1)
++ \underbrace{\alpha_{t-1}(s-2)}_{\ell'_s \neq \varnothing,\; \ell'_s \neq \ell'_{s-2}}\Big]$$
+
+세 번째 항의 조건이 축약 규칙에서 그대로 나온다 —
+blank는 건너뛸 수 있지만, **같은 글자가 연속이면 사이의 blank를 건너뛸 수 없다.**
+
+```{python}
+#| label: forward
+#| code-fold: false
+
+import numpy as np
+
+
+def ctc_forward(logp, target, blank=0):
+    """logp: (T, C) 로그 확률. 반환 (logZ, alpha, ext)"""
+    T = logp.shape[0]
+    ext = extend(target, blank)
+    S = len(ext)
+    a = np.full((T, S), NEG)
+    a[0, 0] = logp[0, ext[0]]
+    if S > 1:
+        a[0, 1] = logp[0, ext[1]]
+    for t in range(1, T):
+        prev = a[t-1]
+        cur = prev.copy()
+        cur[1:] = np.logaddexp(cur[1:], prev[:-1])          # s-1 에서
+        skip = np.full(S, NEG)
+        ok = np.zeros(S, bool)
+        ok[2:] = (ext[2:] != blank) & (ext[2:] != ext[:-2])  # 건너뛰기 조건
+        skip[2:] = np.where(ok[2:], prev[:-2], NEG)
+        a[t] = np.logaddexp(cur, skip) + logp[t, ext]
+    logZ = np.logaddexp(a[T-1, S-1], a[T-1, S-2] if S > 1 else NEG)
+    return logZ, a, ext
+
+
+def brute_force_logZ(logp, target, blank=0):
+    """가능한 프레임 라벨열을 **전부 열거**해 확률을 더한다 (검증용)."""
+    T, C = logp.shape
+
+    def collapse(path):
+        out, prev = [], None
+        for k in path:
+            if k != prev and k != blank:
+                out.append(k)
+            prev = k
+        return out
+
+    tot = NEG
+    for path in itertools.product(range(C), repeat=T):
+        if collapse(path) == list(target):
+            tot = np.logaddexp(tot, sum(logp[t, k] for t, k in enumerate(path)))
+    return tot
+
+
+rg = np.random.default_rng(0)
+print("전방 알고리즘 vs 완전 열거 — 정말 같은 값인가")
+print()
+print(f"{'T':>4} {'C':>4} {'타깃':>12} {'전방 알고리즘':>14} {'완전 열거':>14} "
+      f"{'차이':>11}")
+print("-" * 66)
+for T, C, tgt in [(4, 3, [1]), (5, 3, [1, 2]), (6, 3, [1, 1]),
+                  (7, 4, [1, 2, 3]), (6, 4, [2, 2])]:
+    lg = rg.normal(0, 1, (T, C))
+    logp = lg - logsumexp(lg, axis=1)[:, None]
+    f, _, _ = ctc_forward(logp, tgt)
+    bf = brute_force_logZ(logp, tgt)
+    print(f"{T:>4} {C:>4} {str(tgt):>12} {f:>14.6f} {bf:>14.6f} "
+          f"{abs(f-bf):>11.2e}")
+print()
+print("**부동소수점 오차 안에서 정확히 같다.**")
+print("  `[1, 1]` 처럼 **같은 글자가 반복되는 경우**도 맞는다 —")
+print("  건너뛰기 조건이 없으면 여기서 틀린다. 이 줄이 그 조건의 검증이다.")
+```
 
 ---
 
-**다음**: [8.5 음성 자기지도 학습](05_ssl_speech.qmd) — wav2vec 2.0·HuBERT·WavLM — 레이블 없이 음성 표현 배우기
+## G8.4.2 — 손실과 그래디언트
+
+손실은 $-\log P(\ell\mid X)$ 다. 후방 변수 $\beta$ 를 같이 구하면 그래디언트가 닫힌 형태로 나온다.
+
+$$\frac{\partial \mathcal{L}}{\partial z^t_k}
+= y^t_k - \frac{1}{P(\ell\mid X)}\sum_{s:\,\ell'_s = k}
+\frac{\alpha_t(s)\beta_t(s)}{y^t_k}$$
+
+앞항은 소프트맥스 출력, 뒷항은 **"정답 경로들이 이 시각에 $k$ 를 낼 확률"** 이다.
+즉 **소프트맥스 출력과 사후 정렬의 차이**가 그래디언트다.
+[8.3](03_classical_speech.qmd)의 강제 정렬이 하드 라벨을 만들던 자리에,
+CTC는 **소프트 정렬**을 쓴다.
+
+```{python}
+#| label: grad
+#| code-fold: false
+
+import numpy as np
+
+
+def ctc_backward(logp, target, blank=0):
+    T = logp.shape[0]
+    ext = extend(target, blank)
+    S = len(ext)
+    b = np.full((T, S), NEG)
+    b[T-1, S-1] = logp[T-1, ext[S-1]]
+    if S > 1:
+        b[T-1, S-2] = logp[T-1, ext[S-2]]
+    for t in range(T-2, -1, -1):
+        nxt = b[t+1]
+        cur = nxt.copy()
+        cur[:-1] = np.logaddexp(cur[:-1], nxt[1:])
+        skip = np.full(S, NEG)
+        ok = np.zeros(S, bool)
+        ok[:-2] = (ext[:-2] != blank) & (ext[:-2] != ext[2:])
+        skip[:-2] = np.where(ok[:-2], nxt[2:], NEG)
+        b[t] = np.logaddexp(cur, skip) + logp[t, ext]
+    return b
+
+
+def ctc_loss_grad(logits, target, blank=0):
+    """(-logP, dL/dlogits)"""
+    logp = logits - logsumexp(logits, axis=1)[:, None]
+    logZ, a, ext = ctc_forward(logp, target, blank)
+    b = ctc_backward(logp, target, blank)
+    T, C = logits.shape
+    acc = np.full((T, C), NEG)
+    for s, k in enumerate(ext):
+        acc[:, k] = np.logaddexp(acc[:, k], a[:, s] + b[:, s])
+    return -logZ, np.exp(logp) - np.exp(acc - logp - logZ)
+
+
+print("해석적 그래디언트 vs 수치 미분")
+print()
+print(f"{'T':>4} {'C':>4} {'타깃':>12} {'최대 절대오차':>16}")
+print("-" * 44)
+for T, C, tgt in [(6, 4, [1, 2]), (10, 5, [1, 2, 3]), (8, 4, [2, 2, 1])]:
+    lg = rg.normal(0, 1, (T, C))
+    L, G = ctc_loss_grad(lg, tgt)
+    num = np.zeros_like(lg)
+    eps = 1e-5
+    for i in range(T):
+        for j in range(C):
+            p, m = lg.copy(), lg.copy()
+            p[i, j] += eps
+            m[i, j] -= eps
+            num[i, j] = (ctc_loss_grad(p, tgt)[0]
+                         - ctc_loss_grad(m, tgt)[0])/(2*eps)
+    print(f"{T:>4} {C:>4} {str(tgt):>12} {np.abs(G-num).max():>16.2e}")
+print()
+print("**구현이 맞다.** 이제 실제로 학습시킨다.")
+```
+
+---
+
+## G8.4.3 — 정렬 라벨 없이 학습하기
+
+[8.3](03_classical_speech.qmd)의 코퍼스를 그대로 쓴다.
+차이는 하나다 — **음소 경계를 주지 않는다.** 발화당 음소열만 준다.
+
+```{python}
+#| label: corpus
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+from scipy import signal
+from scipy.fft import dct
+from src import audio, nn
+
+SR, N_FFT, HOP = 16000, 400, 160
+FB, _, _ = audio.mel_filterbank(26, N_FFT, SR)
+VOW = {"a": (730, 1090, 2440), "i": (270, 2290, 3010),
+       "u": (300, 870, 2240), "e": (530, 1840, 2480),
+       "o": (570, 840, 2410)}
+FRIC = {"s": (4500, 7500), "f": (1200, 4000), "S": (2200, 5200)}
+PHONES = list(VOW) + list(FRIC) + ["_"]
+
+
+def formant_coeffs(fs, bws=(80, 90, 120), sr=SR):
+    b, a = np.array([1.0]), np.array([1.0])
+    for f, bw in zip(fs, bws):
+        r = np.exp(-np.pi*bw/sr)
+        th = 2*np.pi*f/sr
+        b = np.convolve(b, [1 - 2*r*np.cos(th) + r**2])
+        a = np.convolve(a, [1, -2*r*np.cos(th), r**2])
+    return b, a
+
+
+def render_phone(p, n, g, f0):
+    if p == "_":
+        return g.normal(0, 0.01, n)
+    if p in VOW:
+        src = np.zeros(n)
+        src[::max(1, int(round(SR/f0)))] = 1.0
+        b, a = formant_coeffs(VOW[p])
+        y = signal.lfilter(b, a, src)
+    else:
+        lo, hi = FRIC[p]
+        b, a = signal.butter(4, [lo/(SR/2), min(hi, SR/2 - 1)/(SR/2)], "band")
+        y = signal.lfilter(b, a, g.normal(0, 1, n))
+    return y/(np.max(np.abs(y)) + 1e-9)*g.uniform(0.7, 1.0)
+
+
+LEX = {"ai": "a i", "us": "u s", "of": "o f", "ea": "e a",
+       "si": "s i", "fo": "f o", "aSu": "a S u", "ies": "i e s",
+       "ou": "o u", "sea": "s e a", "fi": "f i", "uSo": "u S o"}
+WORDS = list(LEX)
+
+
+def make_utt(g, n_words=4):
+    f0 = g.uniform(100, 200)
+    xs, labs = [], []
+    for w in [WORDS[int(g.integers(len(WORDS)))] for _ in range(n_words)]:
+        for p in LEX[w].split():
+            n = int(g.uniform(0.06, 0.14)*SR)
+            xs.append(render_phone(p, n, g, f0))
+            labs.append((p, n))
+        n = int(g.uniform(0.03, 0.07)*SR)
+        xs.append(render_phone("_", n, g, f0))
+        labs.append(("_", n))
+    x = np.concatenate(xs)
+    return x/np.max(np.abs(x)) + g.normal(0, 0.01, len(x)), labs
+
+
+def feats(x):
+    lm = audio.log_mel(x, SR, N_FFT, HOP, fb=FB)
+    return dct(lm, type=2, axis=0, norm="ortho")[:13]
+
+
+def stack(X, w=4):
+    """앞뒤 w 프레임을 이어 붙인다 — 인코더에 문맥을 준다."""
+    T = X.shape[1]
+    P = np.pad(X, ((0, 0), (w, w)), mode="edge")
+    return np.concatenate([P[:, i:i+T] for i in range(2*w+1)], axis=0).T
+
+
+OUT_PH = [p for p in PHONES if p != "_"]
+O2I = {p: i + 1 for i, p in enumerate(OUT_PH)}      # 0 = blank
+NC = len(OUT_PH) + 1
+
+g0 = np.random.default_rng(0)
+TRAIN = [make_utt(g0) for _ in range(50)]
+TEST = [make_utt(g0) for _ in range(25)]
+TRX = [stack(feats(x)) for x, _ in TRAIN]
+TEX = [stack(feats(x)) for x, _ in TEST]
+TRY = [[O2I[p] for p, _ in l if p != "_"] for _, l in TRAIN]
+TEY = [[O2I[p] for p, _ in l if p != "_"] for _, l in TEST]
+D = TRX[0].shape[1]
+
+print(f"인코더 입력 {D}차원 (MFCC 13 x 문맥 9프레임)")
+print(f"출력 {NC}종 = 음소 {len(OUT_PH)}개 + blank")
+print(f"학습 발화 {len(TRX)}개, 평균 {np.mean([x.shape[0] for x in TRX]):.0f}프레임 "
+      f"→ 라벨 {np.mean([len(t) for t in TRY]):.1f}개")
+print()
+print("**모델에 주는 것은 (파형, 음소열) 쌍뿐이다.**")
+print(f"  프레임 {np.mean([x.shape[0] for x in TRX]):.0f}개와 라벨 "
+      f"{np.mean([len(t) for t in TRY]):.1f}개의 대응은 알려주지 않는다.")
+print("  8.3에서는 이것을 강제 정렬로 만들어야 학습을 시작할 수 있었다.")
+```
+
+```{python}
+#| label: train
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+def greedy(logits):
+    """best path 디코딩 — argmax 후 축약."""
+    out, prev = [], -1
+    for k in logits.argmax(1):
+        if k != prev and k != 0:
+            out.append(int(k))
+        prev = k
+    return out
+
+
+def edit_dist(ref, hyp):
+    a, b = len(ref), len(hyp)
+    Dm = np.zeros((a+1, b+1), int)
+    Dm[:, 0], Dm[0, :] = np.arange(a+1), np.arange(b+1)
+    for i in range(1, a+1):
+        for j in range(1, b+1):
+            Dm[i, j] = min(Dm[i-1, j] + 1, Dm[i, j-1] + 1,
+                           Dm[i-1, j-1] + (ref[i-1] != hyp[j-1]))
+    return int(Dm[a, b])
+
+
+def per(model, XS, YS, dec=greedy):
+    tot = n = 0
+    for X, t in zip(XS, YS):
+        o, _ = model.forward(X, training=False)
+        tot += edit_dist(t, dec(o))
+        n += len(t)
+    return tot/n
+
+
+model = nn.MLP([D, 128, 128, NC], activation="relu",
+               out_activation="identity", seed=0)
+opt = nn.Optimizer("adam", lr=3e-3)
+params = model.params()
+rng = np.random.default_rng(0)
+
+print(f"{'에폭':>6} {'CTC 손실/라벨':>14} {'학습 PER':>10} {'테스트 PER':>12} "
+      f"{'blank 프레임 비율':>18}")
+print("-" * 66)
+CURVE = []
+for ep in range(1, 31):
+    for i in rng.permutation(len(TRX)):
+        out, cache = model.forward(TRX[i], training=True)
+        L, G = ctc_loss_grad(out, TRY[i])
+        opt.step(params, model.backward(cache, G))
+    if ep in (1, 2, 3, 5, 10, 20, 30):
+        tot = float(np.mean([ctc_loss_grad(
+            model.forward(X, training=False)[0], t)[0]/len(t)
+            for X, t in zip(TRX, TRY)]))
+        tr, te = per(model, TRX, TRY), per(model, TEX, TEY)
+        bl = float(np.mean([np.mean(model.forward(X, training=False)[0]
+                                    .argmax(1) == 0) for X in TEX]))
+        CURVE.append((ep, tot, tr, te, bl))
+        print(f"{ep:>6} {tot:>14.4f} {tr:>10.4f} {te:>12.4f} {bl:>18.3f}")
+print()
+fin = CURVE[-1]
+print(f"**테스트 음소 오류율 {fin[3]:.4f}** — 정렬을 한 번도 주지 않았다.")
+print()
+print("[8.3](03_classical_speech.qmd)과 비교")
+print(f"{'':<4}{'항목':<24} {'HMM-GMM (8.3)':<22} {'CTC (여기)'}")
+print("-" * 76)
+for a, b, c in [("학습에 필요한 라벨", "프레임별 상태", "**음소열만**"),
+                ("정렬 방법", "flat start + 재추정", "모든 정렬을 주변화"),
+                ("발음 사전", "필요", "필요 없음"),
+                ("깨끗한 조건 오류율", "PER 0.0033 (Viterbi)", f"PER {fin[3]:.4f}"),
+                ("학습 반복", "정렬-재추정 5회", "SGD 30 에폭")]:
+    print(f"{'':<4}{a:<24} {b:<22} {c}")
+print()
+print("**모델이 정렬을 스스로 찾아냈다.** 어떻게 생긴 정렬인지 다음에서 본다.")
+```
+
+---
+
+## G8.4.4 — 스파이크: CTC가 실제로 배우는 정렬
+
+CTC 출력을 그려 보면 대부분이 blank이고, 가끔 **뾰족하게** 글자가 튄다.
+이것은 버그가 아니라 목적함수에서 따라 나오는 성질이다.
+
+```{python}
+#| label: spikes
+#| code-fold: false
+
+import numpy as np
+
+rel, width, dur = [], [], []
+for X, (x, labs) in zip(TEX, TEST):
+    pred = model.forward(X, training=False)[0].argmax(1)
+    t = 0
+    for p, n in labs:
+        nf = n//HOP
+        if p != "_" and nf > 1:
+            seg = pred[t:t+nf]
+            hit = np.where(seg == O2I[p])[0]
+            if len(hit):
+                rel.append(float(hit.mean()/max(nf - 1, 1)))
+                width.append(len(hit))
+                dur.append(nf)
+        t += nf
+
+print(f"{'지표':<34} {'값'}")
+print("-" * 56)
+print(f"{'blank 로 판정된 프레임 비율':<34} {CURVE[-1][4]:.3f}")
+print(f"{'스파이크 폭 (프레임)':<34} {np.mean(width):.1f}")
+print(f"{'참 음소 길이 (프레임)':<34} {np.mean(dur):.1f}")
+print(f"{'폭 / 음소 길이':<34} {np.mean(width)/np.mean(dur):.1%}")
+print(f"{'음소 구간 안에서의 상대 위치':<34} {np.mean(rel):.3f}")
+print()
+print(f"**출력이 음소 구간의 앞이 아니라 뒤쪽에 몰린다** "
+      f"(상대 위치 {np.mean(rel):.2f}, 0=시작 1=끝).")
+print("  CTC 는 **증거를 충분히 본 뒤에** 결정하는 편이 유리하다.")
+print("  같은 정렬 확률을 얻는다면 늦게 내는 쪽이 더 많은 프레임을 근거로 쓴다.")
+print()
+print("**이것이 스트리밍에서 곧바로 문제가 된다.**")
+for s in ["출력이 늦으면 **지연**이 생긴다 — 실시간 자막에서 체감된다",
+          "완화: 지연에 페널티를 주는 손실(FastEmit), 미래 문맥 제한",
+          f"여기서는 문맥 창이 ±4프레임(±40ms)뿐인데도 "
+          f"{np.mean(rel):.0%} 지점에서 낸다"]:
+    print(f"  · {s}")
+print()
+print("**왜 뾰족해지는가**")
+for s in ["정답 경로 집합에 blank 가 압도적으로 많다 — 어느 시점에 내도 되므로",
+          "확률을 한 프레임에 몰아주는 것이 **여러 프레임에 나누는 것보다 안전**하다",
+          "  나누면 축약 규칙 때문에 중복 출력 위험이 생긴다",
+          f"결과: 프레임의 {CURVE[-1][4]:.0%} 가 blank, 나머지가 뾰족한 봉우리",
+          "**부작용**: 프레임 단위 사후확률이 정렬 정보로는 쓸 만하지 않다",
+          "  강제 정렬 용도로는 여전히 HMM 계열이 쓰이는 이유다 (8.3)"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G8.4.5 — 디코딩: greedy와 prefix beam search
+
+greedy(best path)는 **경로 하나**를 고른다. 그런데 우리가 원하는 것은 **라벨열**이고,
+같은 라벨열로 축약되는 경로가 여럿이다. 그것들을 합치는 것이 prefix beam search다.
+
+```{python}
+#| label: decode
+#| code-fold: false
+
+import numpy as np
+
+
+def prefix_beam(logits, beam=8, lm=None, alpha=0.0):
+    """같은 접두사로 축약되는 경로들의 확률을 합친다."""
+    T, C = logits.shape
+    lp = logits - logsumexp(logits, axis=1)[:, None]
+    beams = {(): (0.0, NEG)}                  # 접두사 -> (blank 끝, 비blank 끝)
+    for t in range(T):
+        nxt = {}
+        for pref, (pb, pnb) in beams.items():
+            tot = np.logaddexp(pb, pnb)
+            e = nxt.get(pref, (NEG, NEG))
+            nxt[pref] = (np.logaddexp(e[0], tot + lp[t, 0]), e[1])   # blank
+            for c in range(1, C):
+                if lp[t, c] < -12:
+                    continue
+                same = bool(pref) and pref[-1] == c
+                if same:                       # 같은 글자 반복: 축약된다
+                    e = nxt.get(pref, (NEG, NEG))
+                    nxt[pref] = (e[0], np.logaddexp(e[1], pnb + lp[t, c]))
+                base = pb if same else tot     # 반복이면 blank 뒤에서만 새 글자
+                np_ = pref + (c,)
+                e2 = nxt.get(np_, (NEG, NEG))
+                sc = base + lp[t, c]
+                if lm is not None:
+                    sc += alpha*lm(pref, c)
+                nxt[np_] = (e2[0], np.logaddexp(e2[1], sc))
+        beams = dict(sorted(nxt.items(),
+                            key=lambda kv: -np.logaddexp(*kv[1]))[:beam])
+    return list(max(beams.items(), key=lambda kv: np.logaddexp(*kv[1]))[0])
+
+
+BG = np.ones((NC, NC))
+for t in TRY:
+    seq = [0] + t
+    for a, b in zip(seq, seq[1:]):
+        BG[a, b] += 1
+LOGBG = np.log(BG/BG.sum(1, keepdims=True))
+
+
+def lmf(pref, c):
+    return LOGBG[pref[-1] if pref else 0, c]
+
+
+gn = np.random.default_rng(9)
+print(f"{'잡음 σ':>8} {'greedy':>10} {'beam=8':>10} {'beam=8 + 음소 LM':>18}")
+print("-" * 52)
+DEC = []
+for sg in [0.0, 0.05, 0.12]:
+    NX = [stack(feats(x + gn.normal(0, sg, len(x)))) for x, _ in TEST]
+    row = []
+    for dec in [greedy, lambda o: prefix_beam(o, 8),
+                lambda o: prefix_beam(o, 8, lmf, 1.0)]:
+        tot = n = 0
+        for X, t in zip(NX, TEY):
+            o, _ = model.forward(X, training=False)
+            tot += edit_dist(t, dec(o))
+            n += len(t)
+        row.append(tot/n)
+    DEC.append((sg, *row))
+    print(f"{sg:>8.2f} {row[0]:>10.4f} {row[1]:>10.4f} {row[2]:>18.4f}")
+print()
+d5 = [d for d in DEC if d[0] == 0.05][0]
+print(f"**빔 서치만으로는 이득이 작다** — σ=0.05 에서 "
+      f"{d5[1]:.4f} → {d5[2]:.4f} ({(d5[1]-d5[2])/d5[1]:.0%} 감소).")
+print("  출력이 이미 뾰족해서 경로 하나가 확률의 대부분을 차지하기 때문이다.")
+print("  G8.4.4에서 잰 blank 비율이 그 이유를 그대로 설명한다.")
+print()
+print(f"**이득은 언어모델에서 온다** ({d5[1]:.4f} → {d5[3]:.4f}).")
+print("  빔 서치의 진짜 값어치는 경로 합산이 아니라 **LM 을 끼워 넣을 자리**다.")
+print()
+print("이 결합 방식을 **shallow fusion** 이라 부른다.")
+print(f"  $\\log P = \\log P_{{CTC}} + \\alpha \\log P_{{LM}} + \\beta |y|$")
+print("  CTC 점수에 LM 점수를 **디코딩 시점에** 더한다. 학습은 따로다.")
+print()
+print(f"{'융합 방식':<18} {'언제 결합':<18} {'특징'}")
+print("-" * 66)
+for a, b, c in [("shallow fusion", "디코딩 시점", "가장 흔하다. 가중치 튜닝 필요"),
+                ("deep fusion", "학습 시점 (게이트)", "LM 을 바꾸기 어려워진다"),
+                ("cold fusion", "처음부터 함께", "LM 교체가 쉬워진다"),
+                ("rescoring", "N-best 재점수", "큰 LM 을 쓸 수 있다")]:
+    print(f"{a:<18} {b:<18} {c}")
+print()
+print(f"**그리고 σ=0.12 에서는 모든 방법이 무너진다** "
+      f"(PER {DEC[-1][1]:.2f}).")
+print("  [8.3](03_classical_speech.qmd)의 HMM 도 같은 방식으로 무너졌다.")
+print("  **학습 조건 밖에서 취약한 것은 CTC 여도 마찬가지다** —")
+print("  이 문제를 푸는 것은 목적함수가 아니라 **데이터의 다양성**이다 (8.5, 8.6).")
+```
+
+---
+
+## 조건부 독립 가정과 RNN-T
+
+CTC에는 결정적인 가정이 하나 있다.
+
+$$P(\pi \mid X) = \prod_{t=1}^{T} y^t_{\pi_t}$$
+
+**프레임별 출력이 서로 독립**이다. 앞에서 무엇을 냈는지가 다음 출력에 영향을 주지 않는다.
+
+```{python}
+#| label: rnnt
+#| code-fold: false
+
+print("조건부 독립이 무엇을 못 하게 하는가")
+print()
+for s in ["'q' 다음에는 'u' 가 온다 같은 **출력 사이의 규칙**을 배울 수 없다",
+          "그래서 외부 LM 이 거의 필수다 (위 표에서 이득이 LM 에서 왔다)",
+          "**중복 출력** — 같은 라벨을 몇 번 낼지 판단할 근거가 프레임뿐이다",
+          "긴 문맥의 철자·형태 규칙을 인코더가 전부 떠안아야 한다"]:
+    print(f"  · {s}")
+print()
+print("**RNN-T 는 예측 네트워크를 더해 이 가정을 없앤다.**")
+print()
+print(f"{'':<4}{'구성':<22} {'CTC':<26} {'RNN-T'}")
+print("-" * 78)
+for a, b, c in [
+    ("인코더", "프레임 → 표현", "같다"),
+    ("예측 네트워크", "**없다**", "**이전 출력 → 표현**"),
+    ("결합 네트워크", "없다 (선형 출력)", "인코더+예측을 합쳐 분포"),
+    ("출력 의존성", "없다 (조건부 독립)", "**있다** — 내부 LM 역할"),
+    ("격자", "T x S (1차원 진행)", "**T x U (2차원)**"),
+    ("한 프레임에", "라벨 하나 또는 blank", "**라벨 여러 개 가능**"),
+]:
+    print(f"{'':<4}{a:<22} {b:<26} {c}")
+print()
+print("격자의 차이가 핵심이다.")
+print("  CTC 격자는 시간축을 따라 **한 방향**으로만 간다.")
+print("  RNN-T 격자는 (시간, 출력 위치) 평면에서 오른쪽·위로 간다 —")
+print("  시간을 넘기지 않고도 라벨을 연달아 낼 수 있다.")
+print()
+print("**그래서 RNN-T 가 스트리밍의 표준이 되었다.**")
+print(f"{'요구':<26} {'CTC':<20} {'RNN-T':<18} {'어텐션 seq2seq'}")
+print("-" * 84)
+for a, b, c, d in [
+    ("스트리밍", "가능", "**가능**", "어렵다 (전체를 본다)"),
+    ("출력 의존성", "없다", "**있다**", "있다"),
+    ("외부 LM 필요", "**크다**", "중간", "작다"),
+    ("학습 비용", "낮다", "높다 (T x U 격자)", "중간"),
+    ("정렬 단조성", "보장", "**보장**", "보장 안 됨"),
+]:
+    print(f"{a:<26} {b:<20} {c:<18} {d}")
+print()
+print("**어텐션 기반 seq2seq(LAS)의 단조성 문제**")
+for s in ["어텐션은 입력의 아무 곳이나 볼 수 있다 — 음성은 **단조**인데도",
+          "그래서 반복·건너뜀·조기 종료 같은 실패가 난다 (7.15의 환각과 같은 계열)",
+          "Whisper 도 이 계열이고, 실제로 반복 문제가 보고된다 (8.6)",
+          "완화: CTC 를 보조 손실로 함께 학습해 **단조성을 강제**한다"]:
+    print(f"  · {s}")
+print()
+print("**현재의 표준 조합**")
+for s in ["**인코더**: Conformer — 합성곱(국소)과 어텐션(전역)을 섞는다",
+          "**손실**: CTC + 어텐션 다중 목표 (하이브리드 CTC/attention)",
+          "**스트리밍**: RNN-T, 또는 청크 단위 인과 어텐션",
+          "**출력 단위**: 문자보다 **서브워드**(7.1) — 시퀀스가 짧아져 유리",
+          "  그리고 서브워드는 미등록어 문제를 없앤다 (8.3의 발음 사전과 대조)"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 요약
+
+| 개념 | 수식·수치 | 핵심 |
+|------|----------|------|
+| 정렬 문제 | 프레임 111개 → 라벨 9.4개 | 대응을 사람이 달아 줄 수 없다 |
+| CTC의 답 | $\sum_{\pi \in \mathcal{B}^{-1}(\ell)}$ | 고르지 않고 **전부 더한다** |
+| 장치 | blank + 축약 규칙 | 중복 합치기가 먼저 → 건너뛰기 조건 |
+| **경로 수** | T=300, U=40 → 약 $10^{79}$ | 그런데 합은 $O(TU)$ |
+| 전방 알고리즘 | Viterbi의 max → logsumexp | **완전 열거와 1e-15 이내 일치** |
+| 검증의 핵심 | 타깃 `[1,1]` 케이스 | 건너뛰기 조건이 없으면 여기서 틀린다 |
+| 그래디언트 | $y^t_k - $ 사후 정렬 | 수치 미분과 **1e-10 이내 일치** |
+| 소프트 정렬 | 하드 라벨 대신 기대값 | 8.3의 강제 정렬을 대체하는 지점 |
+| **학습 결과** | 테스트 PER **0.0000** | 정렬을 한 번도 주지 않았다 |
+| **스파이크** | blank 프레임 **64%** | 폭이 음소 길이의 48% |
+| **출력 지연** | 음소 구간의 **0.67 지점** | 증거를 본 뒤 내는 편이 유리하다 |
+| 부작용 | 정렬 용도로는 부적합 | 강제 정렬은 여전히 HMM 계열 |
+| 빔 서치 | σ=0.05에서 0.182 → **0.173** | 경로 합산만으로는 이득이 작다 |
+| 이득의 출처 | LM 결합 시 0.182 → **0.152** | 빔의 값어치는 **LM 을 끼울 자리** |
+| shallow fusion | $\log P_{CTC} + \alpha\log P_{LM}$ | 디코딩 시점 결합이 가장 흔하다 |
+| 조건부 독립 | $P(\pi\|X)=\prod_t y^t_{\pi_t}$ | 출력 사이 규칙을 못 배운다 |
+| RNN-T | 예측 네트워크 + T×U 격자 | 출력 의존성을 복원, 스트리밍 표준 |
+| 여전한 약점 | σ=0.12에서 모두 붕괴 | 목적함수가 아니라 **데이터**의 문제 |
+
+정렬 문제는 풀렸다. 그런데 전사 데이터는 여전히 비싸다.
+다음 장은 **전사 없이** 음성 표현을 배운다.
+
+---
+
+**다음**: [8.5 음성 자기지도 학습](05_ssl_speech.qmd) — 레이블 없이 표현 배우기
 
 **이전**: [8.3 고전 음성 인식](03_classical_speech.qmd)
