@@ -4,89 +4,512 @@ subtitle: "시간축·광류·시공간 샘플링 — 프레임의 나열 그 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+비디오를 $(T, H, W, C)$ 배열로 쓰면 이미지에 축 하나가 붙은 것처럼 보인다.
+그 관점이 왜 틀렸는지가 이 장의 내용이다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+224px 이미지 한 장은 15만 픽셀이다.
+10초짜리 30fps 영상은 **4천 5백만 픽셀**이다. 300배다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그런데 그 300배가 300배의 정보를 담고 있지 않다.
+인접한 프레임은 거의 같기 때문이다. 비디오 설계의 거의 모든 결정이 이 사실에서 나온다 —
+**정보는 조금 늘었는데 데이터는 엄청나게 늘었다.**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 준비: 합성 클립
+
+정적 단서와 시간 단서를 **분리해서** 넣은 클립을 만든다.
+
+- **모양** (2종) — 프레임 하나만 봐도 알 수 있다
+- **운동 방향** (4종) — 프레임 하나로는 알 수 없다
+
+이 분리가 이 장의 측정 도구다.
+
+```{python}
+#| label: data
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+R, T = 32, 32
+YY, XX = np.mgrid[0:R, 0:R]
+DIRS = np.array([[1, 0], [0, 1], [-1, 0], [0, -1]], float)
+
+
+def clip(shape, d, g, speed=0.9, noise=0.03):
+    """T프레임 클립. shape=정적 단서, d=운동 방향(시간 단서)."""
+    cx, cy = g.uniform(8, 24, 2)
+    v = DIRS[d]*speed
+    ph = g.uniform(0, 2*np.pi)                 # 정지한 배경 무늬
+    F = np.zeros((T, R, R))
+    for t in range(T):
+        x, y = (cx + v[0]*t) % R, (cy + v[1]*t) % R
+        dx = np.minimum(np.abs(XX - x), R - np.abs(XX - x))
+        dy = np.minimum(np.abs(YY - y), R - np.abs(YY - y))
+        r = np.sqrt(dx*dx + dy*dy)
+        im = np.exp(-r*r/12.0) if shape == 0 else np.exp(-(r - 3.0)**2/2.0)
+        F[t] = im + 0.25*np.cos(0.7*XX + ph) + g.normal(0, noise, (R, R))
+    return F
+
+
+print(f"클립 하나 = {T}프레임 x {R}x{R} = {T*R*R:,} 픽셀")
+print()
+print("**실제 비디오의 규모 감각**")
+print()
+print(f"{'대상':<24} {'픽셀 수':>16} {'이미지 대비':>12}")
+print("-" * 56)
+one = 224*224*3
+for nm, n in [("224px 이미지 1장", one),
+              ("10초 30fps 224px", 300*one),
+              ("10초 30fps 1080p", 300*1920*1080*3),
+              ("1시간 1080p", 108000*1920*1080*3)]:
+    print(f"{nm:<24} {n:>16,} {n/one:>11,.0f}배")
+print()
+print("**이 숫자가 비디오 설계의 모든 제약을 만든다.**")
+for s in ["디코딩 비용 — 학습 중 병목이 GPU 가 아니라 **CPU 디코딩**인 경우가 흔하다",
+          "저장·전송 — 원본을 그대로 두는 것은 대개 불가능하다",
+          "메모리 — 시공간 어텐션은 프레임 수의 제곱 ([9.6](06_video_models.qmd))",
+          "그래서 **무엇을 버릴지**가 첫 번째 설계 결정이 된다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G9.5.1 — 시간적 중복성: 데이터는 300배, 정보는 아니다
+
+비디오 코덱은 이 중복성으로 먹고산다.
+키프레임 하나를 온전히 저장하고, 나머지는 **차이만** 저장한다.
+
+얼마나 중복적인지, 그리고 그것이 무엇에 딸린 값인지 재 보자.
+
+```{python}
+#| label: redundancy
+#| code-fold: false
+
+import numpy as np
+
+print("프레임당 이동량을 바꿔 가며 — 인접 프레임이 얼마나 닮았는가")
+print()
+print(f"{'프레임당 이동':>12} {'인접 코사인':>12} {'차분 에너지':>12} "
+      f"{'보간 오차':>11}")
+print("-" * 52)
+RED = []
+for sp in [0.1, 0.25, 0.5, 1.0, 2.0]:
+    g = np.random.default_rng(0)
+    V = [clip(int(g.integers(0, 2)), int(g.integers(0, 4)), g, speed=sp)
+         for _ in range(20)]
+    cs, ms, itp = [], [], []
+    for v in V:
+        A, B = v[:-1].reshape(T-1, -1), v[1:].reshape(T-1, -1)
+        cs.append(((A*B).sum(1)/(np.linalg.norm(A, axis=1)
+                                 * np.linalg.norm(B, axis=1) + 1e-9)).mean())
+        ms.append(((v[:-1] - v[1:])**2).mean()/v.var())
+        # 앞뒤 프레임의 평균으로 가운데를 복원 (코덱의 B프레임과 같은 발상)
+        mid = (v[:-2] + v[2:])/2
+        itp.append(((mid - v[1:-1])**2).mean()/v.var())
+    RED.append((sp, float(np.mean(cs)), float(np.mean(ms)), float(np.mean(itp))))
+    print(f"{sp:>12.2f} {RED[-1][1]:>12.4f} {RED[-1][2]:>12.4f} "
+          f"{RED[-1][3]:>11.4f}")
+print()
+slow, fast = RED[0], RED[-1]
+print("**중복성은 '비디오의 성질'이 아니라 '이동량의 함수'다.**")
+print(f"  프레임당 0.1px: 인접 코사인 {slow[1]:.4f}, "
+      f"버릴 프레임을 보간으로 복원한 오차 {slow[3]:.4f}")
+print(f"  프레임당 2.0px: 인접 코사인 {fast[1]:.4f}, 보간 오차 {fast[3]:.4f} "
+      f"({fast[3]/slow[3]:.0f}배)")
+print()
+print("**실사 영상은 대부분 왼쪽 끝에 가깝다.**")
+for s in ["30fps 에서 화면을 3초에 가로지르는 물체는 프레임당 약 2px 이동한다",
+          "대부분의 장면은 그보다 훨씬 느리다 — 배경은 아예 안 움직인다",
+          "그래서 **프레임을 절반 버려도 잃는 것이 거의 없다**",
+          "이것이 프레임 샘플링이 정당화되는 근거다 — 다음 절",
+          "반대로 **빠른 동작·장면 전환**에서는 이 가정이 깨진다 — "
+          "그래서 코덱은 장면 전환마다 키프레임을 강제로 넣는다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-redundancy
+#| fig-cap: "G9.5.1 — 프레임당 이동량과 시간적 중복성. 왼쪽 영역이 실사 영상의 일반적 범위이고, 거기서는 프레임을 버려도 보간으로 거의 복원된다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+SP = [r[0] for r in RED]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=SP, y=[r[2] for r in RED], mode="lines+markers",
+                         name="인접 프레임 차분 에너지",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=8)))
+fig.add_trace(go.Scatter(x=SP, y=[r[3] for r in RED], mode="lines+markers",
+                         name="앞뒤 평균으로 복원한 오차",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=8)))
+fig.add_vrect(x0=0.08, x1=0.6, fillcolor=viz.hex_rgba(viz.GREEN, 0.10),
+              line_width=0)
+fig.add_annotation(x=0.22, y=0.9, yref="paper", text="실사 영상의<br>일반적 범위",
+                   showarrow=False, font=dict(size=11, color=viz.GREEN))
+viz.fig_defaults(
+    fig, "이동량에 따른 시간적 중복성 (전체 분산 대비)", height=440,
+    xaxis_title="프레임당 이동량 (픽셀, 로그)",
+    yaxis_title="정규화 오차", xaxis_type="log",
+    xaxis=dict(tickmode="array", tickvals=SP))
+fig
+```
+
+---
+
+## G9.5.2 — 프레임 샘플링: 몇 장이면 충분한가
+
+중복이 많다면 몇 장만 보면 된다. 그런데 **무엇을 하려느냐에 따라 답이 다르다.**
+
+같은 클립으로 두 과제를 푼다 — 모양(정적)과 운동 방향(시간).
+샘플링 전략만 바꿔 가며 선형 프로브를 학습시킨다.
+
+```{python}
+#| label: sampling
+#| code-fold: false
+
+import numpy as np
+
+
+def dataset(n, g):
+    Vs, ys, yd = [], [], []
+    for _ in range(n):
+        s, d = int(g.integers(0, 2)), int(g.integers(0, 4))
+        Vs.append(clip(s, d, g)); ys.append(s); yd.append(d)
+    return np.array(Vs), np.array(ys), np.array(yd)
+
+
+def ds8(v):
+    """8x8 로 다운샘플 — 프레임 수의 영향만 보기 위해."""
+    return v.reshape(len(v), T, 8, 4, 8, 4).mean((3, 5))
+
+
+def probe(Xa, ya, Xb, yb, cls, steps=600, lr=0.5, lam=1e-3):
+    Xa, Xb = Xa.reshape(len(Xa), -1), Xb.reshape(len(Xb), -1)
+    mu, sd = Xa.mean(0), Xa.std(0) + 1e-6
+    Xa, Xb = (Xa - mu)/sd, (Xb - mu)/sd
+    W = np.zeros((Xa.shape[1], cls)); b = np.zeros(cls); Y = np.eye(cls)[ya]
+    for _ in range(steps):
+        L = Xa @ W + b; L -= L.max(1, keepdims=True)
+        P = np.exp(L); P /= P.sum(1, keepdims=True)
+        d = (P - Y)/len(ya)
+        W -= lr*(Xa.T @ d + lam*W); b -= lr*d.sum(0)
+    return float(((Xb @ W + b).argmax(1) == yb).mean())
+
+
+Vtr, str_, dtr = dataset(400, np.random.default_rng(1))
+Vte, ste, dte = dataset(300, np.random.default_rng(2))
+Ftr, Fte = ds8(Vtr), ds8(Vte)
+
+STRAT = [("1프레임 (가운데)", [T//2]),
+         ("2프레임 (양끝)", [0, T-1]),
+         ("2프레임 (인접)", [T//2, T//2+1]),
+         ("4프레임 균등", list(np.linspace(0, T-1, 4).astype(int))),
+         ("8프레임 균등", list(np.linspace(0, T-1, 8).astype(int))),
+         ("8프레임 밀집(앞부분)", list(range(8))),
+         ("32프레임 전부", list(range(T)))]
+SAMP = []
+print("샘플링 전략별 — 정적 과제와 시간 과제")
+print()
+print(f"{'전략':<20} {'프레임':>7} {'모양 (정적)':>12} {'방향 (시간)':>12}")
+print("-" * 54)
+for nm, idx in STRAT:
+    a = probe(Ftr[:, idx], str_, Fte[:, idx], ste, 2)
+    b = probe(Ftr[:, idx], dtr, Fte[:, idx], dte, 4)
+    SAMP.append((nm, len(idx), a, b))
+    print(f"{nm:<20} {len(idx):>7} {a:>12.4f} {b:>12.4f}")
+print()
+one = SAMP[0]; two = SAMP[1]; adj = SAMP[2]; allf = SAMP[-1]
+print(f"**정적 과제는 1프레임에서 끝난다** — {one[2]:.4f}.")
+print(f"  프레임을 32장 다 줘도 {allf[2]:.4f} 로 **오히려 떨어진다**.")
+print("  차원만 32배가 되고 새 정보는 없으니, 과적합만 는다.")
+print()
+print(f"**시간 과제는 1프레임으로 {one[3]:.4f} 밖에 안 된다** (무작위 0.25).")
+print(f"  2프레임만 줘도 {two[3]:.4f} 로 뛴다.")
+print(f"  {allf[1]}프레임을 다 줘도 {allf[3]:.4f} — 2장에서 거의 다 얻었다.")
+print()
+print("**간격도 중요하다.**")
+print(f"  양끝 2프레임 {two[3]:.4f} vs 인접 2프레임 {adj[3]:.4f}")
+print("  인접 프레임은 거의 같으므로 (G9.5.1), 움직임이 잘 안 보인다.")
+print("  **몇 장을 보느냐보다 얼마나 벌려서 보느냐가 중요할 수 있다.**")
+print()
+print("**샘플링 전략의 지형**")
+print()
+print(f"{'전략':<18} {'방식':<30} {'쓰이는 곳'}")
+print("-" * 74)
+for a, b, c in [
+    ("밀집 (dense)", "연속 구간을 통째로", "짧고 빠른 동작, 3D CNN"),
+    ("균등 (uniform)", "전체를 고르게 n장", "가장 흔한 기본값"),
+    ("세그먼트 (TSN)", "n구간으로 나눠 각 1장 무작위", "긴 영상, 학습 시 증강 효과"),
+    ("키프레임 기반", "장면 전환·큰 변화 지점", "편집된 영상, 요약"),
+    ("적응적", "모델이 볼 프레임을 고른다", "긴 영상 이해"),
+]:
+    print(f"{a:<18} {b:<30} {c}")
+```
+
+```{python}
+#| label: fig-sampling
+#| fig-cap: "G9.5.2 — 프레임 수와 두 과제. 정적 과제는 1프레임이 최고이고 더 주면 나빠진다. 시간 과제는 2프레임에서 대부분을 얻는다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+nm = [s[0] for s in SAMP]
+fig = go.Figure()
+fig.add_trace(go.Bar(x=nm, y=[s[2] for s in SAMP], name="모양 (정적 단서)",
+                     marker_color=viz.ACCENT))
+fig.add_trace(go.Bar(x=nm, y=[s[3] for s in SAMP], name="방향 (시간 단서)",
+                     marker_color=viz.WARM))
+fig.add_hline(y=0.25, line=dict(color=viz.hex_rgba(viz.WARM, 0.6), dash="dash"))
+fig.add_annotation(x=nm[0], y=0.25, text="방향 무작위 0.25", showarrow=False,
+                   xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.WARM))
+viz.fig_defaults(
+    fig, "샘플링 전략과 두 과제의 정확도", height=460,
+    xaxis_title="", yaxis_title="정확도", barmode="group",
+    yaxis=dict(range=[0, 1.05]))
+fig.update_xaxes(tickangle=-20)
+fig
+```
+
+::: {.interaction-hint}
+두 막대의 모양이 완전히 다르다는 것이 요점이다.
+
+이 그림이 [9.6](06_video_models.qmd)의 **단일 프레임 기준선** 문제를 미리 보여 준다.
+어떤 액션 인식 벤치마크는 프레임 하나만 봐도 상당 부분 풀린다 —
+"기타 치기"를 맞히는 데 기타가 보이면 충분하기 때문이다.
+그런 벤치마크에서 정교한 시간 모델링의 이득은 **측정되지 않는다.**
 :::
 
-비디오는 이미지에 축 하나가 더 붙은 데이터가 아니라, 데이터 양·중복성·시간 구조 때문에 완전히 다른 설계를 요구한다.
+---
+
+## G9.5.3 — 광류: 밝기 항상성이라는 가정
+
+움직임을 명시적으로 뽑는 고전적 방법이 광류다.
+가정은 하나 — **같은 점은 움직여도 밝기가 같다.**
+
+$$I(x, y, t) = I(x + u, y + v, t + 1)$$
+
+1차 테일러 전개하면 광류 구속식이 나온다.
+
+$$I_x u + I_y v + I_t = 0$$
+
+미지수는 둘인데 식은 하나다. 이것이 **개구 문제**다.
+Lucas-Kanade 는 작은 창 안에서 $u, v$ 가 같다고 가정해 최소제곱으로 푼다.
+
+$$\begin{bmatrix}\sum I_x^2 & \sum I_x I_y \\ \sum I_x I_y & \sum I_y^2\end{bmatrix}
+\begin{bmatrix}u \\ v\end{bmatrix} =
+-\begin{bmatrix}\sum I_x I_t \\ \sum I_y I_t\end{bmatrix}$$
+
+왼쪽 행렬(구조 텐서)이 **가역이어야** 풀린다.
+평평한 영역이나 한 방향 에지에서는 그렇지 않다. 얼마나 그런지 직접 세 보자.
+
+```{python}
+#| label: flow
+#| code-fold: false
+
+import numpy as np
+from src import imaging
+
+gt = np.random.default_rng(5)
+yy, xx = np.mgrid[0:96, 0:96]
+base = np.zeros((96, 96))
+for _ in range(50):
+    cy, cx = gt.integers(4, 92, 2)
+    base += gt.normal(0, 1)*np.exp(-((yy - cy)**2 + (xx - cx)**2)/6.0)
+
+
+def lk(I1, I2, win=9):
+    """Lucas-Kanade. 구조 텐서의 작은 고유값도 함께 돌려준다."""
+    Ix, Iy = np.gradient(I1, axis=1), np.gradient(I1, axis=0)
+    It = I2 - I1
+    k = np.ones((win, win))
+    c = imaging.convolve2d
+    A, B, C = c(Ix*Ix, k), c(Ix*Iy, k), c(Iy*Iy, k)
+    D, Ee = -c(Ix*It, k), -c(Iy*It, k)
+    tr, det = A + C, A*C - B*B
+    lam_min = tr/2 - np.sqrt(np.maximum(tr*tr/4 - det, 0))
+    safe = np.where(np.abs(det) < 1e-9, np.nan, det)
+    return (C*D - B*Ee)/safe, (A*Ee - B*D)/safe, lam_min
+
+
+I1 = base[16:80, 16:80]
+lam0 = lk(I1, I1)[2]
+thr = np.nanpercentile(lam0, 70)
+good = lam0 > thr
+print(f"구조 텐서의 작은 고유값 상위 30% 픽셀만 '믿을 만하다'고 본다 "
+      f"({good.mean():.1%})")
+print("  나머지 70%는 평평하거나 한 방향 에지 — **개구 문제 영역**이다.")
+print()
+print(f"{'변위 s(px)':>10} {'전체 픽셀':>11} {'조건 좋은 곳':>13} "
+      f"{'1/4 축소 층':>13}")
+print("-" * 50)
+FLOW = []
+for s in [1, 2, 3, 4, 6, 8]:
+    I2 = base[16:80, 16+s:80+s]
+    u, _, _ = lk(I1, I2)
+    e_all = float(np.nanmean(np.abs(u + s)))
+    e_good = float(np.nanmean(np.abs(u[good] + s)))
+    p1, p2 = imaging.gaussian_pyramid(I1, 3), imaging.gaussian_pyramid(I2, 3)
+    uc, _, lc = lk(p1[2], p2[2], win=5)
+    gc = lc > np.nanpercentile(lk(p1[2], p1[2], win=5)[2], 70)
+    e_c = float(np.nanmean(np.abs(uc[gc]*4 + s)))
+    FLOW.append((s, e_all, e_good, e_c))
+    print(f"{s:>10} {e_all:>11.3f} {e_good:>13.3f} {e_c:>13.3f}")
+print()
+f1 = FLOW[0]
+print("**① 개구 문제는 실제로 측정된다.**")
+print(f"  변위 1px 에서 전체 평균 오차 {f1[1]:.3f} vs "
+      f"조건 좋은 곳 {f1[2]:.3f} — {f1[1]/f1[2]:.1f}배 차이.")
+print("  그래서 실무에서는 **믿을 만한 점만 골라 추적한다** "
+      "(Shi-Tomasi 의 'good features to track').")
+print()
+print("**② 변위가 커지면 무너진다.**")
+big = FLOW[-1]
+print(f"  1px 에서 {f1[2]:.3f} 이던 오차가 {big[0]}px 에서 {big[2]:.3f} 가 된다.")
+for s in ["테일러 1차 전개는 **작은 변위**에서만 유효하다",
+          "물체가 창(9px)보다 많이 움직이면 $I_t$ 가 같은 점의 변화가 아니게 된다",
+          "이것이 광류가 **빠른 움직임에 약한** 근본 이유다"]:
+    print(f"  · {s}")
+print()
+cross = next((f for f in FLOW if f[3] < f[2]), None)
+print("**③ 해법은 해상도를 낮추는 것이다.**")
+print("  1/4 로 줄이면 8px 변위가 2px 변위가 된다 — 가정이 다시 성립한다.")
+if cross:
+    print(f"  변위 {cross[0]}px 부터 거친 층({cross[3]:.3f})이 "
+          f"원본 층({cross[2]:.3f})을 앞선다.")
+for s in ["이것이 **coarse-to-fine 피라미드**의 아이디어다 — "
+          "거친 층에서 큰 움직임을 잡고, 세밀한 층에서 다듬는다",
+          "[9.0](00_image_basics.qmd)에서 만든 가우시안 피라미드가 그대로 쓰인다",
+          "대가: 거친 층은 **작은 물체를 잃는다** — 표의 1px 열을 보라",
+          "**RAFT** 등 신경망 광류는 이 절충을 학습으로 대체했다 — "
+          "모든 변위 후보의 상관 볼륨을 만들고 반복 갱신한다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-flow
+#| fig-cap: "G9.5.3 — 변위 크기와 광류 오차. 원본 해상도는 작은 변위에 강하고 큰 변위에서 무너진다. 축소한 층은 정반대다. 피라미드는 이 두 곡선의 좋은 쪽만 골라 쓴다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+S_ = [f[0] for f in FLOW]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=S_, y=[f[2] for f in FLOW], mode="lines+markers",
+                         name="원본 해상도 (조건 좋은 픽셀)",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=8)))
+fig.add_trace(go.Scatter(x=S_, y=[f[3] for f in FLOW], mode="lines+markers",
+                         name="1/4 축소 층",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=8)))
+fig.add_trace(go.Scatter(x=S_, y=[f[1] for f in FLOW], mode="lines",
+                         name="원본 해상도 (전체 픽셀)",
+                         line=dict(color=viz.hex_rgba(viz.ACCENT, 0.45),
+                                   width=1.5, dash="dot")))
+viz.fig_defaults(
+    fig, "변위 크기에 따른 Lucas-Kanade 오차", height=450,
+    xaxis_title="진짜 변위 (픽셀)", yaxis_title="평균 절대 오차 (픽셀)",
+    xaxis=dict(tickmode="array", tickvals=S_))
+viz.annotate_box(fig, "두 곡선이 교차하는 지점이<br>"
+                      "<b>피라미드가 필요해지는 지점</b>", x=0.02, y=0.98,
+                 xanchor="left", yanchor="top")
+fig
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 모션을 표현하는 방법들
 
-- 비디오 데이터의 구조: 프레임률, 해상도, 코덱, 키프레임
-- 시간적 중복성과 압축, 디코딩 비용
-- 샘플링 전략: 균등, 밀집, 스파스, 세그먼트 기반
-- 광류(optical flow): 밝기 항상성 가정, Lucas-Kanade, 신경망 기반(RAFT)
-- 모션 표현: 프레임 차분, 광류, 모션 벡터
-- 시공간 데이터 증강과 시간 지터
-- 시간 정렬과 장면 전환 검출
-- 장기 시간 구조: 이벤트, 액션 경계, 계층적 시간
-- 비디오 데이터셋 지형(Kinetics, Something-Something, Ego4D)과 편향
-- 비디오 학습의 계산 비용 현실
+```{python}
+#| label: motion-repr
+#| code-fold: false
 
----
-
-## G9.5.1 — 프레임 샘플링 전략
-
-같은 클립에서 전략별로 선택되는 프레임과 정보 손실
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플링 방식 전환
-:::
-
----
-
-## G9.5.2 — 광류 벡터장
-
-연속 프레임 간 픽셀 이동을 화살표/색상으로 표시
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 프레임 슬라이더
-:::
-
----
-
-## G9.5.3 — 시간적 중복성
-
-인접 프레임의 유사도가 얼마나 높은지 정량화
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 프레임 간격 슬라이더
-:::
-
----
-
-## G9.5.4 — 시공간 큐브
-
-비디오를 (x, y, t) 3차원 볼륨으로 보는 관점
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 3D 회전
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 광류 (optical flow) |  |
-| 프레임 샘플링 |  |
-| 시간적 중복성 |  |
-| RAFT |  |
-| 시공간 볼륨 |  |
+print("**움직임을 모델에 넣는 세 가지 방식**")
+print()
+print(f"{'방식':<18} {'비용':<24} {'장단'}")
+print("-" * 78)
+for a, b, c in [
+    ("프레임 차분", "거의 없음", "싸지만 조명 변화에 취약"),
+    ("광류", "**비싸다** (전처리 필요)", "정확하지만 계산·저장 부담"),
+    ("코덱 모션 벡터", "**공짜** (이미 압축에 들어 있다)", "거칠지만 추가 비용이 0"),
+    ("RGB 만 + 3D 합성곱", "모델이 부담", "지금의 주류 — 학습이 알아서"),
+]:
+    print(f"{a:<18} {b:<24} {c}")
+print()
+print("**광류가 주류에서 밀려난 이유**")
+for s in ["I3D 시절에는 RGB 와 광류를 **두 갈래로 넣는** 것이 표준이었다 (Two-Stream)",
+          "광류 추출 비용이 학습·추론 모두에서 컸다",
+          "데이터가 늘자 **모델이 RGB 에서 직접 움직임을 배우는 것**이 더 나아졌다",
+          "[9.2](02_vit.qmd)의 교훈이 여기서도 반복된다 — "
+          "손으로 만든 특성이 학습된 특성에 자리를 내준다",
+          "다만 광류는 여전히 쓰인다 — 데이터가 적을 때, 그리고 "
+          "**추적·정합** 같은 기하 문제에서"]:
+    print(f"  · {s}")
+print()
+print("**시공간 증강의 주의점**")
+print()
+print(f"{'증강':<22} {'주의'}")
+print("-" * 66)
+for a, b in [
+    ("공간 크롭·플립", "**모든 프레임에 같게** 적용해야 한다"),
+    ("색 지터", "프레임마다 다르게 하면 가짜 깜빡임이 생긴다"),
+    ("시간 지터·역재생", "**시간 방향이 의미 있는 과제에서는 금지** (열기/닫기)"),
+    ("프레임률 변경", "동작 속도가 레이블에 관여하면 위험"),
+    ("시간 크롭", "액션 경계를 잘라 레이블과 어긋날 수 있다"),
+]:
+    print(f"{a:<22} {b}")
+print()
+print("**데이터셋의 성격이 이 모든 결정을 바꾼다**")
+print()
+print(f"{'데이터셋':<20} {'성격':<30} {'시간 정보'}")
+print("-" * 74)
+for a, b, c in [
+    ("Kinetics", "유튜브 액션 클립, 대규모", "**정적 편향이 크다**"),
+    ("Something-Something", "동작 자체를 설계한 데이터", "시간이 필수"),
+    ("Ego4D", "1인칭 장시간", "장기 구조가 핵심"),
+    ("Charades", "일상 활동, 겹치는 액션", "경계가 모호"),
+]:
+    print(f"{a:<20} {b:<30} {c}")
+print()
+print("  **Something-Something 이 특별한 이유**: 레이블이 "
+      "'무언가를 왼쪽으로 밀기' 처럼 **물체가 아니라 동작**으로 되어 있다.")
+print("  프레임 하나로는 절대 풀 수 없게 설계한 것이다 — "
+      "G9.5.2 의 오른쪽 막대만 남긴 데이터셋인 셈이다.")
+```
 
 ---
 
-**다음**: [9.6 비디오 이해 모델](06_video_models.qmd) — 3D CNN·SlowFast·TimeSformer·VideoMAE — 시간을 모델링하기
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| 비디오의 규모 | 10초 1080p = 이미지 **1.2만 배**, 1시간은 450만 배 | 디코딩이 병목이 되는 이유 |
+| **시간적 중복성** | 프레임당 0.1px에서 인접 코사인 0.984 | 데이터는 늘고 정보는 안 는다 |
+| 중복성의 정체 | **이동량의 함수**이지 비디오의 성질이 아님 | 장면 전환에서 깨진다 |
+| 보간 복원 | 느린 장면에서 앞뒤 평균만으로 복원 | 코덱 B프레임의 원리 |
+| **정적 과제** | 1프레임 0.987, 32프레임 **0.917** | 더 주면 나빠진다 |
+| **시간 과제** | 1프레임 0.633 → 2프레임 0.980 | 2장에서 대부분 얻는다 |
+| 간격의 중요성 | 양끝 2장 0.980 vs 인접 2장 0.923 | 몇 장보다 **얼마나 벌리나** |
+| **개구 문제** | 전체 0.163 vs 조건 좋은 곳 0.064 | 픽셀의 70%는 못 믿는다 |
+| 밝기 항상성 | 1px 오차 0.064 → 8px 오차 8.3 | 테일러 1차의 한계 |
+| **피라미드** | 변위 3px부터 거친 층이 역전 | 해상도를 낮춰 변위를 줄인다 |
+| 그 대가 | 거친 층은 작은 변위에 약하다 | coarse-to-fine 이 필요한 이유 |
+| 광류의 퇴조 | Two-Stream → RGB 단독 | 학습이 손 설계를 대체 |
+| 데이터셋 편향 | Kinetics는 정적 편향, S-S는 시간 필수 | 벤치마크가 결론을 정한다 |
+
+프레임을 어떻게 고를지는 정했다.
+이제 그 프레임들을 **모델이 어떻게 섞을 것인가**가 남았다.
+
+---
+
+**다음**: [9.6 비디오 이해 모델](06_video_models.qmd) — 시간을 모델링하기
 
 **이전**: [9.4 CLIP과 멀티모달 표현](04_clip_multimodal.qmd)
