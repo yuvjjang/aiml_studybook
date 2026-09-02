@@ -4,90 +4,697 @@ subtitle: "벤치마크·LLM-as-judge·오염 — 무엇을 측정하고 있는�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+앞의 세 장은 전부 "좋아졌다"를 전제로 했다. 그 전제를 이 장에서 검사한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+평가는 이 분야에서 **가장 신뢰도가 낮은 부분**이다. 이유는 단순하다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+> 개선했다는 주장은 측정 오차보다 커야 한다.
+> 그런데 대부분의 평가셋은 그 오차를 재지 않는다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 장은 네 가지를 직접 계산한다.
+
+1. 내 평가셋이 **얼마나 작은 차이를 볼 수 있는가** (검정력)
+2. LLM 판정자의 편향 중 **무엇이 고쳐지고 무엇이 안 고쳐지는가**
+3. 두 모델을 리더보드에서 가르려면 **몇 표가 필요한가**
+4. 오염이 점수를 **얼마나 부풀리고**, 탐지가 **어디서 실패하는가**
+
+---
+
+## G7.13.1 — 평가셋 크기와 검정력
+
+가장 먼저 물어야 할 질문이다.
+
+> 내 평가셋 200문항으로 **3%p 개선**을 감지할 수 있는가?
+
+정답을 아는 시뮬레이션으로 정확히 계산할 수 있다.
+문항마다 난이도가 다르고, **같은 문항을 두 모델이 함께 풀므로 정오가 상관된다.**
+가우시안 코퓰라로 그 상관($\rho = 0.7$)을 정확히 넣는다.
+
+```{python}
+#| label: power
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import stats
+
+RHO = 0.7
+
+
+def power(n, delta, trials=2000, seed=0, paired=True, rho=RHO):
+    """유의수준 0.05 양측. paired=True 는 같은 문항으로 비교 (McNemar)."""
+    g = np.random.default_rng(seed)
+    q = g.beta(5, 2.5, (trials, n))*0.9 + 0.05        # 문항 난이도
+    z0 = g.normal(0, 1, (trials, n))
+    z1 = rho*z0 + np.sqrt(1 - rho**2)*g.normal(0, 1, (trials, n))
+    a = stats.norm.cdf(z0) < q
+    if paired:
+        b = stats.norm.cdf(z1) < np.clip(q + delta, 0, 1)
+        n01 = (~a & b).sum(1).astype(float)           # A오답 B정답
+        n10 = (a & ~b).sum(1).astype(float)           # A정답 B오답
+        d = n01 + n10
+        z = np.where(d > 0, (n01 - n10)/np.sqrt(np.maximum(d, 1)), 0.0)
+        return float((np.abs(z) > 1.96).mean())
+    q2 = g.beta(5, 2.5, (trials, n))*0.9 + 0.05       # 다른 문항으로 평가
+    b = stats.norm.cdf(z1) < np.clip(q2 + delta, 0, 1)
+    k1, k2 = a.sum(1)/n, b.sum(1)/n
+    ph = (k1 + k2)/2
+    se = np.sqrt(np.maximum(2*ph*(1 - ph)/n, 1e-12))
+    return float((np.abs((k2 - k1)/se) > 1.96).mean())
+
+
+DS = [0.01, 0.02, 0.05, 0.10]
+print("실제 개선을 감지할 확률 (검정력). 0.80 이상이어야 쓸 만하다.")
+print()
+print(f"{'문항 수':>9} " + " ".join(f"{'+' + str(int(d*100)) + '%p':>10}"
+                                  for d in DS))
+print("-" * 54)
+POW = []
+for n in [50, 100, 200, 500, 1000, 2000, 5000]:
+    row = [power(n, d) for d in DS]
+    POW.append((n, *row))
+    print(f"{n:>9} " + " ".join(f"{v:>10.2f}" for v in row))
+print()
+p200 = [r for r in POW if r[0] == 200][0]
+print("**200문항으로는 5%p 개선도 세 번에 한 번만 보인다** "
+      f"(검정력 {p200[3]:.2f}).")
+print(f"  1%p 개선은 사실상 보이지 않는다 ({p200[1]:.2f}) —")
+print("  '올랐다'고 보고되는 대부분의 작은 개선은 잡음과 구별되지 않는다.")
+print()
+print("**80% 검정력에 필요한 대략적인 문항 수**")
+for i, d in enumerate(DS):
+    need = next((r[0] for r in POW if r[i+1] >= 0.80), None)
+    print(f"  +{int(d*100)}%p 를 보려면: "
+          f"{(f'{need:,}문항 이상' if need else '5,000문항으로도 부족')}")
+print()
+print("**짝짓기(같은 문항으로 비교)가 공짜로 검정력을 준다** (+5%p 기준)")
+print(f"{'문항 수':>9} {'같은 문항':>11} {'다른 문항':>11}")
+print("-" * 34)
+PAIR = []
+for n in [100, 200, 500, 1000, 2000]:
+    a, b = power(n, 0.05), power(n, 0.05, paired=False)
+    PAIR.append((n, a, b))
+    print(f"{n:>9} {a:>11.2f} {b:>11.2f}")
+print()
+print("  문항 난이도의 분산이 통째로 상쇄되기 때문이다.")
+print("  **A/B 비교는 반드시 같은 문항으로 하고, 문항별 정오를 저장해 둘 것.**")
+print("  총점만 저장하면 이 이득을 나중에 되찾을 수 없다.")
+```
+
+::: {.callout-warning}
+## 여기서 나오는 실무 규칙
+
+- **평가셋 100문항으로 리더보드 순위를 논하지 말 것.** 3%p 차이는 잡음이다
+- 여러 벤치마크를 동시에 보면 **다중 비교** 문제가 생긴다.
+  10개 중 하나에서 유의하게 나오는 것은 우연으로도 흔하다
+- 유의성은 필요조건이지 충분조건이 아니다. **효과 크기**를 함께 본다
+- 신뢰구간을 붙이지 않은 벤치마크 표는 정보가 절반뿐이다
+- 개선이 작을 것으로 예상되면 **먼저 필요한 문항 수를 계산하고** 시작한다
 :::
 
-LLM 평가는 지금 이 분야에서 가장 신뢰도가 낮은 부분이다. 평가를 설계할 줄 모르면 개선했다는 주장 자체가 성립하지 않는다.
+```{python}
+#| label: fig-power
+#| fig-cap: "작은 개선을 보려면 평가셋이 커야 하고, 같은 문항으로 비교하면 크게 절약됩니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("개선 폭별 검정력",
+                                    "같은 문항 vs 다른 문항 (+5%p)"))
+ns = [r[0] for r in POW]
+for i, d in enumerate(DS):
+    fig.add_trace(go.Scatter(x=ns, y=[r[i+1] for r in POW],
+                             mode="lines+markers", name=f"+{int(d*100)}%p",
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=8)), row=1, col=1)
+fig.add_hline(y=0.8, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              row=1, col=1)
+fig.update_xaxes(title_text="평가셋 문항 수", type="log", row=1, col=1)
+fig.update_yaxes(title_text="검정력", range=[0, 1.05], row=1, col=1)
+
+fig.add_trace(go.Scatter(x=[r[0] for r in PAIR], y=[r[1] for r in PAIR],
+                         mode="lines+markers", name="같은 문항 (McNemar)",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[r[0] for r in PAIR], y=[r[2] for r in PAIR],
+                         mode="lines+markers", name="다른 문항",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=9)), row=1, col=2)
+fig.add_hline(y=0.8, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              row=1, col=2)
+fig.update_xaxes(title_text="평가셋 문항 수", type="log", row=1, col=2)
+fig.update_yaxes(title_text="검정력", range=[0, 1.05], row=1, col=2)
+viz.fig_defaults(fig, height=420, title="")
+fig.show()
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G7.13.2 — LLM 판정자: 순서 평균화가 무엇을 고치는가
 
-- 내재적 평가(퍼플렉서티)와 외재적 평가의 괴리
-- 주요 벤치마크 지형: 지식·추론·코드·수학·다국어·장문맥·안전
-- 객관식 벤치마크의 한계와 형식 민감성
-- 생성 과제 평가: 참조 기반(BLEU, ROUGE, BERTScore)의 한계
-- LLM-as-judge: 설계, 편향(위치·길이·자기선호), 보정
-- 쌍 비교와 Elo/Bradley-Terry 리더보드, Arena 방식
-- 인간 평가 설계: 지침, 일치도(카파), 비용
-- 오염과 과적합: 데이터 유출 탐지, 비공개 홀드아웃, 동적 벤치마크
-- 능력별 세분 평가와 행동 테스트(CheckList 류)
-- 실서비스 평가: 오프라인 스위트 + 온라인 실험 + 사용자 피드백
-- 회귀 방지: 골든셋, 스냅샷 테스트, 평가 자동화 파이프라인
+생성 과제는 정답이 하나가 아니므로 채점을 LLM에 맡긴다.
+그 판정자에 편향이 있다는 것은 잘 알려져 있다. **어느 편향이 고쳐지는가**가 질문이다.
 
----
+판정자를 이렇게 모형화한다.
 
-## G7.13.1 — LLM 판정자 편향
+$$s_{\text{먼저}} = q + \underbrace{\beta_{\text{pos}}}_{\text{먼저 나온 쪽 가산점}}
++ \beta_{\text{len}}\log \ell + \varepsilon$$
 
-동일 답변의 위치나 길이만 바꿔도 승률이 변하는 실험
+```{python}
+#| label: judge
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 위치·길이 조작 슬라이더
+import numpy as np
+
+NP = 5000
+g = np.random.default_rng(1)
+qa, qb = g.normal(0, 1, NP), g.normal(0, 1, NP)     # 참 품질
+la, lb = g.lognormal(0, 0.6, NP), g.lognormal(0, 0.6, NP)   # 길이 (품질 무관)
+TRUE_A = qa > qb
+
+
+def judge(pos_b, len_b, noise, swap, seed=2):
+    """A를 먼저 제시하면 pos_b 만큼 유리. 반환값은 'A 승리' 여부."""
+    gg = np.random.default_rng(seed)
+    fq, sq = (qb, qa) if swap else (qa, qb)
+    fl, sl = (lb, la) if swap else (la, lb)
+    s1 = fq + pos_b + len_b*np.log(fl) + gg.normal(0, noise, NP)
+    s2 = sq + len_b*np.log(sl) + gg.normal(0, noise, NP)
+    w = s1 > s2
+    return ~w if swap else w
+
+
+print(f"참 A 승률 {TRUE_A.mean():.3f}, A가 더 긴 비율 {(la > lb).mean():.3f}")
+print("길이는 품질과 **무관하게** 만들었다. 길이 편향은 순수한 오류다.")
+print()
+print(f"{'설정':<16} {'A먼저':>8} {'B먼저':>8} {'일관성':>8} {'무승부':>8} "
+      f"{'결정한 것 정확도':>17} {'긴 쪽 승률':>11}")
+print("-" * 86)
+JUD = []
+for lbl, pb, lb_, nz in [("편향 없음", 0.0, 0.0, 0.4),
+                         ("위치 0.3", 0.3, 0.0, 0.4),
+                         ("위치 0.8", 0.8, 0.0, 0.4),
+                         ("길이 0.6", 0.0, 0.6, 0.4),
+                         ("위치+길이", 0.5, 0.6, 0.4)]:
+    w1, w2 = judge(pb, lb_, nz, False), judge(pb, lb_, nz, True)
+    avg = (w1.astype(int) + w2.astype(int))/2
+    tie = (avg == 0.5)
+    dec = ~tie
+    acc = float(((avg[dec] > 0.5) == TRUE_A[dec]).mean())
+    longer = float(np.where(la > lb, avg > 0.5, avg < 0.5)[dec].mean())
+    JUD.append((lbl, float(w1.mean()), float(w2.mean()),
+                float((w1 == w2).mean()), float(tie.mean()), acc, longer))
+    print(f"{lbl:<16} {w1.mean():>8.3f} {w2.mean():>8.3f} "
+          f"{(w1 == w2).mean():>8.3f} {tie.mean():>8.3f} {acc:>17.3f} "
+          f"{longer:>11.3f}")
+print()
+p8 = JUD[2]
+print(f"**위치 편향 0.8: A를 먼저 놓으면 승률 {p8[1]:.3f}, "
+      f"나중에 놓으면 {p8[2]:.3f}.**")
+print("  같은 두 답변인데 순서만 바꿔 승률이 40%p 가까이 움직인다.")
+print()
+print("**순서를 바꿔 평균 내면 위치 편향은 완전히 사라진다.**")
+print(f"  결정한 것의 정확도가 {p8[5]:.3f} 로 유지된다.")
+print(f"  **대신 무승부가 {JUD[0][4]:.3f} → {p8[4]:.3f} 로 늘어난다.**")
+print("  즉 편향이 오답으로 가는 대신 **'판정 불가'로 간다.**")
+print("  이것이 정확히 옳은 결과다 — 판정자가 모르는 것을 모른다고 말하게 된 것이다.")
+print()
+ln = JUD[3]
+print(f"**길이 편향은 순서 평균화로 전혀 고쳐지지 않는다.**")
+print(f"  긴 쪽 승률 {JUD[0][6]:.3f} (편향 없음) → {ln[6]:.3f} (길이 편향)")
+print(f"  결정한 것의 정확도도 {JUD[0][5]:.3f} → {ln[5]:.3f} 로 떨어진다.")
+print("  **순서를 바꿔도 긴 답은 여전히 길기 때문이다.**")
+print()
+print("**여기서 나오는 규칙:**")
+for s in ["순서를 바꿔 두 번 판정하고 평균한다 — **위치 편향은 이걸로 끝난다**",
+          "일관성(두 순서의 일치율)을 **판정자 품질 지표로 보고**한다",
+          "무승부를 억지로 가르지 말 것. 무승부는 정보다",
+          "**길이는 통제해야 한다** — 길이를 회귀로 빼거나(length-controlled),",
+          "  비교 대상의 길이를 맞추거나, 길이 자체를 평가 항목으로 명시한다",
+          "자기선호 편향 — 판정자와 피평가자가 같은 모델 계열이면 따로 측정한다",
+          "판정자를 **사람 라벨과 대조해 보정**한다. 일치율을 모르면 쓸 수 없다"]:
+    print(f"  · {s}")
+```
+
+::: {.callout-note}
+## 이 실험이 낙관적인 지점
+
+여기서 위치 편향을 **상수 가산점**으로 모형화했다. 그래서 순서 평균화가 정확히 상쇄한다.
+실제 판정자의 위치 편향은 내용에 따라 달라지므로 상쇄가 완전하지 않다.
+
+또 "편향 없음"에서 결정한 것의 정확도가 1.000 인 이유는,
+두 순서가 일치한 사례가 곧 **품질 차이가 큰 사례**이기 때문이다.
+어려운 판정은 전부 무승부로 빠졌다. 이 지표를 볼 때는 무승부 비율을 함께 봐야 한다.
 :::
 
 ---
 
-## G7.13.2 — Elo 레이팅 수렴
+## G7.13.3 — 쌍 비교와 Elo: 몇 표가 필요한가
 
-쌍 비교가 쌓이며 레이팅과 신뢰구간이 좁아지는 과정
+Arena 방식은 사람이 두 응답을 비교하고, Bradley-Terry로 레이팅을 추정한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 비교 횟수 슬라이더
-:::
+$$P(i \succ j) = \frac{e^{r_i}}{e^{r_i} + e^{r_j}}, \qquad
+\text{Elo 격차 } \Delta E \Rightarrow p = \frac{1}{1 + 10^{-\Delta E/400}}$$
+
+```{python}
+#| label: elo
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+NM = 12
+TRUE_R = np.linspace(-1.2, 1.2, NM)
+
+
+def bt_fit(n_cmp, seed=0, judge_noise=0.0):
+    """MM 알고리즘으로 Bradley-Terry 레이팅 추정."""
+    g = np.random.default_rng(seed)
+    W = np.zeros((NM, NM))
+    for _ in range(n_cmp):
+        i, j = g.choice(NM, 2, replace=False)
+        p = 1/(1 + np.exp(-(TRUE_R[i] - TRUE_R[j])))
+        p = p*(1 - judge_noise) + 0.5*judge_noise      # 판정 잡음
+        if g.random() < p:
+            W[i, j] += 1
+        else:
+            W[j, i] += 1
+    r = np.zeros(NM)
+    for _ in range(200):
+        for i in range(NM):
+            num = W[i].sum()
+            den = sum((W[i, j] + W[j, i])/(np.exp(r[i]) + np.exp(r[j]))
+                      for j in range(NM) if j != i)
+            if num > 0 and den > 0:
+                r[i] = np.log(num/den)
+        r -= r.mean()
+    return r
+
+
+print(f"모델 {NM}개, 참 실력이 등간격. 무작위 쌍을 비교한다.")
+print()
+print(f"{'비교 수':>9} {'RMSE':>9} {'순위 상관':>10} {'인접 쌍 정순위':>15}")
+print("-" * 46)
+ELO = []
+for n in [100, 300, 1000, 3000, 10000, 30000]:
+    rs = [bt_fit(n, seed=s) for s in range(5)]
+    rmse = float(np.mean([np.sqrt(((r - TRUE_R)**2).mean()) for r in rs]))
+    sp = float(np.mean([stats.spearmanr(r, TRUE_R).statistic for r in rs]))
+    adj = float(np.mean([np.mean([r[i] < r[i+1] for i in range(NM-1)])
+                         for r in rs]))
+    ELO.append((n, rmse, sp, adj))
+    print(f"{n:>9,} {rmse:>9.3f} {sp:>10.3f} {adj:>15.3f}")
+print()
+e1 = [e for e in ELO if e[0] == 1000][0]
+print(f"**비교 1,000회면 전체 순위 상관은 {e1[2]:.3f} 로 이미 훌륭하다.**")
+print(f"  그런데 **인접한 두 모델을 제대로 가르는 비율은 {e1[3]:.3f}** 다.")
+print("  리더보드의 큰 그림은 금방 맞고, **1~2위 다툼은 오래 안 맞는다.**")
+print()
+print("두 모델을 Elo 격차 ΔE 로 가르려면 (검정력 0.8, 유의수준 0.05)")
+print()
+print(f"{'ΔE':>7} {'참 승률':>10} {'필요한 비교 수':>16}")
+print("-" * 36)
+NEED = []
+for de in [5, 10, 20, 30, 50, 100]:
+    p = 1/(1 + 10**(-de/400))
+    n = ((1.96 + 0.84)*0.5/(p - 0.5))**2
+    NEED.append((de, p, int(np.ceil(n))))
+    print(f"{de:>7} {p:>10.4f} {int(np.ceil(n)):>16,}")
+print()
+print(f"**10 Elo 를 가르려면 그 두 모델 사이에서만 {NEED[1][2]:,}번 비교해야 한다.**")
+print("  리더보드에서 10점 차이는 대부분 **구분되지 않는다.**")
+print("  그래서 Arena 는 신뢰구간을 함께 보고하고, 구간이 겹치면 공동 순위로 둔다.")
+print()
+print("판정자에 잡음이 있으면 (승률이 0.5 쪽으로 눌린다)")
+print(f"{'비교 수':>9} {'잡음 0':>9} {'잡음 0.3':>10} {'잡음 0.6':>10}")
+print("-" * 42)
+NOISE = []
+for n in [1000, 10000, 30000]:
+    row = []
+    for nz in [0.0, 0.3, 0.6]:
+        rs = [bt_fit(n, seed=s, judge_noise=nz) for s in range(5)]
+        row.append(float(np.mean([np.mean([r[i] < r[i+1]
+                                           for i in range(NM-1)])
+                                  for r in rs])))
+    NOISE.append((n, *row))
+    print(f"{n:>9,} " + " ".join(f"{v:>9.3f}" for v in row))
+print()
+print("**판정 잡음은 필요한 표 수를 곱으로 늘린다.** 편향처럼 상쇄되지 않는다.")
+print("  잡음 0.6 이면 30,000번을 해도 인접 쌍을 다 못 가른다.")
+```
 
 ---
 
-## G7.13.3 — 오염 효과
+## G7.13.4 — 오염: 기억 용량이 부풀림을 만든다
 
-학습에 벤치마크가 섞였을 때 점수가 부풀려지는 정도
+벤치마크가 학습 데이터에 섞이면 점수가 오른다. **얼마나** 오르는가?
+그리고 **왜** 큰 모델일수록 문제가 되는가?
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 유출 비율 슬라이더
-:::
+[7.2](02_language_models.qmd)의 마르코프 소스를 다시 쓴다.
+참 분포를 알고 있으므로 "부풀림"과 "진짜 실력"을 분리할 수 있다.
+
+```{python}
+#| label: contam
+#| code-fold: false
+
+import collections
+import numpy as np
+
+V, NTR, NTE, LEN = 14, 4000, 400, 16
+rg = np.random.default_rng(0)
+LG = rg.normal(0, 2.0, (V, V))
+PM = np.exp(LG - LG.max(-1, keepdims=True))
+PM /= PM.sum(-1, keepdims=True)
+
+
+def gen(n, g):
+    out = []
+    for _ in range(n):
+        s = [int(g.integers(V))]
+        for _ in range(LEN - 1):
+            s.append(int(g.choice(V, p=PM[s[-1]])))
+        out.append(tuple(s))
+    return out
+
+
+g0 = np.random.default_rng(5)
+TRAIN, TEST, FRESH = gen(NTR, g0), gen(NTE, g0), gen(NTE, g0)
+
+
+class NGram:
+    """m개 토큰 문맥을 기억하고, 없으면 bigram 으로 백오프한다.
+    m 이 클수록 '기억 용량'이 크다."""
+
+    def __init__(self, data, m, alpha=1.0):
+        self.m, self.alpha = m, alpha
+        bi = np.ones((V, V))*0.5
+        self.ctx = collections.defaultdict(lambda: np.zeros(V))
+        for s in data:
+            for i in range(1, len(s)):
+                bi[s[i-1], s[i]] += 1
+                if i >= m:
+                    self.ctx[s[i-m:i]][s[i]] += 1
+        self.bi = bi/bi.sum(1, keepdims=True)
+
+    def ppl(self, data):
+        ll = n = 0
+        for s in data:
+            for i in range(1, len(s)):
+                p = self.bi[s[i-1], s[i]]
+                if i >= self.m:
+                    c = self.ctx.get(s[i-self.m:i])
+                    if c is not None:
+                        p = (c[s[i]] + self.alpha*p*V)/(c.sum() + self.alpha*V)
+                ll += np.log(max(p, 1e-300))
+                n += 1
+        return float(np.exp(-ll/n))
+
+
+def ngram_seen(data, m):
+    seen = set()
+    for s in data:
+        for i in range(len(s) - m):
+            seen.add(s[i:i+m+1])
+    return seen
+
+
+print("벤치마크 문항을 학습셋에 3번씩 넣고 퍼플렉서티를 다시 잰다.")
+print("  '신규 데이터 PPL' 은 같은 소스에서 새로 뽑은 문장 — **진짜 실력**이다.")
+print()
+CON = []
+for m in [1, 2, 4, 8]:
+    base = NGram(TRAIN, m).ppl(TEST)
+    print(f"── 기억 문맥 m={m} ──")
+    print(f"{'유출':>7} {'벤치 PPL':>10} {'신규 PPL':>10} {'부풀림':>9} "
+          f"{str(m+1) + '-gram 탐지':>14}")
+    print("-" * 54)
+    for f in [0.0, 0.10, 0.25, 0.50, 1.0]:
+        tr = TRAIN + list(TEST[:int(NTE*f)])*3
+        mm = NGram(tr, m)
+        seen = ngram_seen(tr, m)
+        det = float(np.mean([all(t[i:i+m+1] in seen for i in range(len(t) - m))
+                             for t in TEST]))
+        bp, fp = mm.ppl(TEST), mm.ppl(FRESH)
+        CON.append((m, f, bp, fp, base/bp, det))
+        print(f"{f:>7.0%} {bp:>10.3f} {fp:>10.3f} {base/bp:>9.2f}x "
+              f"{det:>14.3f}")
+    print()
+
+full = {m: [c for c in CON if c[0] == m and c[1] == 1.0][0] for m in [1, 2, 4, 8]}
+print("**같은 오염, 같은 데이터인데 부풀림이 기억 용량에 달려 있다.**")
+for m in [1, 2, 4, 8]:
+    print(f"  m={m}: 부풀림 {full[m][4]:.2f}x")
+print()
+print("  m=1 은 문장을 외울 수 없어 오염돼도 점수가 거의 안 변한다.")
+print("  m=8 은 문맥을 통째로 외우므로 벤치마크 PPL 이 무너진다.")
+print()
+print("**이것이 '큰 모델일수록 오염이 심각하다'의 메커니즘이다.**")
+print("  오염의 피해는 데이터의 성질이 아니라 **모델의 기억 용량**이 정한다.")
+print("  같은 코퍼스가 작은 모델에는 무해하고 큰 모델에는 치명적일 수 있다.")
+print()
+print("**그리고 신규 데이터 PPL 은 전혀 개선되지 않았다.**")
+f8 = full[8]
+print(f"  m=8, 100% 유출: 벤치 {f8[2]:.3f} vs 신규 {f8[3]:.3f}")
+print("  부풀림은 순수한 착시다. 실제 능력은 1%도 늘지 않았다.")
+```
+
+이제 **탐지**를 본다. 유출된 문항을 그대로가 아니라 조금 바꿔 넣으면?
+
+```{python}
+#| label: paraphrase
+#| code-fold: false
+
+import numpy as np
+
+M = 8
+base = NGram(TRAIN, M).ppl(TEST)
+
+
+def mutate(items, k, g):
+    out = []
+    for s in items:
+        t = list(s)
+        for _ in range(k):
+            t[int(g.integers(len(t)))] = int(g.integers(V))
+        out.append(tuple(t))
+    return out
+
+
+print(f"문항 전체를 유출하되 토큰 몇 개만 바꾼다 (m={M})")
+print()
+print(f"{'바꾼 토큰 수':>12} {'벤치 PPL':>10} {'부풀림':>9} "
+      f"{str(M+1) + '-gram 탐지':>14}")
+print("-" * 50)
+PARA = []
+for k in [0, 1, 2, 3, 4]:
+    gg = np.random.default_rng(9)
+    tr = TRAIN + mutate(list(TEST), k, gg)*3
+    mm = NGram(tr, M)
+    seen = ngram_seen(tr, M)
+    det = float(np.mean([all(t[i:i+M+1] in seen for i in range(len(t) - M))
+                         for t in TEST]))
+    PARA.append((k, mm.ppl(TEST), base/mm.ppl(TEST), det))
+    print(f"{k:>12} {mm.ppl(TEST):>10.3f} {base/mm.ppl(TEST):>9.2f}x "
+          f"{det:>14.3f}")
+print()
+p0, p1, p2 = PARA[0], PARA[1], PARA[2]
+print("**토큰 하나만 바꿔도 n-gram 탐지가 무너진다.**")
+print(f"  탐지: {p0[3]:.3f} → {p1[3]:.3f} → {p2[3]:.3f}")
+print(f"  부풀림: {p0[2]:.2f}x → {p1[2]:.2f}x → {p2[2]:.2f}x")
+print()
+print("**둘 다 떨어지지만 탐지가 훨씬 빨리 떨어진다.**")
+ex0 = p0[2] - 1
+print(f"  토큰 1개 변형: 탐지는 {p1[3]/p0[3]:.1%} 만 남는데 "
+      f"부풀림은 {(p1[2]-1)/ex0:.0%} 가 남는다 — 약 {(p1[2]-1)/ex0/(p1[3]/p0[3]):.0f}배 차이다.")
+print(f"  토큰 2개 변형: 탐지 {p2[3]:.3f} (사실상 0) 인데 "
+      f"부풀림은 아직 {p2[2]:.2f}x 다.")
+print()
+print("**따라서 '오염 검사를 통과했다'는 오염이 없다는 뜻이 아니다.**")
+for s in ["n-gram 겹침은 **정확한 복사만** 잡는다",
+          "번역·재작성·형식 변경은 전부 통과한다 — 그런데 부풀림은 남는다",
+          "짧은 n-gram 을 쓰면 잡히지만 **오탐**이 급증한다 (아래)",
+          "**진짜 해법은 탐지가 아니라 비공개 홀드아웃이다**",
+          "  모델 공개일 이후에 만든 문항, 또는 애초에 공개하지 않은 문항"]:
+    print(f"  · {s}")
+print()
+print("오탐 확인 — 오염이 전혀 없을 때의 탐지율")
+print(f"{'n-gram 길이':>12} {'오염 없음(오탐)':>16} {'100% 유출(정탐)':>17}")
+print("-" * 50)
+for m in [2, 3, 5, 9]:
+    s0 = ngram_seen(TRAIN, m - 1)
+    fp = float(np.mean([all(t[i:i+m] in s0 for i in range(len(t) - m + 1))
+                        for t in TEST]))
+    tr = TRAIN + list(TEST)*3
+    s1 = ngram_seen(tr, m - 1)
+    tp = float(np.mean([all(t[i:i+m] in s1 for i in range(len(t) - m + 1))
+                        for t in TEST]))
+    print(f"{m:>12} {fp:>16.3f} {tp:>17.3f}")
+print()
+print("**짧은 n-gram 은 깨끗한 데이터도 오염으로 판정한다.**")
+print("  임계값 선택이 곧 오탐/미탐 교환이다 — 공짜 점심은 없다.")
+```
+
+```{python}
+#| label: fig-contam
+#| fig-cap: "오염의 피해는 기억 용량이 정하고, n-gram 탐지는 부풀림보다 훨씬 먼저 무너집니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("기억 용량별 점수 부풀림",
+                                    "변형을 주면 — 탐지 vs 부풀림"))
+for i, m in enumerate([1, 2, 4, 8]):
+    rows = [c for c in CON if c[0] == m]
+    fig.add_trace(go.Scatter(x=[c[1] for c in rows], y=[c[4] for c in rows],
+                             mode="lines+markers", name=f"기억 문맥 m={m}",
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)), row=1, col=1)
+fig.update_xaxes(title_text="유출 비율", tickformat=".0%", row=1, col=1)
+fig.update_yaxes(title_text="퍼플렉서티 부풀림 (배)", row=1, col=1)
+
+ks = [p[0] for p in PARA]
+fig.add_trace(go.Scatter(x=ks, y=[p[3] for p in PARA], mode="lines+markers",
+                         name="n-gram 탐지율",
+                         line=dict(color=viz.WARM, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_trace(go.Scatter(x=ks, y=[(p[2] - 1)/(PARA[0][2] - 1) for p in PARA],
+                         mode="lines+markers", name="남은 부풀림 (정규화)",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+fig.update_xaxes(title_text="변형한 토큰 수", row=1, col=2)
+fig.update_yaxes(title_text="비율", range=[-0.05, 1.05], row=1, col=2)
+viz.fig_defaults(fig, height=420, title="")
+fig.show()
+```
 
 ---
 
-## G7.13.4 — 벤치마크 상관
+## G7.13.5 — 벤치마크 상관: 무엇이 중복인가
 
-여러 벤치마크 점수 간 상관 행렬 — 무엇이 중복인가
+벤치마크 열 개의 평균을 보고한다고 하자. 그것은 열 개의 독립적인 증거인가?
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 벤치마크 선택
-:::
+```{python}
+#| label: corr
+#| code-fold: false
+
+import numpy as np
+
+NMOD, NB = 60, 6
+gm = np.random.default_rng(3)
+ability = gm.normal(0, 1, NMOD)                 # 잠재 '일반 능력'
+LOADING = np.array([0.95, 0.90, 0.85, 0.60, 0.40, 0.10])
+NAMES = ["지식", "추론", "수학", "코드", "다국어", "안전"]
+S = np.stack([ability*L + gm.normal(0, np.sqrt(1 - L**2), NMOD)
+              for L in LOADING])
+C = np.corrcoef(S)
+
+print("모델 60개의 벤치마크 점수 상관 행렬")
+print("      " + " ".join(f"{n:>8}" for n in NAMES))
+for i, n in enumerate(NAMES):
+    print(f"{n:>6} " + " ".join(f"{C[i, j]:>8.2f}" for j in range(NB)))
+print()
+ev = np.linalg.eigvalsh(C)[::-1]
+eff = float((ev.sum()**2)/(ev**2).sum())
+print("고윳값: " + "  ".join(f"{v:.2f}" for v in ev))
+print(f"  첫 성분이 분산의 **{ev[0]/NB:.0%}** 를 설명한다")
+print(f"  실효 차원 = **{eff:.2f}** (벤치마크 {NB}개 중)")
+print()
+print(f"**벤치마크 {NB}개를 돌렸지만 독립적인 정보는 {eff:.1f}개어치다.**")
+print("  대부분의 벤치마크가 같은 잠재 능력을 다시 재고 있다.")
+print()
+print("**이것의 실무적 의미:**")
+for s in ["상관 0.85 인 두 벤치마크를 함께 보고하는 것은 **증거를 두 번 세는 것**이다",
+          "평균 점수는 적재량이 큰 벤치마크에 사실상 지배된다",
+          "**정말로 봐야 할 것은 잔차다** — 일반 능력으로 설명되지 않는 부분",
+          f"'{NAMES[-1]}'처럼 상관이 낮은 축이 실제로 새로운 정보를 준다",
+          "벤치마크를 고를 때는 점수가 아니라 **상관 행렬**을 먼저 본다",
+          "선택 기준: 서로 상관이 낮으면서 내 사용 사례와 상관이 높은 것"]:
+    print(f"  · {s}")
+print()
+print("**그리고 이 구조가 리더보드 과적합을 만든다.**")
+print("  공개 벤치마크 몇 개를 목표로 최적화하면 그 잠재 축만 올라간다.")
+print("  실제 사용 경험은 그 축과 상관이 낮은 부분에 많이 걸려 있다.")
+```
 
 ---
 
-## 핵심 용어
+## 실서비스 평가: 오프라인만으로는 부족하다
 
-| 용어 | 비고 |
+```{python}
+#| label: practice
+#| code-fold: false
+
+print("평가 스택 — 한 층으로는 부족하다")
+print()
+print(f"{'층':<16} {'무엇을 잡는가':<30} {'한계'}")
+print("-" * 82)
+for a, b, c in [
+    ("골든셋(회귀)", "이미 아는 실패가 되살아나는 것", "새 실패는 못 잡는다"),
+    ("벤치마크", "일반 능력의 큰 변화", "내 도메인과 상관이 낮다"),
+    ("LLM 판정자", "생성 품질의 대략적 방향", "편향·잡음 (G7.13.2)"),
+    ("사람 평가", "진짜 선호", "비싸고 느리고 일치도가 낮다"),
+    ("온라인 실험", "실제 사용자 행동", "느리고 위험하다"),
+    ("사용자 피드백", "예상 못 한 실패 양식", "편향된 표본 (불만만 온다)"),
+]:
+    print(f"{a:<16} {b:<30} {c}")
+print()
+print("**골든셋 운영 규칙**")
+for s in ["실제로 터진 버그를 문항으로 만든다 — 이것이 가장 값싼 평가셋이다",
+          "**문항별 정오를 저장**한다 (G7.13.1의 짝짓기 이득 때문)",
+          "판정 기준을 문항에 함께 적는다. 3개월 뒤의 나를 위해",
+          "골든셋은 **절대 학습에 넣지 않는다** — 넣는 순간 의미가 사라진다",
+          "통과율 100%가 되면 문항을 더한다. 100%는 정보가 0이라는 뜻이다"]:
+    print(f"  · {s}")
+print()
+print("**평가 결과를 읽을 때의 체크리스트**")
+for s in ["문항 수는? → 검정력은? (G7.13.1)",
+          "신뢰구간이 있는가? 겹치는가?",
+          "같은 문항으로 비교했는가?",
+          "판정자를 썼다면 순서를 바꿨는가? 길이를 통제했는가?",
+          "벤치마크가 모델 공개일보다 오래되었는가? (오염)",
+          "여러 벤치마크가 서로 상관되어 있지 않은가?",
+          "**추론 연산량을 맞췄는가?** (7.12 — n을 밝히지 않은 점수)"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| LLM-as-judge |  |
-| Elo 리더보드 |  |
-| 벤치마크 오염 |  |
-| BERTScore |  |
-| 골든셋 |  |
+| **검정력** | 200문항으로 +5%p 개선을 볼 확률은 **0.34**. +1%p 는 0.05 |
+| 필요한 규모 | +5%p 를 80%로 보려면 **1,000문항**, +1%p 는 5,000문항으로도 부족 |
+| **짝짓기** | 같은 문항으로 비교하면 500문항에서 0.69 vs 0.37 — 공짜 이득 |
+| 실무 규칙 | 총점만 저장하지 말고 **문항별 정오**를 남긴다 |
+| 위치 편향 | 순서만 바꿔 승률이 0.694 ↔ 0.298 로 움직인다 |
+| **순서 평균화** | 위치 편향을 오답이 아니라 **무승부**로 바꾼다 (0.24→0.42) |
+| **길이 편향** | 순서 평균화로 전혀 안 고쳐진다 — 긴 쪽 승률 0.51→0.64 |
+| 판정자 지표 | 일관성(두 순서 일치율)을 품질 지표로 함께 보고한다 |
+| Elo 수렴 | 1,000 비교로 순위 상관 0.986, **인접 쌍 정순위는 0.855** |
+| 리더보드 해석 | 10 Elo 를 가르려면 그 쌍만 **9,470번** 비교해야 한다 |
+| 판정 잡음 | 편향과 달리 상쇄되지 않는다 — 필요한 표 수를 곱으로 늘린다 |
+| **오염의 원인** | 데이터가 아니라 **기억 용량**. m=1은 1.01x, m=8은 1.46x |
+| 부풀림의 정체 | 신규 데이터 PPL 은 그대로 — 실력은 1%도 늘지 않았다 |
+| **탐지의 실패** | 토큰 1개 변형에 탐지는 7.8%만 남는데 부풀림은 40% 남는다 |
+| 오탐 | 짧은 n-gram 은 깨끗한 데이터도 오염으로 판정한다 |
+| 진짜 해법 | 탐지가 아니라 **비공개·사후 홀드아웃** |
+| 벤치마크 상관 | 6개를 돌려도 실효 차원은 **2.51** — 대부분 같은 축을 잰다 |
+| 봐야 할 것 | 평균이 아니라 **잔차**. 상관이 낮은 축이 새 정보다 |
+| 실서비스 | 골든셋 + 벤치마크 + 판정자 + 온라인. 한 층으로는 부족하다 |
+
+평가를 설계했다. 이제 그 모델을 **실제로 서비스**해야 한다.
 
 ---
 
-**다음**: [7.14 추론 최적화](14_inference_optimization.qmd) — KV 캐시·양자화·배칭·PagedAttention — 서비스 비용의 대부분
+**다음**: [7.14 추론 최적화](14_inference_optimization.qmd)
 
 **이전**: [7.12 추론 모델](12_reasoning_models.qmd)
