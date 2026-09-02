@@ -4,102 +4,668 @@ subtitle: "임베딩 검색·청킹·리랭킹 — 모델에 없는 지식을 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[7.6](06_finetuning_peft.qmd)에서 결론 하나를 냈다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+> **지식을 넣으려고 미세조정하지 말 것.** 검색으로 문맥에 넣는 편이 싸고 정확하고 갱신 가능하다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그 "검색으로 넣는 것"이 RAG다. 구조는 단순하다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+$$\text{질의} \to \text{검색} \to \text{문맥에 삽입} \to \text{생성}$$
 
-RAG는 가장 널리 쓰이는 LLM 응용 패턴이고, 동시에 가장 자주 잘못 만들어진다. 실패는 거의 항상 검색 쪽에서 난다.
+그런데 이 패턴은 **가장 자주 잘못 만들어지는** LLM 응용이기도 하다.
+그리고 실패는 거의 언제나 **검색 쪽**에서 난다.
 
----
+> 모델이 못 찾은 것을 인용할 수는 없다.
 
-## 이 장에서 다루는 것
-
-- RAG의 동기: 최신성, 출처, 도메인 지식, 환각 감소
-- 파이프라인: 적재 → 청킹 → 임베딩 → 색인 → 검색 → 재순위 → 생성
-- 청킹 전략: 고정 길이, 문장·문단, 의미 기반, 계층 청킹, 오버랩
-- 임베딩 모델 선택과 도메인 적응
-- 벡터 색인: HNSW, IVF-PQ, 정확도-속도-메모리 트레이드오프
-- 희소 검색(BM25)과 하이브리드 검색, RRF 결합
-- 재순위(cross-encoder reranker)와 비용
-- 쿼리 변환: HyDE, 다중 쿼리, 쿼리 분해, 라우팅
-- 문맥 구성: 순서 효과(lost in the middle), 압축, 인용 강제
-- RAG 평가: 검색 지표(Recall@k, MRR)와 생성 지표(충실성, 정확성)
-- GraphRAG·에이전틱 RAG·긴 문맥 vs RAG 논쟁
-- 흔한 실패 패턴과 디버깅 순서
+이 장은 검색 단계를 직접 구현해 측정한다.
+합성 코퍼스를 만들고 **정답 문서를 알고 있으므로** 재현율을 정확히 잴 수 있다.
 
 ---
 
-## G7.10.1 — RAG 파이프라인
+## 준비: 검색 벤치마크
 
-질의가 검색·재순위·생성 단계를 거치는 전 과정
+```{python}
+#| label: corpus
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단계 재생
-:::
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+
+NTOP, NDOC, EMB_D = 20, 600, 32
+N_CONCEPT = 300                       # 개념마다 표면형 2개 (동의어)
+VOC = 400 + 2*N_CONCEPT + NDOC
+rg = np.random.default_rng(0)
+
+
+def surf(c, which):
+    """개념 c 의 표면형. which=0 은 문서가 쓰는 형태, 1 은 동의어."""
+    return 400 + 2*c + which
+
+
+TOPIC_BG = np.zeros((NTOP, 400))
+for t in range(NTOP):
+    core = rg.choice(400, 30, replace=False)
+    TOPIC_BG[t, core] = rg.random(30) + 0.5
+    TOPIC_BG[t] += 0.02
+    TOPIC_BG[t] /= TOPIC_BG[t].sum()
+
+TOPIC_EMB = rg.normal(0, 1, (NTOP, EMB_D))
+CONCEPT_EMB = rg.normal(0, 1, (N_CONCEPT, EMB_D))
+DOC_TOPIC = rg.integers(0, NTOP, NDOC)
+DOC_CONCEPTS = [rg.choice(N_CONCEPT, 3, replace=False) for _ in range(NDOC)]
+
+DOCS = []
+DOC_EMB = np.zeros((NDOC, EMB_D))
+for d in range(NDOC):
+    n = int(rg.integers(70, 120))
+    words = list(rg.choice(400, n, p=TOPIC_BG[DOC_TOPIC[d]]))
+    for c in DOC_CONCEPTS[d]:
+        words += [surf(int(c), 0)]*3          # 문서는 표면형 0 만 쓴다
+    words += [400 + 2*N_CONCEPT + d]*2        # 문서 고유 식별자
+    DOCS.append(np.array(words))
+    e = TOPIC_EMB[DOC_TOPIC[d]] + CONCEPT_EMB[DOC_CONCEPTS[d]].sum(0)
+    DOC_EMB[d] = e/np.linalg.norm(e)
+
+TF = np.zeros((NDOC, VOC))
+for d, doc in enumerate(DOCS):
+    for w in doc:
+        TF[d, w] += 1
+DF = (TF > 0).sum(0)
+DL = TF.sum(1)
+AVGDL = DL.mean()
+IDF = np.log(1 + (NDOC - DF + 0.5)/(DF + 0.5))
+
+print(f"합성 코퍼스: 문서 {NDOC}개, 주제 {NTOP}개, 문서당 평균 "
+      f"{DL.mean():.0f} 토큰")
+print(f"  개념 {N_CONCEPT}개 — 각각 표면형이 둘 (문서는 하나만 쓴다)")
+print(f"  문서마다 고유 식별자를 하나씩 심었다")
+print()
+print("**정답 문서를 알고 있으므로 재현율을 정확히 잴 수 있다.**")
+print("실제 RAG 평가에서 가장 어려운 부분이 바로 이 정답 라벨이다.")
+```
 
 ---
 
-## G7.10.2 — 청킹 전략 비교
+## G7.10.1 — 희소·밀집·하이브리드
 
-청크 설정에 따른 검색 재현율과 문맥 낭비
+```{python}
+#| label: retrieval
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 청크 크기·오버랩 슬라이더
-:::
+import numpy as np
+import collections
+
+
+def bm25(terms, k1=1.5, b=0.75):
+    """BM25 — TF-IDF 의 개선판. 포화와 길이 정규화가 들어간다."""
+    s = np.zeros(NDOC)
+    for w in terms:
+        f = TF[:, w]
+        s += IDF[w]*f*(k1+1)/(f + k1*(1 - b + b*DL/AVGDL))
+    return s
+
+
+def rrf(ranks, k=60):
+    """Reciprocal Rank Fusion — 점수가 아니라 **순위**를 합친다."""
+    sc = collections.defaultdict(float)
+    for r in ranks:
+        for i, d in enumerate(r):
+            sc[d] += 1.0/(k + i + 1)
+    return [d for d, _ in sorted(sc.items(), key=lambda x: -x[1])]
+
+
+def make_queries(kind, n, seed):
+    g = np.random.default_rng(seed)
+    out = []
+    for _ in range(n):
+        d = int(g.integers(NDOC))
+        t, cs = DOC_TOPIC[d], DOC_CONCEPTS[d]
+        bg = list(g.choice(400, 3, p=TOPIC_BG[t]))
+        if kind == "exact":
+            terms = bg + [surf(int(c), 0) for c in cs]
+        elif kind == "syn":
+            terms = bg + [surf(int(c), 1) for c in cs]     # 문서엔 없는 표면형
+        else:
+            terms = bg + [400 + 2*N_CONCEPT + d]           # 고유 식별자
+        if kind == "rare":
+            # 식별자에는 의미가 없다 — 임베딩은 주제 정보밖에 담지 못한다
+            e = TOPIC_EMB[t] + g.normal(0, 0.5, EMB_D)
+        else:
+            e = TOPIC_EMB[t] + CONCEPT_EMB[cs].sum(0) + g.normal(0, 0.9, EMB_D)
+        out.append((terms, e/np.linalg.norm(e), d))
+    return out
+
+
+print("정답은 **단일 문서**다. Recall@5 를 잰다.")
+print()
+print(f"{'질의 유형':<26} {'BM25':>9} {'밀집':>9} {'하이브리드':>11}")
+print("-" * 60)
+RET = []
+for kind, lbl in [("exact", "문서와 같은 표면형"),
+                  ("syn", "동의어 (문서엔 없음)"),
+                  ("rare", "고유 식별자")]:
+    qs = make_queries(kind, 400, 11)
+    rb = rd = rh = 0
+    for terms, qe, gold in qs:
+        rank_b = list(np.argsort(bm25(terms))[::-1][:50])
+        rank_d = list(np.argsort(DOC_EMB @ qe)[::-1][:50])
+        rb += gold in rank_b[:5]
+        rd += gold in rank_d[:5]
+        rh += gold in rrf([rank_b, rank_d])[:5]
+    n = len(qs)
+    RET.append((lbl, rb/n, rd/n, rh/n))
+    print(f"{lbl:<26} {rb/n:>9.3f} {rd/n:>9.3f} {rh/n:>11.3f}")
+print()
+syn, rare = RET[1], RET[2]
+print("**두 방법이 정확히 반대 방향으로 실패한다.**")
+print(f"  동의어 질의: BM25 {syn[1]:.3f} vs 밀집 {syn[2]:.3f}")
+print(f"    → 어휘가 겹치지 않으면 BM25 는 아무것도 못 한다")
+print(f"  고유 식별자: BM25 {rare[1]:.3f} vs 밀집 {rare[2]:.3f}")
+print(f"    → 의미가 없는 문자열은 임베딩이 담지 못한다")
+print()
+print("**그런데 하이브리드가 각 유형의 1등은 아니다.**")
+print(f"  동의어: 밀집 {syn[2]:.3f} > 하이브리드 {syn[3]:.3f}")
+print(f"  식별자: BM25 {rare[1]:.3f} > 하이브리드 {rare[3]:.3f}")
+print("  RRF 가 진 쪽의 나쁜 순위를 섞기 때문이다.")
+print()
+print("**하이브리드의 가치는 평균이 아니라 최악의 경우에 있다.**")
+print(f"{'방법':<16} {'최악의 유형':>12} {'평균':>10}")
+print("-" * 42)
+for i, nm in enumerate(["BM25", "밀집", "하이브리드"], start=1):
+    vals = [r[i] for r in RET]
+    print(f"{nm:<16} {min(vals):>12.3f} {np.mean(vals):>10.3f}")
+print()
+print("**질의 유형을 미리 알 수 없다는 것이 핵심이다.**")
+print("  사용자가 무엇을 물을지 모르는 상태에서 한 방법만 쓰면")
+print("  그 방법이 못하는 유형에서 재현율이 0.14~0.16 으로 무너진다.")
+print("  하이브리드는 어느 유형에서도 0.59 아래로 떨어지지 않는다 — **보험이다.**")
+print()
+print("실무 참고:")
+for s in ["가중 합보다 **RRF 가 낫다** — 점수 스케일이 달라도 되고 튜닝이 적다",
+          "질의 라우팅으로 유형을 먼저 분류하면 각 유형의 1등을 쓸 수 있다",
+          "  다만 라우팅이 틀리면 최악의 경우로 떨어진다",
+          "**리랭커를 붙이면 하이브리드의 손해를 회복할 수 있다** (아래)"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: rerank
+#| code-fold: false
+
+import numpy as np
+
+print("리랭킹 — 후보를 넓게 뽑고 정밀하게 다시 정렬한다")
+print()
+print("  1단계 (검색): 빠르고 부정확. 상위 k개를 뽑는다")
+print("  2단계 (리랭킹): 느리고 정확. 질의-문서 **쌍**을 함께 본다")
+print()
+print("여기서는 '완벽하진 않은 리랭커'를 흉내낸다 —")
+print("질의의 참 의도 벡터와 문서를 함께 보되 잡음이 섞인 점수.")
+print()
+
+
+def rerank_scores(gold, cand, noise, seed):
+    """리랭커 점수: 정답에 높은 점수를 주되 잡음이 섞인다."""
+    g = np.random.default_rng(seed)
+    return np.array([(1.0 if c == gold else 0.0) + g.normal(0, noise)
+                     for c in cand])
+
+
+print(f"{'1단계 후보 수':>12} {'리랭커 잡음':>12} {'Recall@5 (리랭킹 후)':>22}")
+print("-" * 50)
+qs = make_queries("syn", 300, 21)
+RR = []
+for topk in [5, 20, 50]:
+    for noise in [0.3, 0.6]:
+        hit = 0
+        for i, (terms, qe, gold) in enumerate(qs):
+            rank_b = list(np.argsort(bm25(terms))[::-1][:50])
+            rank_d = list(np.argsort(DOC_EMB @ qe)[::-1][:50])
+            cand = rrf([rank_b, rank_d])[:topk]
+            sc = rerank_scores(gold, cand, noise, seed=i)
+            order = [cand[j] for j in np.argsort(sc)[::-1]]
+            hit += gold in order[:5]
+        RR.append((topk, noise, hit/len(qs)))
+        print(f"{topk:>12} {noise:>12.1f} {hit/len(qs):>22.3f}")
+print()
+base = [r for r in RET if "동의어" in r[0]][0]
+print(f"리랭킹 전 하이브리드 Recall@5 = {base[3]:.3f}")
+best = max(RR, key=lambda r: r[2])
+print(f"리랭킹 후 최고 = {best[2]:.3f} (후보 {best[0]}개, 잡음 {best[1]})")
+print()
+print("**후보를 넓게 뽑을수록 좋다 — 정답이 후보 안에 있어야 하기 때문이다.**")
+print("  1단계의 목표는 **정밀도가 아니라 재현율**이다.")
+print("  2단계가 정밀도를 담당한다.")
+print()
+print("**그런데 리랭커가 나쁘면 오히려 해가 된다:**")
+for topk in [50]:
+    for noise in [0.3, 0.6]:
+        v = [r[2] for r in RR if r[0] == topk and r[1] == noise][0]
+        print(f"  후보 {topk}개, 잡음 {noise}: {v:.3f}")
+print("  잡음이 커지면 정답을 후보 안에 넣어 놓고도 놓친다.")
+print()
+print("비용:")
+print(f"{'단계':<22} {'계산 대상':<26} {'상대 비용'}")
+print("-" * 64)
+for a, b, c in [
+    ("밀집 검색", "질의 1회 인코딩 + 벡터 검색", "1x"),
+    ("BM25", "역색인 조회", "~0.1x"),
+    ("**cross-encoder 리랭킹**", "질의-문서 쌍마다 모델 1회", "**k배**"),
+    ("LLM 리랭킹", "질의-문서 쌍마다 LLM 1회", "k × 훨씬 비쌈"),
+]:
+    print(f"{a:<22} {b:<26} {c}")
+print()
+print("**리랭킹은 k에 비례해 비싸다.** 그래서 1단계에서 50~100개로 줄인 뒤 쓴다.")
+```
 
 ---
 
-## G7.10.3 — 하이브리드 검색
+## G7.10.2 — 청킹
 
-밀집·희소 점수 결합 비율에 따른 검색 품질
+```{python}
+#| label: chunking
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 가중치 슬라이더
-:::
+import numpy as np
+
+print("문서를 어떻게 자를 것인가")
+print()
+print("긴 문서를 통째로 임베딩하면 **한 벡터가 여러 주제를 평균**한다.")
+print("잘게 자르면 정밀해지지만 **문맥이 끊긴다.**")
+print()
+
+# 각 문서에서 개념 하나가 '정답 사실' — 그것이 있는 청크를 찾아야 한다
+CHUNK_DOCS = []
+FACT_POS = []
+for d in range(200):
+    n = 600
+    words = list(rg.choice(400, n, p=TOPIC_BG[DOC_TOPIC[d]]))
+    pos = int(rg.integers(50, n-50))
+    c = int(DOC_CONCEPTS[d][0])
+    for j in range(6):                       # 정답 사실은 6토큰짜리 구간
+        words[pos+j] = surf(c, 0)
+    CHUNK_DOCS.append(np.array(words))
+    FACT_POS.append((pos, c))
+
+
+def chunk_and_search(size, overlap, n_probe=200):
+    """청킹 후 BM25 로 정답 청크를 찾는다."""
+    chunks, owner = [], []
+    for di, doc in enumerate(CHUNK_DOCS):
+        step = max(1, size - overlap)
+        for st in range(0, len(doc), step):
+            ch = doc[st:st+size]
+            if len(ch) < 10:
+                continue
+            chunks.append(ch)
+            pos, c = FACT_POS[di]
+            # 이 청크가 정답 사실을 **온전히** 담고 있는가
+            owner.append((di, st <= pos and pos+6 <= st+size))
+    # 청크 BM25 색인
+    ctf = np.zeros((len(chunks), VOC))
+    for i, ch in enumerate(chunks):
+        for w in ch:
+            ctf[i, w] += 1
+    cdf = (ctf > 0).sum(0)
+    cdl = ctf.sum(1)
+    cavg = cdl.mean()
+    cidf = np.log(1 + (len(chunks) - cdf + 0.5)/(cdf + 0.5))
+    hit = 0
+    g = np.random.default_rng(3)
+    for di in range(n_probe):
+        pos, c = FACT_POS[di]
+        terms = [surf(c, 0)] + list(g.choice(400, 2, p=TOPIC_BG[DOC_TOPIC[di]]))
+        s = np.zeros(len(chunks))
+        for w in terms:
+            f = ctf[:, w]
+            s += cidf[w]*f*2.5/(f + 1.5*(0.25 + 0.75*cdl/cavg))
+        top = np.argsort(s)[::-1][:5]
+        hit += any(owner[i][0] == di and owner[i][1] for i in top)
+    return len(chunks), hit/n_probe, float(cdl.mean())
+
+
+print(f"{'청크 크기':>10} {'오버랩':>8} {'청크 수':>9} {'Recall@5':>11} "
+      f"{'문맥 낭비':>11}")
+print("-" * 56)
+CH = []
+for size, ov in [(50, 0), (100, 0), (200, 0), (400, 0),
+                 (100, 20), (100, 50), (200, 50)]:
+    nch, rec, avglen = chunk_and_search(size, ov)
+    waste = nch*avglen/sum(len(d) for d in CHUNK_DOCS)
+    CH.append((size, ov, nch, rec, waste))
+    print(f"{size:>10} {ov:>8} {nch:>9,} {rec:>11.3f} {waste:>10.2f}x")
+print()
+c50, c400 = CH[0], CH[3]
+o0 = [c for c in CH if c[:2] == (100, 0)][0]
+o50 = [c for c in CH if c[:2] == (100, 50)][0]
+o20 = [c for c in CH if c[:2] == (100, 20)][0]
+
+print("**결과가 흔한 통념과 반대다 — 여기서는 큰 청크가 낫다.**")
+print(f"  크기 50: {c50[3]:.3f}  →  크기 400: {c400[3]:.3f}")
+print()
+print("이유는 이 실험의 정답 기준에 있다.")
+print("  정답 '사실'이 6토큰짜리 구간이고, **청크가 그것을 온전히 담아야** 성공이다.")
+print(f"  크기 50 인 청크는 경계가 {c50[2]:,}군데나 되어 사실이 잘릴 확률이 높다.")
+print(f"  크기 400 이면 경계가 {c400[2]}군데뿐이다.")
+print()
+print("**오버랩이 정확히 그 문제를 푼다:**")
+print(f"  크기 100, 오버랩  0: {o0[3]:.3f}")
+print(f"  크기 100, 오버랩 20: {o20[3]:.3f}")
+print(f"  크기 100, 오버랩 50: {o50[3]:.3f} "
+      f"(청크 수 {o50[2]/o0[2]:.1f}배, 저장 비용도 그만큼)")
+print("  경계에서 잘린 사실이 옆 청크에는 온전히 들어간다.")
+print("  **작은 청크를 쓰려면 오버랩이 사실상 필수다.**")
+print()
+print("**이 실험이 재지 못한 것 — 그리고 통념이 말하는 것**")
+for s_ in ["**정밀도** — 큰 청크는 관련 없는 내용을 함께 끌고 온다. "
+           "여기서는 재현율만 쟀다",
+           "**생성 품질** — 큰 청크는 문맥 예산을 먹고, 작은 청크는 문맥이 끊긴다",
+           "**임베딩 희석** — 큰 청크의 한 벡터가 여러 주제를 평균한다. "
+           "여기서는 BM25 만 썼다"]:
+    print(f"  · {s_}")
+print()
+print("**즉 '청크는 작을수록 좋다'도 '클수록 좋다'도 틀렸다.**")
+print("  무엇을 재느냐에 따라 답이 바뀐다. 자기 데이터로 재보는 수밖에 없다.")
+print()
+print("실무의 절충안:")
+for s in ["**작게 검색하고 크게 제공** — 청크로 찾되 주변 문단을 함께 넣는다",
+          "계층 청킹 — 문서 요약 → 절 → 문단 순으로 내려간다",
+          "의미 기반 분할 — 문장 임베딩이 크게 바뀌는 지점에서 자른다",
+          "**구조를 존중한다** — 마크다운 헤더, 코드 블록, 표를 쪼개지 말 것",
+          "부모 문서 검색 — 청크를 인덱싱하고 부모 문서를 반환"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-retrieval
+#| fig-cap: "두 검색 방식은 정확히 반대로 실패하고, 오버랩은 청크 크기 손해를 메웁니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("질의 유형별 Recall@5",
+                                    "청크 크기와 재현율"))
+labels = [r[0] for r in RET]
+for i, (nm, key) in enumerate([("BM25", 1), ("밀집", 2), ("하이브리드", 3)]):
+    fig.add_trace(go.Bar(x=labels, y=[r[key] for r in RET], name=nm,
+                         marker_color=viz.color(i),
+                         text=[f"{r[key]:.2f}" for r in RET],
+                         textposition="outside"), row=1, col=1)
+fig.update_yaxes(title_text="Recall@5", range=[0, 1.15], row=1, col=1)
+
+no_ov = [c for c in CH if c[1] == 0]
+fig.add_trace(go.Scatter(x=[c[0] for c in no_ov], y=[c[3] for c in no_ov],
+                         mode="lines+markers", name="오버랩 없음",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)), row=1, col=2)
+ov = [c for c in CH if c[1] > 0]
+fig.add_trace(go.Scatter(x=[c[0] for c in ov], y=[c[3] for c in ov],
+                         mode="markers", name="오버랩 있음",
+                         marker=dict(size=12, color=viz.WARM, symbol="diamond")),
+              row=1, col=2)
+fig.update_xaxes(title_text="청크 크기 (토큰)", type="log", row=1, col=2)
+fig.update_yaxes(title_text="Recall@5", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="")
+fig.show()
+```
 
 ---
 
-## G7.10.4 — lost in the middle
+## G7.10.3 — 근사 최근접 이웃 (HNSW)
 
-정답 문서가 문맥 중간에 있을 때 성능이 떨어지는 곡선
+문서가 1억 개면 전수 비교가 불가능하다.
+**HNSW**는 계층 그래프를 따라 탐색해 대부분의 거리 계산을 건너뛴다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 문서 위치 슬라이더
-:::
+```{python}
+#| label: hnsw
+#| code-fold: false
+
+import numpy as np
+import heapq
+
+NV = 4000
+rgv = np.random.default_rng(4)
+BASE = rgv.normal(0, 1, (NV, EMB_D))
+BASE /= np.linalg.norm(BASE, axis=1, keepdims=True)
+QUERIES = rgv.normal(0, 1, (200, EMB_D))
+QUERIES /= np.linalg.norm(QUERIES, axis=1, keepdims=True)
+GOLD = np.argsort(-(QUERIES @ BASE.T), axis=1)[:, :10]
+
+
+def build_hnsw(X, M=8, n_layers=3, seed=0):
+    """아주 단순화한 HNSW: 층마다 부분집합을 두고 근접 이웃으로 그래프를 만든다."""
+    g = np.random.default_rng(seed)
+    n = len(X)
+    layers = []
+    ids = np.arange(n)
+    for L in range(n_layers):
+        keep = ids if L == 0 else g.choice(ids, max(M+1, len(ids)//8),
+                                           replace=False)
+        sim = X[keep] @ X[keep].T
+        np.fill_diagonal(sim, -np.inf)
+        nbr = np.argsort(-sim, axis=1)[:, :M]
+        layers.append((keep, {int(keep[i]): [int(keep[j]) for j in nbr[i]]
+                              for i in range(len(keep))}))
+        ids = keep
+    return layers[::-1]                     # 위층부터
+
+
+def search_hnsw(layers, X, q, ef=32, k=10):
+    """탐색: 위층에서 대략 찾고 아래층에서 정밀화. 반환 (결과, 거리계산 수)."""
+    n_dist = 0
+    entry = int(layers[0][0][0])
+    n_dist += 1
+    best = float(q @ X[entry])
+    for keep, graph in layers[:-1]:         # 상위 층들: 탐욕적 하강
+        improved = True
+        while improved:
+            improved = False
+            for nb in graph.get(entry, []):
+                n_dist += 1
+                s = float(q @ X[nb])
+                if s > best:
+                    best, entry, improved = s, nb, True
+    keep, graph = layers[-1]                # 최하층: ef 크기 빔 탐색
+    visited = {entry}
+    cand = [(-best, entry)]
+    top = [(best, entry)]
+    while cand:
+        neg, cur = heapq.heappop(cand)
+        if -neg < min(t[0] for t in top) and len(top) >= ef:
+            break
+        for nb in graph.get(cur, []):
+            if nb in visited:
+                continue
+            visited.add(nb)
+            n_dist += 1
+            s = float(q @ X[nb])
+            heapq.heappush(cand, (-s, nb))
+            top.append((s, nb))
+            top = sorted(top, reverse=True)[:ef]
+    return [d for _, d in sorted(top, reverse=True)[:k]], n_dist
+
+
+LAYERS = build_hnsw(BASE)
+print(f"벡터 {NV:,}개, 차원 {EMB_D}. 전수 비교는 질의당 {NV:,} 회 거리 계산.")
+print()
+print(f"{'ef (탐색 폭)':>12} {'Recall@10':>12} {'거리 계산 수':>14} "
+      f"{'전수 대비':>10}")
+print("-" * 54)
+HN = []
+for ef in [8, 16, 32, 64, 128]:
+    rec, nd = 0.0, 0
+    for qi in range(len(QUERIES)):
+        res, n = search_hnsw(LAYERS, BASE, QUERIES[qi], ef=ef)
+        rec += len(set(res) & set(GOLD[qi].tolist()))/10
+        nd += n
+    rec /= len(QUERIES)
+    nd /= len(QUERIES)
+    HN.append((ef, rec, nd))
+    print(f"{ef:>12} {rec:>12.3f} {nd:>14.0f} {nd/NV:>9.1%}")
+print()
+h = HN[-1]
+print(f"**ef={h[0]} 에서 재현율 {h[1]:.3f} 을 거리 계산 {h[2]:.0f}회로 얻는다** — "
+      f"전수의 {h[2]/NV:.1%}.")
+print()
+print("**이것이 근사 최근접 이웃의 거래다:**")
+print("  · 재현율 100% 를 포기하는 대신 거리 계산을 크게 줄인다")
+print("  · ef 를 키우면 재현율이 오르고 느려진다 — **런타임에 조절 가능**")
+print(f"  · 여기서는 ef 8→128 로 재현율 {HN[0][1]:.3f}→{HN[-1][1]:.3f}, "
+      f"계산 {HN[0][2]:.0f}→{HN[-1][2]:.0f}회")
+print()
+print("**다만 이 재현율은 실제 HNSW 보다 훨씬 낮다.**")
+print("  제대로 구현된 HNSW 는 비슷한 계산량에서 0.95+ 를 낸다.")
+print("  아래 주의 상자에 적은 대로, 여기 구현은 뼈대만 흉내낸 것이다.")
+print()
+print(f"{'색인 종류':<16} {'구조':<30} {'특징'}")
+print("-" * 76)
+for a, b, c in [
+    ("전수 탐색", "그냥 전부 비교", "정확, 소규모(<10만)에서는 충분"),
+    ("**HNSW**", "계층 근접 그래프", "**빠르고 정확, 메모리를 많이 씀**"),
+    ("IVF", "클러스터로 나눠 일부만 탐색", "메모리 효율, 학습 필요"),
+    ("IVF-PQ", "IVF + 벡터 양자화", "메모리 최소, 정확도 손해"),
+    ("ScaNN", "비등방 양자화", "구글, 대규모에 강함"),
+]:
+    print(f"{a:<16} {b:<30} {c}")
+print()
+print("**주의: 위 구현은 HNSW 의 뼈대만 흉내낸 것이다.**")
+print("  실제 HNSW 는 삽입 시 이웃 선택 휴리스틱, 층 배정 확률,")
+print("  양방향 링크 관리 등이 훨씬 정교하다.")
+print("  여기서 보이려는 것은 **'계층 그래프 탐색으로 거리 계산을 줄인다'** 는 원리다.")
+```
 
 ---
 
-## G7.10.5 — HNSW 그래프 탐색
+## G7.10.4 — 문맥 구성: 찾은 다음이 남았다
 
-계층 그래프를 따라 최근접 이웃을 찾아가는 경로
+```{python}
+#| label: context
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 탐색 스텝 재생
-:::
+print("검색이 성공해도 생성이 실패할 수 있다")
+print()
+print("**lost in the middle (Liu et al. 2023)**")
+print("  정답 문서를 문맥의 앞·중간·뒤에 놓고 정확도를 재면")
+print("  **중간에 놓았을 때 가장 낮다.** U자 곡선이 나온다.")
+print()
+print("  이 장에서는 실제 LLM 을 돌릴 수 없어 재현하지 못한다.")
+print("  다만 관련된 메커니즘은 [7.8](08_prompting_icl.qmd)에서 측정했다 —")
+print("  최근성 가중이 있으면 위치가 결과를 바꾼다 (γ=0.5 에서 38% 의 문제에서 답이 바뀜).")
+print()
+print("**실무 대응:**")
+for s in ["가장 관련 높은 문서를 **맨 앞이나 맨 뒤**에 배치",
+          "문서 수를 줄인다 — 20개를 넣느니 리랭킹해서 5개",
+          "**문맥 압축** — 각 문서에서 질의에 관련된 문장만 추출",
+          "인용 강제 — '어느 문서에서 왔는지 밝혀라' 를 요구하면 실제로 참조한다",
+          "긴 문맥 모델이라고 다 읽는 것은 아니다 — 넣을 수 있는 것과 쓰는 것은 다르다"]:
+    print(f"  · {s}")
+print()
+print("**RAG 평가는 두 층으로 나눠야 한다**")
+print()
+print(f"{'층':<12} {'지표':<34} {'무엇을 잡아내나'}")
+print("-" * 78)
+for a, b, c in [
+    ("검색", "Recall@k, MRR, nDCG", "정답이 후보에 있는가"),
+    ("검색", "정밀도@k", "쓸모없는 문서가 섞였는가"),
+    ("생성", "**충실성 (faithfulness)**", "문맥에 없는 말을 지어냈는가"),
+    ("생성", "답변 정확성", "실제로 맞는가"),
+    ("생성", "문맥 관련성", "검색된 것을 실제로 썼는가"),
+    ("전체", "종단 정확도", "최종 답이 맞는가"),
+]:
+    print(f"{a:<12} {b:<34} {c}")
+print()
+print("**디버깅은 반드시 검색부터 본다.**")
+print("  1. 정답 문서가 코퍼스에 **있는가** (적재·파싱 실패가 흔하다)")
+print("  2. 정답 청크가 상위 k에 **들어오는가** (Recall@k)")
+print("  3. 리랭킹 후에도 **남아 있는가**")
+print("  4. 문맥에 실제로 **들어갔는가** (길이 제한에 잘렸을 수 있다)")
+print("  5. 그제서야 생성 문제다")
+print()
+print("**흔한 실패 패턴:**")
+for a, b in [
+    ("파싱 실패", "PDF 표·다단 레이아웃이 깨져 텍스트가 뒤섞인다"),
+    ("**정규화 불일치**", "질의와 문서의 유니코드 정규화가 다르다 (7.0)"),
+    ("청크 경계", "정답이 두 청크에 걸쳐 잘렸다"),
+    ("임베딩 도메인 불일치", "일반 임베딩으로 전문 용어를 검색"),
+    ("**메타데이터 미사용**", "날짜·부서로 먼저 걸렀으면 쉬웠을 질의"),
+    ("k가 너무 작다", "정답이 6위인데 top-5만 본다"),
+    ("문맥 초과", "검색은 성공했는데 프롬프트에서 잘렸다"),
+]:
+    print(f"  {a:<22} {b}")
+```
 
 ---
 
-## 핵심 용어
+## 긴 문맥 vs RAG
 
-| 용어 | 비고 |
+```{python}
+#| label: long-context
+#| code-fold: false
+
+print("문맥 창이 100만 토큰이면 RAG 가 필요 없는가")
+print()
+print(f"{'축':<18} {'긴 문맥':<28} {'RAG'}")
+print("-" * 76)
+for a, b, c in [
+    ("비용", "매 요청마다 전체 토큰 처리", "**검색된 부분만**"),
+    ("지연", "프리필이 길이에 비례", "검색 수십 ms + 짧은 프리필"),
+    ("규모", "창 크기가 상한", "**사실상 무제한**"),
+    ("갱신", "매번 다시 넣어야", "색인만 갱신"),
+    ("출처", "어디서 왔는지 불분명", "**문서 단위 인용**"),
+    ("정확도", "짧은 문맥에선 더 나을 수 있다", "검색이 실패하면 끝"),
+    ("접근 제어", "전부 보여주거나 말거나", "**문서 단위 권한**"),
+]:
+    print(f"{a:<18} {b:<28} {c}")
+print()
+print("**둘은 배타적이지 않다.** 실제로는 함께 쓴다:")
+for s in ["RAG 로 후보를 좁히고, 긴 문맥에 넉넉히 넣는다",
+          "**프롬프트 캐싱**이 있으면 고정 문서는 긴 문맥이 유리하다 (7.14)",
+          "에이전틱 RAG — 모델이 스스로 검색을 반복한다 (7.11)"]:
+    print(f"  · {s}")
+print()
+print("**결정 기준은 '전체 데이터가 창에 들어가는가' 다.**")
+print("  들어가면 긴 문맥이 단순하고 정확하다.")
+print("  안 들어가면 RAG 밖에 방법이 없다 — 그리고 대부분의 실무는 후자다.")
+print()
+print("**GraphRAG 같은 변형이 푸는 문제**")
+print("  기본 RAG 는 '이 질문에 답하는 문단'을 찾는다.")
+print("  '전체 문서에서 반복되는 주제는?' 같은 **전역 질의**에는 무력하다.")
+print("  GraphRAG 는 엔티티·관계 그래프와 커뮤니티 요약을 미리 만들어 이를 다룬다.")
+print("  대가는 색인 구축 비용이다 (문서마다 LLM 호출).")
+```
+
+---
+
+## 요약
+
+| 개념 | 핵심 |
 |------|------|
-| RAG |  |
-| 청킹 (chunking) |  |
-| HNSW |  |
-| BM25 하이브리드 |  |
-| 리랭커 |  |
-| lost in the middle |  |
+| RAG | 검색해서 문맥에 넣고 생성. 실패는 거의 **검색 쪽** |
+| BM25의 실패 | 동의어 질의 Recall@5 = **0.138** — 어휘가 안 겹치면 무력 |
+| 밀집의 실패 | 고유 식별자 질의 = **0.160** — 의미 없는 문자열은 못 담는다 |
+| 하이브리드 | 어느 유형에서도 1등은 아니다 (0.820, 0.593) |
+| **하이브리드의 가치** | 최악의 경우가 0.59 — 다른 둘은 0.14, 0.16 |
+| RRF | 점수가 아니라 **순위**를 합쳐 스케일 문제를 피한다 |
+| 리랭킹 | 1단계는 **재현율**, 2단계가 정밀도. 비용은 k에 비례 |
+| 청킹 | **이 실험에선 큰 청크가 낫다** — 사실이 잘리지 않기 때문 |
+| 오버랩 | 작은 청크의 경계 문제를 푼다 (0.900 → 1.000), 저장은 2배 |
+| **못 잰 것** | 정밀도·생성 품질·임베딩 희석 — '작을수록 좋다'의 근거들 |
+| HNSW | ef=128에서 재현율 0.893을 전수의 19%로 (단순화된 구현) |
+| ANN의 거래 | 재현율 100%를 포기하고 속도를 얻는다 — ef로 런타임 조절 |
+| lost in the middle | 이 장에서 재현 못 함. 7.8의 위치 민감도가 관련 메커니즘 |
+| 평가 | 검색 지표와 생성 지표를 **따로** 본다 |
+| 디버깅 순서 | 적재 → 청킹 → 검색 → 리랭킹 → 문맥 → 그제서야 생성 |
+| 긴 문맥 vs RAG | 데이터가 창에 들어가면 긴 문맥, 아니면 RAG |
+
+검색으로 지식을 넣었다. 다음은 모델이 **행동**하게 만드는 것이다.
 
 ---
 
-**다음**: [7.11 에이전트와 도구 사용](11_agents.qmd) — 함수 호출·계획·다단계 실행 — 모델을 행동하게 만들기
+**다음**: [7.11 에이전트와 도구 사용](11_agents.qmd)
 
 **이전**: [7.9 디코딩 전략](09_decoding.qmd)
