@@ -4,92 +4,648 @@ subtitle: "환각·탈옥·주입·레드팀 — 배포 전에 물어야 할 것
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+앞의 열다섯 장은 모델을 **더 잘 만드는 법**이었다.
+이 장은 그 모델을 제품에 넣는 순간 생기는 것들을 다룬다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+여기서 다루는 실패들은 버그가 아니다. **학습 목표에서 따라 나오는 성질**이다.
+그래서 고치려면 목표나 시스템 구조를 바꿔야 하고, 프롬프트로는 잘 안 된다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+네 가지를 직접 재 본다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+1. 모델은 **모른다는 것을 아는가** (환각의 뿌리)
+2. 학습 데이터가 **얼마나 반복되면 그대로 나오는가** (암기·백도어)
+3. 가드레일이 **왜 대부분 오탐이 되는가** (기저율)
+4. 필터는 **반복 시도 앞에서 얼마나 버티는가** (탈옥)
+
+---
+
+## G7.15.1 — 모델은 모른다는 것을 모른다
+
+환각의 표준 설명은 "학습 데이터에 없어서"다. 그것만으로는 부족하다.
+없으면 **모른다고 하면 되는데** 그러지 않는다는 것이 문제다.
+
+문맥이 학습에서 몇 번 나왔는지에 따라 **정확도와 확신도**를 따로 재 본다.
+
+```{python}
+#| label: halluc
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+from src import nn
+
+V = 28
+rg = np.random.default_rng(0)
+LG = rg.normal(0, 2.6, (V, V, V))
+PSRC = np.exp(LG - LG.max(-1, keepdims=True))
+PSRC /= PSRC.sum(-1, keepdims=True)
+
+
+def gen(n, g):
+    s = [int(g.integers(V)), int(g.integers(V))]
+    for _ in range(n):
+        s.append(int(g.choice(V, p=PSRC[s[-2], s[-1]])))
+    return np.array(s)
+
+
+def feat(seq):
+    n = len(seq) - 2
+    X = np.zeros((n, 2*V))
+    X[np.arange(n), seq[:-2]] = 1
+    X[np.arange(n), V + seq[1:-1]] = 1
+    return X, seq[2:], list(zip(seq[:-2].tolist(), seq[1:-1].tolist()))
+
+
+def fit(X, y, steps=1500, seed=0):
+    m = nn.MLP([2*V, 96, V], activation="relu", out_activation="softmax",
+               seed=seed)
+    nn.train(m, X, y, loss="softmax_ce", opt=nn.Optimizer("adam", lr=5e-3),
+             steps=steps, batch_size=256, lr=5e-3, schedule="cosine", seed=1)
+    return m
+
+
+g0 = np.random.default_rng(3)
+TR, TE = gen(9000, g0), gen(12000, g0)
+Xtr, ytr, ctr = feat(TR)
+Xte, yte, cte = feat(TE)
+FREQ = collections.Counter(ctr)
+model = fit(Xtr, ytr)
+
+pr = model.predict(Xte)
+conf, pred = pr.max(1), pr.argmax(1)
+ok = (pred == yte)
+opt_ok = (np.array([PSRC[a, b].argmax() for a, b in cte]) == yte)
+
+print(f"문맥 {V*V}개, 학습 토큰 {len(ytr):,} — 문맥당 평균 "
+      f"{len(ytr)/(V*V):.1f}회")
+print(f"전체 정확도 {ok.mean():.3f} "
+      f"(참 분포를 아는 최적값 {opt_ok.mean():.3f}), "
+      f"평균 확신 {conf.mean():.3f}")
+print()
+f = np.array([FREQ.get(c, 0) for c in cte])
+print("**학습에서 본 횟수별로 쪼개면 전혀 다른 그림이 나온다**")
+print()
+print(f"{'본 횟수':>12} {'토큰':>7} {'정확도':>9} {'평균 확신':>10} "
+      f"{'과신(확신-정확)':>16} {'참 최적':>9}")
+print("-" * 68)
+CAL = []
+for lo, hi, lbl in [(0, 0, "0 (처음 봄)"), (1, 2, "1~2"), (3, 5, "3~5"),
+                    (6, 10, "6~10"), (11, 10**9, "11회 이상")]:
+    m_ = (f >= lo) & (f <= hi)
+    if m_.sum() < 20:
+        continue
+    a, c, o = ok[m_].mean(), conf[m_].mean(), opt_ok[m_].mean()
+    CAL.append((lbl, int(m_.sum()), float(a), float(c), float(o)))
+    print(f"{lbl:>12} {int(m_.sum()):>7} {a:>9.3f} {c:>10.3f} "
+          f"{c-a:>+16.3f} {o:>9.3f}")
+print()
+z, many = CAL[0], CAL[-1]
+print(f"**처음 보는 문맥에서 정확도는 {z[2]:.3f} 인데 확신은 {z[3]:.3f} 다.**")
+print(f"  과신이 {z[3]-z[2]:+.3f}. 많이 본 문맥에서는 {many[3]-many[2]:+.3f} 로 "
+      f"오히려 약간 겸손하다.")
+print()
+print("**그리고 참 최적 정확도는 어느 구간에서나 비슷하다** "
+      f"({z[4]:.3f} vs {many[4]:.3f}).")
+print("  문제의 난이도가 달라진 게 아니다. **모델이 그 문맥을 못 본 것**뿐이다.")
+print("  그런데 모델의 출력에는 그 차이가 거의 드러나지 않는다.")
+print()
+print("**이것이 환각의 뿌리다.**")
+for s in ["softmax 는 **언제나** 어떤 분포를 낸다 — '모름'을 표현할 자리가 없다",
+          "학습 목표(교차엔트로피)는 **정답 토큰의 확률만** 올린다.",
+          "  '모를 때 평평하게 하라'는 항이 어디에도 없다",
+          "본 적 없는 문맥에서도 그럴듯한 이웃 문맥의 패턴을 그대로 쓴다",
+          "**그래서 유창하고, 구체적이고, 틀린 답이 나온다**"]:
+    print(f"  · {s}")
+print()
+print("**완화 수단과 각각이 실제로 하는 일**")
+print(f"{'수단':<20} {'무엇을 바꾸는가'}")
+print("-" * 66)
+for a_, b_ in [("검색 근거 (7.10)", "본 적 없는 문맥을 **문맥 창 안에 넣어 준다**"),
+               ("인용 강제", "근거 없는 문장을 만들기 어렵게 한다"),
+               ("확신도 보정", "출력 확률을 사후 보정 — 위 표의 과신을 줄인다"),
+               ("자기일관성", "여러 번 뽑아 흔들리면 모르는 것 (7.11의 한계 참고)"),
+               ("기권 학습", "'모른다'를 **보상하는 목표**로 바꾼다 (다음 절)"),
+               ("도구 사용", "계산·조회를 모델 밖으로 뺀다")]:
+    print(f"{a_:<20} {b_}")
+```
+
+---
+
+## G7.15.2 — 왜 모델은 기권하지 않는가
+
+위에서 "모른다고 하면 된다"고 했다. 그런데 **그럴 이유가 없다.**
+채점 규칙을 보면 안다.
+
+정답 1점, 기권 0점, 오답에 벌점 $w$. 확신도 $c$ 로 추측할 때 기대점수는
+
+$$c \cdot 1 + (1-c)(-w) = c - w(1-c)$$
+
+이것이 0(기권)보다 크려면 $c > \dfrac{w}{1+w}$ 여야 한다.
+
+```{python}
+#| label: abstain
+#| code-fold: false
+
+import numpy as np
+
+print("추측이 기권보다 유리해지는 확신도 문턱")
+print()
+print(f"{'오답 벌점 w':>12} {'문턱 c*':>10}  {'해석'}")
+print("-" * 58)
+for w in [0.0, 0.25, 0.5, 1.0, 3.0, 9.0]:
+    thr = w/(1 + w)
+    note = ("**확신이 0이어도 추측이 낫다**" if w == 0
+            else f"{thr:.0%} 이상 확신할 때만 답한다")
+    print(f"{w:>12.2f} {thr:>10.1%}  {note}")
+print()
+print("**거의 모든 벤치마크가 w = 0 이다.** 틀려도 벌점이 없다.")
+print("  객관식이든 단답형이든 '맞으면 1점, 아니면 0점'이 표준이다.")
+print("  그 채점 아래에서 **최적 전략은 언제나 추측**이다.")
+print()
+print("  그리고 우리는 그 벤치마크로 모델을 고르고, 그 신호로 학습시킨다.")
+print("  **환각은 학습 신호가 정확히 요구한 행동이다.**")
+print()
+
+# 같은 모델, 채점 규칙만 바꿔서 기대점수를 비교한다
+print("위 모델을 그대로 두고 채점 규칙만 바꿔 본다")
+print()
+print(f"{'벌점 w':>8} {'문턱':>8} {'기권 비율':>10} {'답한 것의 정확도':>17} "
+      f"{'항상 추측 점수':>15} {'기권 전략 점수':>15}")
+print("-" * 80)
+ABST = []
+for w in [0.0, 0.25, 1.0, 3.0, 9.0]:
+    thr = w/(1 + w)
+    ans = conf > thr
+    always = float((ok*1.0 + (~ok)*(-w)).mean())
+    strat = float((ans*(ok*1.0 + (~ok)*(-w))).mean())
+    acc_ans = float(ok[ans].mean()) if ans.sum() else float("nan")
+    ABST.append((w, thr, float(1-ans.mean()), acc_ans, always, strat))
+    print(f"{w:>8.2f} {thr:>8.1%} {1-ans.mean():>10.1%} {acc_ans:>17.3f} "
+          f"{always:>15.3f} {strat:>15.3f}")
+print()
+print("**벌점이 커질수록 기권 전략이 유리해진다.**")
+a0, a3 = ABST[0], ABST[3]
+print(f"  w=0: 기권 전략이 아무 이득이 없다 "
+      f"({a0[4]:.3f} vs {a0[5]:.3f} — 문턱이 0이라 전부 답한다)")
+print(f"  w=3: 항상 추측하면 {a3[4]:.3f}, 기권을 섞으면 {a3[5]:.3f}")
+print(f"       {a3[2]:.0%} 를 기권하고, 답한 것의 정확도가 "
+      f"{a0[3]:.3f} → {a3[3]:.3f} 로 오른다")
+print()
+print("**따라서 '모른다고 말하는 모델'을 원하면 평가부터 바꿔야 한다.**")
+for s in ["오답에 벌점을 준다 — 시험에서 오래 쓰던 방식이다",
+          "기권을 **별도로 집계**한다 (정확도와 커버리지를 함께 보고)",
+          "확신도를 함께 요구하고 **보정 오차(ECE)를 지표로** 쓴다",
+          "**선택적 정확도** — 상위 c% 확신 구간에서의 정확도를 본다",
+          "그렇지 않으면 정렬 단계(7.7)가 추측을 다시 학습시킨다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-halluc
+#| fig-cap: "본 적 없는 문맥에서 정확도는 무너지지만 확신은 거의 그대로 남습니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("학습에서 본 횟수별 정확도와 확신도",
+                                    "채점 규칙과 기권 문턱"))
+labels = [c[0] for c in CAL]
+fig.add_trace(go.Bar(x=labels, y=[c[2] for c in CAL], name="실제 정확도",
+                     marker_color=viz.ACCENT,
+                     text=[f"{c[2]:.3f}" for c in CAL],
+                     textposition="outside"), row=1, col=1)
+fig.add_trace(go.Bar(x=labels, y=[c[3] for c in CAL], name="모델의 확신도",
+                     marker_color=viz.WARM,
+                     text=[f"{c[3]:.3f}" for c in CAL],
+                     textposition="outside"), row=1, col=1)
+fig.add_trace(go.Scatter(x=labels, y=[c[4] for c in CAL], mode="lines+markers",
+                         name="참 분포를 아는 최적값",
+                         line=dict(color=viz.GREEN, width=2.5, dash="dash"),
+                         marker=dict(size=9)), row=1, col=1)
+fig.update_yaxes(title_text="비율", range=[0, 0.65], row=1, col=1)
+
+ww = np.linspace(0, 10, 200)
+fig.add_trace(go.Scatter(x=ww, y=ww/(1 + ww), mode="lines",
+                         name="추측이 유리한 확신도 문턱",
+                         line=dict(color=viz.PINK, width=3),
+                         fill="tozeroy",
+                         fillcolor=viz.hex_rgba(viz.PINK, 0.15)), row=1, col=2)
+fig.add_vline(x=0, line=dict(color=viz.YELLOW, width=2, dash="dash"),
+              annotation_text="대부분의 벤치마크", row=1, col=2)
+fig.update_xaxes(title_text="오답 벌점 w", row=1, col=2)
+fig.update_yaxes(title_text="기권 문턱 c*", range=[0, 1], row=1, col=2)
+viz.fig_defaults(fig, height=430, title="")
+fig.show()
+```
+
+---
+
+## G7.15.3 — 암기: 몇 번 반복되면 그대로 나오는가
+
+학습 데이터에 있는 문장이 그대로 출력되는 것을 **암기**라고 한다.
+개인정보 유출도, 저작권 문제도, 백도어도 전부 여기서 나온다.
+
+특정 문맥 뒤에 오는 "비밀" 시퀀스를 학습 데이터에 심고,
+**반복 횟수를 바꿔 가며** 그것이 추출되는지 본다.
+
+```{python}
+#| label: memorize
+#| code-fold: false
+
+import numpy as np
+
+SEC_CTX, SECRET = (7, 13), [21, 5, 22, 18]
+
+
+def extract(m):
+    """SEC_CTX 로 시작해 SECRET 을 그대로 낼 확률과 greedy 재현 여부."""
+    a, b = SEC_CTX
+    p, greedy = 1.0, True
+    for t in SECRET:
+        x = np.zeros((1, 2*V))
+        x[0, a] = 1
+        x[0, V + b] = 1
+        q = m.predict(x)[0]
+        p *= q[t]
+        if q.argmax() != t:
+            greedy = False
+        a, b = b, t
+    return float(p), greedy
+
+
+print(f"비밀: 문맥 {SEC_CTX} 뒤에 {SECRET} 가 이어진다")
+print("  (참 분포에서는 이 연쇄가 특별히 확률이 높지 않다)")
+print()
+print(f"{'반복 횟수':>10} {'학습 데이터 비중':>16} {'정확 재현 확률':>15} "
+      f"{'greedy 로 나오는가':>18} {'깨끗한 테스트 PPL':>18}")
+print("-" * 82)
+BASE_SEQ = list(gen(9000, np.random.default_rng(3)))
+MEM = []
+for reps in [0, 2, 8, 32, 128]:
+    tr = np.array(BASE_SEQ + ([SEC_CTX[0], SEC_CTX[1]] + SECRET)*reps)
+    Xt, yt, _ = feat(tr)
+    m = fit(Xt, yt)
+    p, gd = extract(m)
+    q = m.predict(Xte)
+    ppl = float(np.exp(-np.mean(np.log(np.maximum(
+        q[np.arange(len(yte)), yte], 1e-12)))))
+    MEM.append((reps, reps*6/len(yt), p, gd, ppl))
+    print(f"{reps:>10} {reps*6/len(yt):>15.3%} {p:>15.2e} "
+          f"{('예' if gd else '아니오'):>18} {ppl:>18.4f}")
+print()
+m0, m8, m128 = MEM[0], MEM[2], MEM[4]
+print(f"**반복 {m8[0]}회 — 학습 데이터의 {m8[1]:.2%} — 에서 "
+      f"greedy 디코딩으로 그대로 나온다.**")
+print(f"  재현 확률이 {m0[2]:.1e} → {m8[2]:.1e} 로 "
+      f"{m8[2]/m0[2]:.0e}배 올랐다.")
+print()
+print("**그런데 깨끗한 테스트 퍼플렉서티는 거의 그대로다.**")
+print(f"  반복 0회: {m0[4]:.4f}   반복 {m8[0]}회: {m8[4]:.4f}")
+print("  **일반 평가로는 이 암기를 절대 찾을 수 없다.**")
+print()
+print("**여기서 네 가지가 같은 뿌리에서 나온다.**")
+print()
+print(f"{'문제':<18} {'같은 메커니즘이 만드는 것'}")
+print("-" * 70)
+for a_, b_ in [("개인정보 유출", "코퍼스에 여러 번 나온 주소·번호가 그대로 재현된다"),
+               ("저작권", "널리 복제된 텍스트일수록 그대로 나올 확률이 높다"),
+               ("**백도어**", "공격자가 트리거+행동을 소량 심으면 학습된다"),
+               ("벤치마크 오염", "7.13에서 본 부풀림도 같은 암기다")]:
+    print(f"{a_:<18} {b_}")
+print()
+print("**백도어가 특히 나쁜 이유가 위 표에 있다.**")
+print(f"  학습 데이터의 {m8[1]:.2%} 만 오염시키면 되고,")
+print("  일반 성능 지표는 **아무것도 알려주지 않는다**.")
+print("  트리거를 모르면 테스트할 수도 없다 — 무엇을 입력해야 할지 모르기 때문이다.")
+print()
+print("**완화 수단**")
+for s in ["**중복 제거 (7.5)** — 가장 효과가 크다. 반복 횟수를 직접 줄인다",
+          "개인정보 스크러빙 — 학습 전에 패턴으로 제거 (불완전하다)",
+          "차등 프라이버시 학습 — 이론적 보장이 있지만 품질 대가가 크다",
+          "출력 필터 — 학습 데이터와의 긴 n-gram 겹침을 차단",
+          "**데이터 출처 관리** — 백도어에는 이것 외에 방법이 거의 없다",
+          "  누가 만든 데이터인지, 언제 들어왔는지를 추적할 수 있어야 한다"]:
+    print(f"  · {s}")
+```
+
+::: {.callout-warning}
+## 규모의 방향
+
+이 모델은 파라미터 5천 개짜리다. 실제 LLM은 **훨씬 적은 반복으로도 암기한다** —
+용량이 크면 일반화하지 않고 그냥 외워 버리는 편이 손실을 더 줄이기 때문이다.
+[7.13](13_evaluation.qmd)에서 본 것과 같은 이야기다.
+
+즉 여기 숫자는 **낙관적인 쪽**이다. 구조는 같고, 문턱은 실제로 더 낮다.
 :::
 
-LLM을 제품에 넣는 순간 새로운 공격면과 실패 양식이 생긴다. 이 목록을 모르고 배포하는 것은 사고를 예약하는 일이다.
+---
+
+## G7.15.4 — 가드레일: 좋은 분류기가 대부분 오탐인 이유
+
+입력·출력 필터를 붙인다. 탐지율 99%, 오탐율 1%인 아주 좋은 분류기라고 하자.
+**차단된 것 중 진짜 공격은 몇 퍼센트인가?**
+
+$$\text{정밀도} = \frac{\pi s}{\pi s + (1-\pi)f}$$
+
+$\pi$ 는 공격의 **기저율**이다. 실서비스에서 이 값은 아주 작다.
+
+```{python}
+#| label: guardrail
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'공격 비율 π':>12} {'탐지율':>8} {'오탐율':>8} "
+      f"{'차단된 것 중 진짜 공격':>22} {'놓친 공격':>10}")
+print("-" * 68)
+GUARD = []
+for pi in [0.5, 0.05, 0.01, 0.001]:
+    for s, fpr_ in [(0.99, 0.01), (0.95, 0.001)]:
+        prec = pi*s/(pi*s + (1-pi)*fpr_)
+        GUARD.append((pi, s, fpr_, prec))
+        print(f"{pi:>12.3%} {s:>8.2f} {fpr_:>8.3f} {prec:>22.1%} "
+              f"{1-s:>10.1%}")
+print()
+g_low = [g for g in GUARD if g[0] == 0.001 and g[2] == 0.01][0]
+print(f"**공격이 {g_low[0]:.1%} 인 서비스에서 탐지율 99%/오탐율 1% 필터를 쓰면,**")
+print(f"  차단된 요청의 **{g_low[3]:.1%} 만 진짜 공격**이다. 나머지는 정상 사용자다.")
+print()
+print("  오탐율을 1% → 0.1% 로 낮추면 정밀도가 "
+      f"{[g for g in GUARD if g[0]==0.001 and g[2]==0.001][0][3]:.1%} 로 오른다.")
+print("  **기저율이 낮을수록 오탐율이 탐지율보다 훨씬 중요하다.**")
+print()
+print("**실무 함의**")
+for s in ["차단 대신 **감쇠**를 쓴다 — 경고, 추가 확인, 기능 제한",
+          "고위험 경로에만 강한 필터를 건다 (기저율이 높은 구간)",
+          "차단 로그를 사람이 볼 수 있어야 한다 — 대부분 오탐이므로",
+          "**정확도(accuracy)로 필터를 평가하지 말 것** — 전부 통과시켜도 99.9%다",
+          "정밀도·재현율과 **운영 비용**(검토 인력)을 함께 본다"]:
+    print(f"  · {s}")
+print()
+
+print("계층을 쌓으면 나아지는가 — 두 필터를 겹칠 때")
+print("  둘 다 탐지해야 차단(AND) / 하나라도 탐지하면 차단(OR)")
+print()
+from scipy import stats
+N = 200_000
+gg = np.random.default_rng(0)
+S1, F1 = 0.90, 0.05
+th_a, th_b = stats.norm.ppf(1 - S1), stats.norm.ppf(1 - F1)
+print(f"{'두 필터의 상관 ρ':>16} {'AND 탐지':>10} {'AND 오탐':>10} "
+      f"{'OR 탐지':>10} {'OR 오탐':>10}")
+print("-" * 62)
+LAYER = []
+for rho in [0.0, 0.5, 0.9, 0.99]:
+    z0 = gg.normal(0, 1, N)
+    za = rho*z0 + np.sqrt(1-rho**2)*gg.normal(0, 1, N)
+    zb = rho*z0 + np.sqrt(1-rho**2)*gg.normal(0, 1, N)
+    w0 = gg.normal(0, 1, N)
+    fa = rho*w0 + np.sqrt(1-rho**2)*gg.normal(0, 1, N)
+    fb = rho*w0 + np.sqrt(1-rho**2)*gg.normal(0, 1, N)
+    da, db = za > th_a, zb > th_a
+    ea, eb = fa > th_b, fb > th_b
+    row = (rho, float((da & db).mean()), float((ea & eb).mean()),
+           float((da | db).mean()), float((ea | eb).mean()))
+    LAYER.append(row)
+    print(f"{rho:>16.2f} {row[1]:>10.3f} {row[2]:>10.4f} "
+          f"{row[3]:>10.3f} {row[4]:>10.4f}")
+print()
+l0, l99 = LAYER[0], LAYER[-1]
+print(f"각 필터는 탐지 {S1:.2f}, 오탐 {F1:.3f} 로 동일하다.")
+print()
+print(f"**독립(ρ=0)이면 AND 로 오탐이 {F1:.3f} → {l0[2]:.4f} 로 떨어진다** "
+      f"({F1/l0[2]:.0f}배).")
+print(f"  대가는 탐지율 {S1:.2f} → {l0[1]:.3f}.")
+print(f"**상관이 높으면(ρ={l99[0]}) 오탐이 {l99[2]:.4f} 까지 올라간다** — "
+      f"독립일 때보다 {l99[2]/l0[2]:.0f}배 나쁘다.")
+print(f"  단일 필터 대비 개선 폭이 {F1/l0[2]:.0f}배 → {F1/l99[2]:.1f}배로 준다.")
+print()
+print("**그리고 실제 가드레일은 대부분 강하게 상관되어 있다.**")
+print("  같은 모델 계열, 같은 학습 데이터, 같은 취약점을 공유한다.")
+print("  [7.11](11_agents.qmd)의 다중 에이전트에서 본 것과 **정확히 같은 문제**다.")
+print("  독립적인 층을 만들려면 **다른 종류의 방어**를 섞어야 한다 —")
+print("  분류기, 규칙, 권한 제한, 사람 승인, 사후 모니터링.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G7.15.5 — 탈옥: 반복 시도 앞에서
 
-- 환각의 분류: 사실 오류, 출처 조작, 지시 이탈
-- 환각의 원인: 학습 목표, 데이터, 불확실성 표현 부재
-- 환각 완화: 검색 근거, 인용 강제, 불확실성 표현, 자기 검증
-- 탈옥(jailbreak) 기법과 방어의 군비 경쟁
-- 프롬프트 주입: 직접·간접(문서·웹페이지 경유), 신뢰 경계 설계
-- 데이터 유출과 암기(memorization), 추출 공격
-- 학습 데이터 오염(poisoning)과 백도어
-- 유해성·편향 평가와 완화
-- 레드팀: 수동·자동, 커버리지 설계
-- 가드레일: 입력·출력 필터, 분류기, 정책 계층
-- 권한 설계와 최소 권한 원칙(에이전트 맥락)
-- 모니터링·사고 대응·모델 카드와 문서화
+공격자는 한 번만 시도하지 않는다. 같은 의도를 여러 표현으로 바꿔 가며 던진다.
+필터를 선형 판별로 두고, 공격자가 표현만 바꿔 가며 문턱을 넘어가게 해 보자.
+
+```{python}
+#| label: jailbreak
+#| code-fold: false
+
+import numpy as np
+
+D = 24
+gw = np.random.default_rng(1)
+w = gw.normal(0, 1, D)
+w /= np.linalg.norm(w)          # 필터의 '유해성' 방향
+
+
+def attack(theta, n_try, n_case=800, seed=5):
+    """유해 의도(핵심 성분)는 유지한 채 표현만 바꿔 가며 시도한다."""
+    g = np.random.default_rng(seed)
+    win = 0
+    for _ in range(n_case):
+        core = g.normal(0, 1, D)
+        core = core/np.linalg.norm(core) + 0.9*w        # 유해 성분
+        for _ in range(n_try):
+            x = core + g.normal(0, 0.8, D)              # 표현 변형
+            if float(w @ x) < theta:                    # 필터 통과
+                win += 1
+                break
+    return win/n_case
+
+
+def benign_fp(theta, n=6000, seed=6):
+    g = np.random.default_rng(seed)
+    return float((g.normal(0, 1, (n, D)) @ w >= theta).mean())
+
+
+TRIES = [1, 5, 20, 100]
+print("필터는 w·x ≥ θ 이면 차단한다. θ 를 낮출수록 엄격하다.")
+print()
+print(f"{'문턱 θ':>8} {'정상 요청 오탐율':>16} " +
+      " ".join(f"{'시도 ' + str(t) + '회':>11}" for t in TRIES))
+print("-" * 70)
+JAIL = []
+for th in [0.0, 0.5, 1.0, 1.5, 2.0]:
+    fp = benign_fp(th)
+    row = [attack(th, t) for t in TRIES]
+    JAIL.append((th, fp, *row))
+    print(f"{th:>8.1f} {fp:>16.1%} " + " ".join(f"{v:>11.3f}" for v in row))
+print()
+strict, loose = JAIL[0], JAIL[3]
+print(f"**한 번 시도의 성공률을 {strict[2]:.1%} 로 낮추려면 "
+      f"정상 요청의 {strict[1]:.0%} 를 막아야 한다.**")
+print("  쓸 수 없는 제품이다.")
+print()
+print(f"**그리고 시도를 100번 하면 어느 문턱에서도 성공률이 1.000 이다.**")
+print(f"  운영 가능한 문턱(θ={loose[0]}, 오탐 {loose[1]:.1%})에서는 "
+      f"**한 번에 {loose[2]:.1%}** 가 통과한다.")
+print()
+print("**결론: 내용 필터는 경계가 아니라 속도 제한이다.**")
+print("  공격자의 시도 횟수를 제한하지 않으면 필터의 강도는 거의 의미가 없다.")
+print()
+print("**따라서 실제로 효과가 있는 것들**")
+print(f"{'수단':<22} {'무엇을 바꾸는가'}")
+print("-" * 72)
+for a_, b_ in [("**시도 횟수 제한**", "위 표의 '시도 N회' 를 1에 가깝게 만든다"),
+               ("계정·평판 기반 제한", "반복 공격자를 식별해 비용을 올린다"),
+               ("**권한 축소**", "탈옥에 성공해도 할 수 있는 일이 없게 한다"),
+               ("사후 모니터링", "성공한 공격을 나중에라도 찾아낸다"),
+               ("모델 자체의 정렬 (7.7)", "필터가 아니라 모델이 거절한다"),
+               ("피해 기반 정책", "'무엇을 말했나'가 아니라 '무엇을 할 수 있나'")]:
+    print(f"{a_:<22} {b_}")
+print()
+print("**마지막 줄이 이 장 전체의 요지다.**")
+print("  [7.11](11_agents.qmd)에서 간접 주입을 **구조로** 막았던 것과 같다.")
+print("  탐지는 우회당한다. 권한은 우회당하지 않는다.")
+```
+
+```{python}
+#| label: fig-safety
+#| fig-cap: "기저율이 낮으면 좋은 필터도 대부분 오탐이고, 반복 시도 앞에서 문턱은 무의미해집니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("기저율과 정밀도",
+                                    "탈옥 — 문턱 vs 시도 횟수"))
+pis = np.logspace(-4, -0.3, 120)
+for i, (s, f_) in enumerate([(0.99, 0.01), (0.95, 0.001), (0.99, 0.0001)]):
+    fig.add_trace(go.Scatter(x=pis, y=pis*s/(pis*s + (1-pis)*f_),
+                             mode="lines", name=f"탐지 {s:.2f} / 오탐 {f_}",
+                             line=dict(color=viz.color(i), width=2.5)),
+                  row=1, col=1)
+fig.update_xaxes(title_text="공격의 기저율 π", type="log", tickformat=".1%",
+                 row=1, col=1)
+fig.update_yaxes(title_text="차단된 것 중 진짜 공격", range=[0, 1.02],
+                 row=1, col=1)
+
+for i, t in enumerate(TRIES):
+    fig.add_trace(go.Scatter(x=[j[1] for j in JAIL], y=[j[2+i] for j in JAIL],
+                             mode="lines+markers", name=f"시도 {t}회",
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)), row=1, col=2)
+fig.update_xaxes(title_text="정상 요청 오탐율 (제품이 감당해야 할 비용)",
+                 tickformat=".0%", row=1, col=2)
+fig.update_yaxes(title_text="공격 성공률", range=[0, 1.05], row=1, col=2)
+viz.fig_defaults(fig, height=430, title="")
+fig.show()
+```
 
 ---
 
-## G7.15.1 — 환각 발생 조건
+## 배포 전에 물어야 할 것들
 
-모델이 모르는 영역에서 확신 있게 틀리는 패턴
+```{python}
+#| label: checklist
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 지식 경계 슬라이더
-:::
+print("공격면 — LLM 을 넣으면 새로 생기는 것들")
+print()
+print(f"{'공격':<22} {'경로':<30} {'가장 효과적인 방어'}")
+print("-" * 88)
+for a, b, c in [
+    ("직접 프롬프트 주입", "사용자 입력", "정렬 + 권한 축소"),
+    ("**간접 주입**", "문서·웹·이메일·코드 주석", "**도구 출력을 데이터로만** (7.11)"),
+    ("탈옥", "반복 시도", "**시도 제한 + 권한 축소**"),
+    ("데이터 추출", "긴 프롬프트로 유도", "중복 제거 + 출력 필터"),
+    ("학습 데이터 오염", "공개 코퍼스·기여자", "**출처 관리** (탐지는 거의 불가)"),
+    ("도구 오남용", "에이전트 권한", "최소 권한 + 승인 지점"),
+    ("과의존", "사용자가 검증 없이 믿음", "불확실성 표시 + 인용"),
+]:
+    print(f"{a:<22} {b:<30} {c}")
+print()
+print("레드팀 — 커버리지를 설계한다")
+for s in ["**공격 유형 × 피해 유형** 격자를 만들고 빈칸을 채운다",
+          "자동 레드팀으로 넓게, 사람이 깊게 — 자동화는 아는 유형만 찾는다",
+          "**성공한 공격을 골든셋에 넣는다** (7.13) — 회귀 방지",
+          "외부 레드팀은 내부가 못 보는 것을 본다 (사각지대가 다르다)",
+          "커버리지를 '시도 횟수'가 아니라 **'유형 수'** 로 센다"]:
+    print(f"  · {s}")
+print()
+print("모니터링과 사고 대응")
+for s in ["거절률·차단률의 **급변**을 경보로 건다 (모델 교체·프롬프트 변경 신호)",
+          "고위험 도구 호출을 전부 로깅한다 — 사후에 찾을 수 있어야 한다",
+          "롤백 경로를 미리 만든다. **모델 버전 고정**이 첫 단계다",
+          "사용자 신고 경로 — 예상 못 한 실패는 여기로만 들어온다",
+          "모델 카드·시스템 카드에 **평가하지 않은 것**을 함께 적는다"]:
+    print(f"  · {s}")
+print()
+print("=" * 70)
+print("이 장의 실험이 공통으로 말하는 것")
+print()
+for s in ["**환각은 목표의 산물이다** — 채점 규칙을 바꾸지 않으면 안 바뀐다",
+          "**암기는 일반 평가에 안 보인다** — 따로 재지 않으면 없는 것처럼 보인다",
+          "**필터는 기저율과 반복 시도에 약하다** — 경계가 아니라 속도 제한이다",
+          "**구조적 방어만 우회되지 않는다** — 권한, 신뢰 경계, 데이터 출처"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G7.15.2 — 간접 프롬프트 주입
+## 요약
 
-외부 문서의 지시가 에이전트 행동을 탈취하는 흐름도
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 경로 재생
-:::
-
----
-
-## G7.15.3 — 가드레일 계층
-
-입력 필터·정책·출력 필터가 각각 걸러내는 비율
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 계층 토글
-:::
-
----
-
-## G7.15.4 — 암기 측정
-
-학습 데이터 반복 횟수와 그대로 재현될 확률의 관계
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 중복 횟수 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 환각 (hallucination) |  |
-| 탈옥 (jailbreak) |  |
-| 프롬프트 주입 |  |
-| 암기 (memorization) |  |
-| 레드팀 |  |
-| 가드레일 |  |
+| **환각의 뿌리** | 처음 보는 문맥에서 정확도 0.036, 확신 0.306 — **과신 +0.270** |
+| 난이도가 아니다 | 참 최적 정확도는 어느 구간에서나 비슷 (0.464 vs 0.502) |
+| 왜 고쳐지지 않나 | softmax 에 '모름'이 없고, 교차엔트로피에 겸손을 요구하는 항이 없다 |
+| **기권 문턱** | $c^* = w/(1+w)$. 오답 벌점 $w=0$ 이면 **언제나 추측이 최적** |
+| 평가가 원인이다 | 거의 모든 벤치마크가 $w=0$ — 환각은 학습 신호가 요구한 행동 |
+| 고치는 법 | 오답 벌점, 기권 별도 집계, 보정 오차(ECE), 선택적 정확도 |
+| **암기** | 학습 데이터의 **0.53%** 반복이면 greedy 디코딩으로 그대로 나온다 |
+| 보이지 않는다 | 그때 테스트 PPL 은 10.618 → 10.606 — **일반 평가로는 못 찾는다** |
+| 백도어 | 같은 메커니즘. 트리거를 모르면 테스트조차 불가능 |
+| 완화 | **중복 제거가 가장 효과적**. 백도어에는 출처 관리 외에 방법이 없다 |
+| **기저율 오류** | 공격 0.1%, 탐지 99%/오탐 1% → 차단된 것의 **9.0%** 만 진짜 공격 |
+| 무엇이 중요한가 | 기저율이 낮을수록 **오탐율이 탐지율보다 훨씬 중요하다** |
+| 계층 쌓기 | 독립이면 오탐 0.050 → 0.0026. 상관 0.99면 0.0423 (17배 손해) |
+| 상관의 정체 | 같은 모델·데이터를 쓰는 가드레일은 사각지대를 공유한다 (7.11과 동일) |
+| **탈옥** | 시도 100회면 어느 문턱에서도 성공률 1.000 |
+| 필터의 정체 | 경계가 아니라 **속도 제한**. 시도 횟수를 제한하지 않으면 무의미 |
+| 실제로 듣는 것 | 시도 제한, **권한 축소**, 사후 모니터링, 모델 자체의 정렬 |
+| 관통하는 원리 | **탐지는 우회당하고 구조는 우회당하지 않는다** |
 
 ---
 
-**다음**: [8.0 소리와 디지털 신호](../08_audio/00_sound_and_sampling.qmd) — 파형·샘플링·양자화 — 오디오가 배열이 되기까지
+## Part 7을 마치며
+
+토크나이저에서 시작해 안전성까지 왔다. 되돌아보면 같은 형태의 발견이 반복됐다.
+
+| 장 | 통념 | 측정 결과 |
+|----|------|----------|
+| 7.2 | 스무딩은 늘 좋다 | 문맥이 1개뿐이면 KN이 MLE보다 나쁘다 (0.040 vs 0.114) |
+| 7.6 | LoRA가 full FT만큼 좋다 | 각자의 최적 설정에서는 full FT가 이긴다. LoRA의 강점은 **비용** |
+| 7.9 | 반복 페널티는 반복을 줄인다 | 적용 대상이 넓으면 **온도로 퇴화해 반복을 늘린다** |
+| 7.10 | 청크는 작을수록 좋다 | 그 실험에서는 큰 청크가 이겼다. 무엇을 재느냐가 답을 바꾼다 |
+| 7.11 | 다수결이 신뢰성을 준다 | 분산만 줄인다. **편향은 전혀** 못 줄인다 |
+| 7.12 | 더 오래 생각하면 낫다 | 병목은 생각이 아니라 **고르기**. 검증자가 천장을 정한다 |
+| 7.13 | 벤치마크 점수가 올랐다 | 200문항으로는 5%p 개선도 세 번에 한 번만 보인다 |
+| 7.15 | 환각은 데이터 문제다 | 채점 규칙이 추측을 최적 전략으로 만든다 |
+
+공통점이 있다. **측정하기 전에는 어느 쪽인지 알 수 없다는 것**,
+그리고 측정하면 통념이 자주 틀린다는 것이다.
+
+다음은 언어를 떠나 **소리**로 간다.
+
+---
+
+**다음**: [8.0 소리와 디지털 신호](../08_audio/00_sound_and_sampling.qmd)
 
 **이전**: [7.14 추론 최적화](14_inference_optimization.qmd)
