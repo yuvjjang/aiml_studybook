@@ -4,90 +4,695 @@ subtitle: "MOT·재식별·SAM2 — 프레임을 가로질러 같은 것을 같�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[9.1](01_vision_tasks.qmd)의 검출은 프레임 하나짜리 문제였다.
+"이 그림에 무엇이 어디 있나."
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+세상은 그렇게 끊겨 있지 않다. 3번 프레임의 사람과 4번 프레임의 사람이
+**같은 사람인지**를 말해야 쓸모가 있다. 개수를 세는 것도, 궤적을 그리는 것도,
+"저 차가 방금 신호를 위반했다"고 말하는 것도 전부 그것에 달려 있다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+추적은 그 잇는 문제다. 그리고 실시간 비전 시스템에서 가장 많이 배치되는 부품이기도 하다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 장에서 잴 것은 세 가지다.
+**움직임을 어떻게 예측하고**, **무엇으로 이어 붙이며**,
+그리고 — 늘 그렇듯 — **그 성능을 재는 지표가 무엇을 보고 무엇을 못 보는가.**
+
+---
+
+## tracking-by-detection
+
+지금의 주류는 단순하다.
+
+1. 프레임마다 검출기를 돌린다 ([9.1](01_vision_tasks.qmd))
+2. 기존 트랙들의 **다음 위치를 예측**한다
+3. 예측과 검출을 **짝짓는다**
+4. 짝지어진 트랙은 갱신, 안 지어진 검출은 새 트랙, 오래 못 만난 트랙은 삭제
+
+3번이 [9.1](01_vision_tasks.qmd)의 헝가리안 매칭과 같은 문제다.
+다만 이번엔 **프레임을 가로질러** 짝을 짓는다.
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+SZ, NT = 256, 60
+
+
+def scene(g, n_obj=5, occ_len=0, cross=True):
+    """등속 궤적. cross=True 면 두 객체가 정면으로 교차한다."""
+    P = np.zeros((NT, n_obj, 2))
+    app = g.normal(0, 1, (n_obj, 8))
+    app /= np.linalg.norm(app, axis=1, keepdims=True)
+    for i in range(n_obj):
+        p0, v = g.uniform(30, SZ-30, 2), g.normal(0, 1.6, 2)
+        if cross and i < 2:
+            p0 = np.array([40., 128.]) if i == 0 else np.array([SZ-40., 128.])
+            v = np.array([3.0, 0.]) if i == 0 else np.array([-3.0, 0.])
+        for t in range(NT):
+            P[t, i] = np.clip(p0 + v*t, 10, SZ-10)
+    vis = np.ones((NT, n_obj), bool)
+    if occ_len:
+        s = NT//2 - occ_len//2
+        vis[s:s+occ_len, :max(1, n_obj//2)] = False
+    return P, vis, app
+
+
+def detect(P, vis, app, g, noise=3.0, miss=0.05, app_noise=0.35, low_frac=0.3):
+    """검출기 흉내 — 위치 잡음, 미검출, 낮은 점수, 잡음 섞인 외형 특성."""
+    out = []
+    for t in range(NT):
+        d = []
+        for i in range(P.shape[1]):
+            if not vis[t, i] or g.random() < miss:
+                continue
+            lo = g.random() < low_frac
+            a = app[i] + g.normal(0, app_noise, 8)
+            d.append((P[t, i] + g.normal(0, noise, 2),
+                      float(g.uniform(0.1, 0.45) if lo else g.uniform(0.6, 0.99)),
+                      a/np.linalg.norm(a), i))
+        out.append(d)
+    return out
+
+
+print("합성 추적 장면 준비 완료")
+print(f"  {NT}프레임, 화면 {SZ}x{SZ}")
+print("  검출기는 위치 잡음 σ=3, 미검출 5%, 검출의 30%는 낮은 점수를 낸다")
+print()
+print("**정답 id 를 알고 있으므로, ID 전환을 정확히 셀 수 있다.**")
+```
+
+---
+
+## G9.7.1 — 칼만 필터: 예측이 사는 것과, 모르는 것을 아는 것
+
+관측(검출)에는 잡음이 있다. 물체는 대체로 부드럽게 움직인다.
+이 둘을 합쳐 상태를 추정하는 것이 칼만 필터다.
+
+상태를 $[x, y, \dot{x}, \dot{y}]$ 로 두고 등속 모델을 쓴다.
+
+$$\hat{x}_t^- = F\hat{x}_{t-1},\qquad P_t^- = FP_{t-1}F^\top + Q$$
+$$K = P^-H^\top(HP^-H^\top + R)^{-1},\qquad
+\hat{x}_t = \hat{x}_t^- + K(z_t - H\hat{x}_t^-)$$
+
+$K$ 가 하는 일이 전부다 — **모델을 얼마나 믿고 관측을 얼마나 믿을지**의 비율.
+
+```{python}
+#| label: kalman
+#| code-fold: false
+
+import numpy as np
+
+
+def kalman_run(meas, q=0.5, r=9.0, gap=None):
+    """등속 칼만 필터. gap[t] 가 True 면 관측 없이 예측만 한다."""
+    F = np.eye(4); F[0, 2] = F[1, 3] = 1
+    H = np.zeros((2, 4)); H[0, 0] = H[1, 1] = 1
+    Q, Rm = np.eye(4)*q, np.eye(2)*r
+    x = np.array([meas[0, 0], meas[0, 1], 0, 0], float)
+    Pk = np.eye(4)*50.0
+    est, unc = [], []
+    for t in range(len(meas)):
+        x = F @ x; Pk = F @ Pk @ F.T + Q                    # 예측
+        if gap is None or not gap[t]:                        # 보정
+            S = H @ Pk @ H.T + Rm
+            K = Pk @ H.T @ np.linalg.inv(S)
+            x = x + K @ (meas[t] - H @ x)
+            Pk = (np.eye(4) - K @ H) @ Pk
+        est.append(x[:2].copy())
+        unc.append(float(np.sqrt(np.trace(Pk[:2, :2])/2)))
+    return np.array(est), np.array(unc)
+
+
+g0 = np.random.default_rng(0)
+print("관측 잡음에 따른 위치 오차")
+print()
+print(f"{'관측 σ':>8} {'원시 검출 RMSE':>15} {'칼만 RMSE':>12} {'개선':>8}")
+print("-" * 46)
+KAL = []
+for r_ in [1.0, 3.0, 6.0, 10.0]:
+    er, ek = [], []
+    for _ in range(30):
+        P, vis, app = scene(g0, 3, 0, False)
+        tr = P[:, 0]
+        m = tr + g0.normal(0, r_, (NT, 2))
+        est, _ = kalman_run(m, q=0.5, r=r_**2)
+        er.append(np.sqrt(((m - tr)**2).sum(1).mean()))
+        ek.append(np.sqrt(((est - tr)**2).sum(1).mean()))
+    KAL.append((r_, float(np.mean(er)), float(np.mean(ek))))
+    print(f"{r_:>8.1f} {KAL[-1][1]:>15.3f} {KAL[-1][2]:>12.3f} "
+          f"{1 - KAL[-1][2]/KAL[-1][1]:>7.1%}")
+print()
+print("**잡음이 클수록 이득이 크다** — "
+      f"σ=1 에서 {1-KAL[0][2]/KAL[0][1]:.0%}, σ=10 에서 "
+      f"{1-KAL[-1][2]/KAL[-1][1]:.0%}.")
+print("  관측이 못 미더울수록 모델(등속 가정)에 무게가 실리기 때문이다.")
+```
+
+**그리고 칼만 필터의 진짜 값어치는 관측이 아예 없을 때 나온다.**
+
+```{python}
+#| label: kalman-occ
+#| code-fold: false
+
+import numpy as np
+
+print("가림 구간 — 관측 없이 예측만 할 때 (마지막 가림 프레임에서 평가)")
+print()
+print(f"{'가림 길이':>9} {'예측 오차':>11} {'스스로 낸 σ':>13} {'복귀 직후 오차':>15}")
+print("-" * 52)
+OCC = []
+for L in [1, 3, 6, 12, 24]:
+    e1, u1, e2 = [], [], []
+    for s in range(20):
+        gg = np.random.default_rng(100 + s)
+        P, vis, app = scene(gg, 3, 0, False)
+        tr = P[:, 0]
+        m = tr + gg.normal(0, 3.0, (NT, 2))
+        gap = np.zeros(NT, bool); gap[NT//2:NT//2+L] = True
+        est, unc = kalman_run(m, q=0.5, r=9.0, gap=gap)
+        k = NT//2 + L - 1
+        e1.append(np.linalg.norm(est[k] - tr[k]))
+        u1.append(unc[k])
+        e2.append(np.linalg.norm(est[k+1] - tr[k+1]))
+    OCC.append((L, float(np.mean(e1)), float(np.mean(u1)), float(np.mean(e2))))
+    print(f"{L:>9} {OCC[-1][1]:>11.3f} {OCC[-1][2]:>13.3f} {OCC[-1][3]:>15.3f}")
+print()
+a, b = OCC[0], OCC[-1]
+print("**① 예측 오차는 가림이 길수록 커진다** — "
+      f"{a[1]:.1f}px → {b[1]:.1f}px.")
+print("  등속 가정이 오래 유지될 리 없으니 당연하다.")
+print()
+print("**② 그런데 필터는 그 사실을 스스로 알고 있다.**")
+print(f"  자기가 낸 불확실성 σ 가 {a[2]:.1f} → {b[2]:.1f} 로 커진다 — "
+      f"실제 오차({b[1]:.1f})보다 **크게** 잡는다.")
+for s in ["관측 없이 예측만 하면 $P$ 가 $Q$ 만큼씩 계속 불어난다",
+          "이 값이 매칭에서 **게이트(허용 반경)** 로 쓰인다 — "
+          "오래 못 본 트랙일수록 넓게 찾는다",
+          "**'모른다는 것을 아는' 것이 필터의 핵심 산출물**이다. "
+          "점 추정보다 이쪽이 실무에서 더 쓸모 있다"]:
+    print(f"  · {s}")
+print()
+print(f"**③ 다시 보이면 즉시 회복한다** — 복귀 직후 오차 {b[3]:.1f}px.")
+print(f"  {b[0]}프레임을 못 봤어도, 관측 하나면 {b[1]:.1f} → {b[3]:.1f} 로 돌아온다.")
+```
+
+```{python}
+#| label: fig-kalman
+#| fig-cap: "G9.7.1 — 가림 길이와 칼만 필터. 예측 오차는 커지지만 필터가 스스로 낸 불확실성이 그보다 더 크게 자란다. 이 여유가 매칭 게이트가 된다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+L_ = [o[0] for o in OCC]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=L_, y=[o[2] for o in OCC], mode="lines+markers",
+                         name="필터가 낸 불확실성 σ",
+                         line=dict(color=viz.YELLOW, width=2.5, dash="dot"),
+                         marker=dict(size=8)))
+fig.add_trace(go.Scatter(x=L_, y=[o[1] for o in OCC], mode="lines+markers",
+                         name="실제 예측 오차",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=9), fill="tonexty",
+                         fillcolor=viz.hex_rgba(viz.YELLOW, 0.13)))
+fig.add_trace(go.Scatter(x=L_, y=[o[3] for o in OCC], mode="lines+markers",
+                         name="복귀 직후 오차",
+                         line=dict(color=viz.GREEN, width=2.5),
+                         marker=dict(size=8)))
+viz.fig_defaults(
+    fig, "가림 길이에 따른 예측 오차와 불확실성", height=450,
+    xaxis_title="관측 없이 지난 프레임 수", yaxis_title="픽셀",
+    xaxis=dict(tickmode="array", tickvals=L_))
+viz.annotate_box(fig, "칠해진 여유 = 매칭 게이트<br>"
+                      "<b>오래 못 본 트랙은 넓게 찾는다</b>", x=0.02, y=0.98,
+                 xanchor="left", yanchor="top")
+fig
+```
+
+---
+
+## G9.7.2 — 데이터 연관: 탐욕 매칭이 왜 나쁜가
+
+예측이 있으면 이제 짝을 지어야 한다.
+[9.1](01_vision_tasks.qmd)에서 본 대로 **탐욕적으로 가까운 것부터 집는 것**과
+**전체 비용을 최소화하는 것**은 다르다.
+
+두 사람이 정면으로 교차하는 순간을 생각해 보라.
+가까운 것부터 집으면 두 트랙이 서로 바뀐다.
+
+```{python}
+#| label: assoc
+#| code-fold: false
+
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+
+def track(dets, mode="hungarian", thr=60.0, max_age=1, app_w=0.0,
+          low_thr=0.5):
+    """tracking-by-detection. 반환: 프레임별 [(track_id, gt_id)]"""
+    tracks, nid, out = {}, 0, []
+    for dl in dets:
+        for tr in tracks.values():
+            tr["pos"] = tr["pos"] + tr["vel"]          # 등속 예측
+            tr["age"] += 1
+        hi = [d for d in dl if d[1] >= low_thr]
+        lo = [d for d in dl if d[1] < low_thr]
+        assigned = []
+        stages = [(0, hi), (1, lo)] if mode == "byte" else [(0, hi + lo)]
+        for stage, pool in stages:
+            taken = {a[0] for a in assigned}
+            ids = [k for k in tracks if k not in taken]
+            if not ids or not pool:
+                continue
+            C = np.zeros((len(ids), len(pool)))
+            for i, k in enumerate(ids):
+                for j, d in enumerate(pool):
+                    dist = np.linalg.norm(tracks[k]["pos"] - d[0])
+                    C[i, j] = ((1 - app_w)*dist
+                               + app_w*100*(1 - tracks[k]["app"] @ d[2])
+                               if app_w > 0 else dist)
+            lim = thr if stage == 0 else thr*0.8
+            if mode == "greedy":
+                used = set()
+                for i in range(len(ids)):
+                    row = np.where([j in used for j in range(len(pool))],
+                                   1e9, C[i])
+                    j = int(np.argmin(row))
+                    if row[j] < lim:
+                        used.add(j); assigned.append((ids[i], pool[j]))
+            else:
+                for i, j in zip(*linear_sum_assignment(C)):
+                    if C[i, j] < lim:
+                        assigned.append((ids[i], pool[j]))
+        used_d = {id(a[1]) for a in assigned}
+        for k, d in assigned:
+            tracks[k]["vel"] = (0.7*tracks[k]["vel"]
+                                + 0.3*(d[0] - tracks[k]["pos"] + tracks[k]["vel"]))
+            tracks[k]["pos"] = d[0]
+            tracks[k]["app"] = 0.9*tracks[k]["app"] + 0.1*d[2]
+            tracks[k]["age"] = 0
+        for d in dl:                                   # 새 트랙 생성
+            if id(d) not in used_d and (mode != "byte" or d[1] >= low_thr):
+                tracks[nid] = dict(pos=d[0].copy(), vel=np.zeros(2), age=0,
+                                   app=d[2].copy())
+                assigned.append((nid, d)); nid += 1
+        for k in [k for k, v in tracks.items() if v["age"] > max_age]:
+            del tracks[k]
+        out.append([(k, d[3]) for k, d in assigned])
+    return out
+
+
+def metrics(pred, dets):
+    """MOTA / IDF1 / HOTA(단일 α). DetA·AssA 도 함께."""
+    gt_total = sum(len(dl) for dl in dets)
+    tp = sum(len(p) for p in pred)
+    fn = gt_total - tp
+    last, idsw = {}, 0
+    for fr in pred:
+        for k, gid in fr:
+            if gid in last and last[gid] != k:
+                idsw += 1
+            last[gid] = k
+    mota = 1 - (fn + idsw)/max(gt_total, 1)
+    gids = sorted({g for fr in pred for _, g in fr})
+    tids = sorted({k for fr in pred for k, _ in fr})
+    M = np.zeros((len(gids), len(tids)))
+    for fr in pred:
+        for k, gid in fr:
+            M[gids.index(gid), tids.index(k)] += 1
+    ri, ci = linear_sum_assignment(-M)
+    idtp = M[ri, ci].sum()
+    idf1 = 2*idtp/(2*idtp + (tp - idtp) + (gt_total - idtp))
+    deta = tp/max(gt_total, 1)
+    ct, cg, pair = {}, {}, {}
+    for fr in pred:
+        for k, gid in fr:
+            ct[k] = ct.get(k, 0) + 1
+            cg[gid] = cg.get(gid, 0) + 1
+            pair[(k, gid)] = pair.get((k, gid), 0) + 1
+    assa = float(np.mean([pair[(k, g)]/(ct[k] + cg[g] - pair[(k, g)])
+                          for fr in pred for k, g in fr]))
+    return dict(MOTA=mota, IDF1=idf1, HOTA=float(np.sqrt(deta*assa)),
+                IDSW=idsw, DetA=deta, AssA=assa)
+
+
+gd = np.random.default_rng(7)
+SC = [scene(gd, 5, 0, True) for _ in range(12)]
+DS = [detect(*s, gd) for s in SC]
+
+ASSOC = []
+print("연관 방식별 (교차 있음, 가림 없음)")
+print()
+print(f"{'방식':<20} {'MOTA':>8} {'IDF1':>8} {'HOTA':>8} {'ID 전환':>8}")
+print("-" * 56)
+for nm, kw in [("탐욕 매칭", dict(mode="greedy")),
+               ("헝가리안", dict(mode="hungarian")),
+               ("헝가리안+외형", dict(mode="hungarian", app_w=0.5)),
+               ("ByteTrack 2단계", dict(mode="byte", app_w=0.3))]:
+    acc = [metrics(track(d, **kw), d) for d in DS]
+    r = {k: float(np.mean([a[k] for a in acc])) for k in acc[0]}
+    ASSOC.append((nm, r))
+    print(f"{nm:<20} {r['MOTA']:>8.4f} {r['IDF1']:>8.4f} {r['HOTA']:>8.4f} "
+          f"{r['IDSW']:>8.1f}")
+print()
+gr, hu = ASSOC[0][1], ASSOC[1][1]
+print("**탐욕 매칭은 교차에서 무너진다.**")
+print(f"  ID 전환 {gr['IDSW']:.1f}회 vs 헝가리안 {hu['IDSW']:.1f}회.")
+print("  가까운 것부터 집으면, 교차 순간 두 트랙이 서로를 집어 간다.")
+print("  전체 비용을 함께 최소화하면 그 교환이 손해라는 것이 보인다.")
+print()
+best = max(ASSOC, key=lambda x: x[1]["IDF1"])
+print("**그런데 지표들이 이 차이를 다르게 본다.**")
+print(f"  MOTA: {gr['MOTA']:.4f} → {best[1]['MOTA']:.4f} "
+      f"(차이 {best[1]['MOTA']-gr['MOTA']:.4f})")
+print(f"  IDF1: {gr['IDF1']:.4f} → {best[1]['IDF1']:.4f} "
+      f"(차이 {best[1]['IDF1']-gr['IDF1']:.4f}) — "
+      f"**{(best[1]['IDF1']-gr['IDF1'])/max(best[1]['MOTA']-gr['MOTA'],1e-9):.0f}배**")
+print("  다음 절에서 이 차이를 자세히 본다.")
+```
+
+---
+
+## G9.7.3 — 가림, 재식별, 그리고 나쁜 임베딩의 대가
+
+가림이 길어지면 등속 예측이 어긋난다.
+특히 **가려진 동안 방향이 바뀌면** 모션만으로는 손쓸 도리가 없다.
+
+DeepSORT 의 답은 외형이다. Re-ID 임베딩을 매칭 비용에 섞는다.
+그런데 그 임베딩이 나쁘면 어떻게 되는지도 같이 봐야 한다.
+
+```{python}
+#| label: occlusion
+#| code-fold: false
+
+import numpy as np
+
+
+def scene_turn(g, n_obj=4, occ_len=0):
+    """가려진 동안 방향이 바뀌는 장면 — 등속 외삽이 깨진다."""
+    P = np.zeros((NT, n_obj, 2))
+    app = g.normal(0, 1, (n_obj, 8))
+    app /= np.linalg.norm(app, axis=1, keepdims=True)
+    s0 = NT//2 - occ_len//2
+    for i in range(n_obj):
+        p, v = g.uniform(40, SZ-40, 2).astype(float), g.normal(0, 2.0, 2)
+        for t in range(NT):
+            if occ_len and t == s0 + occ_len//2:
+                v = -v + g.normal(0, 1.0, 2)          # 가려진 사이에 전환
+            p = np.clip(p + v, 10, SZ-10)
+            P[t, i] = p
+    vis = np.ones((NT, n_obj), bool)
+    if occ_len:
+        vis[s0:s0+occ_len, :max(1, n_obj//2)] = False
+    return P, vis, app
+
+
+print("가림 길이에 따라 (외형 잡음 0.30)")
+print()
+print(f"{'가림':>6} {'모션 IDSW':>11} {'외형 IDSW':>11} {'모션 IDF1':>11} "
+      f"{'외형 IDF1':>11}")
+print("-" * 54)
+OCL = []
+for L in [0, 3, 6, 12, 20]:
+    gg = np.random.default_rng(11)
+    S = [scene_turn(gg, 4, L) for _ in range(14)]
+    D = [detect(*s, gg, app_noise=0.30) for s in S]
+    mg = max(2, L+2)
+    a = [metrics(track(d, max_age=mg, thr=90.0), d) for d in D]
+    b = [metrics(track(d, app_w=0.6, max_age=mg, thr=90.0), d) for d in D]
+    f = lambda x, k: float(np.mean([y[k] for y in x]))
+    OCL.append((L, f(a, "IDSW"), f(b, "IDSW"), f(a, "IDF1"), f(b, "IDF1")))
+    print(f"{L:>6} {OCL[-1][1]:>11.1f} {OCL[-1][2]:>11.1f} "
+          f"{OCL[-1][3]:>11.4f} {OCL[-1][4]:>11.4f}")
+print()
+z, big = OCL[0], OCL[-1]
+print("**모션만 쓰면 가림이 길어질수록 정체성이 무너진다.**")
+print(f"  IDF1 {z[3]:.4f} → {big[3]:.4f}. 가려진 사이 방향이 바뀌었으니 "
+      "예측한 곳에 없다.")
+print(f"**외형을 섞으면 가림 길이와 거의 무관해진다** — {big[4]:.4f}.")
+print("  물체가 어디로 갔든 **생김새가 같으면 같은 것**이라고 볼 수 있다.")
+```
+
+**여기까지는 교과서대로다. 그런데 그 임베딩이 늘 좋은가?**
+
+```{python}
+#| label: reid-quality
+#| code-fold: false
+
+import numpy as np
+
+print("Re-ID 임베딩의 품질을 바꿔 가며 (가림 12프레임 고정)")
+print()
+print(f"{'외형 잡음':>9} {'모션 IDF1':>11} {'외형 IDF1':>11} "
+      f"{'모션 IDSW':>11} {'외형 IDSW':>11}")
+print("-" * 58)
+RID = []
+for an in [0.15, 0.3, 0.5, 0.8, 1.2]:
+    gg = np.random.default_rng(11)
+    S = [scene_turn(gg, 4, 12) for _ in range(14)]
+    D = [detect(*s, gg, app_noise=an) for s in S]
+    a = [metrics(track(d, max_age=14, thr=90.0), d) for d in D]
+    b = [metrics(track(d, app_w=0.6, max_age=14, thr=90.0), d) for d in D]
+    f = lambda x, k: float(np.mean([y[k] for y in x]))
+    RID.append((an, f(a, "IDF1"), f(b, "IDF1"), f(a, "IDSW"), f(b, "IDSW")))
+    print(f"{an:>9.2f} {RID[-1][1]:>11.4f} {RID[-1][2]:>11.4f} "
+          f"{RID[-1][3]:>11.1f} {RID[-1][4]:>11.1f}")
+print()
+good, bad = RID[0], RID[-1]
+cross = next((r for r in RID if r[2] < r[1]), None)
+print(f"**좋은 임베딩(잡음 {good[0]}): IDF1 {good[1]:.4f} → {good[2]:.4f}. "
+      "완벽하다.**")
+print(f"**나쁜 임베딩(잡음 {bad[0]}): IDF1 {bad[1]:.4f} → {bad[2]:.4f} "
+      "— 안 쓰느니만 못하다.**")
+print(f"  ID 전환이 {bad[3]:.1f}회에서 **{bad[4]:.1f}회로 늘었다**.")
+if cross:
+    print(f"  역전은 외형 잡음 {cross[0]} 부근에서 일어난다.")
+print()
+print("**왜 나쁜 임베딩이 적극적으로 해로운가**")
+for s in ["모션 항은 **틀려도 게이트 밖으로 나가면 그만**이다 — 매칭이 안 될 뿐",
+          "외형 항은 **엉뚱한 짝에 낮은 비용을 매긴다** — 적극적으로 잘못 잇는다",
+          "즉 잡음 있는 신호를 섞는 것은 신호를 빼는 것보다 나쁠 수 있다",
+          "**이것이 ByteTrack 이 Re-ID 없이 상위권에 올랐던 배경이다**",
+          "Re-ID 는 도메인이 바뀌면 품질이 급락한다 — "
+          "조명·카메라·계절이 달라지면 임베딩이 무너진다",
+          "그래서 실무 순서는 **모션 먼저, Re-ID 는 검증 후 추가**다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-reid
+#| fig-cap: "G9.7.3 — Re-ID 임베딩 품질과 추적 성능. 임베딩이 좋으면 외형이 압도적이지만, 나빠지면 모션만 쓰는 것보다 못해진다. 두 선이 교차하는 지점이 'Re-ID를 넣을지' 결정하는 경계다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+AN = [r[0] for r in RID]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=AN, y=[r[1] for r in RID], mode="lines+markers",
+                         name="모션만 (외형 무시)",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=9)))
+fig.add_trace(go.Scatter(x=AN, y=[r[2] for r in RID], mode="lines+markers",
+                         name="모션 + 외형",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=9)))
+viz.fig_defaults(
+    fig, "Re-ID 임베딩 잡음과 IDF1", height=450,
+    xaxis_title="외형 임베딩의 잡음 (클수록 나쁜 Re-ID)",
+    yaxis_title="IDF1", xaxis=dict(tickmode="array", tickvals=AN))
+viz.annotate_box(fig, "교차점 오른쪽에서는<br>"
+                      "<b>Re-ID 를 넣는 것이 손해다</b>", x=0.98, y=0.98,
+                 yanchor="top")
+fig
+```
+
+::: {.interaction-hint}
+파란 선이 **평평하다**는 점을 보라 — 모션만 쓰는 추적기는 외형 품질과 무관하다.
+주황 선만 왼쪽에서 오른쪽으로 무너진다.
+
+이것이 추적기 선택의 실제 기준이다.
+"Re-ID 를 쓰면 좋아지나?" 가 아니라 **"내 도메인에서 Re-ID 가 이 교차점의 어느 쪽인가?"** 다.
 :::
 
-검출은 프레임 단위지만 세상은 연속이다. 추적은 그 간극을 메우는 문제이고, 실시간 시스템에서 가장 자주 쓰인다.
+---
+
+## G9.7.4 — MOTA가 못 보는 것
+
+추적 지표는 셋이 표준이고, 셋이 다른 것을 잰다.
+
+| 지표 | 정의 | 무엇에 민감한가 |
+|------|------|---------------|
+| **MOTA** | $1 - \dfrac{FN+FP+IDSW}{GT}$ | **검출 오류**. ID 전환은 한 번에 1만 센다 |
+| **IDF1** | 전역 ID 매칭 기준 F1 | **정체성**. 궤적 전체가 맞아야 한다 |
+| **HOTA** | $\sqrt{DetA \times AssA}$ | 검출과 연관을 **분리해서** 곱한다 |
+
+G9.7.2 의 네 추적기를 이 셋으로 다시 본다.
+
+```{python}
+#| label: metrics-compare
+#| code-fold: false
+
+import numpy as np
+
+print("같은 네 추적기, 세 지표 (+ HOTA 의 분해)")
+print()
+print(f"{'방식':<20} {'MOTA':>8} {'IDF1':>8} {'HOTA':>8} | "
+      f"{'DetA':>7} {'AssA':>7}")
+print("-" * 66)
+for nm, r in ASSOC:
+    print(f"{nm:<20} {r['MOTA']:>8.4f} {r['IDF1']:>8.4f} {r['HOTA']:>8.4f} | "
+          f"{r['DetA']:>7.4f} {r['AssA']:>7.4f}")
+print()
+sp = {k: (max(r[k] for _, r in ASSOC) - min(r[k] for _, r in ASSOC))
+      for k in ["MOTA", "IDF1", "HOTA", "DetA", "AssA"]}
+print("**같은 네 결과를 두고 지표가 벌리는 폭이 이만큼 다르다.**")
+print()
+print(f"{'지표':>8} {'최고-최저 폭':>13}")
+print("-" * 24)
+for k in ["MOTA", "IDF1", "HOTA", "DetA", "AssA"]:
+    print(f"{k:>8} {sp[k]:>13.4f}")
+print()
+print(f"**MOTA 의 폭은 {sp['MOTA']:.4f} 뿐이다** — IDF1({sp['IDF1']:.4f})의 "
+      f"{sp['MOTA']/max(sp['IDF1'],1e-9):.2f}배.")
+print()
+print("**MOTA 가 정체성에 둔감한 이유**")
+for s in ["분자에 $FN + FP + IDSW$ 가 **그냥 더해져** 있다",
+          "검출이 수천 개인 장면에서 ID 전환 몇 번은 분모에 묻힌다",
+          "더 중요한 것: **ID 전환은 바뀌는 순간 한 번만** 센다",
+          "궤적의 절반을 다른 사람으로 붙여 놔도 벌점은 1점이다",
+          "IDF1 은 **틀린 구간의 길이만큼** 벌한다 — 전역 매칭이라 그렇다"]:
+    print(f"  · {s}")
+print()
+print(f"**HOTA 의 분해가 상황을 정확히 말해 준다.**")
+print(f"  DetA 폭 {sp['DetA']:.4f} vs AssA 폭 {sp['AssA']:.4f} — "
+      "차이는 거의 전부 **연관** 쪽이다.")
+print(f"  (넷 다 같은 검출 결과를 쓰므로 DetA 가 거의 고정된 것은 "
+      "설계상 당연하다.")
+print("   ByteTrack 만 조금 낮은 것은 2단계에서 매칭 안 된 낮은 점수 검출을 "
+      "버리기 때문이다.)")
+for s in ["요점은 그 '당연함'이 **숫자로 드러난다**는 것이다",
+          "달라진 것은 매칭 알고리즘뿐이므로 AssA 만 벌어져야 하고, 실제로 그렇다",
+          "**HOTA 는 그것을 두 수로 분리해 보여 준다** — "
+          "'무엇을 고쳐야 하나'에 바로 답한다",
+          "MOTA 하나만 보면 '검출기를 키워야 하나 매칭을 고쳐야 하나'를 알 수 없다"]:
+    print(f"  · {s}")
+print()
+print("**[9.1](01_vision_tasks.qmd)의 mAP 이야기가 여기서 반복된다.**")
+print("  거기서는 mAP 가 중복 박스를 벌하지 않았다.")
+print("  여기서는 MOTA 가 정체성 오류를 거의 벌하지 않는다.")
+print("  **지표가 벌하지 않는 것은 개선되지 않는다.**")
+```
+
+```{python}
+#| label: fig-metrics
+#| fig-cap: "G9.7.4 — 같은 네 추적기에 대한 세 지표. MOTA는 거의 평평하고, IDF1과 HOTA만 차이를 드러낸다. HOTA를 DetA·AssA로 쪼개면 차이가 연관 쪽에서 왔음이 바로 보인다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+nm = [a[0] for a in ASSOC]
+fig = go.Figure()
+for i, k in enumerate(["MOTA", "IDF1", "HOTA", "DetA", "AssA"]):
+    fig.add_trace(go.Scatter(
+        x=nm, y=[r[k] for _, r in ASSOC], mode="lines+markers", name=k,
+        line=dict(color=viz.color(i), width=3 if k in ("MOTA", "IDF1") else 1.8,
+                  dash="dot" if k in ("DetA", "AssA") else "solid"),
+        marker=dict(size=9 if k in ("MOTA", "IDF1") else 6)))
+viz.fig_defaults(
+    fig, "추적기별 지표 (같은 검출기, 매칭만 다름)", height=460,
+    xaxis_title="", yaxis_title="점수", yaxis=dict(range=[0.6, 1.02]))
+viz.annotate_box(fig, "MOTA 선이 거의 평평하다<br>"
+                      "<b>정체성 오류를 못 본다</b>", x=0.98, y=0.02)
+fig
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 종단간 추적과 SAM2
 
-- 단일 객체 추적(SOT)과 다중 객체 추적(MOT)
-- tracking-by-detection 패러다임
-- 모션 모델: 칼만 필터와 상태 추정
-- 데이터 연관: 헝가리안 알고리즘, IoU 매칭
-- SORT, DeepSORT, ByteTrack의 계보
-- 외형 특성과 재식별(Re-ID) 임베딩
-- 가림(occlusion), ID 전환, 궤적 단절
-- 종단간 추적: TransTrack, MOTR 계열
-- 비디오 객체 분할과 SAM2의 메모리 구조
-- 평가 지표: MOTA, IDF1, HOTA
+```{python}
+#| label: e2e
+#| code-fold: false
 
----
-
-## G9.7.1 — 칼만 필터 예측-보정
-
-예측 분포가 관측으로 갱신되며 궤적이 매끄러워지는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 스텝 재생
-:::
-
----
-
-## G9.7.2 — 데이터 연관 행렬
-
-검출-트랙 간 비용 행렬과 최적 매칭 선택
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 임계값 슬라이더
-:::
-
----
-
-## G9.7.3 — 가림과 ID 전환
-
-객체가 가려졌다 나타날 때 ID가 바뀌는 실패 모드
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 가림 길이 슬라이더
-:::
-
----
-
-## G9.7.4 — 추적 지표 비교
-
-같은 결과에 대해 MOTA와 HOTA가 다른 평가를 주는 사례
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시나리오 선택
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| MOT |  |
-| 칼만 필터 |  |
-| 헝가리안 매칭 |  |
-| Re-ID |  |
-| HOTA |  |
-| SAM2 |  |
+print("**tracking-by-detection 을 벗어나려는 시도들**")
+print()
+print(f"{'접근':<18} {'방식':<34} {'남는 문제'}")
+print("-" * 80)
+for a, b, c in [
+    ("SORT", "칼만 + 헝가리안, 그게 전부", "가림에 약하다"),
+    ("DeepSORT", "+ Re-ID 외형 특성", "임베딩 품질에 딸림 (G9.7.3)"),
+    ("ByteTrack", "**낮은 점수 검출도 2단계로 쓴다**", "여전히 검출기에 의존"),
+    ("TransTrack", "쿼리로 트랙을 이어받는다", "학습이 무겁다"),
+    ("MOTR", "트랙 쿼리가 프레임을 관통", "새 객체 등장 처리가 까다롭다"),
+    ("SAM2", "**메모리 뱅크 + 프롬프트 분할**", "메모리 길이가 상한"),
+]:
+    print(f"{a:<18} {b:<34} {c}")
+print()
+print("**ByteTrack 의 아이디어가 특히 값싸고 좋다**")
+for s in ["검출기는 가려진 물체에 **낮은 점수**를 준다 — 보통 버려진다",
+          "그런데 그 낮은 점수 검출이 **가려진 트랙의 유일한 단서**인 경우가 많다",
+          "1단계에서 높은 점수로 매칭하고, 남은 트랙을 2단계에서 낮은 점수와 매칭한다",
+          "모델을 바꾸지 않고 **후처리만으로** 큰 이득을 봤다",
+          "G9.7.2 에서 ByteTrack 이 외형 없이도 상위권인 것이 이 효과다"]:
+    print(f"  · {s}")
+print()
+print("**SAM2 는 문제 정의를 바꿨다**")
+for s in ["추적을 '박스를 잇는 문제'가 아니라 "
+          "**'분할을 시간축으로 전파하는 문제'**로 본다",
+          "첫 프레임에 점이나 박스를 **프롬프트**로 주면 이후 프레임의 마스크를 낸다",
+          "메모리 뱅크에 과거 프레임의 특성을 넣어 두고 어텐션으로 참조한다",
+          "[9.1](01_vision_tasks.qmd)에서 본 SAM 의 프롬프트 방식이 시간축으로 확장된 것",
+          "덕분에 **학습 때 못 본 물체도 추적한다** — 클래스 정의가 필요 없다",
+          "한계: 메모리가 유한하므로 아주 긴 영상에서는 여전히 표류한다"]:
+    print(f"  · {s}")
+print()
+print("**실무 체크리스트**")
+print()
+print(f"{'증상':<28} {'먼저 볼 곳'}")
+print("-" * 66)
+for a, b in [
+    ("트랙이 자주 끊긴다", "max_age(트랙 유지 시간)와 검출 점수 문턱"),
+    ("ID 가 자주 바뀐다", "매칭 게이트, 그리고 Re-ID 품질 (G9.7.3)"),
+    ("개수가 부풀려진다", "새 트랙 생성 조건 — 몇 프레임 연속 확인 후 등록"),
+    ("혼잡 장면에서 무너진다", "**검출기의 NMS 문턱** ([9.1](01_vision_tasks.qmd))"),
+    ("MOTA 는 좋은데 쓸모없다", "IDF1·HOTA 로 다시 재라 (G9.7.4)"),
+]:
+    print(f"{a:<28} {b}")
+```
 
 ---
 
-**다음**: [9.8 비디오 생성](08_video_generation.qmd) — video diffusion·DiT·시간 일관성 — 움직이는 것을 만들기
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| tracking-by-detection | 예측 → 매칭 → 갱신/생성/삭제 | 9.1의 헝가리안이 시간축으로 |
+| **칼만 필터** | 관측 σ=10에서 오차 **46% 감소** | 잡음이 클수록 이득이 크다 |
+| 가림 중 예측 | 오차 3.5px → **27.0px** (24프레임) | 등속 가정의 수명 |
+| **스스로 낸 불확실성** | 3.1 → **56.2** (실제 오차보다 크게) | 이 여유가 매칭 게이트다 |
+| 복귀 | 관측 하나로 27.0 → 3.4 | 다시 보이면 즉시 회복 |
+| **탐욕 vs 헝가리안** | ID 전환 13.5회 → 4.5회 | 교차에서 서로를 집어 간다 |
+| 가림 + 방향 전환 | 모션만 IDF1 0.975 → 0.888 | 예측한 곳에 없다 |
+| **Re-ID의 양날** | 좋은 임베딩 0.936 → **1.000** | 나쁜 임베딩 0.936 → **0.778** |
+| 왜 해로운가 | ID 전환 2.3 → **26.6회** | 엉뚱한 짝에 낮은 비용을 매긴다 |
+| 그래서 | ByteTrack은 Re-ID 없이 상위권 | 모션 먼저, Re-ID는 검증 후 |
+| **MOTA의 맹점** | 네 추적기 폭 **0.042** | IDF1 폭 0.283의 0.15배 |
+| 이유 | ID 전환을 **바뀌는 순간 1번만** 센다 | 궤적 절반이 틀려도 1점 |
+| **HOTA의 분해** | DetA 폭 ~0 vs AssA 폭이 대부분 | 무엇을 고칠지 바로 답한다 |
+| 반복되는 병 | 9.1의 mAP·중복, 9.6의 정적 편향 | **벌하지 않는 것은 개선되지 않는다** |
+
+여기까지가 **보는** 이야기다.
+다음은 **만드는** 이야기 — 움직이는 것을 생성하는 문제다.
+
+---
+
+**다음**: [9.8 비디오 생성](08_video_generation.qmd) — 움직이는 것을 만들기
 
 **이전**: [9.6 비디오 이해 모델](06_video_models.qmd)
