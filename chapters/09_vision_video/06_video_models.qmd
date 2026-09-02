@@ -4,91 +4,601 @@ subtitle: "3D CNN·SlowFast·TimeSformer·VideoMAE — 시간을 모델링하기
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[9.5](05_video_representation.qmd)에서 프레임을 골랐다.
+이제 고른 프레임들을 **섞어야** 한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+가장 단순한 방법은 프레임마다 2D CNN 을 돌리고 결과를 평균하는 것이다.
+그러면 시간 순서가 사라진다 — [9.4](04_clip_multimodal.qmd)의 패치 가방 문제가 시간축에서 반복된다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그래서 시간을 모델에 넣어야 하는데, 여기서 비용이 발목을 잡는다.
+$T$ 프레임 × $HW$ 패치를 전부 어텐션에 넣으면 $(THW)^2$ 다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-'어텐션을 시공간에 어떻게 펼칠 것인가'는 비용 때문에 자명하지 않다. 그 분해 방식들이 이 장의 내용이다.
+이 장은 그 비용을 줄이는 **분해 방식들**과, 그 분해가 무엇을 포기하는지를 잰다.
+그리고 마지막에 더 불편한 질문을 던진다 — **그 시간 모델링이 실제로 측정되고 있는가.**
 
 ---
 
-## 이 장에서 다루는 것
+## 준비: 9.5의 클립을 그대로 쓴다
 
-- 2D CNN + 시간 풀링의 한계
-- 3D CNN: C3D, I3D(2D 가중치 팽창)
-- (2+1)D 분해와 파라미터 효율
-- SlowFast: 두 프레임률 경로의 분업
-- TimeSformer: 시공간 어텐션의 분해(divided attention)
-- ViViT의 여러 분해 변형과 비용 비교
-- VideoMAE: 높은 마스킹 비율의 자기지도 사전학습
-- 비디오-텍스트 대조 학습과 검색
-- 시간적 액션 탐지·localization
-- 긴 비디오 이해: 메모리, 요약, 계층적 처리
-- 평가: 액션 인식 벤치마크의 정적 편향 문제(단일 프레임 기준선)
+정적 단서(모양)와 시간 단서(운동 방향)를 분리해 둔 그 클립이다.
+모델 설계가 두 단서를 어떻게 다르게 다루는지 보는 것이 이 장의 도구다.
 
----
+```{python}
+#| label: data
+#| code-fold: false
 
-## G9.6.1 — 시공간 어텐션 분해
+import sys; sys.path.append("../..")
+import numpy as np
 
-공동/분할/희소 시공간 어텐션의 연결 패턴과 비용
+R, T = 32, 32
+YY, XX = np.mgrid[0:R, 0:R]
+DIRS = np.array([[1, 0], [0, 1], [-1, 0], [0, -1]], float)
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 분해 방식 전환
-:::
 
----
+def clip(shape, d, g, speed=0.9, noise=0.03):
+    cx, cy = g.uniform(8, 24, 2)
+    v = DIRS[d]*speed
+    ph = g.uniform(0, 2*np.pi)
+    F = np.zeros((T, R, R))
+    for t in range(T):
+        x, y = (cx + v[0]*t) % R, (cy + v[1]*t) % R
+        dx = np.minimum(np.abs(XX - x), R - np.abs(XX - x))
+        dy = np.minimum(np.abs(YY - y), R - np.abs(YY - y))
+        r = np.sqrt(dx*dx + dy*dy)
+        im = np.exp(-r*r/12.0) if shape == 0 else np.exp(-(r - 3.0)**2/2.0)
+        F[t] = im + 0.25*np.cos(0.7*XX + ph) + g.normal(0, noise, (R, R))
+    return F
 
-## G9.6.2 — SlowFast 두 경로
 
-느린 경로와 빠른 경로가 각각 담당하는 정보
+def dataset(n, g):
+    V, ys, yd = [], [], []
+    for _ in range(n):
+        s, d = int(g.integers(0, 2)), int(g.integers(0, 4))
+        V.append(clip(s, d, g)); ys.append(s); yd.append(d)
+    return np.array(V), np.array(ys), np.array(yd)
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 프레임률 슬라이더
-:::
 
----
+def probe(Xa, ya, Xb, yb, cls, steps=600, lr=0.5, lam=1e-3):
+    Xa, Xb = Xa.reshape(len(Xa), -1), Xb.reshape(len(Xb), -1)
+    mu, sd = Xa.mean(0), Xa.std(0) + 1e-6
+    Xa, Xb = (Xa - mu)/sd, (Xb - mu)/sd
+    W = np.zeros((Xa.shape[1], cls)); b = np.zeros(cls); Y = np.eye(cls)[ya]
+    for _ in range(steps):
+        L = Xa @ W + b; L -= L.max(1, keepdims=True)
+        P = np.exp(L); P /= P.sum(1, keepdims=True)
+        d = (P - Y)/len(ya)
+        W -= lr*(Xa.T @ d + lam*W); b -= lr*d.sum(0)
+    return float(((Xb @ W + b).argmax(1) == yb).mean())
 
-## G9.6.3 — VideoMAE 마스킹
 
-튜브 마스킹으로 90%를 가려도 복원되는 시공간 중복성
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 마스킹 비율 슬라이더
-:::
-
----
-
-## G9.6.4 — 단일 프레임 기준선
-
-프레임 하나만 봐도 풀리는 벤치마크와 그렇지 않은 벤치마크
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 데이터셋 선택
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| I3D |  |
-| (2+1)D 합성곱 |  |
-| SlowFast |  |
-| TimeSformer |  |
-| VideoMAE |  |
-| 분할 어텐션 |  |
+Vtr, str_, dtr = dataset(500, np.random.default_rng(1))
+Vte, ste, dte = dataset(300, np.random.default_rng(2))
+print(f"학습 {len(Vtr)}클립 / 평가 {len(Vte)}클립")
+print(f"  모양 2종 (정적 단서) / 방향 4종 (시간 단서)")
+```
 
 ---
 
-**다음**: [9.7 추적과 시간적 연관](07_tracking.qmd) — MOT·재식별·SAM2 — 프레임을 가로질러 같은 것을 같다고 하기
+## G9.6.1 — 시공간 어텐션을 어떻게 자를 것인가
+
+$T$ 프레임의 각 프레임이 $HW$ 패치라면 토큰은 $N = T\cdot HW$ 개다.
+전체 어텐션은 $N^2$ — 여기서 프레임 수가 제곱으로 들어온다.
+
+TimeSformer 와 ViViT 가 시험한 분해들을 비용으로 세워 본다.
+
+```{python}
+#| label: attn-cost
+#| code-fold: false
+
+import numpy as np
+
+HW = 196                                   # 224px / 패치16
+print(f"프레임마다 {HW} 패치 (224px/P16) 일 때, 어텐션 원소 수")
+print()
+print(f"{'분해 방식':<24} {'식':<22} {'T=8':>12} {'T=32':>13} {'T=32 비율':>11}")
+print("-" * 86)
+COST = []
+for nm, formula, fn in [
+    ("joint (시공간 전체)", "(T·HW)²", lambda t: (t*HW)**2),
+    ("divided (공간→시간)", "T·HW² + HW·T²", lambda t: t*HW*HW + HW*t*t),
+    ("공간만 (시간 무시)", "T·HW²", lambda t: t*HW*HW),
+    ("윈도우 4×4×3", "N·48", lambda t: t*HW*48),
+]:
+    a, b = fn(8), fn(32)
+    COST.append((nm, b))
+    ref = (32*HW)**2
+    print(f"{nm:<24} {formula:<22} {a:>12,} {b:>13,} {b/ref:>11.4f}")
+print()
+print("**분해가 사는 것과 파는 것**")
+print()
+print(f"{'방식':<22} {'같은 층에서 무엇을 볼 수 있나':<32} {'대가'}")
+print("-" * 82)
+for a, b, c in [
+    ("joint", "모든 프레임의 모든 패치", "T=32 에서 3,900만 원소"),
+    ("divided", "같은 시각의 모든 패치 → 같은 위치의 모든 시각",
+     "**움직이는 물체를 한 번에 못 본다**"),
+    ("공간만 + 시간 풀링", "한 프레임 안", "시간 순서가 사라진다"),
+    ("윈도우", "가까운 시공간 이웃", "층을 쌓아야 전역 (9.2의 Swin)"),
+]:
+    print(f"{a:<22} {b:<32} {c}")
+print()
+print("**divided attention 의 미묘한 약점**")
+for s in ["공간 어텐션은 **한 시각 안에서만** 패치를 본다",
+          "시간 어텐션은 **한 위치에서만** 시각을 본다",
+          "그런데 움직이는 물체는 **시각이 바뀌면 위치도 바뀐다**",
+          "즉 (t=0, 왼쪽)과 (t=5, 오른쪽)을 **한 층에서는 직접 못 잇는다**",
+          "두 층을 거쳐야 이어진다 — 그래서 TimeSformer 는 층을 충분히 쌓는다",
+          "이것이 [9.5](05_video_representation.qmd)의 광류를 "
+          "명시적으로 넣던 이유이기도 하다 — 움직임을 따라가는 연결"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G9.6.2 — (2+1)D 분해: 파라미터가 아니라 랭크의 문제
+
+3D 합성곱 $k\times k\times k$ 를 **공간 $1\times k\times k$ 뒤에 시간 $k\times 1\times 1$** 로 쪼개는 것이 (2+1)D 다.
+
+흔히 "파라미터가 준다"고 설명하는데, 정확하지 않다.
+원 논문은 중간 채널 수 $M$ 을 **파라미터가 같아지도록** 골랐다.
+얻은 것은 파라미터가 아니라 **비선형 하나**와 **최적화 난이도**다.
+
+그렇다면 표현력에서는 무엇을 잃는가. 그것을 재 보자.
+
+```{python}
+#| label: r21d
+#| code-fold: false
+
+import numpy as np
+
+k = 3
+print("(2+1)D 는 파라미터를 맞추도록 설계된 분해다")
+print()
+print(f"{'채널 C':>8} {'3D 파라미터':>14} {'중간채널 M':>11} {'(2+1)D':>14} {'비율':>8}")
+print("-" * 60)
+for C in [64, 256, 512]:
+    p3 = k*k*k*C*C
+    M = int(round(k*k*k*C*C/(k*k*C + k*C)))
+    p21 = k*k*C*M + k*M*C
+    print(f"{C:>8} {p3:>14,} {M:>11} {p21:>14,} {p21/p3:>8.3f}")
+print("  → **파라미터는 같다.** 다른 것은 ReLU 하나가 중간에 들어간다는 점이다.")
+print()
+
+g = np.random.default_rng(0)
+
+
+def rank1_residual(K):
+    """시간축 x 공간축으로 편 행렬의 랭크1 근사 잔차.
+    (2+1)D 갈래 하나 = 공간필터 x 시간필터 = 정확히 랭크1 이다."""
+    M = K.reshape(K.shape[0], -1)
+    s = np.linalg.svd(M, compute_uv=False)
+    return float(1 - s[0]**2/(s**2).sum())
+
+
+# ① 분리형: 공간 패턴 x 시간 가중치
+sep = np.zeros((3, 3, 3))
+spatial = np.array([[0, 1, 0], [0, 0, 0], [0, -1, 0]], float)
+for t in range(3):
+    sep[t] = (t - 1)*spatial
+# ② 운동 검출: 시간이 흐르면 공간 위치가 옮겨간다
+mot = np.zeros((3, 3, 3))
+for t in range(3):
+    mot[t, 1, t] = 1.0
+rnd = [rank1_residual(g.normal(0, 1, (3, 3, 3))) for _ in range(300)]
+
+print("커널 종류별 — 랭크1(=(2+1)D 갈래 하나)로 표현되는가")
+print()
+print(f"{'커널':<28} {'랭크1 잔차':>11} {'필요한 랭크':>12}")
+print("-" * 54)
+for nm, Kk in [("분리형 (공간 x 시간 가중치)", sep),
+               ("운동 검출 (위치가 옮겨감)", mot)]:
+    r = np.linalg.matrix_rank(Kk.reshape(3, -1))
+    print(f"{nm:<28} {rank1_residual(Kk):>11.4f} {r:>12}")
+print(f"{'무작위 3x3x3 (300개 평균)':<28} {np.mean(rnd):>11.4f} {'~3':>12}")
+print()
+print("**운동 검출 커널이 무작위 커널보다도 덜 분리된다.**")
+print(f"  잔차 {rank1_residual(mot):.4f} vs 무작위 {np.mean(rnd):.4f}.")
+print("  '시간이 지나면 위치가 옮겨간다'는 것은 본질적으로 "
+      "**공간과 시간이 얽힌** 패턴이다.")
+print()
+print("**그래서 M 이 필요하다.**")
+for s in ["(2+1)D 갈래 하나는 랭크1 이므로, 운동 검출 커널을 못 만든다",
+          f"운동 검출 커널의 랭크는 {np.linalg.matrix_rank(mot.reshape(3,-1))} — "
+          "**중간 채널 3개를 합쳐야** 만들어진다",
+          "M 을 파라미터가 맞도록 크게 잡는 것이 표현력 측면에서도 필수인 셈",
+          "즉 (2+1)D 는 '싼 근사'가 아니라 **같은 예산으로 비선형을 하나 더 사는** 거래다",
+          "I3D 의 '2D 가중치 팽창'도 같은 문제를 다른 쪽에서 푼다 — "
+          "이미지 사전학습 가중치를 시간축으로 복사해 초기값으로 삼는다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G9.6.3 — SlowFast: 같은 예산을 어디에 쓸 것인가
+
+프레임을 많이 볼수록 움직임이 잘 보이고, 해상도가 높을수록 물체가 잘 보인다.
+예산이 정해져 있다면 **어디에 쓸 것인가.**
+
+SlowFast 의 답은 "둘 다, 나눠서" 다.
+느린 경로는 프레임을 적게 보되 채널(용량)을 크게, 빠른 경로는 그 반대로.
+
+특징 차원을 **512로 고정**하고 시간·공간 배분만 바꿔 확인한다.
+
+```{python}
+#| label: slowfast
+#| code-fold: false
+
+import numpy as np
+
+
+def path(V, tstride, sp):
+    """tstride 간격으로 프레임을 뽑고 공간을 sp x sp 로 축소."""
+    f = V[:, ::tstride]
+    b = R//sp
+    return f.reshape(len(V), f.shape[1], sp, b, sp, b).mean((3, 5))
+
+
+print("특징 차원을 512 로 고정하고, 시간과 공간의 배분만 바꾼다")
+print()
+print(f"{'배분':<24} {'프레임':>7} {'해상도':>9} {'차원':>7} "
+      f"{'모양(정적)':>11} {'방향(시간)':>11}")
+print("-" * 74)
+SF = []
+for nm, ts, sp in [("공간 우선 (Slow)", 16, 16),
+                   ("중간", 4, 8),
+                   ("시간 우선 (Fast)", 1, 4)]:
+    a, b = path(Vtr, ts, sp), path(Vte, ts, sp)
+    r = (nm, a.shape[1], sp, a[0].size,
+         probe(a, str_, b, ste, 2), probe(a, dtr, b, dte, 4))
+    SF.append(r)
+    print(f"{nm:<24} {r[1]:>7} {sp:>7}x{sp:<2} {r[3]:>7} "
+          f"{r[4]:>11.4f} {r[5]:>11.4f}")
+
+# 두 경로를 절반씩 — 총 차원은 그대로 512
+s2 = path(Vtr, 32, 16), path(Vte, 32, 16)      # 1프레임 x 16x16 = 256
+f2 = path(Vtr, 2, 4), path(Vte, 2, 4)          # 16프레임 x 4x4  = 256
+ca = np.hstack([s2[0].reshape(len(Vtr), -1), f2[0].reshape(len(Vtr), -1)])
+cb = np.hstack([s2[1].reshape(len(Vte), -1), f2[1].reshape(len(Vte), -1)])
+both = (probe(ca, str_, cb, ste, 2), probe(ca, dtr, cb, dte, 4))
+SF.append(("두 경로 (SlowFast)", None, None, ca.shape[1], *both))
+print(f"{'두 경로 (SlowFast)':<24} {'1+16':>7} {'16+4':>9} {ca.shape[1]:>7} "
+      f"{both[0]:>11.4f} {both[1]:>11.4f}")
+print()
+slow, mid, fast = SF[0], SF[1], SF[2]
+print("**한쪽으로 몰면 반대쪽을 잃는다.**")
+print(f"  공간 우선(2프레임 16x16): 모양 {slow[4]:.4f} 로 좋지만 "
+      f"방향은 {slow[5]:.4f}")
+print(f"  시간 우선(32프레임 4x4) : 방향 {fast[5]:.4f} 로 완벽하지만 "
+      f"모양은 {fast[4]:.4f} 로 무너진다")
+print()
+print(f"**나눠 쓰면 둘 다 얻는다** — 모양 {both[0]:.4f}, 방향 {both[1]:.4f}.")
+print(f"  같은 512차원인데 두 축 모두 단일 경로 최고치를 넘거나 같다.")
+for s in ["움직임을 보는 데는 **해상도가 별로 필요 없다** — 4x4 로도 방향은 완벽",
+          "모양을 보는 데는 **프레임이 별로 필요 없다** — 1장이면 충분",
+          "두 요구가 **직교**하므로, 하나의 경로로 절충하는 것은 손해다",
+          "SlowFast 가 빠른 경로의 **채널을 대폭 줄인** 것도 같은 이유다 — "
+          "움직임 정보는 용량을 덜 먹는다",
+          "실제 SlowFast 는 두 경로를 옆으로 연결(lateral connection)해 "
+          "느린 경로가 빠른 경로의 정보를 받는다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-slowfast
+#| fig-cap: "G9.6.3 — 같은 512차원 예산의 배분. 시간과 공간 어느 한쪽에 몰면 반대 축이 무너진다. 나눠 쓴 두 경로가 두 축 모두에서 앞선다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+for i, r in enumerate(SF):
+    fig.add_trace(go.Scatter(
+        x=[r[4]], y=[r[5]], mode="markers+text", text=[r[0]],
+        textposition="bottom center", textfont=dict(size=11),
+        marker=dict(size=20 if "두 경로" in r[0] else 15,
+                    color=viz.GREEN if "두 경로" in r[0] else viz.color(i),
+                    symbol="star" if "두 경로" in r[0] else "circle",
+                    line=dict(width=1.5, color="rgba(255,255,255,0.5)")),
+        showlegend=False))
+viz.fig_defaults(
+    fig, "예산 배분과 두 단서 (모두 512차원)", height=470,
+    xaxis_title="모양 정확도 (정적 단서)",
+    yaxis_title="방향 정확도 (시간 단서)",
+    xaxis=dict(range=[0.72, 1.02]), yaxis=dict(range=[0.85, 1.02]))
+viz.annotate_box(fig, "오른쪽 위가 좋다<br><b>★ 두 경로가 모서리에 있다</b>",
+                 x=0.02, y=0.02, xanchor="left")
+fig
+```
+
+---
+
+## G9.6.4 — VideoMAE: 튜브 마스킹은 무엇을 막는가
+
+[9.3](03_ssl_vision.qmd)에서 MAE 의 논리를 봤다 — 적게 가리면 국소 보간으로 풀린다.
+비디오에는 **지름길이 하나 더** 있다. 같은 위치의 **다른 시각**을 베끼면 된다.
+
+VideoMAE 의 튜브 마스킹은 그것을 막는다.
+어떤 공간 패치를 가리면 **모든 프레임에서** 가린다.
+
+```{python}
+#| label: videomae
+#| code-fold: false
+
+import numpy as np
+
+PS, TS = 4, 6
+GP = R//PS
+NP, PD = GP*GP, PS*PS
+NOISE = 0.03**2
+
+
+def to_patch(V):
+    return V.reshape(len(V), T, GP, PS, GP, PS).transpose(
+        0, 1, 2, 4, 3, 5).reshape(len(V), T, NP, PD)[:, ::T//TS][:, :TS]
+
+
+Ps, Pv = to_patch(Vtr[:400]), to_patch(Vte[:250])
+
+
+def r2(pred, tgt):
+    return float(1 - (((pred - tgt)**2).mean() - NOISE)/(tgt.var() - NOISE))
+
+
+def full_fit(mask, A_, B_):
+    """보이는 모든 토큰에서 선형 복원."""
+    vt, vp = np.where(~mask); mt, mp = np.where(mask)
+    A = np.hstack([A_[:, vt, vp].reshape(len(A_), -1), np.ones((len(A_), 1))])
+    W = np.linalg.solve(A.T @ A + 1e-1*np.eye(A.shape[1]),
+                        A.T @ A_[:, mt, mp].reshape(len(A_), -1))
+    Av = np.hstack([B_[:, vt, vp].reshape(len(B_), -1), np.ones((len(B_), 1))])
+    return r2(Av @ W, B_[:, mt, mp].reshape(len(B_), -1))
+
+
+def temporal_only(mask, A_, B_):
+    """가려진 (t,p) 를 **같은 p 의 보이는 시각들만으로** 복원 — 시간 지름길."""
+    def feats(P):
+        mt, mp = np.where(mask)
+        n = len(P)
+        F = np.zeros((n*len(mt), TS*PD + 2*TS + 1))
+        Tg = np.zeros((n*len(mt), PD))
+        for i, (t, p) in enumerate(zip(mt, mp)):
+            row = slice(i*n, (i+1)*n)
+            for s in range(TS):
+                if not mask[s, p]:
+                    F[row, s*PD:(s+1)*PD] = P[:, s, p]
+                    F[row, TS*PD + s] = 1.0
+            F[row, TS*PD + TS + t] = 1.0
+            F[row, -1] = 1.0
+            Tg[row] = P[:, t, p]
+        return F, Tg
+    Fa, Ta = feats(A_); Fb, Tb = feats(B_)
+    W = np.linalg.solve(Fa.T @ Fa + 1e-1*np.eye(Fa.shape[1]), Fa.T @ Ta)
+    return r2(Fb @ W, Tb)
+
+
+gm = np.random.default_rng(3)
+print(f"{TS}프레임 x {NP}패치 = {TS*NP} 토큰")
+print()
+print(f"{'마스킹':>7} {'무작위:전체':>12} {'무작위:시간만':>14} "
+      f"{'튜브:전체':>11} {'같은패치 이웃시각':>17}")
+print("-" * 68)
+VM = []
+for ratio in [0.5, 0.75, 0.9, 0.95]:
+    fu, te, tu, nb = [], [], [], []
+    for _ in range(3):
+        m1 = np.zeros(TS*NP, bool)
+        m1[gm.permutation(TS*NP)[:int(TS*NP*ratio)]] = True
+        m1 = m1.reshape(TS, NP)
+        fu.append(full_fit(m1, Ps, Pv)); te.append(temporal_only(m1, Ps, Pv))
+        nb.append(np.mean([(~m1[:, p]).sum() for p in np.where(m1)[1]]))
+        m2 = np.zeros((TS, NP), bool)
+        m2[:, gm.permutation(NP)[:int(round(NP*ratio))]] = True
+        tu.append(full_fit(m2, Ps, Pv))
+    VM.append((ratio, float(np.mean(fu)), float(np.mean(te)),
+               float(np.mean(tu)), float(np.mean(nb))))
+    print(f"{ratio:>7.0%} {VM[-1][1]:>12.4f} {VM[-1][2]:>14.4f} "
+          f"{VM[-1][3]:>11.4f} {VM[-1][4]:>17.2f}")
+print("  (튜브 마스킹에서는 '같은 패치 이웃 시각'이 정의상 항상 0 이다)")
+print()
+half = VM[0]; nine = VM[2]
+print("**① 시간 지름길은 확실히 존재한다.**")
+print(f"  50% 무작위 마스킹에서 가려진 토큰마다 "
+      f"같은 위치의 다른 시각이 평균 {half[4]:.2f}개 보인다.")
+print("  튜브 마스킹은 그 값을 0 으로 만든다 — 설계 의도 그대로다.")
+print()
+print("**② 그런데 이 클립에서는 그 지름길이 결정적이지 않았다.**")
+print(f"  50%: 무작위 {half[1]:.4f} vs 튜브 {half[3]:.4f} "
+      f"— 차이 {half[1]-half[3]:+.4f}. 사실상 같다.")
+print(f"  시간 지름길만 쓰면 {half[2]:.4f} 밖에 안 된다 — "
+      f"전체({half[1]:.4f})의 절반 수준이다.")
+print("  **즉 복원의 대부분을 공간 문맥이 하고 있었다.**")
+print()
+print("**③ 차이는 90% 에서야 나타난다.**")
+print(f"  90%: 무작위 {nine[1]:.4f} vs 튜브 {nine[3]:.4f} "
+      f"— 차이 {nine[1]-nine[3]:+.4f}")
+print("  이 지점에서 공간 문맥도 희박해지므로, 시간 지름길의 유무가 드러난다.")
+print()
+print("**이 결과를 어떻게 읽어야 하나**")
+for s in ["튜브 마스킹의 **메커니즘**은 재현됐다 — 이웃 시각 수를 0 으로 만든다",
+          "**효과 크기**는 재현되지 않았다 — 이 클립은 공간 중복성이 너무 크다",
+          "32x32 이미지의 4x4 패치는 매끄러운 blob 의 일부라 옆에서 거의 복원된다",
+          "224px 의 16x16 패치는 그렇지 않다 — 패치마다 고유한 내용이 있다",
+          "**VideoMAE 가 90~95% 를 쓰는 것이 우연이 아니다** — "
+          "이미지 MAE 의 75% 보다 훨씬 높다",
+          "비디오는 시간 중복까지 더해지므로 **더 많이 가려야 과제가 사소해지지 않는다**"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G9.6.5 — 단일 프레임 기준선: 그 시간 모델링은 측정되고 있는가
+
+여기까지 시간 모델링을 정교하게 만들었다.
+그런데 **벤치마크가 그것을 잴 수 없다면** 전부 헛수고다.
+
+[9.5](05_video_representation.qmd)의 두 과제를 이번엔 **벤치마크 진단 도구**로 쓴다.
+프레임 하나만 주는 모델의 점수를 재고, 그것이 전체 대비 얼마나 되는지 본다.
+
+```{python}
+#| label: single-frame
+#| code-fold: false
+
+import numpy as np
+
+
+def ds8(v, idx):
+    b = R//8
+    f = v[:, idx]
+    return f.reshape(len(v), len(idx), 8, b, 8, b).mean((3, 5))
+
+
+ALL = list(np.linspace(0, T-1, 8).astype(int))
+ONE = [T//2]
+print("두 '벤치마크'를 단일 프레임 기준선으로 진단한다")
+print()
+print(f"{'벤치마크':<22} {'무작위':>8} {'1프레임':>9} {'8프레임':>9} "
+      f"{'정적 편향 지수':>14}")
+print("-" * 68)
+DIAG = []
+for nm, y_tr, y_te, cls in [("모양 (정적 편향형)", str_, ste, 2),
+                            ("방향 (시간 필수형)", dtr, dte, 4)]:
+    ch = 1.0/cls
+    a1 = probe(ds8(Vtr, ONE), y_tr, ds8(Vte, ONE), y_te, cls)
+    a8 = probe(ds8(Vtr, ALL), y_tr, ds8(Vte, ALL), y_te, cls)
+    idx = (a1 - ch)/max(a8 - ch, 1e-9)
+    DIAG.append((nm, ch, a1, a8, idx))
+    print(f"{nm:<22} {ch:>8.3f} {a1:>9.4f} {a8:>9.4f} {idx:>14.3f}")
+print()
+print("**정적 편향 지수 = (1프레임 점수 − 무작위) / (전체 점수 − 무작위)**")
+print("  1에 가까우면 프레임 하나로 다 풀린다는 뜻 — 시간 모델링이 잴 수 없다.")
+print()
+a, b = DIAG[0], DIAG[1]
+print(f"  {a[0]}: 지수 {a[4]:.3f} — **프레임 하나가 전부, 그 이상**")
+if a[4] > 1:
+    print(f"    1을 넘는다 — 1프레임({a[2]:.4f})이 8프레임({a[3]:.4f})보다 높다.")
+    print("    프레임을 더 주면 차원만 늘어 과적합한다 "
+          "([9.5](05_video_representation.qmd)에서 본 그대로).")
+print(f"  {b[0]}: 지수 {b[4]:.3f} — 시간 정보가 실제로 필요하다")
+print()
+print("**이것이 액션 인식 벤치마크의 오래된 문제다.**")
+for s in ["Kinetics 의 상당수 클래스는 **배경과 물체**로 풀린다 — "
+          "'수영'은 물이 보이면 되고 '기타 치기'는 기타가 보이면 된다",
+          "그런 데이터에서는 정교한 시간 모델링의 이득이 **소수점 아래**로 묻힌다",
+          "논문의 향상이 시간 모델링 덕인지 **더 큰 백본** 덕인지 구분되지 않는다",
+          "Something-Something 은 이 문제를 데이터 설계로 풀었다 — "
+          "레이블이 '무언가를 왼쪽으로 밀기' 처럼 **동작 자체**다",
+          "**새 비디오 모델을 볼 때 단일 프레임 기준선부터 확인하는 것**이 "
+          "가장 값싼 검증이다"]:
+    print(f"  · {s}")
+print()
+print("**그리고 이것은 [9.1](01_vision_tasks.qmd)·[9.3](03_ssl_vision.qmd)에서 "
+      "본 것과 같은 병이다.**")
+print("  지표가 무엇을 벌하지 않으면(9.1의 mAP와 중복), "
+      "그 방향의 개선은 측정되지 않는다.")
+print("  프로토콜이 차이를 압축하면(9.3의 kNN), 결론이 달라진다.")
+print("  **모델을 고치기 전에 측정 도구를 확인해야 한다.**")
+```
+
+```{python}
+#| label: fig-diag
+#| fig-cap: "G9.6.5 — 단일 프레임 기준선으로 본 두 벤치마크. 왼쪽은 프레임 하나로 거의 다 풀리고, 오른쪽은 시간 정보가 실제로 필요하다. 벤치마크의 성격이 모델 비교의 결론을 정한다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+nm = [d[0] for d in DIAG]
+fig = go.Figure()
+fig.add_trace(go.Bar(x=nm, y=[d[1] for d in DIAG], name="무작위 추측",
+                     marker_color="rgba(255,255,255,0.22)"))
+fig.add_trace(go.Bar(x=nm, y=[d[2] - d[1] for d in DIAG],
+                     name="1프레임이 얻는 부분", marker_color=viz.ACCENT))
+fig.add_trace(go.Bar(x=nm, y=[d[3] - d[2] for d in DIAG],
+                     name="시간 정보가 더하는 부분", marker_color=viz.WARM))
+viz.fig_defaults(
+    fig, "정확도의 출처 분해", height=440,
+    xaxis_title="", yaxis_title="정확도 (누적)", barmode="stack",
+    yaxis=dict(range=[0, 1.05]))
+viz.annotate_box(fig, "주황 막대가 얇으면<br>"
+                      "<b>시간 모델링을 잴 수 없는 벤치마크다</b>",
+                 x=0.98, y=0.02)
+fig
+```
+
+---
+
+## 계보 정리
+
+```{python}
+#| label: family
+#| code-fold: false
+
+print("**비디오 모델의 갈래**")
+print()
+print(f"{'모델':<16} {'시간을 어떻게':<30} {'핵심 아이디어'}")
+print("-" * 82)
+for a, b, c in [
+    ("2D + 풀링", "프레임별 처리 후 평균", "순서가 사라진다 — 기준선"),
+    ("C3D", "3D 합성곱 직접", "파라미터·연산이 무겁다"),
+    ("I3D", "2D 가중치를 시간축으로 팽창", "**이미지 사전학습을 물려받는다**"),
+    ("(2+1)D", "공간 뒤 시간, 파라미터 동일", "비선형 하나를 더 산다 (G9.6.2)"),
+    ("SlowFast", "두 프레임률 경로 분업", "예산 배분 문제로 봤다 (G9.6.3)"),
+    ("TimeSformer", "divided space-time attention", "층을 쌓아 시공간을 잇는다"),
+    ("ViViT", "여러 분해 변형 비교", "인수분해 어텐션·헤드"),
+    ("VideoMAE", "튜브 마스킹 90%+ 자기지도", "레이블 부족을 우회 (G9.6.4)"),
+    ("비디오-텍스트 대조", "CLIP 을 시간축으로", "검색·제로샷 ([9.4](04_clip_multimodal.qmd))"),
+]:
+    print(f"{a:<16} {b:<30} {c}")
+print()
+print("**시간적 액션 탐지 — 분류가 아니라 '언제'를 맞히는 문제**")
+for s in ["긴 영상에서 액션의 **시작과 끝**을 찾는다",
+          "[9.1](01_vision_tasks.qmd)의 검출과 같은 구조 — "
+          "개수가 정해지지 않은 구간 집합",
+          "그래서 지표도 비슷하다: 시간 IoU 기반 mAP",
+          "경계가 본질적으로 모호하다는 점이 다르다 — "
+          "'앉기'가 언제 시작되는지 사람도 다르게 답한다"]:
+    print(f"  · {s}")
+print()
+print("**긴 비디오 이해의 세 갈래**")
+print()
+print(f"{'접근':<18} {'방식':<34} {'한계'}")
+print("-" * 78)
+for a, b, c in [
+    ("계층적 처리", "짧은 클립 요약 후 그 위에서 다시", "요약 단계에서 세부 손실"),
+    ("메모리", "과거 상태를 압축해 보관", "무엇을 남길지가 어렵다"),
+    ("적응적 샘플링", "모델이 볼 프레임을 고른다", "고르는 모델도 봐야 안다"),
+]:
+    print(f"{a:<18} {b:<34} {c}")
+print()
+print("  세 갈래 모두 [7.10](../07_language/10_rag.qmd)·"
+      "[8.6](../08_audio/06_asr_modern.qmd)에서 본 "
+      "**긴 문맥 문제**의 비디오판이다.")
+```
+
+---
+
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| 시공간 어텐션 | T=32에서 joint 3,930만 원소 | 프레임 수가 제곱으로 |
+| **divided attention** | joint 대비 **0.036배** | 대신 움직임을 한 층에 못 잇는다 |
+| **(2+1)D의 오해** | 파라미터는 **같다** (M을 그렇게 고름) | 산 것은 비선형 하나 |
+| 랭크가 진짜 제약 | 운동 커널 랭크1 잔차 **0.667** | 무작위(0.426)보다 덜 분리된다 |
+| 그래서 M | 운동 커널은 랭크 3 | 중간 채널 3개를 합쳐야 |
+| **SlowFast** | 공간 우선 0.950/0.883, 시간 우선 0.770/0.997 | 한쪽에 몰면 반대를 잃는다 |
+| 나눠 쓰면 | **0.983 / 0.997** (같은 512차원) | 두 요구가 직교하기 때문 |
+| **튜브 마스킹** | 50%에서 이웃 시각 2.59개 → 0개 | 메커니즘은 재현됨 |
+| 그 효과는 | 50%에서 차이 **−0.000** (동일) | 이 클립은 공간 중복이 너무 크다 |
+| 90%에서야 | 무작위 0.781 vs 튜브 0.706 (+0.075) | VideoMAE가 90~95%를 쓰는 이유 |
+| **단일 프레임 지수** | 모양 **1.05** vs 방향 0.50 | 벤치마크가 시간을 재는가 |
+| 그 함의 | 정적 편향 벤치마크에선 시간 모델의 이득이 묻힌다 | 9.1·9.3과 같은 병 |
+
+프레임을 가로질러 **같은 것을 같다고** 하는 문제가 남았다.
+
+---
+
+**다음**: [9.7 추적과 시간적 연관](07_tracking.qmd) — 프레임을 가로질러 잇기
 
 **이전**: [9.5 비디오의 표현](05_video_representation.qmd)
