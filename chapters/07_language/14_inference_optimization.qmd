@@ -4,91 +4,797 @@ subtitle: "KV 캐시·양자화·배칭·PagedAttention — 서비스 비용의 
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+학습은 한 번이다. 추론은 **매 요청마다** 일어난다.
+그래서 실제 지출과 사용자 경험은 거의 전부 이 장에 달려 있다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장의 출발점은 하나의 관찰이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+> 추론의 두 단계는 **완전히 다른 기계**를 돌린다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+프롬프트를 읽는 **prefill** 은 연산이 병목이고,
+토큰을 하나씩 뽑는 **decode** 는 메모리 대역폭이 병목이다.
+같은 GPU, 같은 모델인데 병목이 다르다. 최적화 방법도 그래서 다르다.
+
+숫자로 확인한다.
+
+---
+
+## G7.14.1 — prefill과 decode: 산술 강도
+
+**산술 강도(arithmetic intensity)** = 옮긴 바이트당 하는 연산 수.
+
+$$I = \frac{\text{FLOPs}}{\text{Bytes}}$$
+
+하드웨어에는 **능선점(ridge point)** 이 있다. 연산 성능 ÷ 메모리 대역폭.
+$I$ 가 그보다 낮으면 아무리 좋은 칩이어도 메모리 대역폭이 상한이다.
+
+```{python}
+#| label: roofline
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+# 예시 가속기 (bf16 기준의 대표적인 수치)
+FLOPS = 989e12          # FLOP/s
+BW = 3.35e12            # Byte/s
+RIDGE = FLOPS/BW
+
+N_PARAM = 70e9          # 70B 모델
+BYTES_PER_PARAM = 2     # bf16
+
+print(f"가속기: {FLOPS/1e12:.0f} TFLOP/s, 대역폭 {BW/1e12:.2f} TB/s")
+print(f"  **능선점 = {RIDGE:.0f} FLOP/byte**")
+print("  산술 강도가 이보다 낮으면 연산 유닛이 놀고 메모리만 기다린다.")
+print()
+
+print("모델 70B, bf16. 가중치를 한 번 읽는 데 "
+      f"{N_PARAM*BYTES_PER_PARAM/1e9:.0f} GB 를 옮겨야 한다.")
+print()
+print(f"{'단계':<26} {'FLOPs':>14} {'Bytes':>14} {'산술 강도':>11} {'병목'}")
+print("-" * 78)
+ROOF = []
+for lbl, tokens, batch in [("decode (배치 1)", 1, 1),
+                           ("decode (배치 8)", 1, 8),
+                           ("decode (배치 64)", 1, 64),
+                           ("decode (배치 256)", 1, 256),
+                           ("prefill (2,000 토큰)", 2000, 1),
+                           ("prefill (8,000 토큰)", 8000, 1)]:
+    flops = 2*N_PARAM*tokens*batch
+    byts = N_PARAM*BYTES_PER_PARAM        # 가중치를 한 번 읽는다
+    I = flops/byts
+    ROOF.append((lbl, tokens*batch, I))
+    print(f"{lbl:<26} {flops:>14.2e} {byts:>14.2e} {I:>11.1f} "
+          f"{'연산' if I > RIDGE else '**메모리**'}")
+print()
+print("**패턴이 보인다: 산술 강도는 한 번에 처리하는 토큰 수와 같다.**")
+print(f"  가중치를 한 번 읽어 토큰 T개를 처리하면 I = 2T 가 아니라 T 다")
+print(f"  (파라미터당 2 FLOP, 2 byte 이므로 정확히 상쇄된다).")
+print()
+print(f"**따라서 decode 가 연산 병목이 되려면 배치가 {RIDGE:.0f} 이상이어야 한다.**")
+print("  배치 1 로 서빙하면 GPU 연산 성능의 "
+      f"{1/RIDGE:.2%} 만 쓰는 셈이다.")
+print()
+print("이 하나의 사실에서 추론 최적화의 거의 전부가 따라 나온다.")
+for a, b in [("배칭", "산술 강도를 배치 크기만큼 올린다 (G7.14.4)"),
+             ("KV 캐시 축소", "배치를 키울 메모리 여유를 만든다 (G7.14.2)"),
+             ("양자화", "옮길 바이트 자체를 줄인다 (G7.14.5)"),
+             ("추측 디코딩", "한 번 읽고 여러 토큰을 검증한다 (G7.14.6)"),
+             ("프롬프트 캐싱", "prefill 을 아예 건너뛴다")]:
+    print(f"  · **{a}** — {b}")
+print()
+print("**그리고 두 단계의 지연 특성이 다르다.**")
+print(f"{'지표':<22} {'무엇이 정하는가'}")
+print("-" * 60)
+for a, b in [("TTFT (첫 토큰까지)", "prefill — 프롬프트 길이에 비례"),
+             ("TPOT (토큰 사이 시간)", "decode — 배치와 대역폭이 정한다"),
+             ("총 지연", "TTFT + TPOT × 출력 길이")]:
+    print(f"{a:<22} {b}")
+print()
+print("**배치를 키우면 처리량은 오르고 TPOT 은 나빠진다.** SLO 가 이 균형을 정한다.")
+```
+
+---
+
+## G7.14.2 — KV 캐시가 메모리를 지배한다
+
+decode 스텝마다 이전 토큰들의 K, V가 필요하다. 다시 계산하지 않으려면 저장해야 한다.
+
+$$\text{KV bytes} = 2 \times n_{\text{layer}} \times n_{\text{kv-head}}
+\times d_{\text{head}} \times \text{len} \times \text{bytes}$$
+
+`n_kv_head` 를 줄이는 것이 MQA/GQA다.
+
+```{python}
+#| label: kvcache
+#| code-fold: false
+
+import numpy as np
+
+CFG = {                      # (층, 어텐션 헤드, head_dim, 파라미터)
+    "8B":  (32, 32, 128, 8e9),
+    "70B": (80, 64, 128, 70e9),
+}
+BYTES = 2                    # bf16
+
+
+def kv_per_token(layers, n_kv, dh, bytes_=BYTES):
+    return 2*layers*n_kv*dh*bytes_
+
+
+print("토큰 하나당 KV 캐시 크기")
+print()
+print(f"{'모델':<8} {'어텐션 방식':<22} {'KV 헤드':>8} {'토큰당':>12} {'MHA 대비':>10}")
+print("-" * 66)
+KV = []
+for name, (L, H, DH, _) in CFG.items():
+    mha = kv_per_token(L, H, DH)
+    for lbl, n_kv in [("MHA (헤드마다 KV)", H), ("GQA (8그룹)", 8),
+                      ("MQA (KV 하나)", 1)]:
+        v = kv_per_token(L, n_kv, DH)
+        KV.append((name, lbl, n_kv, v))
+        print(f"{name:<8} {lbl:<22} {n_kv:>8} {v/1024:>10.0f} KiB "
+              f"{v/mha:>9.3f}x")
+print()
+
+L, H, DH, NP = CFG["70B"]
+GPU = 8*80e9                 # 8장 × 80GB
+W = NP*BYTES
+print(f"70B 모델을 GPU {GPU/1e9:.0f} GB 에 올린다 "
+      f"(가중치 {W/1e9:.0f} GB, KV 예산 {(GPU-W)/1e9:.0f} GB)")
+print()
+print(f"{'어텐션':<18} {'토큰당':>11} {'담을 수 있는 총 토큰':>20} "
+      f"{'8K 문맥 동시 요청':>18}")
+print("-" * 72)
+CAP = []
+for lbl, n_kv in [("MHA", H), ("GQA (8그룹)", 8), ("MQA", 1)]:
+    per = kv_per_token(L, n_kv, DH)
+    tot = (GPU - W)/per
+    CAP.append((lbl, per, tot, tot/8192))
+    print(f"{lbl:<18} {per/1024:>9.0f} KiB {tot:>20,.0f} {tot/8192:>18,.0f}")
+print()
+mha_c, gqa_c = CAP[0], CAP[1]
+print(f"**MHA 로는 8K 문맥 요청을 {mha_c[3]:,.0f}개밖에 못 담는다.**")
+print(f"  GQA 로 바꾸면 {gqa_c[3]:,.0f}개 — {gqa_c[3]/mha_c[3]:.0f}배다.")
+print()
+print(f"**그리고 G7.14.1 에서 배치가 {989e12/3.35e12:.0f} 은 되어야 한다고 했다.**")
+print("  MHA 로는 그 배치를 만들 메모리가 애초에 없다.")
+print("  **GQA 는 품질 최적화가 아니라 처리량 최적화다.**")
+print()
+print("긴 문맥에서는 KV 캐시가 가중치를 넘어선다:")
+print(f"{'문맥 길이':>10} {'요청 수':>8} {'GQA KV 총량':>14} {'가중치 대비':>12}")
+print("-" * 50)
+per = kv_per_token(L, 8, DH)
+for ctx in [4096, 32768, 131072]:
+    for nreq in [16, 64]:
+        tot = per*ctx*nreq
+        print(f"{ctx:>10,} {nreq:>8} {tot/1e9:>12.1f} GB {tot/W:>11.2f}x")
+print()
+print("**KV 캐시를 줄이는 다른 방법들**")
+for a, b in [("MLA (DeepSeek)", "KV 를 저차원으로 압축해 저장, 쓸 때 복원"),
+             ("KV 양자화", "8비트/4비트로 저장 — 절반~4분의 1"),
+             ("슬라이딩 윈도", "오래된 토큰을 버린다 (품질 손실)"),
+             ("캐시 오프로딩", "CPU 메모리로 내린다 — 대역폭이 병목이 된다"),
+             ("접두사 공유", "같은 시스템 프롬프트의 KV 를 여러 요청이 공유")]:
+    print(f"  · **{a}** — {b}")
+```
+
+```{python}
+#| label: fig-roofline
+#| fig-cap: "decode는 배치가 수백은 되어야 연산 병목이 되고, KV 캐시는 문맥이 길어지면 가중치를 넘어섭니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("루프라인 — 산술 강도와 달성 성능",
+                                    "문맥 길이별 KV 캐시 (70B, 요청 64개)"))
+I = np.logspace(0, 4, 200)
+perf = np.minimum(BW*I, FLOPS)/1e12
+fig.add_trace(go.Scatter(x=I, y=perf, mode="lines", name="달성 가능 성능",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+for lbl, t, ii in ROOF:
+    fig.add_trace(go.Scatter(x=[ii], y=[min(BW*ii, FLOPS)/1e12], mode="markers",
+                             name=lbl, marker=dict(size=11)), row=1, col=1)
+fig.add_vline(x=RIDGE, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              row=1, col=1)
+fig.update_xaxes(title_text="산술 강도 (FLOP/byte)", type="log", row=1, col=1)
+fig.update_yaxes(title_text="TFLOP/s", type="log", row=1, col=1)
+
+ctxs = np.array([2048, 8192, 32768, 131072])
+for i, (lbl, n_kv) in enumerate([("MHA", 64), ("GQA (8그룹)", 8), ("MQA", 1)]):
+    per = kv_per_token(80, n_kv, 128)
+    fig.add_trace(go.Scatter(x=ctxs, y=per*ctxs*64/1e9, mode="lines+markers",
+                             name=lbl, line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)), row=1, col=2)
+fig.add_hline(y=140, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              annotation_text="가중치 140 GB", row=1, col=2)
+fig.update_xaxes(title_text="문맥 길이 (토큰)", type="log", row=1, col=2)
+fig.update_yaxes(title_text="KV 캐시 (GB)", type="log", row=1, col=2)
+viz.fig_defaults(fig, height=430, title="")
+fig.show()
+```
+
+---
+
+## G7.14.3 — 단편화와 PagedAttention
+
+요청이 얼마나 길어질지는 **미리 알 수 없다.**
+그래서 소박한 구현은 최대 길이만큼 미리 잡아 둔다. 그 대가를 재 보자.
+
+```{python}
+#| label: paging
+#| code-fold: false
+
+import numpy as np
+
+GPU_TOK = 400_000          # KV 로 쓸 수 있는 총 토큰 슬롯
+MAXLEN, BLOCK = 8192, 16
+
+g = np.random.default_rng(0)
+lens_demo = np.minimum(g.lognormal(6.0, 1.1, 20000).astype(int) + 8, MAXLEN)
+print(f"요청 길이 분포: 중앙값 {np.median(lens_demo):.0f}, "
+      f"평균 {lens_demo.mean():.0f}, 95백분위 {np.percentile(lens_demo, 95):.0f}, "
+      f"상한 {MAXLEN:,}")
+print(f"KV 슬롯 예산 {GPU_TOK:,} 토큰, 페이지 크기 {BLOCK} 토큰")
+print()
+
+
+def concurrency(policy, n_trial=400, seed=0):
+    gg = np.random.default_rng(seed)
+    out = []
+    for _ in range(n_trial):
+        lens = np.minimum(gg.lognormal(6.0, 1.1, 4000).astype(int) + 8, MAXLEN)
+        cap = n = 0
+        for L in lens:
+            need = (MAXLEN if policy == "prealloc"
+                    else int(np.ceil(L/BLOCK))*BLOCK if policy == "paged"
+                    else L)
+            if cap + need > GPU_TOK:
+                break
+            cap += need
+            n += 1
+        out.append(n)
+    return float(np.mean(out))
+
+
+ideal = concurrency("ideal")
+print(f"{'할당 방식':<26} {'동시 요청 수':>13} {'메모리 활용률':>13}")
+print("-" * 56)
+FRAG = []
+for pol, lbl in [("prealloc", "최대 길이 사전 할당"),
+                 (f"paged", f"페이지 단위 ({BLOCK}토큰)"),
+                 ("ideal", "이상 (길이를 미리 앎)")]:
+    c = concurrency(pol)
+    FRAG.append((lbl, c, c/ideal))
+    print(f"{lbl:<26} {c:>13.1f} {c/ideal:>12.1%}")
+print()
+pre, pag = FRAG[0], FRAG[1]
+print(f"**최대 길이로 미리 잡으면 메모리의 {pre[2]:.1%} 만 실제로 쓰인다.**")
+print(f"  동시 요청 {pre[1]:.0f}개 vs 페이지 방식 {pag[1]:.0f}개 — "
+      f"**{pag[1]/pre[1]:.1f}배** 차이다.")
+print()
+print("이유는 길이 분포의 모양에 있다.")
+print(f"  중앙값이 {np.median(lens_demo):.0f} 인데 상한이 {MAXLEN:,} 다.")
+print(f"  평균적으로 잡아 둔 자리의 {lens_demo.mean()/MAXLEN:.1%} 만 쓴다.")
+print()
+print(f"**페이지 방식의 낭비는 {1 - pag[2]:.1%} 에 불과하다** — "
+      f"마지막 페이지의 남는 부분뿐이다.")
+print()
+print("**PagedAttention 이 하는 일 (운영체제의 가상 메모리와 같다)**")
+for a, b in [("블록 단위 할당", "필요할 때 한 페이지씩 붙인다"),
+             ("논리↔물리 분리", "시퀀스는 연속이지만 물리 메모리는 흩어져 있다"),
+             ("블록 테이블", "어텐션 커널이 테이블을 보고 흩어진 블록을 읽는다"),
+             ("**copy-on-write**", "beam/병렬 샘플링이 접두사 블록을 공유한다"),
+             ("접두사 공유", "같은 시스템 프롬프트면 KV 블록을 그대로 재사용")]:
+    print(f"  · {a} — {b}")
+print()
+print("**대가**: 어텐션 커널이 복잡해지고 간접 참조가 늘어난다.")
+print("  그 손해보다 배치를 키워 얻는 이득이 훨씬 크다는 것이 위 표의 내용이다.")
+```
+
+---
+
+## G7.14.4 — 연속 배칭
+
+정적 배칭은 배치의 **가장 긴 요청이 끝날 때까지** 슬롯을 붙잡는다.
+출력 길이 분포가 넓으면 대부분의 슬롯이 논다.
+
+```{python}
+#| label: batching
+#| code-fold: false
+
+import numpy as np
+
+B = 32
+gl = np.random.default_rng(1)
+demo = np.minimum(gl.lognormal(4.6, 0.9, 4000).astype(int) + 4, 2000)
+print(f"배치 크기 {B}. 출력 길이: 중앙값 {np.median(demo):.0f}, "
+      f"평균 {demo.mean():.0f}, 95백분위 {np.percentile(demo, 95):.0f}, "
+      f"최대 {demo.max()}")
+print()
+
+
+def simulate(mode, n_req=4000, seed=1):
+    g = np.random.default_rng(seed)
+    out_len = np.minimum(g.lognormal(4.6, 0.9, n_req).astype(int) + 4, 2000)
+    if mode == "static":
+        steps = sum(int(out_len[i:i+B].max()) for i in range(0, n_req, B))
+    else:
+        slots, nxt, steps = list(out_len[:B]), B, 0
+        while slots:
+            m = int(min(slots))
+            steps += m
+            new = []
+            for s in slots:
+                if s - m > 0:
+                    new.append(s - m)
+                elif nxt < n_req:
+                    new.append(out_len[nxt])
+                    nxt += 1
+            slots = new
+    return n_req/steps, out_len.sum()/(steps*B)
+
+
+print(f"{'방식':<14} {'요청/스텝':>12} {'슬롯 활용률':>13} {'상대 처리량':>13}")
+print("-" * 56)
+st, su = simulate("static")
+co, cu = simulate("continuous")
+print(f"{'정적 배칭':<14} {st:>12.4f} {su:>12.1%} {1.0:>12.2f}x")
+print(f"{'연속 배칭':<14} {co:>12.4f} {cu:>12.1%} {co/st:>12.2f}x")
+print()
+print(f"**처리량이 {co/st:.1f}배 오른다.** 코드 변경이 아니라 스케줄링 변경만으로.")
+print(f"  정적 배칭의 슬롯 활용률이 {su:.1%} 라는 것이 원인 전부다.")
+print()
+print("**출력 길이 분포가 좁으면 이득이 작아진다:**")
+print(f"{'길이 분산(σ)':>12} {'정적 활용률':>13} {'연속 배칭 이득':>15}")
+print("-" * 44)
+BATCH = []
+for sigma in [0.1, 0.4, 0.9, 1.4]:
+    def sim2(mode, n_req=3000, seed=2):
+        g = np.random.default_rng(seed)
+        ol = np.minimum(g.lognormal(4.6, sigma, n_req).astype(int) + 4, 3000)
+        if mode == "static":
+            steps = sum(int(ol[i:i+B].max()) for i in range(0, n_req, B))
+        else:
+            slots, nxt, steps = list(ol[:B]), B, 0
+            while slots:
+                m = int(min(slots))
+                steps += m
+                new = []
+                for s in slots:
+                    if s - m > 0:
+                        new.append(s - m)
+                    elif nxt < n_req:
+                        new.append(ol[nxt])
+                        nxt += 1
+                slots = new
+        return n_req/steps, ol.sum()/(steps*B)
+    a, au = sim2("static")
+    c, _ = sim2("continuous")
+    BATCH.append((sigma, au, c/a))
+    print(f"{sigma:>12.1f} {au:>12.1%} {c/a:>14.2f}x")
+print()
+print("**이득의 원천은 길이의 분산이다.** 채팅처럼 길이가 제각각이면 크고,")
+print("  분류처럼 출력이 고정 길이면 정적 배칭으로도 충분하다.")
+print()
+print("**연속 배칭이 만드는 새로운 문제들**")
+for a, b in [("prefill 끼어들기", "새 요청의 prefill 이 진행 중인 decode 를 멈춘다"),
+             ("→ 청크 prefill", "긴 prefill 을 잘라 decode 사이에 끼워 넣는다"),
+             ("선점과 스왑", "메모리가 모자라면 요청을 내렸다가 다시 올린다"),
+             ("공정성", "긴 요청이 슬롯을 오래 점유한다"),
+             ("TPOT 변동", "배치 구성이 바뀌면 토큰 간격이 흔들린다")]:
+    print(f"  · {a} — {b}")
+```
+
+---
+
+## G7.14.5 — 양자화
+
+옮길 바이트를 줄이면 decode 가 그만큼 빨라진다. **품질은 얼마나 잃는가?**
+
+여기서는 실제로 학습한 신경 언어모델의 가중치를 양자화해 퍼플렉서티를 잰다.
+
+```{python}
+#| label: quant-train
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import copy
+import numpy as np
+from src import nn
+
+V = 24
+rg = np.random.default_rng(0)
+LG = rg.normal(0, 2.0, (V, V, V))
+PSRC = np.exp(LG - LG.max(-1, keepdims=True))
+PSRC /= PSRC.sum(-1, keepdims=True)
+
+
+def gen(n, g):
+    s = [int(g.integers(V)), int(g.integers(V))]
+    for _ in range(n):
+        s.append(int(g.choice(V, p=PSRC[s[-2], s[-1]])))
+    return np.array(s)
+
+
+def feat(seq):
+    X = np.zeros((len(seq) - 2, 2*V))
+    X[np.arange(len(seq)-2), seq[:-2]] = 1
+    X[np.arange(len(seq)-2), V + seq[1:-1]] = 1
+    return X, seq[2:]
+
+
+g0 = np.random.default_rng(3)
+Xtr, ytr = feat(gen(40000, g0))
+Xte, yte = feat(gen(8000, g0))
+
+model = nn.MLP([2*V, 128, 128, V], activation="relu",
+               out_activation="softmax", seed=0)
+nn.train(model, Xtr, ytr, loss="softmax_ce",
+         opt=nn.Optimizer("adam", lr=3e-3), steps=3000, batch_size=512,
+         lr=3e-3, schedule="cosine", seed=1)
+
+
+def ppl(m):
+    pr = m.predict(Xte)
+    return float(np.exp(-np.mean(np.log(np.maximum(
+        pr[np.arange(len(yte)), yte], 1e-12)))))
+
+
+BASE = ppl(model)
+ent = -(PSRC*np.log(np.maximum(PSRC, 1e-300))).sum(-1)
+print(f"학습된 신경 LM: 테스트 PPL {BASE:.4f} "
+      f"(참 퍼플렉서티 {np.exp(ent.mean()):.4f})")
+print(f"  파라미터 {model.n_params():,}개. 이제 가중치를 양자화한다.")
+print()
+
+
+def quantize(W, bits, mode):
+    """대칭 균등 양자화. mode='tensor' 는 행렬 전체가 스케일 하나."""
+    if mode == "tensor":
+        s = max(float(np.abs(W).max())/(2**(bits-1) - 1), 1e-12)
+    else:                                   # 출력 채널마다 스케일
+        s = np.maximum(np.abs(W).max(axis=0, keepdims=True)/(2**(bits-1)-1),
+                       1e-12)
+    return np.clip(np.round(W/s), -(2**(bits-1)), 2**(bits-1)-1)*s
+
+
+def eval_q(m, bits, mode):
+    mq = copy.deepcopy(m)
+    mq.W = [quantize(w, bits, mode) for w in m.W]
+    return ppl(mq)
+
+
+print("① 정상 학습된 가중치")
+print(f"{'비트':>5} {'per-tensor':>12} {'per-channel':>13} "
+      f"{'per-tensor 손실':>16} {'per-channel 손실':>17}")
+print("-" * 70)
+Q1 = []
+for b in [8, 6, 5, 4, 3]:
+    t, c = eval_q(model, b, "tensor"), eval_q(model, b, "channel")
+    Q1.append((b, t, c))
+    print(f"{b:>5} {t:>12.4f} {c:>13.4f} {t/BASE-1:>15.1%} {c/BASE-1:>16.1%}")
+print()
+q8 = [q for q in Q1 if q[0] == 8][0]
+q4 = [q for q in Q1 if q[0] == 4][0]
+print(f"**8비트는 사실상 공짜다** (PPL {BASE:.4f} → {q8[1]:.4f}).")
+print(f"**4비트에서 갈린다** — per-tensor {q4[1]/BASE-1:.1%} vs "
+      f"per-channel {q4[2]/BASE-1:.1%}.")
+print("  같은 비트 수인데 **스케일을 어디에 두느냐**로 손실이 세 배 가까이 차이 난다.")
+```
+
+이제 진짜 문제를 만든다. LLM 가중치·활성화에는 **이상치 채널**이 있다.
+소수의 채널이 나머지보다 수십 배 크다. 그것이 왜 치명적인지 직접 본다.
+
+```{python}
+#| label: quant-outlier
+#| code-fold: false
+
+import numpy as np
+import copy
+
+S, NOUT = 20.0, 6
+gm = np.random.default_rng(7)
+ch = gm.choice(model.W[0].shape[1], NOUT, replace=False)
+
+mo = copy.deepcopy(model)
+mo.W[0][:, ch] *= S
+mo.b[0][ch] *= S
+mo.W[1][ch, :] /= S        # ReLU(s·z) = s·ReLU(z) → 함수는 완전히 동일
+
+def ch_ratio(W):
+    m = np.abs(W).max(axis=0)
+    return float(m.max()/np.median(m))
+
+
+print(f"은닉 채널 {NOUT}개를 {S:.0f}배로 키우고 다음 층에서 되돌린다.")
+print("  ReLU 의 양의 동차성 때문에 **함수는 한 치도 변하지 않는다.**")
+print(f"  FP PPL: {BASE:.4f} → {ppl(mo):.4f}")
+print(f"  W0 채널 크기 비 (최대/중앙): {ch_ratio(model.W[0]):.1f} → "
+      f"{ch_ratio(mo.W[0]):.1f}")
+print()
+print(f"{'비트':>5} {'per-tensor':>13} {'per-channel':>13} {'정상 가중치(per-t)':>19}")
+print("-" * 56)
+Q2 = []
+for b in [8, 6, 4, 3]:
+    t, c = eval_q(mo, b, "tensor"), eval_q(mo, b, "channel")
+    ref = [q[1] for q in Q1 if q[0] == b][0]
+    Q2.append((b, t, c))
+    print(f"{b:>5} {t:>13.4f} {c:>13.4f} {ref:>19.4f}")
+print()
+o6 = [q for q in Q2 if q[0] == 6][0]
+r6 = [q for q in Q1 if q[0] == 6][0]
+print(f"**함수가 같은 모델인데 6비트 per-tensor PPL 이 "
+      f"{r6[1]:.3f} → {o6[1]:.3f} 로 무너진다.**")
+print("  이상치 채널 몇 개가 스케일을 정해 버리면 "
+      "나머지 전부가 몇 개의 정수로 뭉개진다.")
+print(f"  per-channel 은 {o6[2]:.3f} 로 버틴다 — 채널마다 스케일이 따로이기 때문이다.")
+print()
+print("**이것이 양자화 연구의 핵심 관찰이다.**")
+print("  '몇 비트인가'보다 **'스케일을 어떻게 나누는가'** 가 더 중요하다.")
+```
+
+그렇다면 스케일을 **층 사이로 옮기면** 어떨까. 이것이 SmoothQuant의 아이디어다.
+
+```{python}
+#| label: quant-smooth
+#| code-fold: false
+
+import numpy as np
+import copy
+
+ms = copy.deepcopy(mo)
+a = np.abs(ms.W[0]).max(axis=0)
+a = np.maximum(a/np.median(a), 1.0)     # 큰 채널만 줄인다
+ms.W[0] /= a
+ms.b[0] /= a
+ms.W[1] *= a[:, None]                   # 다음 층이 그만큼 받는다
+
+print("이상치의 크기를 다음 층으로 넘긴다 (역시 함수 보존)")
+print(f"  FP PPL: {ppl(ms):.4f}  (원본 {BASE:.4f})")
+print(f"  W0 채널 크기 비: {ch_ratio(mo.W[0]):.1f} → {ch_ratio(ms.W[0]):.1f}")
+print()
+print(f"{'비트':>5} {'이상치 있음':>13} {'스케일 이동 후':>15} {'정상 가중치':>13}")
+print("-" * 52)
+Q3 = []
+for b in [8, 6, 4, 3]:
+    s_ = eval_q(ms, b, "tensor")
+    o_ = [q[1] for q in Q2 if q[0] == b][0]
+    r_ = [q[1] for q in Q1 if q[0] == b][0]
+    Q3.append((b, o_, s_, r_))
+    print(f"{b:>5} {o_:>13.4f} {s_:>15.4f} {r_:>13.4f}")
+print()
+s6 = [q for q in Q3 if q[0] == 6][0]
+print(f"**6비트 per-tensor 가 {s6[1]:.3f} → {s6[2]:.3f} 로 회복된다** "
+      f"(정상 가중치 {s6[3]:.3f}).")
+print("  함수는 세 모델 모두 같다. 바뀐 것은 **양자화하기 쉬운 형태**뿐이다.")
+print()
+print("**실제 기법들이 하는 일**")
+for a_, b_ in [("SmoothQuant", "활성화의 이상치 스케일을 가중치로 옮긴다 (위 실험)"),
+               ("AWQ", "중요한 채널을 골라 스케일을 키워 상대 오차를 줄인다"),
+               ("GPTQ", "층별로 오차를 최소화하며 순차적으로 양자화·보정"),
+               ("GGUF/k-quant", "블록 단위 스케일 + 혼합 비트 배분"),
+               ("QuIP·AQLM", "회전·격자 양자화로 이상치 방향 자체를 없앤다")]:
+    print(f"  · **{a_}** — {b_}")
+print()
+print("**무엇을 양자화하는가에 따라 이득이 다르다**")
+print(f"{'대상':<20} {'무엇이 좋아지나':<26} {'난이도'}")
+print("-" * 66)
+for a_, b_, c_ in [("가중치만 (W4A16)", "메모리와 대역폭 (decode 이득)", "쉽다"),
+                   ("가중치+활성화 (W8A8)", "연산까지 (prefill 도 이득)", "이상치 때문에 어렵다"),
+                   ("KV 캐시", "배치를 키울 수 있다", "중간 — 채널별 스케일 필요"),
+                   ("4비트 미만", "메모리를 더", "품질 붕괴 구간 (위 표의 3비트)")]:
+    print(f"{a_:<20} {b_:<26} {c_}")
+```
+
+::: {.callout-warning}
+## 이 실험이 진짜 LLM과 다른 점
+
+여기 모델은 파라미터 26K짜리 MLP다. 실제 LLM의 양자화 내성은 훨씬 좋다 —
+파라미터가 많을수록 중복이 많아 4비트에서도 손실이 작다.
+**절대 수치를 그대로 옮기지 말 것.**
+
+옮겨도 되는 것은 **구조**다. per-tensor와 per-channel의 격차,
+이상치가 per-tensor를 무너뜨리는 메커니즘,
+그리고 함수를 바꾸지 않고 스케일만 옮겨 회복되는 현상 — 이 셋은 실제와 같다.
 :::
 
-학습은 한 번이지만 추론은 매 요청마다 일어난다. 실제 지출과 사용자 경험은 거의 전부 이 장에 달려 있다.
+---
+
+## G7.14.6 — 추측 디코딩
+
+decode 가 메모리 병목이라는 사실을 정면으로 이용한다.
+작은 모델이 $k$ 개를 미리 써 보고, 큰 모델이 **한 번의 순전파로 전부 검증**한다.
+
+수락률을 $\alpha$ 라 하면 한 라운드에 통과하는 기대 토큰 수는
+
+$$\mathbb{E}[\text{accepted}] = \frac{1 - \alpha^{k+1}}{1 - \alpha}$$
+
+```{python}
+#| label: spec
+#| code-fold: false
+
+import numpy as np
+
+KS = [1, 2, 4, 8, 16]
+print("한 라운드에 얻는 기대 토큰 수")
+print(f"{'수락률 α':>10} " + " ".join(f"{'k=' + str(k):>9}" for k in KS))
+print("-" * 62)
+for a in [0.5, 0.7, 0.8, 0.9]:
+    print(f"{a:>10.2f} " + " ".join(
+        f"{(1 - a**(k+1))/(1 - a):>9.2f}" for k in KS))
+print()
+print("**k를 키워도 수확이 체감한다.** 한 번 거절되면 그 뒤는 전부 버려지기 때문이다.")
+print(f"  α=0.5 면 k를 무한히 키워도 기대 토큰은 {1/(1-0.5):.1f}개가 상한이다.")
+print()
+print("드래프트 비용을 넣은 실제 속도 향상")
+print("  speedup = E[토큰] / (1 + k·c),  c = 드래프트 1스텝 / 타깃 1스텝")
+print()
+SPEC = []
+for c in [0.05, 0.15, 0.30]:
+    print(f"드래프트 비용 c = {c}")
+    print(f"{'α':>10} " + " ".join(f"{'k=' + str(k):>9}" for k in KS)
+          + f" {'최적 k':>8} {'최대':>8}")
+    print("-" * 80)
+    for a in [0.6, 0.7, 0.8, 0.9]:
+        def sp(k):
+            return ((1 - a**(k+1))/(1 - a))/(1 + k*c)
+        best = max(range(1, 41), key=sp)
+        SPEC.append((c, a, [sp(k) for k in KS], best, sp(best)))
+        print(f"{a:>10.2f} " + " ".join(f"{sp(k):>9.2f}" for k in KS)
+              + f" {best:>8} {sp(best):>8.2f}x")
+    print()
+print("**읽는 법**")
+for s in ["**최적 k 는 α 와 드래프트 비용이 함께 정한다** — 고정값이 아니다",
+          "c=0.30, α=0.6 이면 k=8 에서 speedup 0.73 — **오히려 느려진다**",
+          "α 가 높을수록 긴 드래프트가 유리하다 (α=0.9 면 k=13 까지)",
+          "그래서 **적응적 k** 를 쓴다 — 최근 수락률을 보고 조절한다"]:
+    print(f"  · {s}")
+print()
+print("**α 를 올리는 것이 k 를 늘리는 것보다 훨씬 값지다.**")
+for a_, b_ in [("드래프트 모델", "같은 계열의 작은 모델 — 분포가 비슷해야 α 가 높다"),
+               ("Medusa", "타깃 모델에 여러 예측 헤드를 붙인다 (별도 모델 없음)"),
+               ("EAGLE", "특징 수준에서 예측 — 토큰 수준보다 α 가 높다"),
+               ("n-gram / 프롬프트 조회", "입력에서 그대로 복사 — 요약·편집에서 α 가 매우 높다"),
+               ("트리 어텐션", "여러 후보를 트리로 동시 검증해 기대 토큰을 늘린다")]:
+    print(f"  · **{a_}** — {b_}")
+print()
+print("**중요한 성질: 출력 분포가 바뀌지 않는다.**")
+print("  거절 샘플링으로 보정하므로 타깃 모델을 그냥 돌린 것과 분포가 같다.")
+print("  즉 **품질을 걸고 하는 거래가 아니다** — 양자화와 근본적으로 다른 점이다.")
+```
+
+```{python}
+#| label: fig-quant
+#| fig-cap: "이상치는 per-tensor 양자화를 무너뜨리고, 추측 디코딩의 최적 드래프트 길이는 수락률이 정합니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("양자화 — 비트 수와 퍼플렉서티",
+                                    "추측 디코딩 (드래프트 비용 0.15)"))
+bits = [q[0] for q in Q2]
+for i, (nm, idx) in enumerate([("이상치 있음 · per-tensor", 1),
+                               ("스케일 이동 후 · per-tensor", 2),
+                               ("정상 가중치 · per-tensor", 3)]):
+    fig.add_trace(go.Scatter(x=bits, y=[q[idx] for q in Q3],
+                             mode="lines+markers", name=nm,
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=bits, y=[q[2] for q in Q2], mode="lines+markers",
+                         name="이상치 있음 · per-channel",
+                         line=dict(color=viz.GREEN, width=2.5, dash="dot"),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_hline(y=BASE, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              row=1, col=1)
+fig.update_xaxes(title_text="비트 수", autorange="reversed", row=1, col=1)
+fig.update_yaxes(title_text="테스트 퍼플렉서티", type="log", row=1, col=1)
+
+kk = np.arange(1, 25)
+for i, a in enumerate([0.6, 0.7, 0.8, 0.9]):
+    y = [((1 - a**(k+1))/(1 - a))/(1 + k*0.15) for k in kk]
+    fig.add_trace(go.Scatter(x=kk, y=y, mode="lines", name=f"α={a}",
+                             line=dict(color=viz.color(i), width=2.5)),
+                  row=1, col=2)
+fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
+              row=1, col=2)
+fig.update_xaxes(title_text="드래프트 길이 k", row=1, col=2)
+fig.update_yaxes(title_text="속도 향상 (배)", row=1, col=2)
+viz.fig_defaults(fig, height=430, title="")
+fig.show()
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 프롬프트 캐싱과 SLO
 
-- 추론의 두 단계: prefill(연산 집약) vs decode(메모리 대역폭 집약)
-- KV 캐시의 크기 계산과 메모리 지배성
-- MQA/GQA/MLA로 캐시 줄이기
-- PagedAttention과 vLLM의 메모리 단편화 해결
-- 연속 배칭(continuous batching)과 처리량
-- 양자화: INT8/FP8/INT4, 가중치 전용 vs 활성화 포함
-- 양자화 기법: GPTQ, AWQ, SmoothQuant, GGUF 계열
-- 추측 디코딩과 메두사·EAGLE 계열
-- 프롬프트 캐싱과 접두사 공유
-- 지연·처리량·비용의 삼각 트레이드오프와 SLO 설계
-- 롱컨텍스트 서빙: 캐시 오프로딩, 청크 prefill
-- 하드웨어 선택과 배치 크기·시퀀스 길이의 상호작용
+```{python}
+#| label: caching
+#| code-fold: false
 
----
-
-## G7.14.1 — KV 캐시 메모리
-
-모델 가중치와 KV 캐시가 GPU 메모리를 나눠 갖는 비율
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 배치·길이 슬라이더
-:::
-
----
-
-## G7.14.2 — prefill vs decode
-
-두 단계의 연산 특성과 병목이 다른 이유
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 입력·출력 길이 슬라이더
-:::
-
----
-
-## G7.14.3 — 연속 배칭 처리량
-
-정적 배칭 대비 GPU 활용률 향상
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 요청 도착률 슬라이더
-:::
-
----
-
-## G7.14.4 — 양자화 품질-크기
-
-비트를 줄일 때 모델 크기와 품질이 변하는 곡선
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 비트 수 슬라이더
-:::
+print("프롬프트 캐싱 — 같은 접두사의 KV 를 다시 쓴다")
+print()
+print(f"{'상황':<26} {'접두사':>9} {'질의':>8} {'절약되는 prefill':>17}")
+print("-" * 66)
+for lbl, pre, q in [("시스템 프롬프트만 공유", 800, 200),
+                    ("긴 문서 Q&A (같은 문서)", 30000, 100),
+                    ("에이전트 다단계 (7.11)", 12000, 300),
+                    ("few-shot 예시 고정 (7.8)", 4000, 150)]:
+    print(f"{lbl:<26} {pre:>9,} {q:>8,} {pre/(pre+q):>16.1%}")
+print()
+print("**접두사가 길고 질의가 짧을수록 이득이 크다.**")
+print("  그래서 **변하는 부분을 뒤에 두는 것**이 프롬프트 설계 규칙이 된다.")
+print("  타임스탬프 하나를 시스템 프롬프트 앞에 넣으면 캐시가 통째로 날아간다.")
+print()
+print("**이것이 7.10 의 긴 문맥 vs RAG 논쟁을 다시 흔든다.**")
+print("  고정된 문서라면 긴 문맥의 비용이 캐싱으로 크게 줄어든다.")
+print("  문서가 요청마다 다르면 캐싱이 안 되고 RAG 가 유리하다.")
+print()
+print("SLO 삼각 트레이드오프 — 셋 중 둘만 가진다")
+print()
+print(f"{'축':<12} {'개선하는 손잡이':<34} {'무엇을 잃는가'}")
+print("-" * 76)
+for a, b, c in [
+    ("지연 (TTFT)", "청크 prefill, 캐싱, 작은 모델", "처리량"),
+    ("지연 (TPOT)", "**배치를 줄인다**, 추측 디코딩", "처리량"),
+    ("처리량", "**배치를 키운다**, 연속 배칭", "TPOT"),
+    ("비용", "양자화, GQA, 작은 모델", "품질"),
+    ("품질", "큰 모델, 높은 정밀도, 긴 추론", "비용과 지연"),
+]:
+    print(f"{a:<12} {b:<34} {c}")
+print()
+print("**배치 크기 하나가 지연과 처리량을 정면으로 맞바꾼다.**")
+print("  G7.14.1 에서 본 대로 배치가 커야 GPU 를 다 쓰지만,")
+print("  배치가 커지면 각 요청의 토큰 간격이 벌어진다.")
+print("  **SLO 를 먼저 정하고 그 안에서 배치를 최대화**하는 것이 실제 운영이다.")
+print()
+print("측정해야 할 것")
+for s in ["TTFT / TPOT 의 **p50 과 p99** — 평균은 거의 쓸모없다",
+          "GPU 활용률이 아니라 **유효 처리량**(토큰/초/장비)",
+          "대기 큐 길이 — 포화 직전에 지연이 급격히 튄다",
+          "KV 캐시 점유율 — 선점·스왑이 시작되는 지점",
+          "캐시 적중률 — 프롬프트 설계가 바뀌면 급변한다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 핵심 용어
+## 요약
 
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| KV 캐시 |  |
-| PagedAttention |  |
-| 연속 배칭 |  |
-| 양자화 (GPTQ/AWQ) |  |
-| prefill/decode |  |
+| **두 단계** | prefill 은 연산 병목, decode 는 **메모리 대역폭 병목** |
+| 산술 강도 | 한 번에 처리하는 토큰 수와 같다. 능선점은 **295 FLOP/byte** |
+| **decode 배치** | 배치 1 이면 GPU 연산 성능의 **0.34%** 만 쓴다 |
+| KV 캐시 크기 | 70B MHA 는 토큰당 **2,560 KiB**, GQA(8) 는 320 KiB |
+| **GQA의 정체** | 품질이 아니라 **처리량** 최적화 — 8K 요청 23개 → 186개 |
+| 긴 문맥 | 128K × 64요청이면 KV 가 가중치의 **19.6배** |
+| **단편화** | 최대 길이 사전 할당은 메모리의 **8.8%** 만 쓴다 |
+| PagedAttention | 활용률 **99.0%**, 동시 요청 48 → 540 (11배) |
+| **연속 배칭** | 처리량 **4.9배**. 정적 배칭의 슬롯 활용률이 20%라서 |
+| 이득의 원천 | **출력 길이의 분산**. 길이가 고정이면 이득이 거의 없다 |
+| 양자화 8비트 | 사실상 공짜 (PPL 8.481 → 8.486) |
+| 양자화 4비트 | per-tensor **+18.8%** vs per-channel +6.9% — 스케일이 정한다 |
+| **이상치 채널** | 함수가 같은데도 6비트 per-tensor PPL 8.53 → **14.51** |
+| SmoothQuant | 스케일을 층 사이로 옮기면 **8.57 로 회복** (함수는 그대로) |
+| 추측 디코딩 | 기대 토큰 = $(1-\alpha^{k+1})/(1-\alpha)$. 최적 k는 α와 비용이 정한다 |
+| 느려질 수도 | c=0.30, α=0.6, k=8 이면 speedup **0.73** |
+| 추측의 미덕 | **출력 분포가 바뀌지 않는다** — 품질을 걸지 않는 유일한 최적화 |
+| 프롬프트 캐싱 | 변하는 부분을 **뒤에** 둔다. 앞에 두면 캐시가 통째로 날아간다 |
+| SLO | 배치 크기 하나가 지연과 처리량을 맞바꾼다. p99 를 본다 |
+
+싸고 빠르게 서빙하는 법을 봤다. 마지막으로, **배포해도 되는가**를 묻는다.
 
 ---
 
-**다음**: [7.15 안전성과 신뢰](15_safety.qmd) — 환각·탈옥·주입·레드팀 — 배포 전에 물어야 할 것들
+**다음**: [7.15 안전성과 신뢰](15_safety.qmd)
 
 **이전**: [7.13 LLM 평가](13_evaluation.qmd)
