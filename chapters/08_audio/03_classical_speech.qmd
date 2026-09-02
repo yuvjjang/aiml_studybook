@@ -4,90 +4,865 @@ subtitle: "HMM-GMM·음소·발음사전 — 딥러닝 이전의 30년"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+현대 ASR의 용어는 거의 전부 이 시대에서 왔다.
+**정렬(alignment)**, **언어모델 결합**, **빔 서치 디코딩**, **WER** —
+[8.4](04_ctc_rnnt.qmd)의 CTC가 무엇을 대체했는지 알려면 무엇이 있었는지 알아야 한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장에서는 **작동하는 미니 인식기를 처음부터 만든다.**
+[8.0](00_sound_and_sampling.qmd)의 소스-필터로 합성 음성을 만들고,
+[8.2](02_mel_mfcc.qmd)의 MFCC를 특성으로 쓰고, HMM-GMM으로 인식한다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+합성이므로 **음소 경계와 정답 문장을 알고 있다.** 그래서 전부 정확히 잴 수 있다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## 문제 정의: 잡음 채널
+
+음성 인식은 이렇게 정의된다.
+
+$$\hat{W} = \arg\max_W P(W \mid X)
+= \arg\max_W \underbrace{P(X \mid W)}_{\text{음향 모델}} \cdot
+\underbrace{P(W)}_{\text{언어 모델}}$$
+
+베이즈 정리로 뒤집는 이 형태를 **잡음 채널 모델**이라 부른다.
+말하려던 문장 $W$ 가 "채널"(성도 + 공기 + 마이크)을 지나 $X$ 로 관측됐다고 본다.
+
+두 항이 분리되는 것이 핵심이다.
+
+| 항 | 무엇을 모형화 | 학습 데이터 |
+|----|-------------|-----------|
+| $P(X\mid W)$ | 소리가 어떻게 나는가 | **전사된 음성** (비싸다) |
+| $P(W)$ | 무엇을 말할 법한가 | **텍스트만** (거의 공짜) |
+
+$P(W)$ 를 텍스트만으로 따로 학습할 수 있다는 것이 이 분해의 실용적 가치였다.
+[8.4](04_ctc_rnnt.qmd)에서 종단간 모델이 이 분해를 없애면서 다시 문제가 된다.
+
+$P(X \mid W)$ 를 계산하려면 단어를 소리로 내려야 한다.
+
+$$\text{단어} \xrightarrow{\text{발음 사전}} \text{음소열}
+\xrightarrow{\text{HMM}} \text{상태열} \xrightarrow{\text{GMM}} \text{특성 프레임}$$
+
+---
+
+## 준비: 합성 음성 코퍼스
+
+```{python}
+#| label: corpus
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+from scipy import signal
+from scipy.fft import dct
+from src import audio
+
+SR, N_FFT, HOP, NS = 16000, 400, 160, 3      # 25ms 프레임 / 10ms 홉 / 상태 3개
+NEG = -1e30
+FB, _, _ = audio.mel_filterbank(26, N_FFT, SR)
+
+VOW = {"a": (730, 1090, 2440), "i": (270, 2290, 3010),
+       "u": (300, 870, 2240), "e": (530, 1840, 2480),
+       "o": (570, 840, 2410)}
+FRIC = {"s": (4500, 7500), "f": (1200, 4000), "S": (2200, 5200)}
+PHONES = list(VOW) + list(FRIC) + ["_"]
+P2I = {p: i for i, p in enumerate(PHONES)}
+NST = len(PHONES)*NS
+
+
+def formant_coeffs(fs, bws=(80, 90, 120), sr=SR):
+    b, a = np.array([1.0]), np.array([1.0])
+    for f, bw in zip(fs, bws):
+        r = np.exp(-np.pi*bw/sr)
+        th = 2*np.pi*f/sr
+        b = np.convolve(b, [1 - 2*r*np.cos(th) + r**2])
+        a = np.convolve(a, [1, -2*r*np.cos(th), r**2])
+    return b, a
+
+
+def render_phone(p, n, g, f0):
+    """유성음은 소스-필터, 무성음은 대역 잡음 (8.0의 모델)."""
+    if p == "_":
+        return g.normal(0, 0.01, n)
+    if p in VOW:
+        src = np.zeros(n)
+        src[::max(1, int(round(SR/f0)))] = 1.0
+        b, a = formant_coeffs(VOW[p])
+        y = signal.lfilter(b, a, src)
+    else:
+        lo, hi = FRIC[p]
+        b, a = signal.butter(4, [lo/(SR/2), min(hi, SR/2 - 1)/(SR/2)], "band")
+        y = signal.lfilter(b, a, g.normal(0, 1, n))
+    return y/(np.max(np.abs(y)) + 1e-9)*g.uniform(0.7, 1.0)
+
+
+LEX = {"ai": "a i", "us": "u s", "of": "o f", "ea": "e a",
+       "si": "s i", "fo": "f o", "aSu": "a S u", "ies": "i e s",
+       "ou": "o u", "sea": "s e a", "fi": "f i", "uSo": "u S o"}
+WORDS = list(LEX)
+W2I = {w: i for i, w in enumerate(WORDS)}
+
+
+def make_utt(g, n_words=4):
+    """발화 하나 — 파형, (음소, 길이) 목록, 단어열을 함께 돌려준다."""
+    f0 = g.uniform(100, 200)
+    xs, labs, ws = [], [], []
+    for w in [WORDS[int(g.integers(len(WORDS)))] for _ in range(n_words)]:
+        ws.append(w)
+        for p in LEX[w].split():
+            n = int(g.uniform(0.06, 0.14)*SR)
+            xs.append(render_phone(p, n, g, f0))
+            labs.append((p, n))
+        n = int(g.uniform(0.03, 0.07)*SR)
+        xs.append(render_phone("_", n, g, f0))
+        labs.append(("_", n))
+    x = np.concatenate(xs)
+    return x/np.max(np.abs(x)) + g.normal(0, 0.01, len(x)), labs, ws
+
+
+def frame_labels(labs):
+    """샘플 단위 라벨 → 프레임 단위 음소 라벨 (정답 정렬)."""
+    edges, acc = [], 0
+    for p, n in labs:
+        edges.append((acc, acc + n, p))
+        acc += n
+    n_frames = 1 + (acc - N_FFT)//HOP
+    out = []
+    for i in range(n_frames):
+        c = i*HOP + N_FFT//2
+        lab = labs[-1][0]
+        for s, e, p in edges:
+            if s <= c < e:
+                lab = p
+                break
+        out.append(P2I[lab])
+    return np.array(out)
+
+
+def feats(x, kind="mfcc"):
+    lm = audio.log_mel(x, SR, N_FFT, HOP, fb=FB)
+    return lm if kind == "logmel" else dct(lm, type=2, axis=0, norm="ortho")[:13]
+
+
+g0 = np.random.default_rng(0)
+TRAIN = [make_utt(g0) for _ in range(50)]
+TEST = [make_utt(g0) for _ in range(25)]
+XT = [feats(x) for x, _, _ in TRAIN]
+YT = [frame_labels(l) for _, l, _ in TRAIN]
+XE = [feats(x) for x, _, _ in TEST]
+YE = [frame_labels(l) for _, l, _ in TEST]
+
+print(f"코퍼스: 학습 {len(TRAIN)} 발화 / 테스트 {len(TEST)} 발화, "
+      f"발화당 단어 4개")
+print(f"  음소 {len(PHONES)}종: {' '.join(PHONES)}  "
+      f"(모음 5, 마찰음 3, 묵음 1)")
+print(f"  어휘 {len(WORDS)}개, 발음 사전으로 음소열에 대응")
+print(f"  학습 프레임 {sum(y.size for y in YT):,}, "
+      f"테스트 프레임 {sum(y.size for y in YE):,}, 특성 차원 {XT[0].shape[0]}")
+print()
+print("**정답을 세 층위에서 알고 있다** — 단어열, 음소열, 그리고 음소 경계.")
+print("  실제 코퍼스에서 마지막 것을 얻으려면 사람이 손으로 표시해야 한다.")
+print("  그것이 불가능해서 나온 것이 아래의 **강제 정렬**이다.")
+```
+
+---
+
+## HMM: 시간을 상태로 쪼개기
+
+음소 하나를 상태 셋으로 나눈다 — 시작 전이, 정상 구간, 끝 전이.
+왼쪽에서 오른쪽으로만 가고, 각 상태에서 머무를 수 있다.
+
+$$a_{ij} = P(q_{t+1} = j \mid q_t = i), \qquad
+b_j(x) = P(x \mid q_t = j)$$
+
+머무는 확률 $a_{jj}$ 가 **지속 시간**을 만든다.
+자기 전이 확률 $p$ 면 지속 시간이 기하 분포를 따르고 평균이 $1/(1-p)$ 다.
+(실제 음소 길이는 기하 분포가 아니다 — HMM의 알려진 약점이다.)
+
+방출 $b_j$ 는 가우시안 혼합(GMM)으로 둔다. 여기서는 **대각 공분산 가우시안 하나**로 시작한다.
+
+```{python}
+#| label: hmm-basics
+#| code-fold: false
+
+import numpy as np
+
+
+def fit_gauss(X, y, n_cls=NST, diag=True, reg=1e-2):
+    d = X.shape[0]
+    mus, covs = np.zeros((n_cls, d)), np.zeros((n_cls, d, d))
+    for c in range(n_cls):
+        Z = X[:, y == c].T
+        if len(Z) < 3:
+            Z = X.T
+        mus[c] = Z.mean(0)
+        S = np.cov(Z.T) + reg*np.eye(d)
+        covs[c] = np.diag(np.diag(S)) if diag else S
+    return mus, covs
+
+
+def loglik(X, mus, covs):
+    """(n_states, T) 로그 방출 확률."""
+    d = X.shape[0]
+    out = np.zeros((len(mus), X.shape[1]))
+    for c in range(len(mus)):
+        L = np.linalg.cholesky(covs[c])
+        z = np.linalg.solve(L, X - mus[c][:, None])
+        out[c] = -0.5*(z**2).sum(0) - np.log(np.diag(L)).sum() \
+            - 0.5*d*np.log(2*np.pi)
+    return out
+
+
+def phone_seq(y):
+    out = [y[0]]
+    for v in y[1:]:
+        if v != out[-1]:
+            out.append(v)
+    return out
+
+
+def state_seq(y):
+    return [p*NS + k for p in phone_seq(y) for k in range(NS)]
+
+
+def viterbi_linear(B, seq):
+    """좌→우 선형 HMM 의 최적 경로. seq 를 순서대로 지나야 한다."""
+    S, T = len(seq), B.shape[1]
+    dp = np.full((S, T), NEG)
+    bp = np.zeros((S, T), np.int8)
+    dp[0, 0] = B[seq[0], 0]
+    for t in range(1, T):
+        stay = dp[:, t-1]
+        move = np.concatenate([[NEG], dp[:-1, t-1]])
+        mv = move > stay
+        dp[:, t] = np.where(mv, move, stay) + B[seq, t]
+        bp[:, t] = mv
+    path, s = np.zeros(T, int), S - 1
+    for t in range(T-1, -1, -1):
+        path[t] = s
+        if bp[s, t]:
+            s -= 1
+    return np.array([seq[p] for p in path])
+
+
+print("음소당 상태 3개, 좌→우 전이만 허용")
+print(f"  전체 상태 수 = {len(PHONES)} 음소 x {NS} = {NST}")
+print()
+print("자기 전이 확률과 기대 지속 시간 (프레임 10 ms 기준)")
+print(f"{'a_jj':>8} {'기대 지속(프레임)':>18} {'ms':>10}")
+print("-" * 40)
+for p in [0.5, 0.7, 0.9, 0.95]:
+    print(f"{p:>8.2f} {1/(1-p):>18.1f} {1/(1-p)*10:>10.0f}")
+print()
+lens = [n/SR*1000 for _, labs, _ in TRAIN for p, n in labs if p != "_"]
+print(f"이 코퍼스의 실제 음소 길이: 평균 {np.mean(lens):.0f} ms, "
+      f"표준편차 {np.std(lens):.0f} ms")
+print(f"  기하 분포라면 표준편차가 평균과 비슷해야 한다 "
+       f"({np.mean(lens):.0f} ms).")
+print("  **실제로는 훨씬 좁다** — HMM 의 지속 시간 모형이 틀렸다는 뜻이다.")
+print("  상태를 여러 개 직렬로 쌓는 것이 이 결함을 부분적으로 메운다.")
+```
+
+---
+
+## G8.3.1 — 강제 정렬과 임베디드 재학습
+
+여기가 이 장의 핵심 알고리즘이다.
+
+**우리는 음소 경계를 모른다.** 아는 것은 발화의 단어열뿐이다.
+그런데 GMM을 학습하려면 "이 프레임은 어느 상태인가"가 필요하다.
+
+닭과 달걀 문제를 이렇게 푼다.
+
+1. **flat start** — 발화를 상태 수만큼 **균등 분할**한다 (경계를 모르니 일단 균등하게)
+2. 그 배정으로 가우시안을 추정한다
+3. 그 가우시안으로 **Viterbi 강제 정렬**을 다시 한다
+4. 2~3을 반복한다
+
+```{python}
+#| label: alignment
+#| code-fold: false
+
+import numpy as np
+
+
+def flat_start(y):
+    """참 경계를 **모른 채** 상태열에 균등 배정한다."""
+    seq = state_seq(y)
+    T = len(y)
+    idx = (np.arange(T)*len(seq)//T).clip(0, len(seq) - 1)
+    return np.array([seq[i] for i in idx])
+
+
+def boundary_err(pred_states, y):
+    """예측 음소 경계와 참 경계의 평균 거리 (프레임)."""
+    def edges(l):
+        return [i for i in range(1, len(l)) if l[i] != l[i-1]]
+    tb, pb = edges(y), edges(pred_states//NS)
+    if not tb or not pb:
+        return np.nan
+    return float(np.mean([min(abs(t - p) for p in pb) for t in tb]))
+
+
+Xa = np.concatenate(XT, axis=1)
+ST = [flat_start(y) for y in YT]
+print("flat start 에서 시작해 정렬과 재추정을 번갈아 한다")
+print()
+print(f"{'단계':>8} {'경계 평균오차(프레임)':>20} {'ms':>8} "
+      f"{'테스트 프레임 정확도':>20}")
+print("-" * 60)
+ALIGN = []
+e0 = float(np.nanmean([boundary_err(s, y) for s, y in zip(ST, YT)]))
+for it in range(5):
+    mus, covs = fit_gauss(Xa, np.concatenate(ST))
+    aligns = [viterbi_linear(loglik(X, mus, covs), state_seq(y))
+              for X, y in zip(XT, YT)]
+    acc = float(np.mean(np.concatenate(
+        [(viterbi_linear(loglik(X, mus, covs), state_seq(y))//NS == y)
+         for X, y in zip(XE, YE)])))
+    if it == 0:
+        ALIGN.append(("flat start", e0, acc))
+        print(f"{'flat':>8} {e0:>20.2f} {e0*10:>8.1f} {acc:>20.4f}")
+    err = float(np.nanmean([boundary_err(a, y) for a, y in zip(aligns, YT)]))
+    ALIGN.append((f"반복 {it+1}", err, acc))
+    print(f"{it+1:>8} {err:>20.2f} {err*10:>8.1f} {acc:>20.4f}")
+    ST = aligns
+mus, covs = fit_gauss(Xa, np.concatenate(ST))
+print()
+print(f"**한 번의 재정렬로 경계 오차가 {ALIGN[0][1]*10:.1f} ms → "
+      f"{ALIGN[1][1]*10:.1f} ms 로 떨어진다** "
+      f"({ALIGN[0][1]/ALIGN[1][1]:.1f}배).")
+print("  경계를 하나도 알려주지 않았는데 프레임 하나 이내로 맞춘다.")
+print()
+print("**그 뒤로는 거의 나아지지 않는다.**")
+print(f"  반복 2~5 에서 {ALIGN[2][1]*10:.1f}~{ALIGN[-1][1]*10:.1f} ms 로 "
+      "오히려 조금씩 나빠진다.")
+print("  합성 데이터라 애초에 경계가 선명해서 고칠 것이 없기 때문이다.")
+print("  실제 음성에서는 여러 번 반복하며 계속 좋아진다.")
+print()
+print("**강제 정렬은 지금도 쓰인다.**")
+for s in ["TTS 학습 데이터의 음소 지속 시간 라벨 (8.7)",
+          "**Montreal Forced Aligner** 등이 여전히 HMM-GMM 기반이다",
+          "발음 사전 검증 — 정렬 점수가 낮으면 전사가 틀렸을 가능성",
+          "자막 동기화, 노래 가사 정렬",
+          "종단간 모델의 학습 데이터를 만들 때도 쓴다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G8.3.2 — 8.2의 주장을 다시 검사한다
+
+[8.2](02_mel_mfcc.qmd)에서 "DCT는 **대각 공분산 GMM**을 위한 장치였다"고 했다.
+이제 실제로 대각 공분산 분류기가 있으니 확인할 수 있다.
+
+**공정한 비교를 위해 차원을 맞춘다** — 멜 26대역 vs DCT 26계수(자르지 않음).
+그러면 두 표현은 **같은 정보의 직교 회전**일 뿐이다.
+
+```{python}
+#| label: dct-test
+#| code-fold: false
+
+import numpy as np
+from scipy.fft import dct
+
+
+def F26(x, kind):
+    lm = audio.log_mel(x, SR, N_FFT, HOP, fb=FB)
+    return lm if kind == "logmel" else dct(lm, type=2, axis=0, norm="ortho")
+
+
+def offdiag(M):
+    m = ~np.eye(M.shape[0], dtype=bool)
+    return float(np.abs(M[m]).mean())
+
+
+ya = np.concatenate(YT)
+yb = np.concatenate(YE)
+print(f"{'특성':<10} {'차원':>5} {'클래스 내 |r|':>14} "
+      f"{'대각 공분산':>12} {'전체 공분산':>12}")
+print("-" * 60)
+DCTRES = {}
+for kind in ["logmel", "mfcc"]:
+    Xa26 = np.concatenate([F26(x, kind) for x, _, _ in TRAIN], axis=1)
+    Xb26 = np.concatenate([F26(x, kind) for x, _, _ in TEST], axis=1)
+    rs = [offdiag(np.corrcoef(Xa26[:, ya == c]))
+          for c in range(len(PHONES)) if (ya == c).sum() > 60]
+    accs = []
+    for diag in [True, False]:
+        m, c = fit_gauss(Xa26, ya, len(PHONES), diag)
+        accs.append(float((loglik(Xb26, m, c).argmax(0) == yb).mean()))
+    DCTRES[kind] = (float(np.mean(rs)), accs[0], accs[1])
+    print(f"{kind:<10} {Xa26.shape[0]:>5} {np.mean(rs):>14.3f} "
+          f"{accs[0]:>12.4f} {accs[1]:>12.4f}")
+print()
+lm_, mf_ = DCTRES["logmel"], DCTRES["mfcc"]
+print("**① 전체 공분산에서는 두 표현이 정확히 같다** "
+      f"({lm_[2]:.4f} vs {mf_[2]:.4f}).")
+print("  당연하다 — DCT 는 직교 회전이고 가우시안은 회전에 등변이다.")
+print("  이 일치가 실험 설계가 옳다는 확인이 된다.")
+print()
+print(f"**② DCT 는 실제로 탈상관시킨다** — 클래스 내 |r| "
+      f"{lm_[0]:.3f} → {mf_[0]:.3f}.")
+print("  8.2에서 잰 것과 같은 현상이다.")
+print()
+print(f"**③ 그런데 대각 공분산 정확도는 오히려 로그멜이 높다** "
+      f"({lm_[1]:.4f} vs {mf_[1]:.4f}).")
+print("  **8.2에서 예상한 방향과 반대다.** 그대로 보고한다.")
+print()
+print("왜 이런가 — 이 실험이 재현하지 못하는 조건들")
+for s in ["여기는 음소 9개이고 서로 매우 다르다. 공분산 모형이 병목이 아니다",
+          "실제 시스템은 **수만 개의 묶인 상태**에 상태당 **수십 개 혼합**을 쓴다",
+          "  그 규모에서는 파라미터 수가 곧 성능이고, 탈상관의 값어치가 커진다",
+          "합성 음성이라 화자·조음결합에 의한 **클래스 내 변이가 거의 없다**",
+          "  탈상관이 중요해지는 것은 바로 그 변이가 클 때다"]:
+    print(f"  · {s}")
+print()
+print("**여기서 강하게 재현되는 것은 다른 사실이다** — 학습 데이터가 적을 때.")
+print()
+print(f"{'학습 발화':>10} {'대각 공분산':>12} {'전체 공분산':>12} {'차이':>10}")
+print("-" * 48)
+for ntr in [50, 20, 8]:
+    Xs = np.concatenate([F26(x, "mfcc") for x, _, _ in TRAIN[:ntr]], axis=1)
+    ys = np.concatenate(YT[:ntr])
+    Xb26 = np.concatenate([F26(x, "mfcc") for x, _, _ in TEST], axis=1)
+    r = []
+    for diag in [True, False]:
+        m, c = fit_gauss(Xs, ys, len(PHONES), diag)
+        r.append(float((loglik(Xb26, m, c).argmax(0) == yb).mean()))
+    print(f"{ntr:>10} {r[0]:>12.4f} {r[1]:>12.4f} {r[0]-r[1]:>+10.4f}")
+print()
+print("**데이터가 줄수록 대각 공분산이 유리해진다.**")
+print(f"  26차원이면 전체 공분산은 상태마다 {26*27//2}개 파라미터,")
+print(f"  대각이면 {26}개다. {26*27//2/26:.0f}배 차이다.")
+print("  **이것이 대각 공분산을 쓴 진짜 이유다** — 추정 분산을 줄이려고.")
+print("  DCT 는 그 제약을 덜 아프게 만들기 위한 보조 장치였다.")
+```
+
+---
+
+## G8.3.3 — 디코딩: 전이 제약이 무엇을 고치는가
+
+정렬은 정답 음소열을 알 때의 이야기다. **인식**은 그것을 모른 채 찾는 것이다.
+
+가장 단순한 방법은 프레임마다 가장 그럴듯한 상태를 고르는 것이다.
+그런데 그러면 시간 구조를 무시한다.
+
+```{python}
+#| label: decode-phone
+#| code-fold: false
+
+import numpy as np
+
+BIG = np.ones((len(PHONES), len(PHONES)))
+for _, labs, _ in TRAIN:
+    ph = [P2I[p] for p, _ in labs]
+    for a, b in zip(ph, ph[1:]):
+        BIG[a, b] += 1
+LOGBIG = np.log(BIG/BIG.sum(1, keepdims=True))
+
+
+def phone_loop(B, lm_w=0.0):
+    """음소 루프 Viterbi — 어떤 음소든 어떤 음소로든 이어질 수 있다."""
+    P, T = len(PHONES), B.shape[1]
+    dp = np.full((P, NS, T), NEG)
+    bp = np.zeros((P, NS, T, 2), np.int16)
+    dp[:, 0, 0] = B[np.arange(P)*NS, 0]
+    for t in range(1, T):
+        prev_end = dp[:, NS-1, t-1]
+        for p in range(P):
+            for k in range(NS):
+                stay = dp[p, k, t-1]
+                if k > 0:
+                    cand, src = dp[p, k-1, t-1], (p, k-1)
+                else:
+                    sc = prev_end + lm_w*LOGBIG[:, p]
+                    j = int(np.argmax(sc))
+                    cand, src = sc[j], (j, NS-1)
+                if cand > stay:
+                    dp[p, k, t], bp[p, k, t] = cand + B[p*NS + k, t], src
+                else:
+                    dp[p, k, t], bp[p, k, t] = stay + B[p*NS + k, t], (p, k)
+    p, k = int(np.argmax(dp[:, NS-1, T-1])), NS-1
+    out = np.zeros(T, int)
+    for t in range(T-1, -1, -1):
+        out[t] = p
+        p, k = bp[p, k, t]
+    return out
+
+
+def edit_dist(ref, hyp):
+    n, m = len(ref), len(hyp)
+    D = np.zeros((n+1, m+1), int)
+    D[:, 0], D[0, :] = np.arange(n+1), np.arange(m+1)
+    for i in range(1, n+1):
+        for j in range(1, m+1):
+            D[i, j] = min(D[i-1, j] + 1, D[i, j-1] + 1,
+                          D[i-1, j-1] + (ref[i-1] != hyp[j-1]))
+    return int(D[n, m])
+
+
+Bs = [loglik(X, mus, covs) for X in XE]
+print(f"{'방법':<30} {'프레임 정확도':>14} {'음소 오류율(PER)':>18}")
+print("-" * 66)
+DEC = []
+fa = float(np.mean(np.concatenate([(B.argmax(0)//NS == y)
+                                   for B, y in zip(Bs, YE)])))
+pa = float(np.mean([edit_dist(phone_seq(y), phone_seq(B.argmax(0)//NS))
+                    / len(phone_seq(y)) for B, y in zip(Bs, YE)]))
+DEC.append(("프레임별 argmax", fa, pa))
+print(f"{'프레임별 argmax (전이 무시)':<30} {fa:>14.4f} {pa:>18.4f}")
+for lmw, tag in [(0.0, "음소 루프 Viterbi"), (3.0, "  + 음소 바이그램 x3")]:
+    outs = [phone_loop(B, lmw) for B in Bs]
+    fv = float(np.mean(np.concatenate([(o == y) for o, y in zip(outs, YE)])))
+    pv = float(np.mean([edit_dist(phone_seq(y), phone_seq(o))/len(phone_seq(y))
+                        for o, y in zip(outs, YE)]))
+    DEC.append((tag, fv, pv))
+    print(f"{tag:<30} {fv:>14.4f} {pv:>18.4f}")
+print()
+d0, d1, d2 = DEC
+print("**여기서 두 지표가 반대로 움직인다.**")
+print(f"  프레임 정확도: {d0[1]:.4f} → {d1[1]:.4f} — **떨어진다**")
+print(f"  음소 오류율:   {d0[2]:.4f} → {d1[2]:.4f} — "
+      f"**{d0[2]/max(d1[2],1e-9):.1f}배 좋아진다**")
+print()
+print("Viterbi 는 개별 프레임을 조금 희생하고 **경로 전체**를 맞춘다.")
+print("  프레임 argmax 는 짧게 깜빡이는 오류를 내는데,")
+print("  그 하나가 음소열에 삽입 오류를 만든다 — 시퀀스 지표에서는 훨씬 비싸다.")
+print()
+print(f"**음소 바이그램을 더하면 PER 이 {d2[2]:.4f} 가 된다.**")
+if d2[2] == 0:
+    print("  이 코퍼스에서는 완벽하다. 발음 사전이 음소 연쇄를 강하게 제약하기 때문이다.")
+print()
+print("**교훈: 최적화하는 지표와 보고하는 지표를 혼동하지 말 것.**")
+print("  프레임 정확도가 올라도 WER 이 나빠질 수 있고, 그 반대도 마찬가지다.")
+print("  [8.4](04_ctc_rnnt.qmd)의 CTC 는 아예 **시퀀스 확률을 직접** 최적화한다.")
+```
+
+---
+
+## G8.3.4 — 단어 디코딩과 WER
+
+발음 사전으로 단어를 음소열로 펼치고, 단어 바이그램으로 이어 붙인 **네트워크**를 만든다.
+그 위에서 Viterbi를 돌리면 인식기가 된다.
+
+```{python}
+#| label: decode-word
+#| code-fold: false
+
+import numpy as np
+
+WSEQ = [LEX[w].split() + ["_"] for w in WORDS]
+NODE_W, NODE_ST, NODE_FIRST = [], [], []
+for wi, ph in enumerate(WSEQ):
+    for pi, p in enumerate(ph):
+        for k in range(NS):
+            NODE_W.append(wi)
+            NODE_ST.append(P2I[p]*NS + k)
+            NODE_FIRST.append(pi == 0 and k == 0)
+NODE_W, NODE_ST = np.array(NODE_W), np.array(NODE_ST)
+NODE_FIRST = np.array(NODE_FIRST)
+N_NODE = len(NODE_W)
+LAST = np.array([np.where(NODE_W == w)[0][-1] for w in range(len(WORDS))])
+FIRST = np.array([np.where((NODE_W == w) & NODE_FIRST)[0][0]
+                  for w in range(len(WORDS))])
+LASTSET, FIRSTSET = set(LAST.tolist()), set(FIRST.tolist())
+
+CNT = np.ones((len(WORDS), len(WORDS)))
+for _, _, ws in TRAIN:
+    for a, b in zip(ws, ws[1:]):
+        CNT[W2I[a], W2I[b]] += 1
+LOGW = np.log(CNT/CNT.sum(1, keepdims=True))
+
+
+def word_decode(B, lm_w=1.0, ins=0.0):
+    T = B.shape[1]
+    E = B[NODE_ST]
+    dp = np.full((N_NODE, T), NEG)
+    bp = np.zeros((N_NODE, T), np.int32)
+    dp[FIRST, 0] = E[FIRST, 0]
+    prev_idx = np.arange(N_NODE) - 1
+    inner = ~NODE_FIRST
+    for t in range(1, T):
+        stay = dp[:, t-1]
+        within = np.full(N_NODE, NEG)
+        within[inner] = dp[prev_idx[inner], t-1]
+        cross = np.full(N_NODE, NEG)
+        cross_src = np.zeros(N_NODE, np.int32)
+        sc = dp[LAST, t-1][:, None] + lm_w*LOGW + ins
+        j = np.argmax(sc, axis=0)
+        cross[FIRST] = sc[j, np.arange(len(WORDS))]
+        cross_src[FIRST] = LAST[j]
+        cand = np.stack([stay, within, cross])
+        k = np.argmax(cand, axis=0)
+        dp[:, t] = cand[k, np.arange(N_NODE)] + E[:, t]
+        bp[:, t] = np.where(k == 0, np.arange(N_NODE),
+                            np.where(k == 1, prev_idx, cross_src))
+    n = int(LAST[np.argmax(dp[LAST, T-1])])
+    path = np.zeros(T, np.int32)
+    for t in range(T-1, -1, -1):
+        path[t] = n
+        n = bp[n, t]
+    out = [WORDS[NODE_W[path[0]]]]
+    for t in range(1, T):
+        if path[t] in FIRSTSET and path[t-1] in LASTSET:
+            out.append(WORDS[NODE_W[path[t]]])
+    return out
+
+
+def wer_ops(ref, hyp):
+    """편집거리 역추적으로 (치환, 삭제, 삽입) 분해."""
+    n, m = len(ref), len(hyp)
+    D = np.zeros((n+1, m+1), int)
+    D[:, 0], D[0, :] = np.arange(n+1), np.arange(m+1)
+    for i in range(1, n+1):
+        for j in range(1, m+1):
+            D[i, j] = min(D[i-1, j] + 1, D[i, j-1] + 1,
+                          D[i-1, j-1] + (ref[i-1] != hyp[j-1]))
+    i, j, S = n, m, [0, 0, 0]
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and D[i, j] == D[i-1, j-1] + (ref[i-1] != hyp[j-1]):
+            if ref[i-1] != hyp[j-1]:
+                S[0] += 1
+            i, j = i-1, j-1
+        elif i > 0 and D[i, j] == D[i-1, j] + 1:
+            S[1] += 1
+            i -= 1
+        else:
+            S[2] += 1
+            j -= 1
+    return S
+
+
+print(f"단어 네트워크: 노드 {N_NODE}개 (단어 {len(WORDS)}개를 음소·상태로 펼침)")
+print()
+print("WER = (치환 + 삭제 + 삽입) / 참조 단어 수")
+print()
+print(f"{'평가 조건':<22} {'WER':>9} {'치환':>7} {'삭제':>7} {'삽입':>7}")
+print("-" * 58)
+WER = []
+for tag, sg in [("학습과 같은 조건", 0.01), ("잡음 추가 (σ=0.10)", 0.10),
+                ("잡음 추가 (σ=0.25)", 0.25)]:
+    gn = np.random.default_rng(5)
+    tot, nref = np.zeros(3), 0
+    for x, _, ws in TEST:
+        B = loglik(feats(x + gn.normal(0, sg, len(x))), mus, covs)
+        tot += wer_ops(ws, word_decode(B, 1.0))
+        nref += len(ws)
+    WER.append((tag, float(tot.sum()/nref), tot.copy()))
+    print(f"{tag:<22} {tot.sum()/nref:>9.4f} {int(tot[0]):>7} "
+          f"{int(tot[1]):>7} {int(tot[2]):>7}")
+print()
+print(f"**학습과 같은 조건에서는 WER {WER[0][1]:.4f} 다.**")
+print("  발음 사전 + 단어 바이그램이 탐색 공간을 강하게 좁히기 때문이다.")
+print()
+print(f"**그런데 잡음을 조금만 더하면 {WER[1][1]:.2f} 로 무너진다.**")
+print(f"  오류가 거의 전부 **삭제**다 ({int(WER[1][2][1])}개) — "
+      "단어를 못 찾고 통째로 빠뜨린다.")
+print()
+print("원인을 본다 — 잡음이 각 음소의 **자기 프레임**에서 우도를 얼마나 바꾸는가")
+gn = np.random.default_rng(5)
+num = np.zeros(len(PHONES))
+den = np.zeros(len(PHONES))
+top_wrong = collections.Counter()
+for (x, labs, _), y in zip(TEST[:12], YE[:12]):
+    Bc = loglik(feats(x), mus, covs)
+    Bn = loglik(feats(x + gn.normal(0, 0.10, len(x))), mus, covs)
+    for pi in range(len(PHONES)):
+        m = (y == pi)
+        if m.sum() == 0:
+            continue
+        num[pi] += float(np.abs(Bn[pi*NS, m] - Bc[pi*NS, m]).sum())
+        den[pi] += int(m.sum())
+    pred = Bn.argmax(0)//NS
+    for t in np.where(pred != y)[0]:
+        top_wrong[(PHONES[y[t]], PHONES[pred[t]])] += 1
+shift = num/np.maximum(den, 1)
+order = np.argsort(-shift)
+print()
+print(f"{'음소':>6} {'자기 프레임에서 |Δ 로그우도|':>28} {'프레임 수':>10}")
+print("-" * 48)
+for pi in order:
+    if den[pi] > 0:
+        print(f"{PHONES[pi]:>6} {shift[pi]:>28.1f} {int(den[pi]):>10}")
+print()
+print("가장 흔한 프레임 혼동 (잡음 σ=0.10)")
+print(f"{'참 → 예측':>14} {'횟수':>8}")
+print("-" * 26)
+for (a, b), c in top_wrong.most_common(5):
+    print(f"{a + ' → ' + b:>14} {c:>8}")
+print()
+worst = PHONES[int(order[0])]
+print(f"**모든 음소의 우도가 크게 흔들린다** (최대 {shift[order[0]]:.0f}, "
+      f"최소 {shift[order[-1]]:.0f}).")
+print("  절대 우도가 무너지면 Viterbi 는 **가장 덜 나쁜 경로**를 고르는데,")
+print("  단어 네트워크에서 그것은 대개 '단어를 적게 지나는 경로'다 — 그래서 삭제다.")
+print()
+print("**학습·평가 조건이 어긋나면 우아하게 나빠지지 않는다 — 무너진다.**")
+for s in ["가우시안은 학습 때 본 분포 밖에서 **어떤 보정도 하지 않는다**",
+          "**우도의 절대값이 무너지면 경로 비교 자체가 의미를 잃는다**",
+          "그래서 고전 시스템은 조건마다 **따로 학습**하는 것이 상식이었다",
+          "완화책: 다중 조건 학습, 특성 정규화(CMVN, 8.2), 잡음 적응(MLLR)",
+          "**Whisper 가 공격한 것이 바로 이 취약성이다** (8.6) — "
+          "다양한 조건을 대량으로 학습해 버렸다"]:
+    print(f"  · {s}")
+```
+
+::: {.callout-note}
+## WER를 읽는 법
+
+WER은 100%를 넘을 수 있다 — 삽입 오류에는 상한이 없기 때문이다.
+
+그리고 **세 오류의 비율이 진단 정보**다.
+
+| 우세한 오류 | 흔한 원인 | 손잡이 |
+|-----------|---------|-------|
+| **삭제** | 음향 모델이 약하거나 조건 불일치 | 음향 모델, 삽입 페널티를 낮춘다 |
+| **삽입** | 언어모델이 약하거나 삽입 페널티가 낮다 | LM 가중치↑, 삽입 페널티↑ |
+| **치환** | 혼동되는 음소·단어 | 발음 사전, 문맥 의존 모델 |
+
+WER만 보고하고 분해를 안 보여 주는 논문은 절반만 말한 것이다.
 :::
 
-현대 ASR의 용어(정렬, 언어모델 결합, 빔 서치 디코딩)는 전부 이 시대에서 왔다. 계보를 알면 CTC·RNN-T가 무엇을 대체했는지 정확히 보인다.
+---
+
+## G8.3.5 — 문맥 의존 음소와 상태 묶기
+
+/a/ 는 앞뒤 음소에 따라 실제 소리가 달라진다 — **조음결합(coarticulation)**.
+그래서 음소를 문맥과 함께 다룬다: `s-a+i` (앞이 s, 뒤가 i인 a).
+
+이것이 **트라이폰**이고, 곧바로 폭발한다.
+
+```{python}
+#| label: triphone
+#| code-fold: false
+
+import collections
+import numpy as np
+
+seen = collections.Counter()
+for _, labs, _ in TRAIN:
+    ph = [p for p, _ in labs]
+    for i in range(1, len(ph) - 1):
+        seen[(ph[i-1], ph[i], ph[i+1])] += 1
+
+P = len(PHONES)
+print(f"{'모형':<22} {'단위 수':>12} {'상태 수':>12}")
+print("-" * 50)
+print(f"{'모노폰':<22} {P:>12,} {P*NS:>12,}")
+print(f"{'트라이폰 (가능한 전부)':<22} {P**3:>12,} {P**3*NS:>12,}")
+print(f"{'트라이폰 (학습에서 관측)':<22} {len(seen):>12,} {len(seen)*NS:>12,}")
+print()
+rare = sum(1 for v in seen.values() if v < 5)
+print(f"**가능한 트라이폰의 {len(seen)/P**3:.1%} 만 학습에서 나타났다.**")
+print(f"  그중 {rare}개({rare/len(seen):.0%})는 5회 미만이다 — "
+      "가우시안을 추정하기에 턱없이 부족하다.")
+print()
+print("실제 규모에서는 훨씬 심각하다")
+print(f"{'음소 수':>8} {'트라이폰':>14} {'상태(3개씩)':>14}")
+print("-" * 42)
+for p in [9, 40, 50]:
+    print(f"{p:>8} {p**3:>14,} {p**3*3:>14,}")
+print()
+print("**해법이 상태 묶기(state tying)다.**")
+for s in ["음향적으로 비슷한 트라이폰 상태들이 **같은 가우시안을 공유**한다",
+          "묶는 기준을 **음성학적 결정 트리**로 정한다",
+          "  '앞 음소가 비음인가?', '뒤가 원순모음인가?' 같은 질문으로 분기",
+          "**보지 못한 트라이폰도 트리를 타고 내려가 상태를 배정받는다**",
+          "  이것이 상태 묶기의 진짜 값어치다 — 일반화",
+          "결과: 수십만 상태 → 보통 2,000~10,000개의 묶인 상태"]:
+    print(f"  · {s}")
+print()
+print("**이 문제 구조가 딥러닝으로 바뀐 방식**")
+print(f"{'접근':<24} {'문맥을 어떻게 다루나'}")
+print("-" * 62)
+for a, b in [("트라이폰 + 결정 트리", "**이산 단위를 쪼개고 다시 묶는다**"),
+             ("DNN-HMM 하이브리드", "여러 프레임을 입력으로 받아 상태 사후확률"),
+             ("CTC / RNN-T (8.4)", "인코더가 문맥을 표현. 트라이폰 개념 자체가 없다"),
+             ("Transformer (8.6)", "어텐션이 발화 전체를 본다")]:
+    print(f"{a:<24} {b}")
+print()
+print("**DNN-HMM 이 결정적이었던 이유가 여기 있다.**")
+print("  GMM 은 프레임 하나만 보므로 문맥을 **단위 쪼개기**로 넣어야 했다.")
+print("  DNN 은 앞뒤 프레임을 그냥 입력으로 받는다 — 트라이폰이 하던 일을")
+print("  파라미터 공유로 훨씬 값싸게 한다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 전체 그림
 
-- 음성 인식 문제의 정의와 잡음 채널 모델
-- 음소(phoneme)와 음성학 기초, 발음 사전
-- 은닉 마르코프 모델(HMM): 상태·전이·방출
-- 세 가지 기본 문제와 forward-backward, Viterbi, Baum-Welch
-- GMM 방출 모델과 특성 벡터
-- 문맥 의존 음소(triphone)와 상태 묶기
-- 언어모델 결합과 WFST 디코딩
-- 강제 정렬(forced alignment)의 개념과 활용
-- DNN-HMM 하이브리드로의 전환
-- 평가 지표: WER, CER, 정렬 기반 오류 분해
+```{python}
+#| label: wfst
+#| code-fold: false
 
----
-
-## G8.3.1 — HMM 상태 전이
-
-상태가 시간에 따라 전이하며 관측을 방출하는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 관측 시퀀스 재생
-:::
-
----
-
-## G8.3.2 — Viterbi 경로
-
-격자(trellis) 위에서 최적 경로가 선택되는 동적계획법
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 격자 탐색 재생
-:::
-
----
-
-## G8.3.3 — 강제 정렬
-
-음성 파형 위에 음소 경계가 그어지는 모습
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 발화 선택
-:::
-
----
-
-## G8.3.4 — WER 계산
-
-삽입·삭제·치환 오류가 편집거리로 집계되는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 가설 문장 입력
-:::
+print("고전 디코더는 네 층의 유한상태 기계를 합성한다 (WFST)")
+print()
+print(f"{'기호':<6} {'무엇을 무엇으로':<34} {'이 장에서'}")
+print("-" * 76)
+for a, b, c in [
+    ("H", "HMM 상태 → 문맥의존 음소", "상태 3개 좌→우"),
+    ("C", "문맥의존 음소 → 음소", "트라이폰 (G8.3.5)"),
+    ("L", "음소 → 단어", "발음 사전 LEX"),
+    ("G", "단어 → 문장", "단어 바이그램"),
+]:
+    print(f"{a:<6} {b:<34} {c}")
+print()
+print("  H ∘ C ∘ L ∘ G 를 미리 합성해 하나의 큰 그래프로 만들고,")
+print("  결정화·최소화로 줄인 뒤 그 위에서 빔 서치를 돌린다.")
+print()
+print("**이 구조의 장점과 대가**")
+print(f"{'':<4}{'장점':<34} {'대가'}")
+print("-" * 70)
+for a, b in [("각 층을 따로 학습·교체할 수 있다", "층마다 별도 학습 파이프라인"),
+             ("언어모델을 텍스트만으로 학습", "발음 사전을 사람이 만들어야 한다"),
+             ("어휘 추가가 사전 수정으로 끝난다", "미등록어(OOV)는 절대 못 낸다"),
+             ("탐색이 이론적으로 잘 이해된다", "합성된 그래프가 수 GB 가 된다")]:
+    print(f"{'':<4}{a:<34} {b}")
+print()
+print("**미등록어 문제가 특히 아팠다.**")
+print("  사전에 없는 이름·신조어는 인식 결과에 **나타날 수조차 없다.**")
+print("  서브워드 출력(8.4)이 이 제약을 없앤다.")
+print()
+print("**그리고 CTC 가 걷어낸 것이 정확히 무엇인지 이제 말할 수 있다**")
+for s in ["**프레임 단위 상태 라벨** — 강제 정렬로 만들던 것 (G8.3.1)",
+          "**발음 사전** — 문자/서브워드를 바로 낸다",
+          "**문맥 의존 단위와 상태 묶기** — 인코더가 문맥을 담는다",
+          "**HMM 의 조건부 독립 가정** — 그래서 델타 특성도 필요 없어졌다 (8.2)",
+          "남는 것은 정렬을 **주변화**하는 아이디어 하나다 (8.4)"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 핵심 용어
+## 요약
 
-| 용어 | 비고 |
-|------|------|
-| HMM |  |
-| Viterbi 알고리즘 |  |
-| GMM |  |
-| 강제 정렬 |  |
-| WER |  |
-| WFST |  |
+| 개념 | 수식·수치 | 핵심 |
+|------|----------|------|
+| 잡음 채널 | $\arg\max_W P(X\|W)P(W)$ | 음향과 언어를 **따로** 학습 |
+| HMM | 좌→우 3상태 + 자기 전이 | 자기 전이가 지속 시간을 만든다 |
+| 지속 시간의 결함 | 기하 분포 가정 | 실제 음소 길이는 훨씬 좁다 |
+| **flat start** | 균등 분할로 시작 | 경계를 몰라도 학습을 시작할 수 있다 |
+| **강제 정렬** | Viterbi를 정답 음소열에 묶는다 | 경계 오차 **22.3 → 5.8 ms (1회 반복)** |
+| 그 뒤 | 거의 개선 없음 | 합성 데이터라 고칠 것이 없기 때문 |
+| 8.2 재검증 ① | 전체 공분산에서 두 표현 **동일** | DCT는 직교 회전 — 설계가 옳다는 확인 |
+| 8.2 재검증 ② | 클래스 내 \|r\| 0.352 → 0.151 | **DCT는 실제로 탈상관시킨다** |
+| **8.2 재검증 ③** | 대각 정확도는 **로그멜이 더 높다** | 8.2의 예상과 **반대** — 그대로 보고 |
+| 강하게 재현된 것 | 데이터가 적을수록 대각이 유리 | 파라미터 351개 vs 26개 |
+| 디코딩의 역설 | 프레임 정확도 ↓, PER **5.3배 ↓** | 최적화 지표와 보고 지표를 혼동 말 것 |
+| 음소 바이그램 | PER **0.0000** | 발음 사전이 연쇄를 강하게 제약 |
+| WER (일치 조건) | **0.0000** | 사전 + 바이그램이 탐색을 좁힌다 |
+| **WER (불일치)** | σ=0.10에서 **0.82** | 우아하게 나빠지지 않고 **무너진다** |
+| 오류 분해 | 거의 전부 **삭제** | S/D/I 비율이 진단 정보다 |
+| 트라이폰 폭발 | 음소 40개 → **64,000개** | 관측된 것은 9.2%뿐 |
+| 상태 묶기 | 결정 트리로 공유 | **보지 못한 트라이폰도 배정받는다** |
+| WFST | H ∘ C ∘ L ∘ G | 층 분리의 장점과 OOV의 대가 |
+| CTC가 걷어낸 것 | 정렬·사전·문맥단위·독립가정 | 남는 것은 **주변화** 하나 |
+
+정렬을 사람이 만들 수 없다는 문제를, 다음 장은 전혀 다르게 푼다.
 
 ---
 
-**다음**: [8.4 CTC와 RNN-T](04_ctc_rnnt.qmd) — 정렬 없이 학습하기 — 종단간 음성 인식의 문
+**다음**: [8.4 CTC와 RNN-T](04_ctc_rnnt.qmd) — 정렬 없이 학습하기
 
 **이전**: [8.2 멜 스케일과 MFCC](02_mel_mfcc.qmd)
