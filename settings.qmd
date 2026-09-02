@@ -1,0 +1,273 @@
+---
+title: "읽기 설정"
+subtitle: "글꼴·색·크기를 취향에 맞게"
+number-sections: false
+code-tools: false      # 소스 모달이 위젯 id 를 중복 생성하는 것을 막는다
+---
+
+이 페이지에서 바꾼 값은 **이 브라우저에만** 저장되고 모든 장에 적용됩니다.
+서버로 전송되지 않으며, 언제든 초기값으로 되돌릴 수 있습니다.
+
+::: {.callout-note appearance="simple"}
+색을 바꾸면 아래 **명도 대비**가 실시간으로 계산됩니다.
+본문 글자는 WCAG 기준 **4.5:1 이상**(AA), 되도록 **7:1 이상**(AAA)을 권합니다.
+:::
+
+```{=html}
+<div class="reader-settings">
+  <div class="rs-field">
+    <label for="rs-text">본문 글자색</label>
+    <input type="color" id="rs-text">
+  </div>
+  <div class="rs-field">
+    <label for="rs-bg">배경색</label>
+    <input type="color" id="rs-bg">
+  </div>
+  <div class="rs-field">
+    <label for="rs-link">링크색</label>
+    <input type="color" id="rs-link">
+  </div>
+  <div class="rs-field">
+    <label for="rs-muted">보조 글자색 <span class="rs-value">(캡션·힌트)</span></label>
+    <input type="color" id="rs-muted">
+  </div>
+  <div class="rs-field">
+    <label for="rs-font">글꼴</label>
+    <select id="rs-font">
+      <option value="">Pretendard (기본)</option>
+      <option value='"Noto Sans KR", sans-serif'>Noto Sans KR</option>
+      <option value='"Nanum Gothic", sans-serif'>나눔고딕</option>
+      <option value='"Malgun Gothic", "맑은 고딕", sans-serif'>맑은 고딕</option>
+      <option value='"Noto Serif KR", serif'>Noto Serif KR (명조)</option>
+      <option value='system-ui, sans-serif'>시스템 기본</option>
+    </select>
+  </div>
+  <div class="rs-field">
+    <label for="rs-size">글자 크기 <span class="rs-value" id="rs-size-v"></span></label>
+    <input type="range" id="rs-size" min="0.85" max="1.35" step="0.05">
+  </div>
+  <div class="rs-field">
+    <label for="rs-lh">줄 간격 <span class="rs-value" id="rs-lh-v"></span></label>
+    <input type="range" id="rs-lh" min="1.4" max="2.2" step="0.05">
+  </div>
+  <div class="rs-field">
+    <label for="rs-measure">본문 최대 너비 <span class="rs-value" id="rs-measure-v"></span></label>
+    <input type="range" id="rs-measure" min="720" max="1500" step="20">
+  </div>
+</div>
+
+<div class="rs-actions">
+  <button type="button" id="rs-preset-default">기본값</button>
+  <button type="button" id="rs-preset-soft">눈이 편한 회색</button>
+  <button type="button" id="rs-preset-high">고대비</button>
+  <button type="button" id="rs-preset-sepia">세피아</button>
+  <button type="button" id="rs-reset">저장한 설정 지우기</button>
+</div>
+
+<table class="rs-contrast">
+  <thead>
+    <tr><th>조합</th><th>대비</th><th>등급</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>본문 글자 / 배경</td><td id="rs-c-text">–</td><td id="rs-g-text">–</td></tr>
+    <tr><td>링크 / 배경</td><td id="rs-c-link">–</td><td id="rs-g-link">–</td></tr>
+    <tr><td>보조 글자 / 배경</td><td id="rs-c-muted">–</td><td id="rs-g-muted">–</td></tr>
+  </tbody>
+</table>
+
+<script>
+(function () {
+  "use strict";
+  var RS = window.readerSettings;
+  if (!RS) { return; }
+
+  var el = function (id) { return document.getElementById(id); };
+  var ctrls = {
+    "--reader-text": el("rs-text"),
+    "--reader-bg": el("rs-bg"),
+    "--reader-link": el("rs-link"),
+    "--reader-muted": el("rs-muted"),
+    "--reader-font": el("rs-font"),
+    "--reader-font-size": el("rs-size"),
+    "--reader-line-height": el("rs-lh"),
+    "--reader-measure": el("rs-measure")
+  };
+
+  // 테마가 준 현재 값(사용자 설정이 없을 때의 기본값)을 읽어 온다
+  function themeValue(name) {
+    return getComputedStyle(document.body).getPropertyValue(name).trim();
+  }
+
+  function toHex(c) {
+    if (!c) { return "#000000"; }
+    if (c[0] === "#") {
+      return c.length === 4
+        ? "#" + c[1] + c[1] + c[2] + c[2] + c[3] + c[3]
+        : c.slice(0, 7);
+    }
+    var m = c.match(/\d+/g);
+    if (!m) { return "#000000"; }
+    return "#" + m.slice(0, 3).map(function (v) {
+      return ("0" + parseInt(v, 10).toString(16)).slice(-2);
+    }).join("");
+  }
+
+  // ── WCAG 명도 대비 ────────────────────────────────────────
+  function lin(c) {
+    c = c / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  }
+  function lum(hex) {
+    var h = toHex(hex).slice(1);
+    return 0.2126 * lin(parseInt(h.slice(0, 2), 16))
+         + 0.7152 * lin(parseInt(h.slice(2, 4), 16))
+         + 0.0722 * lin(parseInt(h.slice(4, 6), 16));
+  }
+  function ratio(a, b) {
+    var x = lum(a), y = lum(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  }
+  function grade(r) {
+    if (r >= 7) { return ["AAA", "rs-ok"]; }
+    if (r >= 4.5) { return ["AA", "rs-ok"]; }
+    if (r >= 3) { return ["큰 글자만", "rs-warn"]; }
+    return ["미달", "rs-bad"];
+  }
+
+  function updateContrast() {
+    var bg = ctrls["--reader-bg"].value;
+    [["text", "--reader-text"], ["link", "--reader-link"],
+     ["muted", "--reader-muted"]].forEach(function (p) {
+      var r = ratio(ctrls[p[1]].value, bg);
+      var g = grade(r);
+      el("rs-c-" + p[0]).textContent = r.toFixed(2) + ":1";
+      var ge = el("rs-g-" + p[0]);
+      ge.textContent = g[0];
+      ge.className = g[1];
+    });
+  }
+
+  function collect() {
+    var cfg = {};
+    Object.keys(ctrls).forEach(function (k) {
+      var c = ctrls[k];
+      if (!c) { return; }
+      var v = c.value;
+      if (k === "--reader-font-size") { v = v + "rem"; }
+      if (k === "--reader-measure") { v = v + "px"; }
+      if (k === "--reader-font" && v === "") { return; }   // 기본 글꼴
+      cfg[k] = v;
+    });
+    return cfg;
+  }
+
+  function push() {
+    RS.save(collect());
+    el("rs-size-v").textContent = ctrls["--reader-font-size"].value + " rem";
+    el("rs-lh-v").textContent = ctrls["--reader-line-height"].value;
+    el("rs-measure-v").textContent = ctrls["--reader-measure"].value + " px";
+    updateContrast();
+  }
+
+  // 저장값 -> 없으면 테마 기본값으로 컨트롤을 채운다
+  function load() {
+    var cfg = RS.get();
+    Object.keys(ctrls).forEach(function (k) {
+      var c = ctrls[k];
+      if (!c) { return; }
+      var v = cfg[k] || themeValue(k);
+      if (c.type === "color") { c.value = toHex(v); }
+      else if (c.type === "range") { c.value = parseFloat(v) || c.value; }
+      else { c.value = cfg[k] || ""; }
+    });
+    el("rs-size-v").textContent = ctrls["--reader-font-size"].value + " rem";
+    el("rs-lh-v").textContent = ctrls["--reader-line-height"].value;
+    el("rs-measure-v").textContent = ctrls["--reader-measure"].value + " px";
+    updateContrast();
+  }
+
+  Object.keys(ctrls).forEach(function (k) {
+    if (ctrls[k]) { ctrls[k].addEventListener("input", push); }
+  });
+
+  var PRESETS = {
+    "rs-preset-soft":  { "--reader-text": "#d7dde5", "--reader-bg": "#22262b",
+                         "--reader-link": "#8fb8ff", "--reader-muted": "#9aa7b6" },
+    "rs-preset-high":  { "--reader-text": "#ffffff", "--reader-bg": "#000000",
+                         "--reader-link": "#8ab4ff", "--reader-muted": "#d0d0d0" },
+    "rs-preset-sepia": { "--reader-text": "#3b3228", "--reader-bg": "#f4ecd8",
+                         "--reader-link": "#8c4a1f", "--reader-muted": "#6b5c4a" }
+  };
+
+  Object.keys(PRESETS).forEach(function (id) {
+    var b = el(id);
+    if (!b) { return; }
+    b.addEventListener("click", function () {
+      var p = PRESETS[id];
+      Object.keys(p).forEach(function (k) {
+        if (ctrls[k]) { ctrls[k].value = p[k]; }
+      });
+      push();
+    });
+  });
+
+  el("rs-preset-default").addEventListener("click", function () {
+    RS.reset();
+    load();
+  });
+  el("rs-reset").addEventListener("click", function () {
+    RS.reset();
+    load();
+  });
+
+  load();
+})();
+</script>
+```
+
+---
+
+## 미리보기
+
+아래 문단으로 지금 설정을 확인하세요.
+
+> 스펙트로그램은 사실상 모든 오디오 모델의 입력이다. STFT의 파라미터 하나가
+> 모델 성능을 좌우하는데, 그 이유는 **시간-주파수 해상도 트레이드오프**에 있다.
+> 프레임을 늘리면 주파수는 선명해지고 시간은 뭉개진다 — 원리적인 한계이고
+> 절충만 가능하다. 이것은 [8.1](chapters/08_audio/01_fourier_stft.qmd)에서 다룬다.
+
+수식도 함께 봅니다.
+
+$$P(\ell \mid X) = \sum_{\pi \in \mathcal{B}^{-1}(\ell)} \prod_{t=1}^{T} y^t_{\pi_t}$$
+
+| 항목 | 값 | 비고 |
+|------|-----|------|
+| 본문 글꼴 | Pretendard | 한글·영문·숫자 폭이 고르다 |
+| 기본 대비 (라이트) | 16.6:1 | AAA |
+| 기본 대비 (다크) | 13.5:1 | AAA |
+
+::: {.interaction-hint}
+이 회색 힌트 글씨가 보조 글자색입니다. 너무 흐리면 위에서 밝기를 올리세요.
+:::
+
+---
+
+## 기본값을 이렇게 고른 이유
+
+색은 눈대중이 아니라 **WCAG 명도 대비**를 계산해서 골랐습니다.
+바꾸기 전 값에는 실제로 기준 미달인 조합이 있었습니다.
+
+| 용도 | 이전 | 대비 | 지금 | 대비 |
+|------|------|------|------|------|
+| 링크 (라이트) | `#7ea8f7` | **2.38:1 미달** | `#1d4ed8` | 6.70:1 AA |
+| 캡션·힌트 (라이트) | `#8899aa` | **2.92:1 미달** | `#5b6672` | 5.85:1 AA |
+| 본문 (다크) | `#dee2e6` | 10.94:1 | `#e8ecf1` | 13.48:1 AAA |
+| 링크 (다크) | `#7ea8f7` | 5.99:1 | `#8fb8ff` | 7.97:1 AAA |
+| 캡션·힌트 (다크) | `#8899aa` | 4.87:1 | `#a7b4c4` | 7.59:1 AAA |
+
+라이트 테마의 링크와 캡션이 특히 문제였습니다 — 흰 배경에서 2~3:1이면
+정상 시력에서도 흐릿하게 보입니다.
+
+글꼴은 **Pretendard 가변 폰트**를 동적 서브셋으로 불러옵니다.
+한글 웹폰트는 글자 수가 많아 통짜로 받으면 무겁기 때문에,
+페이지에 실제로 쓰인 글자만 내려받는 방식을 씁니다.

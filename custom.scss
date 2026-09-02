@@ -1,15 +1,18 @@
 /*-- scss:defaults --*/
-$font-family-sans-serif: "Pretendard", "Noto Sans KR", system-ui, sans-serif;
-$font-family-monospace: "JetBrains Mono", "Fira Code", monospace;
+$font-family-sans-serif: "Pretendard Variable", "Pretendard", "Noto Sans KR",
+                         system-ui, -apple-system, "Segoe UI", sans-serif;
+$font-family-monospace: "JetBrains Mono", "Fira Code", "D2Coding",
+                        "Consolas", monospace;
 $headings-font-weight: 600;
-$link-color: #7ea8f7;
+$line-height-base: 1.75;
+$link-color: #1d4ed8;
 
 /*-- scss:rules --*/
 
 /* 수식 강조 블록 */
 .math-box {
   background: rgba(126, 168, 247, 0.08);
-  border-left: 3px solid #7ea8f7;
+  border-left: 3px solid var(--accent, #7ea8f7);
   border-radius: 4px;
   padding: 1rem 1.2rem;
   margin: 1.2rem 0;
@@ -24,32 +27,31 @@ $link-color: #7ea8f7;
 .plotly-graph-div {
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
   margin: 1.5rem 0;
 }
 
 /* 코드 블록 */
 pre.sourceCode {
   border-radius: 6px;
-  font-size: 0.85em;
 }
 
 /* 챕터 헤더 */
 h1.title {
-  border-bottom: 2px solid #7ea8f7;
+  border-bottom: 2px solid var(--accent, #7ea8f7);
   padding-bottom: 0.5rem;
 }
 
 /* 섹션 구분선 */
 hr {
-  border-color: rgba(126, 168, 247, 0.2);
+  border-color: var(--reader-rule, rgba(126, 168, 247, 0.2));
   margin: 2rem 0;
 }
 
 /* 인터랙션 힌트 */
 .interaction-hint {
-  font-size: 0.82em;
-  color: #8899aa;
+  font-size: 0.86em;
+  color: var(--reader-muted, #5b6672);
   text-align: center;
   margin-top: -0.8rem;
   margin-bottom: 1rem;
@@ -76,3 +78,82 @@ hr {
   font-size: 1.1rem;
   font-weight: 700;
 }
+
+/* ── 읽기 설정 페이지(settings.qmd) 위젯 ─────────────────────── */
+.reader-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.1rem;
+  margin: 1.5rem 0;
+}
+
+.reader-settings .rs-field {
+  border: 1px solid var(--reader-rule, rgba(128, 128, 128, 0.25));
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+}
+
+.reader-settings label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.45rem;
+}
+
+.reader-settings input[type="color"] {
+  width: 100%;
+  height: 2.4rem;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.reader-settings input[type="range"],
+.reader-settings select {
+  width: 100%;
+}
+
+.reader-settings .rs-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--reader-muted, #5b6672);
+  font-size: 0.88em;
+}
+
+.rs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 1.2rem 0;
+}
+
+.rs-actions button {
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--reader-rule, rgba(128, 128, 128, 0.35));
+  background: transparent;
+  color: var(--reader-text, inherit);
+  cursor: pointer;
+}
+
+.rs-actions button:hover {
+  border-color: var(--accent, #7ea8f7);
+  color: var(--accent, #7ea8f7);
+}
+
+.rs-contrast {
+  border-collapse: collapse;
+  margin: 1rem 0;
+}
+
+.rs-contrast th,
+.rs-contrast td {
+  border: 1px solid var(--reader-rule, rgba(128, 128, 128, 0.25));
+  padding: 0.4rem 0.75rem;
+  text-align: left;
+}
+
+.rs-ok { color: #2f9e44; font-weight: 600; }
+.rs-warn { color: #e8a33d; font-weight: 600; }
+.rs-bad { color: #e5484d; font-weight: 600; }

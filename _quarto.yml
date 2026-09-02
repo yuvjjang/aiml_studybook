@@ -167,6 +167,9 @@ book:
         - chapters/13_appendix/01_glossary.qmd
         - chapters/13_appendix/02_math_cheatsheet.qmd
         - chapters/13_appendix/03_resources.qmd
+    - part: "부록: 설정"
+      chapters:
+        - settings.qmd
 
 format:
   html:
@@ -174,6 +177,7 @@ format:
       dark: [slate, custom.scss]
       light: [flatly, custom.scss]
     css: styles.css
+    include-in-header: theme-settings.html
     toc: true
     toc-depth: 3
     toc-title: "이 페이지"

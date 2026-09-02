@@ -88,6 +88,9 @@ def build_quarto_yml():
             lines.append(f'        - chapters/{part["dir"]}/{ch["file"]}.qmd')
 
     lines += [
+        '    - part: "부록: 설정"',
+        "      chapters:",
+        "        - settings.qmd",
         "",
         "format:",
         "  html:",
@@ -95,6 +98,7 @@ def build_quarto_yml():
         "      dark: [slate, custom.scss]",
         "      light: [flatly, custom.scss]",
         "    css: styles.css",
+        "    include-in-header: theme-settings.html",
         "    toc: true",
         "    toc-depth: 3",
         '    toc-title: "이 페이지"',

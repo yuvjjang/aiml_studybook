@@ -1,14 +1,78 @@
-@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+/* Pretendard — 가변 폰트 + 동적 서브셋 (한글 웹폰트 용량을 크게 줄인다) */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css');
 
+/* ══════════════════════════════════════════════════════════════════
+   읽기 설정 변수
+   settings.qmd 에서 바꾼 값이 theme-settings.js 를 통해
+   :root 인라인 스타일로 덮어써진다. 여기 값은 기본값이다.
+   ══════════════════════════════════════════════════════════════════ */
 :root {
   --accent: #7ea8f7;
   --accent-dim: rgba(126, 168, 247, 0.15);
+
+  --reader-font: "Pretendard Variable", Pretendard, "Noto Sans KR",
+                 system-ui, -apple-system, "Segoe UI", sans-serif;
+  --reader-font-size: 1rem;
+  --reader-line-height: 1.75;
+  --reader-measure: 1100px;
 }
 
-/* 전체 페이지 최대 너비 */
-.quarto-container {
-  max-width: 1100px;
+/* 라이트 테마 기본 색 (WCAG 대비를 실제로 계산해 고른 값) */
+body.quarto-light {
+  --reader-text: #1b1f24;    /* 흰 배경 대비 16.6:1  AAA */
+  --reader-bg: #ffffff;
+  --reader-link: #1d4ed8;    /*                6.7:1  AA  */
+  --reader-muted: #5b6672;   /*                5.9:1  AA  */
+  --reader-rule: rgba(27, 31, 36, 0.14);
 }
+
+/* 다크 테마 기본 색 */
+body.quarto-dark {
+  --reader-text: #e8ecf1;    /* #1e2227 대비  13.5:1  AAA */
+  --reader-bg: #1e2227;
+  --reader-link: #8fb8ff;    /*                8.0:1  AAA */
+  --reader-muted: #a7b4c4;   /*                7.6:1  AAA */
+  --reader-rule: rgba(232, 236, 241, 0.16);
+}
+
+/* ── 본문에 적용 ─────────────────────────────────────────────── */
+body {
+  font-family: var(--reader-font);
+  font-size: var(--reader-font-size);
+  line-height: var(--reader-line-height);
+  color: var(--reader-text);
+  background-color: var(--reader-bg);
+}
+
+/* Bootstrap 이 자체 변수로 색을 칠하는 곳까지 맞춘다 */
+body,
+body.quarto-dark,
+body.quarto-light {
+  --bs-body-color: var(--reader-text);
+  --bs-body-bg: var(--reader-bg);
+  --bs-link-color: var(--reader-link);
+  --bs-link-hover-color: var(--reader-link);
+  --bs-emphasis-color: var(--reader-text);
+  --bs-secondary-color: var(--reader-muted);
+}
+
+main.content,
+.quarto-title-block,
+p, li, td, th, dd, dt,
+.callout-body, .callout-title {
+  color: var(--reader-text);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--reader-text);
+  font-family: var(--reader-font);
+}
+
+a, a:visited { color: var(--reader-link); }
+a:hover { color: var(--reader-link); }
+
+/* 전체 페이지 최대 너비 */
+.quarto-container { max-width: var(--reader-measure); }
 
 /* 인라인 수식 크기 */
 .math.inline { font-size: 1.05em; }
@@ -16,8 +80,8 @@
 
 /* 그래픽 캡션 */
 figcaption {
-  font-size: 0.82em;
-  color: #8899aa;
+  font-size: 0.86em;
+  color: var(--reader-muted);
   text-align: center;
   margin-top: 0.4rem;
 }
@@ -33,5 +97,12 @@ figcaption {
 .page-navigation {
   margin-top: 3rem;
   padding-top: 1.5rem;
-  border-top: 1px solid rgba(126, 168, 247, 0.2);
+  border-top: 1px solid var(--reader-rule);
+}
+
+/* 코드 출력(print 결과)도 본문 폰트 크기를 따라간다 */
+pre.sourceCode,
+.cell-output pre {
+  font-size: calc(var(--reader-font-size) * 0.85);
+  line-height: 1.55;
 }

@@ -1,0 +1,83 @@
+<!-- 읽기 설정을 모든 페이지에 적용한다 (settings.qmd 에서 조절) -->
+<script>
+/* 읽기 설정을 모든 페이지에 적용한다.
+ *
+ * settings.qmd 에서 바꾼 값을 localStorage 에 저장하고,
+ * 이 스크립트가 페이지마다 :root 의 CSS 변수로 덮어쓴다.
+ * 값은 브라우저에만 저장되며 서버로 가지 않는다.
+ *
+ * <head> 에서 동기 실행되므로 본문이 그려지기 전에 적용된다
+ * (색이 번쩍이는 것을 막는다).
+ */
+(function () {
+  "use strict";
+
+  var KEY = "aimlstudy.reader";
+
+  // settings.qmd 와 공유하는 스키마. CSS 변수명 -> 기본값(테마별)
+  var FIELDS = {
+    "--reader-text": null,        // null = 테마 기본값을 그대로 둔다
+    "--reader-bg": null,
+    "--reader-link": null,
+    "--reader-muted": null,
+    "--reader-font": null,
+    "--reader-font-size": null,
+    "--reader-line-height": null,
+    "--reader-measure": null
+  };
+
+  function read() {
+    try {
+      var raw = window.localStorage.getItem(KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      return {};                 // 사생활 보호 모드 등에서 접근이 막히는 경우
+    }
+  }
+
+  function apply(cfg) {
+    var root = document.documentElement;
+    Object.keys(FIELDS).forEach(function (k) {
+      if (cfg && typeof cfg[k] === "string" && cfg[k] !== "") {
+        root.style.setProperty(k, cfg[k]);
+      } else {
+        root.style.removeProperty(k);
+      }
+    });
+  }
+
+  function save(cfg) {
+    try {
+      window.localStorage.setItem(KEY, JSON.stringify(cfg || {}));
+    } catch (e) {
+      /* 저장할 수 없으면 이번 세션에만 적용된다 */
+    }
+  }
+
+  // settings.qmd 가 쓰는 최소 API
+  window.readerSettings = {
+    key: KEY,
+    fields: Object.keys(FIELDS),
+    get: read,
+    apply: apply,
+    save: function (cfg) { save(cfg); apply(cfg); },
+    reset: function () {
+      try { window.localStorage.removeItem(KEY); } catch (e) { /* noop */ }
+      apply({});
+    }
+  };
+
+  apply(read());
+
+  // 라이트/다크 토글 후에도 사용자 값이 유지되도록 다시 적용한다
+  document.addEventListener("DOMContentLoaded", function () {
+    apply(read());
+    var btn = document.querySelector(".quarto-color-scheme-toggle");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        window.setTimeout(function () { apply(read()); }, 0);
+      });
+    }
+  });
+})();
+</script>
