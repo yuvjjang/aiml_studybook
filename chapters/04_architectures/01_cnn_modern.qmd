@@ -9,7 +9,7 @@ jupyter: ai-ml-study
 
 이 장의 주인공은 **잔차 연결**이다.
 ResNet(2015)이 도입한 이 한 줄짜리 아이디어는 CNN을 넘어
-[Transformer](../05_transformer/01_transformer_architecture.qmd)의 필수 부품이 되었고,
+[Transformer](../05_transformer/04_transformer_block.qmd)의 필수 부품이 되었고,
 지금 돌아가는 거의 모든 대형 모델 안에 들어 있다.
 
 아키텍처 설계의 역사는 골동품이 아니다. **현재 모델의 설계 근거다.**

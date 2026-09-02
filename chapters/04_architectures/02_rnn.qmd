@@ -15,7 +15,7 @@ $$h_t = \tanh(W_{hh}h_{t-1} + W_{xh}x_t + b)$$
 이 장의 목적은 RNN을 쓰는 법을 배우는 것이 아니다.
 **RNN이 어디서 아팠는지**를 정확히 아는 것이다.
 그 통증 지점이 [LSTM](03_lstm_gru.qmd), [어텐션](04_seq2seq_attention.qmd),
-[Transformer](../05_transformer/01_transformer_architecture.qmd)를 차례로 낳았다.
+[Transformer](../05_transformer/04_transformer_block.qmd)를 차례로 낳았다.
 
 ---
 
@@ -630,7 +630,7 @@ print()
 print("GPU 는 병렬 연산기다. 순차 단계가 많으면 연산 유닛이 놀게 된다.")
 print("**RNN 은 하드웨어와 맞지 않았다.** 이것이 Transformer 가 이긴 결정적 이유다.")
 print()
-print("(그래서 최근 [상태공간 모델](../05_transformer/07_ssm_mamba.qmd)은")
+print("(그래서 최근 [상태공간 모델](../05_transformer/10_alternatives_ssm.qmd)은")
 print(" '순환의 효율 + 병렬 학습'을 동시에 얻으려 한다 — 순환 구조를")
 print(" 학습 시에는 합성곱으로 펼쳐 병렬화하는 방식이다.)")
 ```
@@ -674,7 +674,7 @@ RNN의 병 두 가지가 보였다.
 **기억을 유지하지 못하는 것**과 **병렬화가 안 되는 것.**
 
 다음 장은 앞의 것을 고친다 — 게이트로 정보 흐름을 명시적으로 관리하는 LSTM.
-뒤의 것은 [Part 5](../05_transformer/01_transformer_architecture.qmd)까지 기다려야 한다.
+뒤의 것은 [Part 5](../05_transformer/00_attention_mechanism.qmd)까지 기다려야 한다.
 
 ---
 

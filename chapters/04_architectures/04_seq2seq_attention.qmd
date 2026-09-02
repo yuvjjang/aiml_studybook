@@ -350,7 +350,7 @@ print("   어텐션 구조는 그대로다. 바뀐 것은 입력에 붙인 위�
 
 **이것이 Transformer가 위치 인코딩을 반드시 넣는 이유다.**
 셀프 어텐션은 순환조차 없어서 위치 정보가 아예 0이므로,
-[Part 5](../05_transformer/02_positional_encoding.qmd)에서는 선택이 아니라 필수가 된다.
+[Part 5](../05_transformer/03_positional_encoding.qmd)에서는 선택이 아니라 필수가 된다.
 :::
 
 ---
