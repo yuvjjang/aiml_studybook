@@ -4,93 +4,615 @@ subtitle: "LLaVA·Flamingo·통합 멀티모달 — 보고 말하는 모델"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[9.4](04_clip_multimodal.qmd)에서 이미지와 글을 한 공간에 넣었다.
+그런데 CLIP 이 할 수 있는 말은 "이 이미지가 이 문장과 얼마나 맞나" 뿐이다.
+질문에 답할 수는 없다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+VLM 의 발상은 단순하다. **이미 말을 잘하는 모델(LLM)에 눈을 달아 주자.**
+그리고 지난 몇 년 사이 그 레시피가 상당히 정리되었다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+| 축 | 선택지 | 지금의 관행 |
+|----|--------|------------|
+| 비전 인코더 | CLIP ViT, SigLIP, DINOv2 | **사전학습된 것을 그대로** |
+| 연결 모듈 | 사영, Q-Former, 크로스 어텐션 | **단순한 사영**이 이겼다 |
+| 언어모델 | 기존 LLM | 그대로 쓰고 지시 조정 |
+| 학습 데이터 | 캡션 + 지시 데이터 | 합성 데이터 비중이 크다 |
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+LLaVA 가 보여 준 것이 "선형 사영 한 층 + 좋은 지시 데이터면 된다"였고,
+그 뒤로 대부분이 그 골격을 따른다.
+
+이 장은 그 골격의 **비용**과 **구조적 한계**를 잰다.
+특히 VLM 이 왜 개수를 못 세고 좌우를 헷갈리며 없는 것을 봤다고 하는지 —
+그것이 우연이 아니라 **구조에서 나온다**는 것을 보인다.
+
+---
+
+## G9.9.1 — 시각 토큰 예산
+
+VLM 에서 이미지는 **토큰 몇 개**가 된다.
+그 토큰들은 언어 토큰과 같은 시퀀스에 들어가므로, LLM 의 문맥을 그만큼 먹는다.
+
+```{python}
+#| label: budget
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+print("해상도와 시각 토큰 수 (ViT 패치 14 기준)")
+print()
+print(f"{'구성':<26} {'격자':>9} {'시각 토큰':>10} {'문맥 대비':>10} "
+      f"{'LLM 연산 배수':>14}")
+print("-" * 74)
+CTX = 4096
+D_LLM = 4096
+BUD = []
+for nm, res, tiles in [("336px 단일", 336, 1), ("448px 단일", 448, 1),
+                       ("672px 단일", 672, 1),
+                       ("AnyRes 2x2 타일 + 전체", 336, 5),
+                       ("AnyRes 3x3 타일 + 전체", 336, 10)]:
+    n = (res//14)**2*tiles
+    # 어텐션 2N²d + MLP 12Nd² 를 시각 토큰이 없을 때 대비로
+    base = 12*100*D_LLM*D_LLM
+    cost = (2*(n+100)**2*D_LLM + 12*(n+100)*D_LLM*D_LLM)/base
+    BUD.append((nm, res, n, n/CTX, cost))
+    print(f"{nm:<26} {f'{res//14}x{res//14}':>9} {n:>10,} {n/CTX:>9.1%} "
+          f"{cost:>13.1f}배")
+print()
+one, big = BUD[0], BUD[-1]
+print("**이미지 한 장이 문맥의 상당 부분을 먹는다.**")
+print(f"  336px 단일: 토큰 {one[2]}개 — 4096 문맥의 {one[3]:.1%}")
+print(f"  AnyRes 3x3: 토큰 {big[2]:,}개 — {big[3]:.1%}. "
+      "**이미지 두 장이면 문맥이 꽉 찬다.**")
+print()
+print("**그래서 두 방향의 압력이 생긴다**")
+print()
+print(f"{'요구':<22} {'왜':<32} {'수단'}")
+print("-" * 76)
+for a, b, c in [
+    ("토큰을 늘려라", "작은 글자·세부를 보려면 해상도가 필요", "AnyRes 타일링, 고해상 인코더"),
+    ("토큰을 줄여라", "문맥·연산·비용", "Q-Former, 풀링, 토큰 병합"),
+    ("", "다중 이미지·비디오면 더 절박", "프레임당 토큰 수를 줄인다"),
+]:
+    print(f"{a:<22} {b:<32} {c}")
+print()
+print("**AnyRes 가 하는 일**")
+for s in ["원본을 타일로 잘라 각각 인코더에 넣고, 축소한 전체 이미지를 하나 더 넣는다",
+          "**세부는 타일이, 전체 맥락은 축소본이** 담당한다",
+          "위치 임베딩 보간 문제([9.2](02_vit.qmd))를 피하는 방법이기도 하다 — "
+          "인코더는 늘 336px 만 본다",
+          "대가: 토큰 수가 타일 수만큼 곱해진다",
+          "OCR·문서·차트 이해가 이 방식으로 크게 좋아졌다 — 거기서는 "
+          "**해상도가 곧 성능**이다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 준비: 격자 장면과 세 가지 질문
+
+연결 모듈이 무엇을 살리고 무엇을 죽이는지 재려면,
+**정답을 아는 장면**과 **성격이 다른 질문들**이 필요하다.
+
+6×6 격자에 물체를 몇 개 놓고 세 가지를 묻는다.
+
+- **존재** — "X 가 있나?" (집합 질문)
+- **개수** — "물체가 몇 개인가?" (수 세기)
+- **좌우 관계** — "0번이 1번보다 왼쪽인가?" (공간 질문)
+
+```{python}
+#| label: data
+#| code-fold: false
+
+import numpy as np
+
+G, NT, D = 6, 6, 16                      # 6x6 격자, 물체 6종
+NPOS = G*G
+_w = np.random.default_rng(0)
+PROTO = _w.normal(0, 1, (NT, D))
+PROTO /= np.linalg.norm(PROTO, axis=1, keepdims=True)
+CX = (np.arange(NPOS) % G)/(G - 1) - 0.5
+CY = (np.arange(NPOS)//G)/(G - 1) - 0.5
+
+
+def make_scene(g, cooc=0.0, noise=0.30):
+    """cooc>0 이면 0번 물체가 1번과 함께 나오도록 편향을 준다."""
+    n_obj = int(g.integers(2, 6))
+    cells = g.permutation(NPOS)[:n_obj]
+    types = g.integers(0, NT, n_obj)
+    if cooc > 0 and 0 in types and g.random() < cooc:
+        types[(int(np.argmax(types == 0)) + 1) % n_obj] = 1
+    X = g.normal(0, noise*0.3, (NPOS, D))
+    for c, t in zip(cells, types):
+        X[c] = PROTO[t] + g.normal(0, noise, D)
+    return X, cells, types, n_obj
+
+
+def encode(X, pos=False):
+    """비전 인코더 출력 흉내 — 셀마다 '어떤 유형인가' 점수 (+ 위치)."""
+    S = X @ PROTO.T
+    if pos:
+        P = np.broadcast_to(np.stack([CX, CY], -1), S.shape[:-1] + (2,))
+        S = np.concatenate([S, P], -1)
+    return S
+
+
+def dataset(n, g, cooc=0.0):
+    Xs, P, N, R = [], [], [], []
+    for _ in range(n):
+        X, cells, types, n_obj = make_scene(g, cooc)
+        p = np.zeros(NT); p[types] = 1
+        rel = -1
+        if 0 in types and 1 in types:
+            c0 = cells[np.argmax(types == 0)]
+            c1 = cells[np.argmax(types == 1)]
+            rel = int((c0 % G) < (c1 % G))
+        Xs.append(X); P.append(p); N.append(n_obj); R.append(rel)
+    return np.array(Xs), np.array(P), np.array(N), np.array(R)
+
+
+def probe(Fa, ya, Fb, yb, cls, steps=800, lr=0.5, lam=1e-3):
+    mu, sd = Fa.mean(0), Fa.std(0) + 1e-6
+    A, B = (Fa - mu)/sd, (Fb - mu)/sd
+    W = np.zeros((A.shape[1], cls)); b = np.zeros(cls); Y = np.eye(cls)[ya]
+    for _ in range(steps):
+        L = A @ W + b; L -= L.max(1, keepdims=True)
+        P = np.exp(L); P /= P.sum(1, keepdims=True)
+        d = (P - Y)/len(ya)
+        W -= lr*(A.T @ d + lam*W); b -= lr*d.sum(0)
+    return float(((B @ W + b).argmax(1) == yb).mean())
+
+
+def multilabel(Fa, Ya, Fb, Yb, steps=800, lr=0.5, lam=1e-3):
+    mu, sd = Fa.mean(0), Fa.std(0) + 1e-6
+    A, B = (Fa - mu)/sd, (Fb - mu)/sd
+    W = np.zeros((A.shape[1], NT)); b = np.zeros(NT)
+    for _ in range(steps):
+        p = 1/(1 + np.exp(-(A @ W + b)))
+        d = (p - Ya)/len(Ya)
+        W -= lr*(A.T @ d + lam*W); b -= lr*d.sum(0)
+    pv = 1/(1 + np.exp(-(B @ W + b)))
+    return float(((pv > 0.5) == Yb).mean()), W, b, mu, sd
+
+
+g0 = np.random.default_rng(1)
+Xtr, Ptr, Ntr, Rtr = dataset(4000, g0)
+Xte, Pte, Nte, Rte = dataset(1500, g0)
+Etr, Ete = encode(Xtr, True), encode(Xte, True)
+mtr, mte = Rtr >= 0, Rte >= 0
+
+print(f"학습 {len(Xtr):,}장면 / 평가 {len(Xte):,}장면")
+print(f"  격자 {G}x{G} = 시각 토큰 {NPOS}개, 물체 {NT}종, 장면당 2~5개")
+print(f"  좌우 질문이 성립하는 장면: 평가셋 {mte.sum()}개")
+print()
+print("무작위 기준선 — 존재 0.500(유형별) / 개수 0.250 / 좌우 0.500")
+```
+
+---
+
+## G9.9.2 — 연결 모듈: 압축에서 무엇이 살아남나
+
+시각 토큰 36개를 몇 개로 줄일 것인가.
+줄이는 방식마다 **잃는 것이 다르다**는 것이 요점이다.
+
+```{python}
+#| label: connector
+#| code-fold: false
+
+import numpy as np
+
+
+def tile(E, side):
+    """공간을 side x side 타일로 나눠 평균 — AnyRes 계열의 축소판."""
+    b = G//side
+    return E.reshape(len(E), G, G, E.shape[-1])[:, :side*b, :side*b].reshape(
+        len(E), side, b, side, b, E.shape[-1]).mean((2, 4)).reshape(len(E), -1)
+
+
+print("연결 모듈별 — 세 질문의 정확도")
+print()
+print(f"{'연결':<18} {'토큰':>6} {'차원':>7} {'존재':>9} {'개수':>9} {'좌우':>9}")
+print("-" * 62)
+CONN = []
+for nm, fn, k in [("전체 토큰", lambda E: E.reshape(len(E), -1), NPOS),
+                  ("타일 3x3", lambda E: tile(E, 3), 9),
+                  ("타일 2x2", lambda E: tile(E, 2), 4),
+                  ("평균 풀 1개", lambda E: E.mean(1), 1)]:
+    A, B = fn(Etr), fn(Ete)
+    r = (nm, k, A.shape[1], multilabel(A, Ptr, B, Pte)[0],
+         probe(A, Ntr-2, B, Nte-2, 4),
+         probe(A[mtr], Rtr[mtr], B[mte], Rte[mte], 2))
+    CONN.append(r)
+    print(f"{nm:<18} {k:>6} {r[2]:>7} {r[3]:>9.4f} {r[4]:>9.4f} {r[5]:>9.4f}")
+print()
+full, pool = CONN[0], CONN[-1]
+print("**① 존재는 압축에 강하다.**")
+print(f"  토큰 36개 {full[3]:.4f} → 1개 {pool[3]:.4f}. 거의 그대로다.")
+print("  '무엇이 있나'는 집합 질문이라, 평균에 다 남는다.")
+print()
+print("**② 좌우 관계는 완전히 사라진다.**")
+print(f"  토큰 36개 {full[5]:.4f} → 1개 {pool[5]:.4f} — **무작위(0.5)와 같다.**")
+print("  평균을 내는 순간 '어디에 있었나'가 지워지기 때문이다.")
+print()
+print("**③ 개수는 셋 다 못 센다.**")
+print(f"  가장 좋은 것이 {max(c[4] for c in CONN):.4f} — 무작위 0.25 보다는 "
+      "낫지만 형편없다.")
+for s in ["개수를 세려면 셀마다 **'물체가 있다/없다'로 자른 뒤 더해야** 한다",
+          "선형 모델은 그 자르기(문턱)를 못 한다 — 흐릿한 점수를 그냥 합칠 뿐",
+          "**실제 VLM 의 개수 세기 실패도 구조가 비슷하다** — "
+          "언어모델이 시각 토큰의 부드러운 집계를 읽는다",
+          "그래서 개수는 토큰을 늘려도, 모델을 키워도 잘 안 는다"]:
+    print(f"  · {s}")
+print()
+print("**④ 그리고 토큰이 많다고 늘 좋지도 않다.**")
+best_rel = max(CONN, key=lambda c: c[5])
+print(f"  좌우 최고는 {best_rel[0]}({best_rel[5]:.4f})로 "
+      f"전체 토큰({full[5]:.4f})보다 낫다.")
+print(f"  전체 토큰은 차원이 {full[2]}이라 이 데이터 양에서 과적합한다.")
+print("  **적당히 줄이는 것이 실제로 도움이 되는 구간이 있다.**")
+```
+
+```{python}
+#| label: fig-connector
+#| fig-cap: "G9.9.2 — 연결 모듈의 압축과 세 질문. 존재는 끝까지 살아남고, 좌우 관계만 평균 풀링에서 무작위로 떨어진다. 개수는 어느 쪽도 잘 못한다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+nm = [c[0] for c in CONN]
+fig = go.Figure()
+for i, (lbl, idx, chance) in enumerate([("존재", 3, 0.5), ("개수", 4, 0.25),
+                                        ("좌우 관계", 5, 0.5)]):
+    fig.add_trace(go.Scatter(x=nm, y=[c[idx] for c in CONN],
+                             mode="lines+markers", name=lbl,
+                             line=dict(color=viz.color(i), width=3),
+                             marker=dict(size=10)))
+fig.add_hline(y=0.5, line=dict(color="rgba(255,255,255,0.3)", dash="dot"))
+fig.add_annotation(x=nm[0], y=0.5, text="이분 질문 무작위 0.5", showarrow=False,
+                   xanchor="left", yanchor="bottom", font=dict(size=11))
+viz.fig_defaults(
+    fig, "시각 토큰을 줄일 때 무엇이 남는가", height=450,
+    xaxis_title="", yaxis_title="정확도", yaxis=dict(range=[0.2, 0.9]))
+viz.annotate_box(fig, "좌우 관계만 무작위로 떨어진다<br>"
+                      "<b>평균이 위치를 지운다</b>", x=0.98, y=0.02)
+fig
+```
+
+---
+
+## G9.9.3 — Q-Former: 쿼리를 늘려도 안 되는 것
+
+BLIP-2 의 Q-Former 는 학습 가능한 쿼리 $k$ 개로 시각 토큰을 **어텐션 풀링**한다.
+토큰 수를 $k$ 로 고정할 수 있어 매력적이다.
+
+그런데 [9.2](02_vit.qmd)에서 본 사실이 여기서 다시 문제가 된다.
+**어텐션은 순열 등변이다.** 시각 토큰에 위치 정보가 없으면
+쿼리를 아무리 늘려도 "왼쪽"을 알 수 없다.
+
+직접 확인해 보자 — 같은 Q-Former 를 위치 정보 있을 때와 없을 때로.
+
+```{python}
+#| label: qformer
+#| code-fold: false
+
+import numpy as np
+
+
+def qformer(Xa, ya, Xb, yb, k=4, ncls=2, steps=800, lr=0.3, seed=0):
+    """쿼리 k개로 어텐션 풀링 후 분류. 쿼리와 헤드를 함께 학습한다."""
+    gg = np.random.default_rng(seed)
+    d = Xa.shape[-1]
+    Q = gg.normal(0, 0.5, (k, d))
+    W = np.zeros((k*d, ncls)); b = np.zeros(ncls); E = np.eye(ncls)
+    for _ in range(steps):
+        j = gg.integers(0, len(Xa), 128)
+        Xb_, yb_ = Xa[j], ya[j]
+        S = np.einsum('nid,kd->nki', Xb_, Q)
+        S -= S.max(2, keepdims=True)
+        Aw = np.exp(S); Aw /= Aw.sum(2, keepdims=True)
+        F = np.einsum('nki,nid->nkd', Aw, Xb_).reshape(len(j), -1)
+        L = F @ W + b; L -= L.max(1, keepdims=True)
+        P = np.exp(L); P /= P.sum(1, keepdims=True)
+        dl = (P - E[yb_])/len(j)
+        dF = (dl @ W.T).reshape(len(j), k, d)
+        dA = np.einsum('nkd,nid->nki', dF, Xb_)
+        dS = Aw*(dA - (dA*Aw).sum(2, keepdims=True))
+        Q -= lr*np.einsum('nki,nid->kd', dS, Xb_)
+        W -= lr*(F.T @ dl); b -= lr*dl.sum(0)
+    S = np.einsum('nid,kd->nki', Xb, Q); S -= S.max(2, keepdims=True)
+    Aw = np.exp(S); Aw /= Aw.sum(2, keepdims=True)
+    F = np.einsum('nki,nid->nkd', Aw, Xb).reshape(len(Xb), -1)
+    return float(((F @ W + b).argmax(1) == yb).mean())
+
+
+Ntr_, Nte_ = encode(Xtr, False), encode(Xte, False)     # 위치 없는 토큰
+print("Q-Former 쿼리 수와 위치 임베딩")
+print()
+print(f"{'쿼리':>6} | {'좌우: 위치 없음':>15} {'좌우: 위치 있음':>15} | "
+      f"{'개수: 위치 없음':>15} {'개수: 위치 있음':>15}")
+print("-" * 76)
+QF = []
+for k in [1, 2, 4, 8]:
+    a = qformer(Ntr_[mtr], Rtr[mtr], Nte_[mte], Rte[mte], k=k)
+    b_ = qformer(Etr[mtr], Rtr[mtr], Ete[mte], Rte[mte], k=k)
+    c = qformer(Ntr_, Ntr-2, Nte_, Nte-2, k=k, ncls=4)
+    d_ = qformer(Etr, Ntr-2, Ete, Nte-2, k=k, ncls=4)
+    QF.append((k, a, b_, c, d_))
+    print(f"{k:>6} | {a:>15.4f} {b_:>15.4f} | {c:>15.4f} {d_:>15.4f}")
+print()
+lo, hi = QF[0], QF[-1]
+print("**위치 정보가 없으면 쿼리를 8배로 늘려도 우연 수준이다.**")
+print(f"  쿼리 1개 {lo[1]:.4f} → 8개 {hi[1]:.4f}. 무작위가 0.5 다.")
+print()
+print("**위치를 주면 쿼리 수가 곧바로 성능이 된다.**")
+print(f"  쿼리 1개 {lo[2]:.4f} → 8개 {hi[2]:.4f}.")
+for s in ["쿼리 하나는 **가중 평균 하나**뿐이라 두 물체의 상대 위치를 못 만든다",
+          "쿼리가 여러 개면 '0번을 찾는 쿼리'와 '1번을 찾는 쿼리'로 나뉠 수 있다",
+          "그리고 각각이 **위치 좌표를 함께 집어 오면** 비교가 가능해진다",
+          "**두 조건이 모두 필요하다** — 위치 정보와 충분한 쿼리 수"]:
+    print(f"  · {s}")
+print()
+print("**개수는 위치와 무관하다** — "
+      f"위치 없음 {hi[3]:.4f} vs 있음 {hi[4]:.4f}.")
+print("  당연하다. 개수는 위치를 안 봐도 되는 질문이다.")
+print("  못 세는 이유는 다른 데 있다 (G9.9.2 의 ③).")
+print()
+print("**이것이 연결 모듈 논쟁의 실체다**")
+print()
+print(f"{'모듈':<20} {'시각 토큰':<16} {'공간 정보':<22} {'실무 평가'}")
+print("-" * 80)
+for a, b, c, d in [
+    ("선형 사영 (LLaVA)", "인코더 그대로", "**패치 순서로 보존**", "단순하고 강하다"),
+    ("Q-Former (BLIP-2)", "고정 k개", "쿼리·위치 설계에 딸림", "압축은 좋지만 손실"),
+    ("크로스 어텐션 (Flamingo)", "LLM 안에서 참조", "LLM 층마다 접근", "구조 변경이 크다"),
+    ("풀링·토큰 병합", "가변", "**뭉갠 만큼 잃는다**", "비디오에서 불가피"),
+]:
+    print(f"{a:<20} {b:<16} {c:<22} {d}")
+print()
+print("**LLaVA 의 '그냥 사영' 이 이긴 이유가 여기 보인다.**")
+for s in ["압축하지 않으니 **아무것도 안 잃는다** — 위치도 세부도 그대로",
+          "대가는 토큰 수(G9.9.1)인데, 문맥이 길어지면서 그 대가가 싸졌다",
+          "Q-Former 는 토큰이 비쌌던 시기의 해법이었다",
+          "지금도 **비디오**에서는 압축이 필수다 — 프레임 수만큼 곱해지니까"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-qformer
+#| fig-cap: "G9.9.3 — Q-Former의 쿼리 수와 위치 정보. 위치가 없으면 쿼리를 늘려도 공간 질문은 우연 수준에 머문다. 위치를 주면 쿼리 수가 곧 성능이 된다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+K = [q[0] for q in QF]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=K, y=[q[2] for q in QF], mode="lines+markers",
+                         name="좌우 — 위치 있음",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=10)))
+fig.add_trace(go.Scatter(x=K, y=[q[1] for q in QF], mode="lines+markers",
+                         name="좌우 — 위치 없음",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=10)))
+fig.add_hline(y=0.5, line=dict(color="rgba(255,255,255,0.35)", dash="dash"))
+fig.add_annotation(x=K[0], y=0.5, text="무작위 0.5", showarrow=False,
+                   xanchor="left", yanchor="bottom", font=dict(size=11))
+viz.fig_defaults(
+    fig, "쿼리 수와 공간 추론", height=440,
+    xaxis_title="쿼리 개수", yaxis_title="좌우 관계 정확도",
+    xaxis=dict(tickmode="array", tickvals=K),
+    yaxis=dict(range=[0.42, 0.9]))
+viz.annotate_box(fig, "주황 선은 평평하다<br>"
+                      "<b>위치가 없으면 쿼리를 늘려도 소용없다</b>",
+                 x=0.02, y=0.98, xanchor="left", yanchor="top")
+fig
+```
+
+::: {.interaction-hint}
+이 그림은 [9.2](02_vit.qmd)의 순열 불변성 실험과 **같은 이야기**다.
+거기서는 패치를 섞어도 어텐션 출력이 같았고, 여기서는 쿼리가 위치를 못 본다.
+
+VLM 이 "왼쪽/오른쪽", "위/아래", "A 앞에 B" 를 자주 틀리는 이유가 여기 있다.
+**모델이 멍청해서가 아니라, 위치 정보가 연결 모듈에서 새기 때문이다.**
+그래서 최근 모델들은 시각 토큰에 2D 위치 임베딩을 명시적으로 유지하거나,
+아예 압축하지 않는 쪽(LLaVA 계열)을 택한다.
 :::
 
-LLM에 눈을 달아주는 가장 실용적인 방법이 무엇인지는 최근 몇 년 사이 상당히 정리되었고, 그 레시피는 오디오·비디오에도 그대로 적용된다.
+---
+
+## G9.9.4 — 환각: 안 본 것을 봤다고 하는 이유
+
+VLM 의 가장 유명한 실패는 **물체 환각**이다.
+사진에 없는 물체를 있다고 답한다.
+
+원인은 여러 가지지만, 가장 재현하기 쉬운 것 하나가 **공동 출현 편향**이다.
+학습 데이터에서 두 물체가 늘 함께 나왔다면, 모델은 하나만 봐도 둘 다 있다고 한다.
+
+학습 데이터에만 편향을 넣고, **평가는 편향 없는 데이터**로 한다.
+
+```{python}
+#| label: hallucination
+#| code-fold: false
+
+import numpy as np
+
+gh = np.random.default_rng(3)
+Xb, Pb, _, _ = dataset(4000, gh, cooc=0.9)      # 0번의 90%가 1번과 함께
+Eb = encode(Xb, True)
+
+acc_b, W, b, mu, sd = multilabel(Eb.mean(1), Pb, Ete.mean(1), Pte)
+acc_c, W2, b2, mu2, sd2 = multilabel(Etr.mean(1), Ptr, Ete.mean(1), Pte)
+pv_b = 1/(1 + np.exp(-(((Ete.mean(1) - mu)/sd) @ W + b)))
+pv_c = 1/(1 + np.exp(-(((Ete.mean(1) - mu2)/sd2) @ W2 + b2)))
+
+sel = (Pte[:, 0] == 1) & (Pte[:, 1] == 0)      # 0은 있고 1은 없다
+oth = (Pte[:, 0] == 0) & (Pte[:, 1] == 0)      # 둘 다 없다
+
+print("학습에만 공동 출현 편향을 넣고, 편향 없는 데이터로 평가한다")
+print()
+print(f"{'학습 데이터':<22} {'전체 정확도':>11} {'0 있음 → 1 환각':>16} "
+      f"{'0 없음 → 1 환각':>16}")
+print("-" * 70)
+HAL = []
+for nm, a, pv in [("공동 출현 편향 90%", acc_b, pv_b),
+                  ("편향 없음 (대조군)", acc_c, pv_c)]:
+    r = (nm, a, float((pv[sel, 1] > 0.5).mean()),
+         float((pv[oth, 1] > 0.5).mean()))
+    HAL.append(r)
+    print(f"{nm:<22} {r[1]:>11.4f} {r[2]:>16.4f} {r[3]:>16.4f}")
+print(f"  (평가 표본: 0만 있는 장면 {sel.sum()}개, 둘 다 없는 장면 {oth.sum()}개)")
+print()
+bi, ctl = HAL
+print("**편향 학습 모델은 0번을 보면 1번을 환각한다.**")
+print(f"  0번이 있을 때 {bi[2]:.4f} vs 없을 때 {bi[3]:.4f} — "
+      f"차이 {bi[2]-bi[3]:.4f}")
+print(f"  대조군은 {ctl[2]:.4f} vs {ctl[3]:.4f} — 차이 {ctl[2]-ctl[3]:.4f}")
+print(f"  **조건부 격차가 {(bi[2]-bi[3])/max(ctl[2]-ctl[3],1e-9):.0f}배**로 벌어졌다.")
+print()
+print(f"**그런데 전체 정확도는 {bi[1]:.4f} vs {ctl[1]:.4f} 로 거의 같다.**")
+for s in ["환각은 **평균 정확도에 잘 안 잡힌다** — 특정 조건에서만 터지니까",
+          "그래서 POPE 같은 벤치마크는 **'없는 물체'를 골라 물어본다**",
+          "특히 '**자주 함께 나오는 물체**'를 물어보는 항목이 결정적이다",
+          "무작위로 없는 물체를 고르면 쉽고, 공동 출현하는 것을 고르면 어렵다",
+          "[9.1](01_vision_tasks.qmd)·[9.7](07_tracking.qmd)에서 본 것과 같은 교훈 — "
+          "**평균 지표는 조건부 실패를 감춘다**"]:
+    print(f"  · {s}")
+print()
+print("**환각의 다른 원인들**")
+print()
+print(f"{'원인':<24} {'설명':<34} {'대처'}")
+print("-" * 82)
+for a, b_, c in [
+    ("언어 사전지식 우세", "LLM 이 이미지보다 문장 확률을 따른다", "시각 신호 가중, 대조 디코딩"),
+    ("공동 출현 편향", "함께 나온 것을 함께 답한다 (위 실험)", "데이터 균형, 부정 예시"),
+    ("지시 데이터의 편향", "'있다'로 답하는 예가 더 많다", "부정 응답 데이터 추가"),
+    ("시각 정보 손실", "연결 모듈에서 뭉개짐 (G9.9.2~3)", "토큰·해상도 늘리기"),
+    ("긴 응답의 표류", "뒤로 갈수록 이미지에서 멀어진다", "짧게 답하게, 근거 요구"),
+]:
+    print(f"{a:<24} {b_:<34} {c}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 학습 전략과 평가
 
-- VLM 설계 축: 비전 인코더, 연결 모듈, 언어모델, 학습 데이터
-- Flamingo: 게이트 크로스 어텐션과 Perceiver Resampler
-- BLIP-2: Q-Former로 시각 토큰 압축
-- LLaVA: 단순한 사영 층 + 지시 조정 데이터라는 미니멀 레시피
-- 시각 토큰 수와 비용, 해상도 처리(타일링, AnyRes)
-- 동결 vs 미세조정: 각 구성요소의 학습 전략
-- 멀티모달 지시 데이터 구성과 합성 데이터
-- OCR·문서·차트 이해 특화
-- 비디오 VLM: 프레임 샘플링, 시간 토큰, 긴 영상 처리
-- 네이티브 멀티모달(처음부터 함께 학습)과 통합 토크나이저
-- 이미지 생성까지 겸하는 통합 모델
-- 환각·공간 추론 실패 등 VLM 고유의 실패 모드
-- 평가: MMMU, MMBench, 문서·차트 벤치마크와 그 한계
+```{python}
+#| label: practice
+#| code-fold: false
 
----
-
-## G9.9.1 — VLM 연결 모듈 비교
-
-사영·Q-Former·크로스어텐션 방식의 토큰 흐름 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 구조 전환
-:::
-
----
-
-## G9.9.2 — 시각 토큰 예산
-
-해상도를 올릴 때 시각 토큰 수와 비용이 증가하는 관계
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 해상도 슬라이더
-:::
-
----
-
-## G9.9.3 — 어텐션 근거 시각화
-
-답변 생성 시 모델이 이미지의 어느 영역을 보는지
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 질문 입력
-:::
-
----
-
-## G9.9.4 — 공간 추론 실패
-
-개수 세기·상대 위치 등에서 VLM이 자주 틀리는 유형
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 과제 선택
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| VLM |  |
-| Q-Former |  |
-| LLaVA |  |
-| 시각 토큰 |  |
-| 네이티브 멀티모달 |  |
-| MMMU |  |
+print("**무엇을 얼리고 무엇을 학습하나 (LLaVA 계열의 관행)**")
+print()
+print(f"{'단계':<16} {'비전 인코더':<12} {'연결 모듈':<12} {'LLM':<12} {'데이터'}")
+print("-" * 72)
+for a, b, c, d, e in [
+    ("1. 정렬", "동결", "**학습**", "동결", "이미지-캡션 쌍"),
+    ("2. 지시 조정", "동결", "학습", "**학습**", "멀티모달 지시 데이터"),
+    ("3. (선택) 고해상", "학습", "학습", "학습", "고해상·문서 데이터"),
+]:
+    print(f"{a:<16} {b:<12} {c:<12} {d:<12} {e}")
+print()
+for s in ["1단계에서 **연결 모듈만** 학습하는 것이 핵심이다 — "
+          "LLM 을 건드리지 않아 언어 능력이 안 무너진다",
+          "2단계에서 LLM 을 열어야 '질문에 답하는' 형태가 잡힌다",
+          "비전 인코더를 여는 것은 마지막이다 — 열면 CLIP 이 배운 것을 잃기 쉽다",
+          "[9.1](01_vision_tasks.qmd)의 전이학습 원칙이 그대로 적용된다"]:
+    print(f"  · {s}")
+print()
+print("**멀티모달 지시 데이터가 병목이었다**")
+for s in ["사람이 만들기에는 너무 비싸다",
+          "LLaVA 의 해법: **캡션과 박스 정보를 GPT-4 에 주고 대화를 생성**시켰다",
+          "이미지를 안 본 모델이 만든 데이터로 이미지 모델을 학습시킨 셈이다",
+          "그래서 원본 주석의 오류·누락이 **그대로 증폭**된다",
+          "[7.7](../07_language/07_alignment.qmd)의 합성 데이터 논의와 같은 문제"]:
+    print(f"  · {s}")
+print()
+print("**평가 지형과 그 한계**")
+print()
+print(f"{'벤치마크':<16} {'재는 것':<30} {'한계'}")
+print("-" * 74)
+for a, b, c in [
+    ("MMMU", "대학 수준 학문 문제", "**언어만으로도 상당 부분 풀린다**"),
+    ("MMBench", "다면적 능력, 순환 평가", "객관식이라 추측 여지"),
+    ("POPE", "물체 환각", "물어보는 물체 선택에 민감 (G9.9.4)"),
+    ("DocVQA / ChartQA", "문서·차트 이해", "해상도가 성능을 지배"),
+    ("MathVista", "시각적 수학", "그림 없이도 풀리는 문항 존재"),
+]:
+    print(f"{a:<16} {b:<30} {c}")
+print()
+print("**가장 값싼 검증은 [9.6](06_video_models.qmd)에서 본 것과 같다.**")
+print("  '**이미지를 빼면 몇 점인가**' 를 재 보라.")
+print("  이미지 없이도 점수가 높다면, 그 벤치마크는 시각 능력을 재는 게 아니다.")
+print("  단일 프레임 기준선의 VLM 판이다.")
+print()
+print("**네이티브 멀티모달로 가는 흐름**")
+for s in ["지금까지는 **따로 학습한 것을 붙이는** 방식이었다",
+          "처음부터 이미지·텍스트·오디오를 함께 학습하면 정렬 단계가 필요 없다",
+          "통합 토크나이저 — 이미지를 이산 토큰으로 만들어 언어와 같은 어휘에 넣는다 "
+          "([8.8](../08_audio/08_vocoders_codecs.qmd)의 RVQ 와 같은 발상)",
+          "**생성까지 겸하는 통합 모델** — 같은 모델이 보고 말하고 그린다",
+          "대가: 이미 학습된 강력한 LLM 을 재사용할 수 없다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-**다음**: [10.0 마르코프 결정 과정](../10_rl/00_mdp.qmd) — 상태·행동·보상·가치 — 순차적 의사결정의 형식화
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **시각 토큰 예산** | 336px = 576토큰, AnyRes 3x3 = 5,760 | 문맥의 141%를 먹는다 |
+| 두 방향의 압력 | 세부는 해상도, 비용은 토큰 수 | AnyRes가 절충안 |
+| **압축에 강한 것** | 존재: 36토큰 0.746 → 1토큰 0.760 | 집합 질문은 평균에 남는다 |
+| **압축에 죽는 것** | 좌우: 0.702 → **0.509 (무작위)** | 평균이 위치를 지운다 |
+| 개수는 둘 다 아님 | 최고 0.391 (무작위 0.25) | 문턱을 못 세우면 못 센다 |
+| 토큰이 많다고 좋지 않다 | 타일3x3(0.785) > 전체(0.702) | 고차원은 과적합한다 |
+| **Q-Former의 벽** | 위치 없음: 쿼리 1→8개, 0.536→0.528 | 어텐션은 순열 등변 |
+| 위치를 주면 | 0.536 → **0.811** | 위치 + 충분한 쿼리, 둘 다 필요 |
+| 왜 LLaVA가 이겼나 | 압축을 안 하니 아무것도 안 잃는다 | 문맥이 싸지면서 대가도 싸졌다 |
+| **공동 출현 환각** | 0번 보면 1번 환각 **0.593** vs 0.260 | 대조군은 0.180 vs 0.153 |
+| 조건부 격차 | 0.027 → **0.333** (12배) | |
+| 그런데 | 전체 정확도는 0.744 vs 0.760 | **평균 지표가 감춘다** |
+| 학습 전략 | 연결 모듈 → LLM → 인코더 순서로 연다 | 언어 능력을 지키기 위해 |
+| 가장 값싼 평가 검증 | **이미지를 빼고 재 보라** | 9.6의 단일 프레임 기준선 |
+
+---
+
+## Part 9를 닫으며
+
+10개 장을 관통한 것이 하나 있다.
+
+```{python}
+#| label: part9
+#| code-fold: false
+
+print("**측정 도구가 결론을 정한다** — Part 9 에서 반복해 만난 것")
+print()
+print(f"{'장':<6} {'지표가 못 본 것':<34} {'그래서'}")
+print("-" * 80)
+for a, b, c in [
+    ("9.1", "mAP 가 중복 박스를 안 벌한다", "NMS 의 근거는 다운스트림"),
+    ("9.2", "'16배'는 어텐션만의 이야기", "224px 에서 어텐션은 4%"),
+    ("9.3", "kNN 이 붕괴한 표현에 0.73 을 준다", "표현 통계를 따로 봐야"),
+    ("9.4", "손실이 모달리티 갭을 안 벌한다", "그래서 갭이 안 없어진다"),
+    ("9.6", "정적 편향 벤치마크는 시간을 못 잰다", "단일 프레임 기준선을 보라"),
+    ("9.7", "MOTA 가 정체성 오류를 거의 안 벌한다", "HOTA 로 쪼개 보라"),
+    ("9.8", "프레임 단위 지표는 순서를 못 본다", "FVD 가 I3D 를 쓰는 이유"),
+    ("9.9", "평균 정확도가 조건부 환각을 감춘다", "POPE 식으로 골라 물어야"),
+]:
+    print(f"{a:<6} {b:<34} {c}")
+print()
+print("**여덟 번 같은 모양의 문제를 만났다.**")
+print("  지표가 벌하지 않는 것은 개선되지 않고,")
+print("  지표가 못 보는 실패는 논문 표에 남지 않는다.")
+print()
+print("  모델을 고르거나 만들기 전에, **무엇을 재고 있는지부터** 확인할 것.")
+print("  이것이 Part 9 가 남기는 실무 습관이다.")
+```
+
+---
+
+**다음**: [10.0 마르코프 결정 과정](../10_rl/00_mdp.qmd) — Part 10 강화학습
 
 **이전**: [9.8 비디오 생성](08_video_generation.qmd)
