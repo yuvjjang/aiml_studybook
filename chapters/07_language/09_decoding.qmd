@@ -4,90 +4,849 @@ subtitle: "greedy·beam·top-p·온도 — 확률 분포에서 문장을 꺼내�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+모델이 주는 것은 **다음 토큰의 확률 분포**다. 문장이 아니다.
+그 분포에서 토큰을 꺼내는 방법이 디코딩이고,
+**같은 모델이 디코딩 설정 하나로 지루해지거나 헛소리를 한다.**
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+가장 자연스러운 목표부터 생각해 보자.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+$$\hat{y} = \arg\max_y \; p(y \mid x)$$
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+**가장 확률 높은 시퀀스를 찾자.** 그런데 두 가지 문제가 있다.
+
+1. **계산 불가능하다** — 길이 $T$, 어휘 $V$ 면 후보가 $V^T$ 개다
+2. **그게 좋은 답이 아니다** — 아래에서 직접 확인한다
+
+이 장에서 [7.2](02_language_models.qmd)의 마르코프 소스를 **모델 삼아**
+각 디코딩 방법을 직접 돌려 본다. 참 분포를 알고 있으니
+"이 방법이 분포를 얼마나 왜곡하는가"를 정확히 잴 수 있다.
+
+---
+
+## 준비: 모델과 참 분포
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import collections
+import numpy as np
+
+V = 12
+rg = np.random.default_rng(0)
+LG = rg.normal(0, 2.2, (V, V, V))
+P = np.exp(LG - LG.max(-1, keepdims=True))
+P /= P.sum(-1, keepdims=True)          # P[a,b,c] = p(c | 직전 두 토큰 a,b)
+
+M = np.zeros((V*V, V*V))
+for a in range(V):
+    for b in range(V):
+        M[a*V+b, b*V:(b+1)*V] = P[a, b]
+pi = np.ones(V*V)/(V*V)
+for _ in range(4000):
+    pi = pi @ M
+PI2 = pi.reshape(V, V)
+PF = P.reshape(V*V, V)
+H_TRUE = float(-(pi[:, None]*PF*np.log2(np.maximum(PF, 1e-300))).sum())
+
+print(f"모델: 2차 마르코프, 어휘 {V}")
+print(f"  엔트로피율 {H_TRUE:.4f} bits/token, 참 퍼플렉서티 {2**H_TRUE:.3f}")
+print()
+# 문맥마다 분포가 얼마나 뾰족한지
+ent = -(P*np.log2(np.maximum(P, 1e-300))).sum(-1)
+print(f"문맥별 다음 토큰 분포의 엔트로피")
+print(f"  최소 {ent.min():.3f} (아주 뾰족) / 중앙값 {np.median(ent):.3f} "
+      f"/ 최대 {ent.max():.3f} bits (평평)")
+print(f"  균등 분포라면 {np.log2(V):.3f} bits")
+print()
+print("**문맥에 따라 확신의 정도가 크게 다르다.** 이것이 뒤의 핵심이다.")
+```
+
+---
+
+## G7.9.1 — greedy는 왜 반복에 빠지는가
+
+```{python}
+#| label: greedy
+#| code-fold: false
+
+import numpy as np
+
+
+def gen_greedy(ctx, n=60):
+    a, b = ctx
+    out = []
+    for _ in range(n):
+        t = int(P[a, b].argmax())
+        out.append(t)
+        a, b = b, t
+    return out
+
+
+def find_cycle(seq):
+    """상태(직전 두 토큰) 반복이 시작되는 지점과 주기를 찾는다."""
+    seen = {}
+    for i in range(len(seq)-1):
+        st = (seq[i], seq[i+1])
+        if st in seen:
+            return seen[st], i - seen[st]
+        seen[st] = i
+    return None, None
+
+
+print("greedy 디코딩은 결정론적이다 — 상태가 반복되면 **영원히 반복한다**")
+print()
+print(f"{'시작 문맥':>12} {'생성 앞부분':<34} {'순환 시작':>10} {'주기':>7}")
+print("-" * 70)
+CYC = []
+g0 = np.random.default_rng(3)
+for _ in range(6):
+    ctx = (int(g0.integers(V)), int(g0.integers(V)))
+    s = gen_greedy(ctx)
+    st, per = find_cycle(s)
+    CYC.append((ctx, st, per))
+    print(f"{str(ctx):>12} {str(s[:14]):<34} {str(st):>10} {str(per):>7}")
+print()
+pers = [c[2] for c in CYC if c[2]]
+print(f"**모든 경우가 순환에 빠진다.** 주기 {sorted(set(pers))}")
+print()
+print("이유는 구조적이다:")
+print("  · greedy 는 상태(직전 k개 토큰)만 보고 결정론적으로 다음을 정한다")
+print("  · 상태 공간이 유한하다 (여기서는 V²=144개)")
+print("  · **비둘기집 원리** — 유한 상태에서 결정론적 전이는 반드시 순환한다")
+print()
+print("실제 LLM 은 문맥이 훨씬 길어 순환이 늦게 오지만, 같은 일이 일어난다.")
+print("Holtzman et al.(2020)이 보고한 'neural text degeneration' 이 이것이다 —")
+print("greedy·beam 이 만드는 텍스트는 같은 구절을 반복한다.")
+```
+
+---
+
+## G7.9.2 — 최대 확률 시퀀스는 좋은 답이 아니다
+
+빔 서치는 근사적으로 $\arg\max_y p(y|x)$ 를 찾는다.
+그런데 **찾으면 문제가 해결되는가?**
+
+```{python}
+#| label: beam
+#| code-fold: false
+
+import numpy as np
+
+
+def beam_search(ctx, n, width):
+    """빔 서치. 반환 (최고 시퀀스, 그 로그확률)."""
+    beams = [((ctx[0], ctx[1]), [], 0.0)]
+    for _ in range(n):
+        cand = []
+        for (a, b), seq, lp in beams:
+            logp = np.log(np.maximum(P[a, b], 1e-300))
+            for t in np.argsort(logp)[::-1][:width]:
+                cand.append(((b, int(t)), seq + [int(t)], lp + logp[t]))
+        cand.sort(key=lambda c: -c[2])
+        beams = cand[:width]
+    return beams[0][1], beams[0][2]
+
+
+def seq_logprob(ctx, seq):
+    a, b, lp = ctx[0], ctx[1], 0.0
+    for t in seq:
+        lp += float(np.log(max(P[a, b, t], 1e-300)))
+        a, b = b, t
+    return lp
+
+
+CTX = (3, 7)
+N = 30
+print(f"문맥 {CTX} 에서 길이 {N} 시퀀스를 찾는다")
+print()
+print(f"{'빔 크기':>8} {'로그확률':>11} {'토큰/개':>9} {'고유 토큰':>10} "
+      f"{'최빈 토큰 비율':>14}")
+print("-" * 60)
+BEAM = []
+for wdt in [1, 2, 4, 8, 16]:
+    seq, lp = beam_search(CTX, N, wdt)
+    uniq = len(set(seq))
+    top = collections.Counter(seq).most_common(1)[0][1]/len(seq)
+    BEAM.append((wdt, lp, uniq, top, seq))
+    print(f"{wdt:>8} {lp:>11.3f} {lp/N:>9.3f} {uniq:>10} {top:>13.1%}")
+print("-" * 60)
+# 비교: 참 분포에서 그냥 샘플링한 시퀀스
+gs = np.random.default_rng(11)
+samp_lps, samp_uniq, samp_top = [], [], []
+for _ in range(500):
+    a, b, seq = CTX[0], CTX[1], []
+    for _ in range(N):
+        t = int(gs.choice(V, p=P[a, b]))
+        seq.append(t)
+        a, b = b, t
+    samp_lps.append(seq_logprob(CTX, seq))
+    samp_uniq.append(len(set(seq)))
+    samp_top.append(collections.Counter(seq).most_common(1)[0][1]/N)
+print(f"{'샘플링':>8} {np.mean(samp_lps):>11.3f} "
+      f"{np.mean(samp_lps)/N:>9.3f} {np.mean(samp_uniq):>10.1f} "
+      f"{np.mean(samp_top):>13.1%}")
+print()
+b16 = BEAM[-1]
+EXPECTED = -H_TRUE*N*np.log(2)          # 기대 로그확률 (nats)
+print(f"**빔을 키울수록 확률 높은 시퀀스를 찾는다** "
+      f"({BEAM[0][1]:.2f} → {b16[1]:.2f}).")
+print()
+print("**결정적인 비교는 다양성이 아니라 '전형성'이다.**")
+print()
+print(f"  {'':<26} {'로그확률 (nats)':>16}")
+print("  " + "-"*46)
+print(f"  {'이론적 기대값 (H×길이)':<26} {EXPECTED:>16.2f}")
+print(f"  {'참 분포에서 샘플링':<26} {np.mean(samp_lps):>16.2f}")
+print(f"  {'빔 서치 (빔 16)':<26} {b16[1]:>16.2f}")
+print()
+print(f"**샘플링한 시퀀스의 로그확률({np.mean(samp_lps):.1f})이 "
+      f"이론값({EXPECTED:.1f})과 일치한다.**")
+print("  정보이론의 **전형 집합(typical set)** 이 말하는 그대로다 —")
+print("  실제 데이터에서 나온 시퀀스는 로그확률이 −H·T 근처에 몰린다.")
+print()
+print(f"**빔 서치의 시퀀스는 {b16[1]:.1f} 로 "
+      f"{b16[1]-np.mean(samp_lps):.1f} nats 나 높다.**")
+print("  즉 **실제 데이터에서는 거의 나올 수 없는 종류의 시퀀스**다.")
+print("  '가장 확률 높은 것'을 찾는 것과 '그럴듯한 것'을 찾는 것은 다르다.")
+print()
+print("**다양성 지표도 보긴 하자 — 다만 이 장난감에서는 차이가 작다.**")
+print(f"  {'':<16} {'고유 토큰':>10} {'최빈 토큰 비율':>14}")
+print("  " + "-"*44)
+print(f"  {'빔 16':<16} {b16[2]:>10} {b16[3]:>13.1%}")
+print(f"  {'샘플링':<16} {np.mean(samp_uniq):>10.1f} "
+      f"{np.mean(samp_top):>13.1%}")
+print()
+print(f"  고유 토큰이 {b16[2]} vs {np.mean(samp_uniq):.1f} 로 조금 적을 뿐이고,")
+print(f"  최빈 토큰 비율은 오히려 빔 쪽이 낮다 "
+      f"({b16[3]:.1%} vs {np.mean(samp_top):.1%}).")
+print()
+print("  **어휘가 12개뿐이고 엔트로피가 높은 소스라 붕괴가 잘 안 보인다.**")
+print("  실제 LLM 은 어휘가 10만 단위이고 문맥이 길어,")
+print("  빔 서치가 같은 구절을 통째로 반복하는 것이 육안으로 보인다")
+print("  (Holtzman et al. 2020). 여기서 재현된 것은 **비전형성** 쪽이다.")
+print()
+print("**그래서 빔 서치는 용도가 갈린다:**")
+print(f"{'과제':<24} {'적합?':<10} {'이유'}")
+print("-" * 66)
+for a, b, c in [
+    ("기계번역", "**적합**", "정답이 좁게 정해져 있다"),
+    ("요약", "적합", "충실도가 다양성보다 중요"),
+    ("음성인식", "**적합**", "정답이 하나다"),
+    ("대화·창작", "**부적합**", "단조로워진다 (위 실험)"),
+    ("코드 생성", "경우에 따라", "정확성 우선이면 낮은 온도가 낫다"),
+]:
+    print(f"{a:<24} {b:<10} {c}")
+```
+
+---
+
+## G7.9.3 — 온도, top-k, top-p
+
+```{python}
+#| label: temperature
+#| code-fold: false
+
+import numpy as np
+
+
+def temper(p, T):
+    if T <= 1e-8:
+        q = np.zeros_like(p)
+        q[p.argmax()] = 1.0
+        return q
+    lg = np.log(np.maximum(p, 1e-300))/T
+    e = np.exp(lg - lg.max())
+    return e/e.sum()
+
+
+CTX_SHARP = np.unravel_index(ent.argmin(), ent.shape)
+CTX_FLAT = np.unravel_index(ent.argmax(), ent.shape)
+print(f"두 문맥을 고른다")
+print(f"  뾰족한 문맥 {CTX_SHARP}: 엔트로피 {ent[CTX_SHARP]:.3f} bits")
+print(f"  평평한 문맥 {CTX_FLAT}: 엔트로피 {ent[CTX_FLAT]:.3f} bits")
+print()
+print("온도를 바꾸면 분포가 어떻게 변하는가")
+print()
+print(f"{'온도':>7} " + " ".join(f"{c:>16}" for c in ["뾰족한 문맥", "평평한 문맥"]))
+print(f"{'':>7} " + " ".join(f"{'엔트로피':>7}{'최대확률':>9}" for _ in range(2)))
+print("-" * 46)
+TEMPS = [0.0, 0.5, 0.7, 1.0, 1.5, 2.0]
+TEMP_ROWS = []
+for T in TEMPS:
+    row = []
+    for c in [CTX_SHARP, CTX_FLAT]:
+        q = temper(P[c], T)
+        h = float(-(q*np.log2(np.maximum(q, 1e-300))).sum())
+        row += [h, float(q.max())]
+    TEMP_ROWS.append((T, row))
+    print(f"{T:>7.1f} {row[0]:>7.3f}{row[1]:>9.3f} {row[2]:>7.3f}{row[3]:>9.3f}")
+print()
+print("**온도는 로짓을 나눈다.** T<1 이면 뾰족해지고 T>1 이면 평평해진다.")
+print("  T→0 은 greedy 와 같다 (최대 확률에 전부)")
+print("  T=1 은 모델의 분포 그대로")
+print("  T→∞ 는 균등 분포")
+print()
+print("**그런데 온도는 문맥의 확신 정도를 무시한다.**")
+print(f"  T=1 에서 뾰족한 문맥의 최대 확률은 {TEMP_ROWS[3][1][1]:.3f},")
+print(f"  평평한 문맥은 {TEMP_ROWS[3][1][3]:.3f} 다.")
+print("  같은 온도가 두 상황에 같은 영향을 주지 않는다 — 그래서 절단이 필요하다.")
+```
+
+```{python}
+#| label: topk-topp
+#| code-fold: false
+
+import numpy as np
+
+
+def topk_set(p, k):
+    return int(min(k, (p > 0).sum()))
+
+
+def topp_set(p, top_p):
+    s = np.sort(p)[::-1]
+    c = s.cumsum()
+    return int(np.searchsorted(c, top_p) + 1)
+
+
+print("문맥마다 후보 집합의 크기가 어떻게 정해지는가")
+print()
+print(f"{'문맥 유형':<14} {'엔트로피':>9} " +
+      " ".join(f"{'top-k=' + str(k):>9}" for k in [5, 20]) +
+      " " + " ".join(f"{'top-p=' + str(p):>10}" for p in [0.9, 0.95]))
+print("-" * 66)
+ROWS = []
+for nm, c in [("가장 뾰족", CTX_SHARP), ("중간", (3, 7)), ("가장 평평", CTX_FLAT)]:
+    p = P[c]
+    r = (nm, float(ent[c]), topk_set(p, 5), topk_set(p, 20),
+         topp_set(p, 0.9), topp_set(p, 0.95))
+    ROWS.append(r)
+    print(f"{nm:<14} {r[1]:>9.3f} {r[2]:>9} {r[3]:>9} {r[4]:>10} {r[5]:>10}")
+print()
+print("**top-k 는 문맥과 무관하게 항상 k 개다.**")
+print("  뾰족한 문맥에서는 쓸데없이 나쁜 후보까지 포함한다")
+print("  평평한 문맥에서는 좋은 후보를 잘라낸다")
+print()
+print("**top-p 는 문맥에 따라 크기가 변한다** — 그것이 핵심이다.")
+sharp_r, flat_r = ROWS[0], ROWS[2]
+print(f"  뾰족한 문맥: {sharp_r[4]}개, 평평한 문맥: {flat_r[4]}개 "
+      f"(top-p=0.9 기준)")
+print()
+# 전체 문맥에 대한 분포
+sizes_k = np.full(V*V, 5)
+sizes_p = np.array([topp_set(P[a, b], 0.9) for a in range(V) for b in range(V)])
+print(f"144개 문맥 전체에서 후보 집합 크기")
+print(f"  top-k=5   : 항상 5 (표준편차 0.00)")
+print(f"  top-p=0.9 : 평균 {sizes_p.mean():.2f}, 표준편차 {sizes_p.std():.2f}, "
+      f"범위 [{sizes_p.min()}, {sizes_p.max()}]")
+print()
+print("**변형들**")
+print(f"{'방법':<20} {'절단 기준':<34} {'특징'}")
+print("-" * 76)
+for a, b, c in [
+    ("top-k", "상위 k개", "단순, 문맥 무시"),
+    ("**top-p (nucleus)**", "누적 확률 p 까지", "**적응적, 현재 표준**"),
+    ("min-p", "최대 확률의 p배 이상", "뾰족한 문맥에서 더 관대"),
+    ("typical", "정보량이 엔트로피에 가까운 것", "'전형적' 토큰 선호"),
+    ("epsilon", "절대 확률 임계값", "단순한 하한"),
+    ("η (eta)", "엔트로피에 따라 임계값 조정", "typical + epsilon"),
+]:
+    print(f"{a:<20} {b:<34} {c}")
+```
+
+```{python}
+#| label: fig-decoding
+#| fig-cap: "온도는 분포 전체를 바꾸고, top-p는 문맥에 따라 후보 수를 바꿉니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=3, column_widths=[0.34, 0.33, 0.33],
+                    subplot_titles=("온도에 따른 분포 (중간 문맥)",
+                                    "후보 집합 크기 분포 (144개 문맥)",
+                                    "top-p 크기 vs 문맥 엔트로피"))
+pm = P[3, 7]
+order = np.argsort(pm)[::-1]
+for i, T in enumerate([0.5, 0.7, 1.0, 1.5, 2.0]):
+    q = temper(pm, T)[order]
+    fig.add_trace(go.Scatter(x=np.arange(1, V+1), y=np.round(q, 5),
+                             mode="lines+markers", name=f"T={T}",
+                             line=dict(color=viz.color(i), width=2.2),
+                             marker=dict(size=6)), row=1, col=1)
+fig.update_xaxes(title_text="확률 순위", row=1, col=1)
+fig.update_yaxes(title_text="확률", type="log", row=1, col=1)
+
+for nm, arr, c in [("top-k=5", sizes_k, viz.WARM),
+                   ("top-p=0.9", sizes_p, viz.ACCENT)]:
+    h = np.bincount(arr, minlength=V+1)[:V+1]
+    fig.add_trace(go.Bar(x=np.arange(V+1), y=h, name=nm, opacity=0.7,
+                         marker_color=c), row=1, col=2)
+fig.update_xaxes(title_text="후보 집합 크기", row=1, col=2)
+fig.update_yaxes(title_text="문맥 수", row=1, col=2)
+
+ents_flat = ent.ravel()
+fig.add_trace(go.Scatter(x=np.round(ents_flat, 3), y=sizes_p, mode="markers",
+                         showlegend=False,
+                         marker=dict(size=5,
+                                     color=viz.hex_rgba(viz.GREEN, 0.55))),
+              row=1, col=3)
+fig.update_xaxes(title_text="문맥 엔트로피 (bits)", row=1, col=3)
+fig.update_yaxes(title_text="top-p=0.9 후보 수", row=1, col=3)
+fig.update_layout(barmode="overlay")
+viz.fig_defaults(fig, height=390, title="")
+fig.show()
+```
+
+---
+
+## G7.9.4 — 절단이 분포를 얼마나 왜곡하는가
+
+```{python}
+#| label: distortion
+#| code-fold: false
+
+import numpy as np
+
+
+def truncate(p, kind, param):
+    q = p.copy()
+    if kind == "top-k":
+        idx = np.argsort(p)[::-1][param:]
+        q[idx] = 0
+    elif kind == "top-p":
+        order = np.argsort(p)[::-1]
+        c = p[order].cumsum()
+        keep = order[:int(np.searchsorted(c, param) + 1)]
+        mask = np.zeros(len(p), bool)
+        mask[keep] = True
+        q[~mask] = 0
+    elif kind == "min-p":
+        q[p < param*p.max()] = 0
+    return q/q.sum()
+
+
+print("절단·온도가 참 분포에서 얼마나 벗어나는가 (144개 문맥 평균 총변동거리)")
+print()
+print(f"{'설정':<22} {'평균 TV':>10} {'최대 TV':>10} {'평균 후보 수':>13}")
+print("-" * 60)
+SETTINGS = [
+    ("원본 (T=1)", lambda p: p),
+    ("T=0.7", lambda p: temper(p, 0.7)),
+    ("T=1.3", lambda p: temper(p, 1.3)),
+    ("top-k=3", lambda p: truncate(p, "top-k", 3)),
+    ("top-k=8", lambda p: truncate(p, "top-k", 8)),
+    ("top-p=0.9", lambda p: truncate(p, "top-p", 0.9)),
+    ("top-p=0.95", lambda p: truncate(p, "top-p", 0.95)),
+    ("min-p=0.05", lambda p: truncate(p, "min-p", 0.05)),
+    ("greedy (T=0)", lambda p: temper(p, 0.0)),
+]
+DIST = []
+for nm, f in SETTINGS:
+    tvs, ns = [], []
+    for a in range(V):
+        for b in range(V):
+            q = f(P[a, b])
+            tvs.append(0.5*np.abs(q - P[a, b]).sum())
+            ns.append((q > 1e-12).sum())
+    DIST.append((nm, float(np.mean(tvs)), float(np.max(tvs)),
+                 float(np.mean(ns))))
+    print(f"{nm:<22} {np.mean(tvs):>10.4f} {np.max(tvs):>10.4f} "
+          f"{np.mean(ns):>13.2f}")
+print()
+print("**총변동거리 0 이 '모델 분포 그대로'다.** 크면 왜곡이 크다.")
+print()
+gd = [d for d in DIST if d[0] == "greedy (T=0)"][0]
+tp = [d for d in DIST if d[0] == "top-p=0.9"][0]
+tk = [d for d in DIST if d[0] == "top-k=3"][0]
+print(f"  greedy 는 TV {gd[1]:.3f} — 분포를 완전히 버린다")
+print(f"  top-k=3 은 TV {tk[1]:.3f} (최대 {tk[2]:.3f})")
+print(f"  top-p=0.9 는 TV {tp[1]:.3f} (최대 {tp[2]:.3f})")
+print()
+print("**핵심은 평균이 아니라 최댓값이다.**")
+print(f"  top-k=3 의 최대 왜곡 {tk[2]:.3f} > top-p=0.9 의 {tp[2]:.3f}")
+print("  top-k 는 평평한 문맥에서 크게 잘라낸다 — 그 문맥이 최악의 경우다.")
+print()
+print("**왜곡이 무조건 나쁜 것은 아니다.**")
+print("  모델 분포의 꼬리에는 학습 잡음이 섞여 있다.")
+print("  꼬리를 자르면 **모델의 실수가 나올 확률**이 줄어든다.")
+print("  Holtzman et al.(2020)의 논지가 정확히 이것이다 —")
+print("  사람의 텍스트는 모델 분포의 꼬리를 밟지 않는다.")
+```
+
+---
+
+## G7.9.5 — 반복 페널티
+
+```{python}
+#| label: repetition
+#| code-fold: false
+
+import numpy as np
+
+
+def gen_with_penalty(ctx, n, temp=1.0, rep_pen=1.0, no_repeat_ngram=0,
+                     seed=0):
+    g = np.random.default_rng(seed)
+    a, b = ctx
+    out = []
+    for _ in range(n):
+        p = temper(P[a, b], temp).copy()
+        if rep_pen != 1.0 and out:
+            for t in set(out):
+                # 로짓을 나누는 방식 (CTRL) 을 확률에 근사 적용
+                p[t] = p[t]**rep_pen
+            p = p/p.sum()
+        if no_repeat_ngram and len(out) >= no_repeat_ngram-1:
+            prev = tuple(out[-(no_repeat_ngram-1):])
+            for t in range(V):
+                if len(out) >= no_repeat_ngram:
+                    ng = prev + (t,)
+                    seen = any(tuple(out[i:i+no_repeat_ngram]) == ng
+                               for i in range(len(out)-no_repeat_ngram+1))
+                    if seen:
+                        p[t] = 0
+            if p.sum() > 0:
+                p = p/p.sum()
+            else:
+                p = temper(P[a, b], temp)
+        t = int(g.choice(V, p=p))
+        out.append(t)
+        a, b = b, t
+    return out
+
+
+def stats_of(seq):
+    bi = [tuple(seq[i:i+2]) for i in range(len(seq)-1)]
+    rep2 = 1 - len(set(bi))/len(bi)
+    # 페널티가 '이미 나온 토큰' 에만 걸리므로, 그 비율이 얼마나 되는지 본다
+    seen_frac = float(np.mean([len(set(seq[:i]))/V
+                               for i in range(1, len(seq))]))
+    return seen_frac, rep2
+
+
+print("반복 억제 기법들 (길이 200, 시드 8개 평균)")
+print()
+print(f"{'설정':<28} {'페널티 적용 토큰 비율':>20} {'반복 bigram 비율':>18} "
+      f"{'참 분포 대비':>13}")
+print("-" * 78)
+# 참 분포에서 샘플링한 기준선
+base_u, base_r = [], []
+for s in range(8):
+    seq = gen_with_penalty((3, 7), 200, 1.0, 1.0, 0, seed=s)
+    u, r = stats_of(seq)
+    base_u.append(u)
+    base_r.append(r)
+BU, BR = float(np.mean(base_u)), float(np.mean(base_r))
+
+REP = []
+for nm, kw in [
+    ("온도 1.0 (모델 그대로)", dict(temp=1.0)),
+    ("온도 0.7", dict(temp=0.7)),
+    ("온도 0.5", dict(temp=0.5)),
+    ("온도 0.7 + 반복 페널티 1.2", dict(temp=0.7, rep_pen=1.2)),
+    ("온도 0.7 + no-repeat 3gram", dict(temp=0.7, no_repeat_ngram=3)),
+    ("온도 0.5 + 반복 페널티 1.5", dict(temp=0.5, rep_pen=1.5)),
+]:
+    us, rs = [], []
+    for s in range(8):
+        seq = gen_with_penalty((3, 7), 200, seed=s, **kw)
+        u, r = stats_of(seq)
+        us.append(u)
+        rs.append(r)
+    REP.append((nm, float(np.mean(us)), float(np.mean(rs))))
+    print(f"{nm:<28} {np.mean(us):>20.4f} {np.mean(rs):>18.4f} "
+          f"{np.mean(rs)/BR:>12.2f}x")
+print("-" * 78)
+print(f"{'참 분포 샘플링 (기준선)':<28} {BU:>20.4f} {BR:>18.4f} "
+      f"{1.0:>12.2f}x")
+print()
+t05 = [r for r in REP if r[0] == "온도 0.5"][0]
+t07 = [r for r in REP if r[0] == "온도 0.7"][0]
+pen = [r for r in REP if "반복 페널티 1.2" in r[0]][0]
+nrg = [r for r in REP if "no-repeat" in r[0]][0]
+
+print("**온도를 낮추면 반복이 늘어난다** — 예상대로다.")
+print(f"  T=1.0 에서 반복 bigram {REP[0][2]:.3f} → T=0.5 에서 {t05[2]:.3f}")
+print()
+print("**그런데 반복 페널티는 반복을 늘렸다.**")
+print(f"  T=0.7 그대로: {t07[2]:.3f}")
+print(f"  + 반복 페널티 1.2: {pen[2]:.3f}  ← **오히려 늘었다**")
+print(f"  + no-repeat 3gram: {nrg[2]:.3f}  ← 이쪽은 줄었다")
+print()
+print("**원인은 위 표의 첫 열에 있다.**")
+print(f"  '페널티 적용 토큰 비율'이 {pen[1]:.2f} 다 — "
+      f"거의 **모든 토큰**이 이미 등장했다.")
+print(f"  어휘가 {V}개뿐이라 몇 스텝 만에 전부 '이미 나온' 상태가 된다.")
+print()
+print("  페널티가 전부에게 걸리면 그것은 **선택적 억제가 아니라 전역 재조정**이다.")
+print("  p → p^1.2 를 모든 토큰에 적용하고 정규화하면 온도 1/1.2 와 같다 —")
+print("  **분포를 뾰족하게 만들어 오히려 반복을 늘린다.**")
+print()
+print("**이것은 장난감의 인공물이지만, 실제 함의가 있다.**")
+print("  실제 LLM 은 어휘가 10만 단위라 등장한 토큰이 극히 일부다 → 선택적으로 작동한다.")
+print("  그런데 **긴 출력에서는 등장 토큰이 누적되어 같은 문제가 생긴다.**")
+print("  긴 생성에 반복 페널티를 강하게 걸면 품질이 무너지는 이유가 이것이다.")
+print()
+print("**no-repeat n-gram 은 다르게 작동한다.**")
+print(f"  {nrg[2]:.3f} 로 실제로 반복을 줄였다 ({nrg[2]/t07[2]:.2f}배).")
+print("  '이미 나온 토큰'이 아니라 **'이미 나온 n-gram'** 을 막기 때문에")
+print("  어휘가 작아도 선택적으로 작동한다.")
+print()
+print("**두 기법 모두 대가가 있다.**")
+print("  반복 페널티 — **정당한 반복까지 막는다.**")
+print("    변수명, 인용, 목록 형식, 고유명사 재언급이 전부 억제된다.")
+print("    코드 생성에서 특히 해롭다 (같은 식별자를 여러 번 써야 한다).")
+print("  no-repeat n-gram — 더 공격적이다. 같은 n-gram 을 **두 번 금지**한다.")
+print("    긴 텍스트에서는 자연스러운 문구까지 막아 문법을 깨뜨릴 수 있다.")
+print()
+print(f"{'기법':<24} {'방식':<30} {'주의'}")
+print("-" * 76)
+for a, b, c in [
+    ("repetition_penalty", "이미 나온 토큰의 로짓을 나눔", "코드·목록에 해롭다"),
+    ("presence_penalty", "등장 여부로 한 번만 감점", "부드러움"),
+    ("frequency_penalty", "등장 횟수에 비례해 감점", "긴 텍스트에 적합"),
+    ("no_repeat_ngram_size", "같은 n-gram 재사용 금지", "**가장 공격적**"),
+    ("대조 검색", "확률과 표현 다양성을 함께 본다", "계산 비용 증가"),
+]:
+    print(f"{a:<24} {b:<30} {c}")
+print()
+print("**근본 해법은 반복 억제가 아니라 좋은 샘플링이다.**")
+print("  위 표에서 T=1.0 이 이미 기준선과 같다 — 억제가 필요 없다.")
+print("  반복은 대개 **온도를 너무 낮췄거나 greedy 를 썼을 때** 생긴다.")
+```
+
+---
+
+## G7.9.6 — 추측 디코딩: 공짜 가속
+
+::: {.key-concept}
+**추측 디코딩 (Leviathan 2023, Chen 2023)**
+
+작은 초안 모델 $q$ 로 $K$개 토큰을 순차 생성한 뒤,
+큰 목표 모델 $p$ 로 **한 번에 병렬 검증**한다.
+
+각 토큰 $x$ 를 확률 $\min\!\big(1, p(x)/q(x)\big)$ 로 수락하고,
+거절하면 잔차 분포 $\dfrac{[p-q]_+}{\|[p-q]_+\|_1}$ 에서 다시 뽑는다.
+
+**놀라운 성질: 결과 분포가 정확히 $p$ 와 같다.** 근사가 아니다.
 :::
 
-같은 모델이 디코딩 설정 하나로 지루해지거나 헛소리를 한다. 생성 품질 문제의 상당수는 모델이 아니라 샘플러의 문제다.
+```{python}
+#| label: speculative
+#| code-fold: false
+
+import numpy as np
+
+P_DRAFT = 0.65*P + 0.35*np.ones_like(P)/V      # 초안 모델 = 흐릿한 목표 모델
+
+
+def spec_round(ctx, g, K=4):
+    """추측 디코딩 한 라운드. 반환 (생성 토큰들, 초안 수, 수락 수)."""
+    a, b = ctx
+    draft, states = [], []
+    for _ in range(K):
+        t = int(g.choice(V, p=P_DRAFT[a, b]))
+        draft.append(t)
+        states.append((a, b))
+        a, b = b, t
+    out, acc = [], 0
+    for i, t in enumerate(draft):
+        sa, sb = states[i]
+        p_, q_ = P[sa, sb], P_DRAFT[sa, sb]
+        if g.random() < min(1.0, p_[t]/q_[t]):
+            out.append(t)
+            acc += 1
+        else:
+            resid = np.maximum(p_ - q_, 0)
+            out.append(int(g.choice(V, p=resid/resid.sum())))
+            return out, K, acc
+    sa, sb = states[-1][1], draft[-1]
+    out.append(int(g.choice(V, p=P[sa, sb])))     # 전부 수락 시 보너스 토큰
+    return out, K, acc
+
+
+CTX_S = (3, 7)
+NRUN = 200000
+gs2 = np.random.default_rng(1)
+cnt_spec = np.zeros(V)
+tot_draft = tot_acc = tot_out = 0
+for _ in range(NRUN):
+    o, nd, na = spec_round(CTX_S, gs2)
+    cnt_spec[o[0]] += 1
+    tot_draft += nd
+    tot_acc += na
+    tot_out += len(o)
+p_spec = cnt_spec/cnt_spec.sum()
+p_true = P[CTX_S]
+
+gs3 = np.random.default_rng(2)
+cnt_naive = np.zeros(V)
+for _ in range(NRUN):
+    cnt_naive[int(gs3.choice(V, p=p_true))] += 1
+p_naive = cnt_naive/cnt_naive.sum()
+
+print(f"문맥 {CTX_S} 에서 첫 토큰의 분포를 {NRUN:,}회 관측")
+print()
+print(f"{'토큰':>5} {'목표 p':>10} {'추측 디코딩':>13} {'직접 샘플링':>13}")
+print("-" * 46)
+for t in np.argsort(p_true)[::-1][:6]:
+    print(f"{t:>5} {p_true[t]:>10.5f} {p_spec[t]:>13.5f} {p_naive[t]:>13.5f}")
+print("   ...")
+print()
+tv_spec = 0.5*float(np.abs(p_spec - p_true).sum())
+tv_naive = 0.5*float(np.abs(p_naive - p_true).sum())
+print(f"총변동거리 — 추측 디코딩 {tv_spec:.5f}, 직접 샘플링 {tv_naive:.5f}")
+print()
+print("**추측 디코딩의 오차가 직접 샘플링의 오차와 같은 수준이다.**")
+print(f"  ({tv_spec:.5f} vs {tv_naive:.5f} — 둘 다 몬테카를로 잡음)")
+print("**무손실이 증명 가능한 성질이고, 여기서 수치로도 확인된다.**")
+print()
+print(f"속도 — 수락률 {tot_acc/tot_draft:.3f}, "
+      f"목표 모델 호출 1회당 생성 토큰 {tot_out/NRUN:.3f}")
+print(f"  표준 디코딩은 호출 1회당 1토큰이므로 이론상 "
+      f"{tot_out/NRUN:.2f}배 빠르다.")
+print()
+print("**실제 가속은 그보다 작다:**")
+for s in ["초안 모델도 K번 호출해야 한다 (작지만 공짜는 아니다)",
+          "검증은 병렬이지만 배치가 커져 메모리 대역폭을 더 쓴다",
+          "수락률이 낮으면 초안 계산이 버려진다",
+          "**수락률이 핵심 지표다** — 초안 모델이 목표와 비슷할수록 높다"]:
+    print(f"  · {s}")
+print()
+print(f"{'변형':<24} {'초안 출처':<30} {'특징'}")
+print("-" * 74)
+for a, b, c in [
+    ("표준 추측 디코딩", "작은 별도 모델", "가장 일반적"),
+    ("자기 추측(self-spec)", "같은 모델의 일부 층", "별도 모델 불필요"),
+    ("Medusa", "여러 예측 헤드를 붙임", "학습이 필요"),
+    ("**프롬프트 룩업**", "입력에서 n-gram 을 복사", "**모델 불필요**, 요약·편집에 강력"),
+    ("EAGLE", "특징 수준에서 초안 생성", "수락률이 높다"),
+]:
+    print(f"{a:<24} {b:<30} {c}")
+print()
+print("**프롬프트 룩업이 특히 실용적이다** — 초안 모델 없이,")
+print("입력에 이미 있는 구절을 후보로 제시한다. 요약·번역·코드 편집처럼")
+print("출력이 입력을 많이 반복하는 과제에서 수락률이 아주 높다.")
+```
+
+```{python}
+#| label: fig-spec
+#| fig-cap: "추측 디코딩은 분포를 바꾸지 않고 목표 모델 호출만 줄입니다"
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
+                    subplot_titles=("첫 토큰 분포 비교",
+                                    "절단 방식별 분포 왜곡 (총변동거리)"))
+idx = np.argsort(p_true)[::-1]
+fig.add_trace(go.Bar(x=list(range(V)), y=np.round(p_true[idx], 5),
+                     name="목표 p", marker_color=viz.GREEN, opacity=0.85),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=list(range(V)), y=np.round(p_spec[idx], 5),
+                         mode="markers", name="추측 디코딩",
+                         marker=dict(size=10, color=viz.ACCENT,
+                                     symbol="circle-open",
+                                     line=dict(width=2.5))), row=1, col=1)
+fig.add_trace(go.Scatter(x=list(range(V)), y=np.round(p_naive[idx], 5),
+                         mode="markers", name="직접 샘플링",
+                         marker=dict(size=8, color=viz.WARM, symbol="x")),
+              row=1, col=1)
+fig.update_xaxes(title_text="확률 순위", row=1, col=1)
+fig.update_yaxes(title_text="확률", type="log", row=1, col=1)
+
+names = [d[0] for d in DIST]
+fig.add_trace(go.Bar(x=names, y=[d[1] for d in DIST], name="평균 TV",
+                     marker_color=viz.ACCENT), row=1, col=2)
+fig.add_trace(go.Bar(x=names, y=[d[2] for d in DIST], name="최대 TV",
+                     marker_color=viz.hex_rgba(viz.PINK, 0.75)), row=1, col=2)
+fig.update_yaxes(title_text="총변동거리", row=1, col=2)
+fig.update_xaxes(tickangle=-45, row=1, col=2)
+viz.fig_defaults(fig, height=430, title="")
+fig.show()
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 실전 설정
 
-- 탐색 문제로서의 디코딩: argmax 시퀀스는 계산 불가능
-- greedy 디코딩과 그 반복 함정
-- 빔 서치: 빔 크기, 길이 정규화, 왜 개방형 생성에는 부적합한가
-- 온도(temperature)와 분포 날카로움
-- top-k 샘플링과 top-p(뉴클리어스) 샘플링
-- min-p, typical sampling, epsilon/eta sampling
-- 반복 페널티, presence/frequency penalty, no-repeat n-gram
-- 대조 검색(contrastive search)과 대조 디코딩
-- 제약 디코딩: 문법·정규식·JSON 스키마
-- 추측 디코딩(speculative decoding)의 원리와 무손실성
-- 설정별 권장값과 과제 유형에 따른 선택
+```{python}
+#| label: presets
+#| code-fold: false
 
----
-
-## G7.9.1 — 온도와 확률 분포
-
-같은 로짓이 온도에 따라 뾰족해지고 평평해지는 모습
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 온도 슬라이더
-:::
-
----
-
-## G7.9.2 — top-k vs top-p
-
-잘려나가는 후보 집합이 문맥마다 달라지는 방식 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 임계값 슬라이더
-:::
-
----
-
-## G7.9.3 — 빔 서치 탐색 트리
-
-빔이 유지·확장·가지치기되는 탐색 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 빔 크기 슬라이더
-:::
+rows = [
+    ("사실 질의응답", "T=0 또는 0.1", "—", "결정론적, 재현 가능"),
+    ("코드 생성", "T=0.2, top-p=0.95", "**반복 페널티 금지**"),
+    ("요약·번역", "T=0.3, top-p=0.9", "또는 빔 서치 4~8"),
+    ("일반 대화", "T=0.7, top-p=0.9", "가장 흔한 기본값"),
+    ("창작", "T=0.9~1.1, top-p=0.95", "다양성 우선"),
+    ("**self-consistency**", "T=0.7~1.0 필수", "온도 0이면 경로가 같아진다"),
+    ("구조화 출력", "T=0 + 제약 디코딩", "형식 보장 (7.8)"),
+]
+print(f"{'과제':<22} {'권장 설정':<24} {'비고'}")
+print("-" * 72)
+for r in rows:
+    print(f"{r[0]:<22} {r[1]:<24} {r[2]}")
+print()
+print("**설정을 고를 때의 원칙**")
+for s in ["정답이 하나면 온도를 낮춘다. 여럿이면 높인다",
+          "**top-k 보다 top-p 를 쓴다** — 문맥에 적응한다 (이 장 실험)",
+          "온도와 top-p 를 **동시에** 세게 조이지 말 것 (이중 절단)",
+          "반복이 보이면 페널티보다 **온도를 먼저** 확인한다",
+          "**평가할 때는 온도를 고정하고 시드를 여러 개 쓴다**"]:
+    print(f"  · {s}")
+print()
+print("**흔한 함정**")
+for a, b in [
+    ("T=0 인데 결과가 다르다", "부동소수점 비결정성·배치 크기·GPU 커널 차이"),
+    ("반복 페널티로 코드가 깨짐", "식별자 재사용이 막힌다"),
+    ("빔 서치로 대화가 지루함", "이 장 G7.9.2 의 결과 그대로"),
+    ("self-consistency 가 무효", "온도가 0 이라 경로가 전부 같다"),
+    ("긴 출력에서 형식이 깨짐", "프롬프트 대신 제약 디코딩을 쓸 것"),
+]:
+    print(f"  {a:<26} → {b}")
+```
 
 ---
 
-## G7.9.4 — 추측 디코딩
+## 요약
 
-초안 모델이 제안하고 대형 모델이 검증·수용하는 과정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 초안 길이 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 개념 | 핵심 |
 |------|------|
-| 온도 (temperature) |  |
-| top-p 샘플링 |  |
-| 빔 서치 |  |
-| 반복 페널티 |  |
-| 추측 디코딩 |  |
+| 디코딩 문제 | $\arg\max_y p(y\vert x)$ 는 계산 불가능하고, **좋은 답도 아니다** |
+| greedy 반복 | 유한 상태 + 결정론적 전이 → **비둘기집 원리로 반드시 순환** |
+| 빔 서치 | 확률은 높아지지만 **실제 데이터에서 나올 수 없는** 시퀀스 |
+| 측정된 것 | 빔의 로그확률이 전형값보다 22 nats 높다 — **비전형적** |
+| 빔의 용도 | 번역·요약·음성인식은 적합, 대화·창작은 부적합 |
+| 온도 | 로짓을 $T$로 나눈다. $T{\to}0$이 greedy |
+| 온도의 한계 | 문맥의 확신 정도를 무시한다 |
+| top-k | 항상 $k$개 — 뾰족한 문맥엔 과하고 평평한 문맥엔 부족 |
+| **top-p** | 누적 확률 기준 → **문맥에 따라 크기가 변한다** |
+| 왜곡 측정 | 평균이 아니라 **최댓값**을 봐야 한다 — top-k의 최악 경우가 나쁘다 |
+| 왜곡이 유용한 이유 | 꼬리에는 학습 잡음이 있다 — 자르면 실수가 준다 |
+| 반복 페널티 | 적용 대상이 넓어지면 **온도로 퇴화해 반복을 늘린다** (실측) |
+| no-repeat n-gram | n-gram 단위라 선택적으로 작동 — 반복을 실제로 줄였다 |
+| 근본 해법 | T=1이면 억제가 필요 없다 — 반복은 대개 온도를 낮춘 결과 |
+| **추측 디코딩** | 수락률 $\min(1, p/q)$ + 잔차 재샘플링 |
+| **무손실 검증** | 총변동거리가 직접 샘플링과 같은 수준 — 몬테카를로 잡음 |
+| 속도 | 목표 모델 호출 1회당 3토큰 이상 생성 |
+| 실제 가속 | 초안 비용·메모리 대역폭 때문에 이론값보다 작다 |
+| 프롬프트 룩업 | 초안 모델 없이 입력에서 복사 — 요약·편집에 강력 |
+
+Part 7의 절반을 지났다.
+남은 장들은 이 도구들을 **시스템으로 조립**하는 이야기다 —
+검색, 도구, 추론, 평가, 최적화, 안전.
 
 ---
 
-**다음**: [7.10 검색 증강 생성(RAG)](10_rag.qmd) — 임베딩 검색·청킹·리랭킹 — 모델에 없는 지식을 주입하기
+**다음**: [7.10 검색 증강 생성(RAG)](10_rag.qmd)
 
 **이전**: [7.8 프롬프팅과 문맥 내 학습](08_prompting_icl.qmd)
