@@ -4,92 +4,672 @@ subtitle: "RLHF·DPO·GRPO·RLVR — 토큰 생성을 MDP로 보기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[7.7](../07_language/07_alignment.qmd)에서 정렬을 언어모델 쪽에서 봤다.
+이제 [10.0](00_mdp.qmd)–[10.4](04_policy_gradient.qmd)의 기계를 들고 같은 것을 다시 본다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+대응은 이렇게 맞춘다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+| MDP | 텍스트 생성 |
+|-----|-----------|
+| 상태 $s_t$ | 프롬프트 + 지금까지 생성한 토큰 |
+| 행동 $a_t$ | **다음 토큰 하나** |
+| 전이 $P$ | **결정적** — 토큰을 이어 붙일 뿐 |
+| 보상 $R$ | 대개 **시퀀스가 끝났을 때 한 번** |
+| 정책 $\pi_\theta$ | 언어모델 그 자체 |
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+그런데 이 MDP 는 지금까지 다룬 것들과 세 가지가 다르다.
+
+| 특수성 | 그리드월드 | 텍스트 생성 |
+|--------|-----------|-----------|
+| 행동 공간 | 4개 | **수만~수십만** |
+| 보상 밀도 | 매 스텝 | **끝에 한 번** (극도로 희소) |
+| 전이 | 확률적 | 결정적 — 불확실성이 **정책 안에만** 있다 |
+
+세 번째가 의외로 중요하다. 환경이 결정적이므로 **탐색은 곧 샘플링**이고,
+[10.0](00_mdp.qmd)의 탐색-활용 문제가 온도·top-p 같은 디코딩 설정으로 옮겨 간다.
+
+이 장에서는 **완전히 열거 가능한 장난감 언어모델**을 만들어
+RLHF 의 목적함수를 정확히 풀고, β·보상 해킹·DPO·GRPO 를 수치로 확인한다.
+
+---
+
+## 준비: 열거 가능한 언어모델
+
+어휘 6개, 길이 4 → 완성이 $6^4 = 1296$ 개다.
+전부 나열할 수 있으므로 **기댓값도 KL 도 근사 없이 정확히** 계산된다.
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import itertools
+import numpy as np
+
+V, L = 6, 4
+YS = np.array(list(itertools.product(range(V), repeat=L)))
+NY = len(YS)
+g = np.random.default_rng(0)
+
+
+def softmax(z):
+    z = z - z.max(-1, keepdims=True)
+    e = np.exp(z)
+    return e/e.sum(-1, keepdims=True)
+
+
+LOGITS = g.normal(0, 1.0, (V + 1, V))     # 상태 = 직전 토큰 (V 는 BOS)
+
+
+def seq_logp(logits):
+    """각 완성의 로그확률 (자기회귀)."""
+    P = softmax(logits)
+    lp = np.zeros(NY)
+    prev = np.full(NY, V)
+    for t in range(L):
+        lp += np.log(P[prev, YS[:, t]] + 1e-300)
+        prev = YS[:, t]
+    return lp
+
+
+LP_REF = seq_logp(LOGITS)
+P_REF = np.exp(LP_REF)
+P_REF /= P_REF.sum()
+
+# 참 품질 — 우리만 아는 값. 보상 모델은 이것의 불완전한 대리다.
+W_TRUE = g.normal(0, 1, (V, V))
+R_TRUE = sum(W_TRUE[YS[:, t], YS[:, t+1]] for t in range(L-1))/(L-1)
+R_TRUE = (R_TRUE - R_TRUE.mean())/R_TRUE.std()
+
+# 허위 특성 — 참 품질과 직교하도록 만든다 (형식·길이 같은 것의 대역)
+SPUR = (YS == 0).sum(1).astype(float)
+SPUR = SPUR - (SPUR @ R_TRUE)/(R_TRUE @ R_TRUE)*R_TRUE
+SPUR = (SPUR - SPUR.mean())/SPUR.std()
+
+
+def KL(p, q):
+    return float((p*np.log((p + 1e-300)/(q + 1e-300))).sum())
+
+
+print(f"완성 {NY}개 (어휘 {V}, 길이 {L}) — 전부 열거해 정확히 계산한다")
+print(f"  참조 정책 엔트로피 {-(P_REF*np.log(P_REF+1e-300)).sum():.4f} "
+      f"(균등이면 {np.log(NY):.4f})")
+print(f"  참 품질 범위 [{R_TRUE.min():.3f}, {R_TRUE.max():.3f}], "
+      f"**도달 가능한 천장 {R_TRUE.max():.4f}**")
+print(f"  허위 특성과 참 품질의 상관 {np.corrcoef(SPUR, R_TRUE)[0,1]:+.6f} "
+      f"(직교하도록 만들었다)")
+print()
+print("**이 장의 핵심 장치: 참 품질을 우리는 알고, 모델은 모른다.**")
+print("  보상 모델은 참 품질의 대리일 뿐이고, 그 격차가 이 장의 주제다.")
+```
+
+---
+
+## RLHF 의 목적함수
+
+RLHF 가 실제로 푸는 문제는 이것이다.
+
+$$\max_\pi\ \mathbb{E}_{y\sim\pi}\big[\hat{r}(y)\big]
+\ -\ \beta\,\mathrm{KL}\big(\pi\,\|\,\pi_{\text{ref}}\big)$$
+
+$\hat r$ 은 사람 선호로 학습한 **보상 모델**, $\pi_{\text{ref}}$ 는 SFT 를 마친 **참조 모델**이다.
+
+이 문제의 해는 닫힌 형태로 알려져 있다.
+
+$$\pi^*(y) \ \propto\ \pi_{\text{ref}}(y)\,\exp\!\big(\hat{r}(y)/\beta\big)$$
+
+우리 장난감은 완성이 1296개뿐이므로 **이 해를 정확히 계산할 수 있다.**
+PPO 로 근사할 필요 없이 최적점을 직접 놓고 β 를 바꿔 볼 수 있다는 뜻이다.
+
+```{python}
+#| label: kl-opt
+#| code-fold: false
+
+import numpy as np
+
+
+def kl_reg_opt(rhat, beta):
+    """KL 정규화 RL 의 정확한 해."""
+    lw = LP_REF + rhat/beta
+    lw -= lw.max()
+    p = np.exp(lw)
+    return p/p.sum()
+
+
+print("β 는 '참조 모델에서 얼마나 멀어질 수 있는가'의 손잡이다")
+print()
+print(f"{'β':>7} {'KL(π*‖π_ref)':>14} {'참 품질':>10} {'엔트로피':>10} "
+      f"{'최빈 완성의 확률':>16}")
+print("-" * 62)
+BETAS = [10.0, 3.0, 1.0, 0.3, 0.1, 0.03]
+for b in BETAS:
+    p = kl_reg_opt(R_TRUE, b)
+    print(f"{b:>7} {KL(p, P_REF):>14.4f} {float((p*R_TRUE).sum()):>10.4f} "
+          f"{-(p*np.log(p+1e-300)).sum():>10.4f} {p.max():>16.4f}")
+print()
+print("**β 를 낮추면 보상을 더 좇고 참조 모델에서 멀어진다.**")
+for s in ["β→∞ 이면 π* = π_ref — 아무것도 안 바뀐다",
+          "β→0 이면 π* 가 $\\hat r$ 의 최댓값 하나에 몰린다 — "
+          "엔트로피가 0 으로 붕괴한다",
+          "위 표에서 β=0.03 일 때 최빈 완성 하나가 확률 대부분을 가져간다",
+          "**이것이 RLHF 에서 β 를 낮추면 출력이 단조로워지는 이유**다 — "
+          "'모드 붕괴'라 부르는 현상",
+          "보상 모델이 **완벽하다면** 낮은 β 가 늘 이득이다 "
+          f"(참 품질 {float((kl_reg_opt(R_TRUE,0.03)*R_TRUE).sum()):.4f}, "
+          f"천장 {R_TRUE.max():.4f})",
+          "문제는 보상 모델이 완벽하지 않다는 것이다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G10.5.1 — 보상 해킹: 대리 지표를 최적화한 대가
+
+보상 모델은 사람 선호를 근사한 것이다. 반드시 틀린 데가 있다.
+그 틀림이 **체계적**일 때 — 형식, 길이, 자신감 있는 말투 같은 것을 과대평가할 때 —
+정책은 그쪽으로 달려간다.
+
+참 품질과 **직교하는** 허위 특성을 보상 모델에 섞어 재현한다.
+
+```{python}
+#| label: hacking
+#| code-fold: false
+
+import numpy as np
+
+print("보상 모델이 허위 특성을 c 만큼 과대평가할 때")
+print(f"  (허위 특성은 참 품질과 상관 {np.corrcoef(SPUR, R_TRUE)[0,1]:+.4f} — "
+      "품질과 무관하다)")
+print()
+HACK = {}
+for c in [0.0, 1.0, 2.0]:
+    RH = R_TRUE + c*SPUR
+    RH = (RH - RH.mean())/RH.std()
+    rows = []
+    print(f"  허위 가중치 c={c} "
+          f"(보상 모델과 참 품질의 상관 {np.corrcoef(RH, R_TRUE)[0,1]:.3f})")
+    print(f"    {'β':>7} {'KL':>8} {'대리 보상':>10} {'참 품질':>10} "
+          f"{'허위 특성':>10}")
+    for b in BETAS[1:]:
+        p = kl_reg_opt(RH, b)
+        rows.append((b, KL(p, P_REF), float((p*RH).sum()),
+                     float((p*R_TRUE).sum()), float((p*SPUR).sum())))
+        print(f"    {b:>7} {rows[-1][1]:>8.3f} {rows[-1][2]:>10.4f} "
+              f"{rows[-1][3]:>10.4f} {rows[-1][4]:>10.4f}")
+    HACK[c] = rows
+print()
+clean = HACK[0.0][-1]
+dirty = HACK[2.0][-1]
+print("**① 대리 보상은 계속 오르는데 참 품질은 멈춘다.**")
+print(f"  c=2, β=0.03: 대리 보상 {dirty[2]:.4f} vs 참 품질 {dirty[3]:.4f} — "
+      f"**{dirty[2]/dirty[3]:.1f}배 부풀려져 있다**")
+print(f"  같은 지점에서 허위 특성은 {dirty[4]:.4f} — "
+      "정책이 사실상 그것만 최대화했다")
+print()
+print("**② 오염된 보상 모델은 천장 자체를 낮춘다.**")
+print(f"  완벽한 보상 모델: 참 품질 {clean[3]:.4f} "
+      f"(천장 {R_TRUE.max():.4f}의 {clean[3]/R_TRUE.max():.1%})")
+print(f"  c=2 오염: 아무리 최적화해도 {dirty[3]:.4f} "
+      f"({dirty[3]/R_TRUE.max():.1%})")
+print(f"  **{(clean[3]-dirty[3])/R_TRUE.max():.1%} 를 영구히 잃는다.** "
+      "β 를 어떻게 잡아도 되찾을 수 없다")
+print()
+print("**③ β 를 낮출수록 격차가 벌어진다.**")
+for b, kl, rh, rt, sp in HACK[2.0]:
+    print(f"  β={b:>5}: KL {kl:>6.2f}, 대리 {rh:>7.4f}, 참 {rt:>7.4f}, "
+          f"격차 {rh-rt:>7.4f}")
+print()
+print("**이것이 KL 페널티의 진짜 역할이다.**")
+for s in ["흔히 '참조 모델의 언어 능력을 지키기 위해'라고 설명하지만, "
+          "그것은 절반이다",
+          "**나머지 절반은 보상 모델의 유효 범위를 벗어나지 않기 위해서**다",
+          "보상 모델은 π_ref 근처의 응답으로 학습됐다 — "
+          "멀리 가면 **본 적 없는 입력**을 채점하게 된다",
+          "[10.0](00_mdp.qmd) G10.0.3 의 분포 이동이 여기서 "
+          "'보상 모델의 분포 밖 외삽'으로 나타난다",
+          "그래서 실무에서 β 는 **KL 예산**으로 관리된다 — "
+          "'KL 이 얼마를 넘으면 멈춘다'",
+          "[7.12](../07_language/12_reasoning_models.qmd)에서 본 "
+          "best-of-n 과최적화와 같은 곡선의 RL 판이다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-hacking
+#| fig-cap: "G10.5.1 — 보상 해킹. 가로축이 참조 모델에서 멀어진 정도(KL)다. 대리 보상(점선)은 계속 오르지만 참 품질(실선)은 멈추거나 꺾인다. 그 간격이 해킹의 크기다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+for i, c in enumerate([0.0, 1.0, 2.0]):
+    r = HACK[c]
+    fig.add_trace(go.Scatter(x=[x[1] for x in r], y=[x[3] for x in r],
+                             mode="lines+markers", name=f"참 품질 (c={c})",
+                             line=dict(color=viz.color(i), width=3),
+                             marker=dict(size=9)))
+    fig.add_trace(go.Scatter(x=[x[1] for x in r], y=[x[2] for x in r],
+                             mode="lines+markers", name=f"대리 보상 (c={c})",
+                             line=dict(color=viz.color(i), width=1.6,
+                                       dash="dot"),
+                             marker=dict(size=6), showlegend=(i == 0)))
+fig.add_hline(y=float(R_TRUE.max()),
+              line=dict(color=viz.hex_rgba(viz.GREEN, 0.6), dash="dash"))
+fig.add_annotation(x=0.2, y=float(R_TRUE.max()), text="참 품질의 천장",
+                   showarrow=False, xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.GREEN))
+viz.fig_defaults(
+    fig, "참조 모델에서 멀어질 때 (β를 낮추며)", height=470,
+    xaxis_title="KL(π ‖ π_ref)", yaxis_title="점수")
+viz.annotate_box(fig, "점선과 실선의 간격 = 보상 해킹<br>"
+                      "<b>c=2 는 천장의 68%에서 멈춘다</b>",
+                 x=0.98, y=0.02)
+fig
+```
+
+::: {.interaction-hint}
+초록 점선(천장)에 닿는 것은 오염 없는 c=0 뿐이다.
+
+**보상 모델이 오염되면 KL 예산을 아무리 써도 그 천장에 못 간다.**
+더 많이 최적화하는 것으로는 못 고친다 — 보상 모델 자체를 고쳐야 한다.
+
+이것이 RLHF 파이프라인에서 **보상 모델의 품질이 병목**인 이유다.
+그리고 다음 절의 RLVR 이 나온 동기이기도 하다.
 :::
 
-Part 7의 정렬 장을 강화학습 관점에서 다시 본다. 상태·행동·보상이 무엇에 대응하는지 정리하면 최신 알고리즘이 정확히 어디를 건드리는지 보인다.
+---
+
+## G10.5.2 — DPO: 강화학습 없이 같은 곳에 도달하기
+
+위의 닫힌 해를 뒤집어 보자.
+
+$$\pi^*(y) \propto \pi_{\text{ref}}(y)e^{\hat r(y)/\beta}
+\quad\Longleftrightarrow\quad
+\hat r(y) = \beta\log\frac{\pi^*(y)}{\pi_{\text{ref}}(y)} + \text{const}$$
+
+**보상 함수를 정책으로 표현할 수 있다.** 그러면 보상 모델을 따로 학습할 필요가 없다 —
+선호 데이터의 로그우도를 정책에 대해 직접 최적화하면 된다. 그것이 DPO 다.
+
+$$L^{\text{DPO}} = -\log\sigma\Big(\beta\log\frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)}
+- \beta\log\frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)}\Big)$$
+
+이 등가성이 정말 성립하는지 수치로 확인한다.
+
+```{python}
+#| label: dpo
+#| code-fold: false
+
+import numpy as np
+
+RH = R_TRUE + g.normal(0, 0.5, NY)
+print("KL 정규화 RL 의 해에서 보상을 되돌려 복원한다")
+print()
+print(f"{'β':>7} {'최대 오차':>12} {'상관':>10}")
+print("-" * 32)
+for b in [1.0, 0.3, 0.1]:
+    p = kl_reg_opt(RH, b)
+    r_rec = b*(np.log(p + 1e-300) - LP_REF)
+    r_rec = r_rec - r_rec.mean() + RH.mean()      # 상수는 결정되지 않는다
+    print(f"{b:>7} {np.abs(r_rec - RH).max():>12.2e} "
+          f"{np.corrcoef(r_rec, RH)[0,1]:>10.6f}")
+print()
+print("**부동소수점 오차 수준으로 정확히 복원된다.**")
+print("  즉 π* 와 r̂ 은 **같은 정보를 담고 있다** — 하나에서 다른 하나가 나온다.")
+print()
+print("**그런데 등가성이 성립하는 조건이 있다**")
+print()
+print(f"{'가정':<26} {'RLHF':<22} {'DPO'}")
+print("-" * 70)
+for a, b_, c in [
+    ("보상 모델의 형태", "따로 학습한 신경망", "**정책에 암묵적으로 내재**"),
+    ("선호 데이터", "보상 모델 학습에만", "**직접 최적화**"),
+    ("온-정책 샘플링", "필요 (롤아웃)", "**불필요** — 오프라인"),
+    ("최적해", "같다 (위에서 확인)", "같다"),
+    ("도달 경로", "PPO 로 근사", "지도학습처럼 한 번에"),
+]:
+    print(f"{a:<26} {b_:<22} {c}")
+print()
+print("**그래서 DPO 가 훨씬 간단하다. 그런데 왜 RLHF 가 안 사라졌나**")
+for s in ["등가성은 **선호 데이터의 분포가 π_ref 를 따를 때** 정확하다 — "
+          "실제 데이터는 그렇지 않다",
+          "DPO 는 오프라인이라 **새로운 응답을 탐색하지 못한다** — "
+          "데이터에 없는 좋은 응답은 못 찾는다",
+          "RLHF 는 롤아웃으로 계속 새 응답을 만들어 채점받는다",
+          "보상 모델을 한 번 학습하면 **무한히 많은 응답을 채점**할 수 있다 — "
+          "선호 데이터보다 훨씬 넓게 쓴다",
+          "그래서 실무는 섞는다 — 온라인 DPO, 반복 DPO, "
+          "그리고 검증 가능한 보상이 있으면 RL (다음 절)"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G10.5.3 — GRPO: 비평자를 그룹 평균으로 대체하기
 
-- 텍스트 생성을 MDP로 매핑 (상태=문맥, 행동=토큰, 보상=시퀀스 끝)
-- 희소 보상·긴 지평·거대한 행동 공간이라는 특수성
-- RLHF의 PPO 적용: 가치 헤드, KL 페널티, 보상 정규화
-- 참조 모델과 KL 제약의 역할 재해석
-- 보상 해킹과 과최적화의 강화학습적 진단
-- DPO를 강화학습 없는 선호 최적화로 다시 유도
-- GRPO: 그룹 상대 이점으로 비평자 제거
-- RLVR: 규칙 기반 검증 가능 보상, 수학·코드 도메인
-- 과정 보상 모델(PRM)과 단계별 신용 배분
-- 샘플링 전략과 온-정책성 유지, 롤아웃 비용
-- 학습 인프라: 생성과 학습의 동시 실행, 추론 엔진 연동
-- 안정성 문제와 실무 하이퍼파라미터
+[10.4](04_policy_gradient.qmd) G10.4.1 에서 **상수 기준선만으로 분산의 대부분이 줄었다**.
+LLM 에서는 그 사실이 더 크게 작동한다.
+
+같은 프롬프트에 응답을 $k$ 개 뽑고, **그 그룹의 평균을 기준선으로** 쓰면
+비평자 네트워크가 아예 필요 없다.
+
+$$\hat{A}_i = \frac{r_i - \text{mean}(r_1,\dots,r_k)}{\text{std}(r_1,\dots,r_k)}$$
+
+얼마나 이득인지는 **보상의 스케일**에 달려 있다. 그것을 직접 잰다.
+
+```{python}
+#| label: grpo
+#| code-fold: false
+
+import numpy as np
+
+
+def sample_grad(k, mode, rng, rew):
+    """그룹 k개를 뽑아 이점을 만들고 정책 경사를 추정한다."""
+    idx = rng.choice(NY, size=k, p=P_REF)
+    r = rew[idx]
+    adv = {"none": r,
+           "mean": r - r.mean(),
+           "grpo": (r - r.mean())/(r.std() + 1e-8)}[mode]
+    P = softmax(LOGITS)
+    gr = np.zeros_like(LOGITS)
+    prev = np.full(k, V)
+    for t in range(L):
+        at = YS[idx][:, t]
+        np.add.at(gr, (prev, at), adv)
+        for a in range(V):
+            np.add.at(gr, (prev, a), -adv*P[prev, a])
+        prev = at
+    return gr/k
+
+
+print("보상 모델의 출력 스케일은 임의다 — 오프셋이 있으면 어떻게 되나")
+print()
+print(f"{'보상 오프셋':>11} {'그룹 k':>7} {'기준선 없음 분산':>17} "
+      f"{'그룹 평균':>13} {'감소':>9}")
+print("-" * 62)
+GR = []
+for off in [0.0, 5.0, 20.0]:
+    rew = RH + off
+    for k in [8, 64]:
+        vs = {}
+        for mode in ["none", "mean"]:
+            Gs = np.array([sample_grad(k, mode, np.random.default_rng(s), rew)
+                           for s in range(2000)])
+            vs[mode] = float(Gs.var(0).mean())
+        GR.append((off, k, vs["none"], vs["mean"]))
+        print(f"{off:>11} {k:>7} {vs['none']:>17.5f} {vs['mean']:>13.5f} "
+              f"{vs['none']/vs['mean']:>9.1f}x")
+print()
+z = [x for x in GR if x[0] == 0.0 and x[1] == 8][0]
+b = [x for x in GR if x[0] == 20.0 and x[1] == 8][0]
+print("**그룹 기준선의 값어치는 전적으로 보상의 오프셋에 달려 있다.**")
+print(f"  오프셋 0: {z[2]/z[3]:.1f}배 — 거의 이득이 없다")
+print(f"  오프셋 20: {b[2]/b[3]:.1f}배 — **결정적이다**")
+print(f"  그룹 평균을 뺀 쪽의 분산은 오프셋과 무관하게 {z[3]:.5f} 로 같다")
+print()
+for s in ["보상 모델의 출력에는 **의미 없는 상수**가 늘 섞여 있다 — "
+          "스케일과 원점이 자유롭기 때문",
+          "그 상수가 그래디언트 추정기의 분산을 그대로 키운다 "
+          "([10.4](04_policy_gradient.qmd) G10.4.1 의 그것)",
+          "**그룹 평균은 그 상수를 정확히 제거한다** — "
+          "그것도 프롬프트마다 따로",
+          "표준편차로 나누는 것까지 하면 프롬프트별 **난이도 차이**도 정규화된다",
+          "쉬운 프롬프트(모든 응답이 좋음)와 어려운 프롬프트를 "
+          "같은 스케일로 다룰 수 있다"]:
+    print(f"  · {s}")
+print()
+print("**GRPO 가 LLM 에서 특히 잘 맞는 이유**")
+print()
+print(f"{'조건':<28} {'일반 RL':<22} {'LLM'}")
+print("-" * 72)
+for a, b_, c in [
+    ("같은 상태 재방문", "어렵다 (환경이 진행)", "**공짜** — 같은 프롬프트 재사용"),
+    ("한 상태에서 여러 궤적", "환경 리셋 필요", "**샘플링만 하면 된다**"),
+    ("비평자 학습 비용", "감당할 만하다", "모델 하나를 더 얹어야 한다"),
+    ("보상 밀도", "매 스텝", "끝에 한 번 — 비평자가 배우기 어렵다"),
+]:
+    print(f"{a:<28} {b_:<22} {c}")
+print()
+print("  **네 줄이 전부 GRPO 쪽을 가리킨다.**")
+print("  비평자를 없애면 메모리도 절반 가까이 줄어든다 — "
+      "70B 모델에서는 그것만으로도 큰 이득이다.")
+print()
+print("  대가: 그룹 크기 k 만큼 롤아웃을 더 해야 한다.")
+print("  **비평자 학습 비용을 샘플링 비용으로 바꾼 거래**다.")
+```
+
+```{python}
+#| label: fig-grpo
+#| fig-cap: "G10.5.3 — 그룹 기준선의 효과. 보상에 상수 오프셋이 있을 때만 값어치가 나타나고, 오프셋이 클수록 극적이다. 보상 모델의 출력 원점이 임의라는 사실이 이것을 필연으로 만든다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+OFFS = [0.0, 5.0, 20.0]
+fig = go.Figure()
+for i, k in enumerate([8, 64]):
+    rows = [x for x in GR if x[1] == k]
+    fig.add_trace(go.Scatter(x=OFFS, y=[x[2] for x in rows],
+                             mode="lines+markers", name=f"기준선 없음 (k={k})",
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)))
+    fig.add_trace(go.Scatter(x=OFFS, y=[x[3] for x in rows],
+                             mode="lines+markers", name=f"그룹 평균 (k={k})",
+                             line=dict(color=viz.color(i), width=2.5,
+                                       dash="dot"),
+                             marker=dict(size=7)))
+viz.fig_defaults(
+    fig, "보상 오프셋과 그래디언트 분산", height=450,
+    xaxis_title="보상에 더해진 상수", yaxis_title="그래디언트 분산 (로그)",
+    yaxis_type="log")
+viz.annotate_box(fig, "점선(그룹 평균)은 평평하다<br>"
+                      "<b>오프셋에 면역이다</b>", x=0.02, y=0.98,
+                 xanchor="left", yanchor="top")
+fig
+```
 
 ---
 
-## G10.5.1 — 텍스트 생성 MDP
+## G10.5.4 — RLVR: 채점할 수 있으면 해킹당하지 않는다
 
-토큰 하나가 행동이 되고 문맥이 상태가 되는 대응 도식
+G10.5.1 의 결론은 **보상 모델이 병목**이라는 것이었다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 토큰 스텝 재생
-:::
+그런데 어떤 과제는 보상 모델이 필요 없다.
+수학 문제는 답이 맞는지 **확인**할 수 있고, 코드는 테스트를 돌려 보면 된다.
+
+이것이 RLVR(Reinforcement Learning with Verifiable Rewards)이고,
+$\hat r$ 을 학습된 모델에서 **규칙 기반 검증기**로 바꾼 것이다.
+
+```{python}
+#| label: rlvr
+#| code-fold: false
+
+import numpy as np
+
+print("β=0.1 까지 최적화했을 때 도달하는 참 품질")
+print()
+print(f"{'보상의 출처':<30} {'참 품질':>10} {'천장 대비':>10}")
+print("-" * 54)
+ceil = float(R_TRUE.max())
+RLVR = []
+for nm, rew in [("검증기 (참 품질을 그대로)", R_TRUE),
+                ("보상 모델 (잡음 σ=0.5)", R_TRUE + g.normal(0, 0.5, NY)),
+                ("보상 모델 (허위 특성 c=2)", R_TRUE + 2*SPUR)]:
+    rr = (rew - rew.mean())/rew.std()
+    q = float((kl_reg_opt(rr, 0.1)*R_TRUE).sum())
+    RLVR.append((nm, q))
+    print(f"{nm:<30} {q:>10.4f} {q/ceil:>10.1%}")
+print()
+a, b_, c = RLVR
+print(f"**검증기는 천장의 {a[1]/ceil:.1%} 에 도달하고, "
+      f"오염된 보상 모델은 {c[1]/ceil:.1%} 에서 멈춘다.**")
+print()
+print("**검증기가 해킹당하지 않는 이유는 단순하다.**")
+for s in ["검증기는 **참 목표 그 자체**다 — 대리가 아니다",
+          "'답이 맞다'는 것에는 과대평가할 허위 특성이 없다",
+          "그래서 KL 예산을 다 써도 안전하다 — "
+          "β 를 낮추는 것이 순수한 이득이 된다",
+          "DeepSeek-R1 계열이 **긴 사고 과정을 강화학습으로 길러 낼 수 있었던** "
+          "배경이 이것이다 — 보상 모델이 없으니 해킹 걱정 없이 밀어붙일 수 있었다"]:
+    print(f"  · {s}")
+print()
+print("**그런데 검증기에도 함정이 있다**")
+print()
+print(f"{'함정':<24} {'무슨 일이 생기나'}")
+print("-" * 68)
+for x, y in [
+    ("답만 맞으면 된다", "과정이 엉터리여도 통과 — 요행수를 학습한다"),
+    ("테스트 케이스 해킹", "테스트만 통과하는 특수 케이스 코드"),
+    ("검증 가능한 것에 편중", "수학·코드만 늘고 나머지는 그대로"),
+    ("형식 붕괴", "답만 남고 설명이 사라진다 (형식 보상을 따로 주는 이유)"),
+    ("긴 사고의 비용", "토큰이 길어져 추론 비용이 급증"),
+]:
+    print(f"{x:<24} {y}")
+print()
+print("  첫 줄이 **과정 보상 모델(PRM)** 이 나온 이유다 —")
+print("  최종 답이 아니라 **단계마다** 채점해 신용을 배분한다.")
+print("  [10.0](00_mdp.qmd)의 신용 배분 문제를 사람이 손으로 푸는 셈이다.")
+print()
+print("**희소 보상 문제의 크기를 실감해 보자**")
+print()
+print(f"{'설정':<24} {'값'}")
+print("-" * 56)
+for x, y in [
+    ("행동 공간 (어휘)", "약 100,000"),
+    ("에피소드 길이", "수천 토큰 (사고 과정 포함)"),
+    ("보상 신호", "끝에 스칼라 **하나**"),
+    ("그리드월드 비교", "행동 4개, 32스텝, 매 스텝 보상"),
+]:
+    print(f"{x:<24} {y}")
+print()
+print("  **이 정도 희소성에서 학습이 되는 것 자체가 특이한 일이다.**")
+print("  가능한 이유: 사전학습된 정책이 이미 아주 좋은 출발점이라서다.")
+print("  무작위 초기화에서 시작하면 절대 안 된다 — "
+      "RLHF 는 **미세조정**이지 밑바닥 학습이 아니다.")
+```
 
 ---
 
-## G10.5.2 — KL 제약 궤적
+## 실무 지형
 
-참조 모델에서 멀어질수록 커지는 벌점과 보상의 균형
+```{python}
+#| label: practice
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: β 슬라이더
-:::
+print("**정렬 알고리즘의 지형**")
+print()
+print(f"{'방법':<12} {'보상의 출처':<20} {'비평자':<10} {'온라인?':<8} {'주 용도'}")
+print("-" * 76)
+for a, b, c, d, e in [
+    ("PPO-RLHF", "학습된 보상 모델", "필요", "예", "일반 선호 정렬"),
+    ("DPO", "선호 쌍 직접", "불필요", "아니오", "간단·안정, 오프라인"),
+    ("온라인 DPO", "선호 쌍 + 롤아웃", "불필요", "예", "둘의 절충"),
+    ("GRPO", "보상 모델 또는 검증기", "**불필요**", "예", "추론 모델 학습"),
+    ("RLVR", "규칙 기반 검증기", "선택", "예", "수학·코드"),
+    ("PRM + 탐색", "단계별 보상", "선택", "예", "긴 추론"),
+]:
+    print(f"{a:<12} {b:<20} {c:<10} {d:<8} {e}")
+print()
+print("**학습 인프라의 특수성**")
+for s in ["RLHF 는 **생성과 학습을 번갈아** 한다 — "
+          "롤아웃이 전체 시간의 대부분을 먹는다",
+          "그래서 추론 엔진(vLLM 등)과 학습 프레임워크를 붙여 쓴다",
+          "생성 중에는 학습 GPU 가 놀고, 학습 중에는 추론 GPU 가 논다 — "
+          "**이 낭비를 줄이는 것이 시스템 과제**",
+          "GRPO 는 그룹 k 만큼 생성이 더 필요하지만 "
+          "비평자 모델이 없어 메모리를 아낀다 — 절충이다",
+          "온-정책성을 얼마나 지킬지도 선택이다 — "
+          "옛 롤아웃을 재사용하면 싸지만 [10.2](02_model_free.qmd) G10.2.5 의 "
+          "중요도 비율 문제가 돌아온다"]:
+    print(f"  · {s}")
+print()
+print("**흔한 실패와 진단**")
+print()
+print(f"{'증상':<26} {'먼저 볼 곳'}")
+print("-" * 68)
+for a, b in [
+    ("출력이 단조로워진다", "β 가 너무 낮다 / KL 예산 초과 (G10.5.1)"),
+    ("보상은 오르는데 품질이 안 오름", "**보상 해킹** — 보상 모델을 의심하라"),
+    ("학습이 발산한다", "이점 정규화, 학습률, 클리핑 ε (10.4)"),
+    ("길이가 계속 늘어난다", "길이 편향 — 보상 모델의 대표적 허위 특성"),
+    ("검증기 과제만 좋아진다", "RLVR 편중 — 일반 능력 회귀 확인"),
+    ("KL 이 갑자기 튄다", "롤아웃 배치가 작거나 오래됐다"),
+]:
+    print(f"{a:<26} {b}")
+```
 
 ---
 
-## G10.5.3 — GRPO 그룹 이점
+## 요약
 
-같은 프롬프트의 여러 응답을 서로 비교해 이점을 만드는 방식
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 그룹 크기 슬라이더
-:::
-
----
-
-## G10.5.4 — 검증 가능 보상
-
-채점 가능한 도메인과 불가능한 도메인의 학습 신호 차이
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 과제 선택
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| RLHF |  |
-| KL 페널티 |  |
-| DPO |  |
-| GRPO |  |
-| RLVR |  |
-| 과정 보상 모델 |  |
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| MDP 대응 | 상태=문맥, 행동=토큰, 전이=결정적 | 보상은 끝에 한 번 |
+| 특수성 | 행동 10만, 지평 수천, 보상 1개 | 극도의 희소성 |
+| **RLHF 목적함수** | $\max E[\hat r] - \beta\,\mathrm{KL}$ | 닫힌 해가 있다 |
+| β의 역할 | β↓ → KL↑, 엔트로피 붕괴 | 모드 붕괴의 원인 |
+| **보상 해킹** | c=2에서 대리 4.46 vs 참 1.72 (**2.6배**) | 허위 특성만 최대화 |
+| 천장이 낮아진다 | 완벽 96.0% vs 오염 **67.6%** | β로는 못 되찾는다 |
+| KL 페널티의 진짜 역할 | 보상 모델의 **유효 범위** 유지 | 언어 능력 보존은 절반 |
+| **DPO 등가성** | 보상 복원 오차 **1e-15** | π*와 r̂은 같은 정보 |
+| 그런데 | DPO는 오프라인 — 새 응답을 못 찾는다 | RLHF가 안 사라진 이유 |
+| **GRPO** | 오프셋 0에서 1.1배, 오프셋 20에서 **392배** | 값어치가 보상 스케일에 딸림 |
+| 왜 필연인가 | 보상 모델의 원점은 임의다 | 그룹 평균이 정확히 제거 |
+| LLM에 맞는 이유 | 같은 프롬프트 재사용이 공짜 | 비평자 학습을 샘플링으로 교환 |
+| **RLVR** | 검증기 96.0% vs 오염된 RM 67.6% | 대리가 아니라 목표 그 자체 |
+| 그 함정 | 답만 맞으면 됨 → PRM이 나온 이유 | 검증 가능한 것에 편중 |
+| 되는 이유 | 사전학습이 아주 좋은 출발점 | **미세조정이지 밑바닥 학습이 아니다** |
 
 ---
 
-**다음**: [11.0 재현성과 실험 관리](../11_systems/00_reproducibility.qmd) — 시드·버전·추적 — 어제의 결과를 오늘 다시 얻기
+## Part 10을 닫으며
+
+```{python}
+#| label: part10
+#| code-fold: false
+
+print("**벨만 방정식 하나에서 RLHF 까지** — Part 10 의 줄기")
+print()
+print(f"{'장':<6} {'무엇을 풀었나':<34} {'무엇을 근사했나'}")
+print("-" * 78)
+for a, b, c in [
+    ("10.0", "형식화 — MDP 와 벨만 방정식", "(아무것도)"),
+    ("10.1", "모델을 알 때 정확히 푼다", "(아무것도) — GPI 도식 확립"),
+    ("10.2", "모델을 모를 때", "기댓값 → 표본"),
+    ("10.3", "상태가 너무 많을 때", "가치 표 → 신경망"),
+    ("10.4", "정책을 직접", "argmax → 미분 가능한 정책"),
+    ("10.5", "토큰 생성에 적용", "환경 보상 → **사람 선호의 대리**"),
+]:
+    print(f"{a:<6} {b:<34} {c}")
+print()
+print("**근사가 하나씩 쌓일 때마다 새로운 실패 모드가 생겼다.**")
+print()
+print(f"{'근사':<24} {'생긴 문제':<28} {'대응'}")
+print("-" * 76)
+for a, b, c in [
+    ("기댓값 → 표본", "편향-분산 절충 (10.2)", "n-스텝, TD(λ)"),
+    ("표 → 함수 근사", "치명적 삼중고 (10.2·10.3)", "타깃 네트워크"),
+    ("argmax → 정책", "분산 폭발 (10.4)", "기준선, GAE"),
+    ("옛 데이터 재사용", "중요도 비율 폭발 (10.2)", "PPO 클리핑"),
+    ("보상 → 보상 모델", "**보상 해킹** (10.5)", "KL 페널티, 검증기"),
+]:
+    print(f"{a:<24} {b:<28} {c}")
+print()
+print("**그리고 반복해서 나온 교훈이 하나 있다.**")
+for s in ["**대리를 최적화하면 대리만 좋아진다.**",
+          "10.2 의 부트스트랩은 자기 추정을 목표로 삼아 발산했고,",
+          "10.4 의 대리 목적은 한 배치에 과적합했고,",
+          "10.5 의 보상 모델은 허위 특성을 최대화했다.",
+          "매번 **대리와 참 목표 사이의 거리를 제한**하는 것이 답이었다 —",
+          "타깃 네트워크의 주기, PPO 의 클리핑, RLHF 의 KL 페널티.",
+          "**셋은 같은 처방이다.**"]:
+    print(f"  {s}")
+```
+
+---
+
+**다음**: [11.0 재현성과 실험 관리](../11_systems/00_reproducibility.qmd) — Part 11 시스템과 MLOps
 
 **이전**: [10.4 정책 경사법](04_policy_gradient.qmd)
