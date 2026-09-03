@@ -28,7 +28,7 @@ jupyter: ai-ml-study
 | $Z = XW$, 손실 $L$ | $\partial L/\partial W = X^\top\,\partial L/\partial Z$ |
 | " | $\partial L/\partial X = (\partial L/\partial Z)\,W^\top$ |
 
-마지막 두 줄이 신경망 역전파의 전부다. [3.8](../03_deep_learning/08_autodiff.qmd) 에서 직접 구현했다.
+마지막 두 줄이 신경망 역전파의 전부다. [3.8](../03_deep_learning/08_autograd_from_scratch.qmd) 에서 직접 구현했다.
 
 **연쇄법칙의 형태**: $\dfrac{\partial L}{\partial \theta} = \dfrac{\partial L}{\partial z}\dfrac{\partial z}{\partial \theta}$ —
 역전파는 이것을 **오른쪽에서 왼쪽으로** 곱해 나가는 것이다 (벡터-야코비 곱).
