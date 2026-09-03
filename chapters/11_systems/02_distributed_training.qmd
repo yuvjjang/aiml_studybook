@@ -4,92 +4,622 @@ subtitle: "DDP·ZeRO·FSDP·텐서/파이프라인 병렬 — 여러 장치로 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+모델이 GPU 한 장에 안 들어가는 순간, 병렬화 전략이 아키텍처만큼 중요해진다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그런데 "안 들어간다"가 정확히 무슨 뜻인지부터 애매하다.
+7B 모델의 파라미터는 bf16 으로 13GB 다. 80GB GPU 에 여섯 개는 들어갈 것 같다.
+그런데 **학습**은 한 장에 안 된다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장은 그 산수를 먼저 맞추고, 그다음에 쪼개는 축들을 본다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+| 쪼개는 축 | 무엇을 나누나 | 통신하는 것 |
+|----------|-------------|-----------|
+| **데이터 병렬** | 배치 | 그래디언트 (스텝당 1회) |
+| **ZeRO / FSDP** | 옵티마이저 상태·그래디언트·파라미터 | + 파라미터 (층마다) |
+| **텐서 병렬** | 행렬 곱을 행·열로 | 활성화 (**층마다 2회**) |
+| **파이프라인 병렬** | 층을 구간으로 | 경계 활성화 (구간마다) |
+
+어느 축을 고르느냐는 결국 **통신 비용**이 정한다. 그것을 수치로 만든다.
+
+---
+
+## G11.2.1 — 학습 메모리는 무엇으로 채워지나
+
+파라미터만 세면 안 된다. 학습에는 네 가지가 필요하다.
+
+$$\underbrace{2\Psi}_{\text{bf16 파라미터}} +
+\underbrace{2\Psi}_{\text{그래디언트}} +
+\underbrace{12\Psi}_{\text{Adam: fp32 마스터} + m + v} +
+\underbrace{\text{활성화}}_{\text{배치·시퀀스에 비례}}$$
+
+```{python}
+#| label: memory
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+GB = 1024**3
+
+
+def state_mem(P, opt="adam"):
+    """파라미터·그래디언트·옵티마이저 상태 (혼합정밀 학습 관례)."""
+    par = 2*P                                   # bf16 파라미터
+    grad = 2*P                                  # bf16 그래디언트
+    st = {"adam": 12*P,                         # fp32 마스터 + m + v
+          "sgdm": 8*P,                          # fp32 마스터 + 모멘텀
+          "sgd": 4*P}[opt]                      # fp32 마스터만
+    return par, grad, st
+
+
+print("모델 크기별 학습 상태 메모리 (혼합정밀 + Adam, 활성화 제외)")
+print()
+print(f"{'모델':<8} {'Ψ':>9} {'파라미터':>10} {'그래디언트':>11} {'옵티마이저':>11} "
+      f"{'합계':>10} {'Ψ당 바이트':>11}")
+print("-" * 68)
+MEM = []
+for nm, P in [("125M", 125e6), ("1.3B", 1.3e9), ("7B", 7e9),
+              ("70B", 70e9), ("175B", 175e9)]:
+    a, b, c = state_mem(P)
+    tot = a + b + c
+    MEM.append((nm, P, a, b, c))
+    print(f"{nm:<8} {P/1e9:>8.2f}B {a/GB:>9.1f}G {b/GB:>10.1f}G {c/GB:>10.1f}G "
+          f"{tot/GB:>9.1f}G {tot/P:>11.0f}")
+print()
+print("**파라미터 하나당 16바이트가 든다.** bf16 파라미터의 8배다.")
+print()
+print("옵티마이저를 바꾸면 (7B 기준)")
+print()
+print(f"{'옵티마이저':<24} {'합계':>10} {'옵티마이저 비중':>15}")
+print("-" * 52)
+for opt, nm in [("adam", "Adam (마스터+m+v)"), ("sgdm", "SGD + 모멘텀"),
+                ("sgd", "SGD")]:
+    a, b, c = state_mem(7e9, opt)
+    print(f"{nm:<24} {(a+b+c)/GB:>9.1f}G {c/(a+b+c):>15.0%}")
+print()
+for s in ["**Adam 의 상태가 전체의 75% 다** — 파라미터보다 6배 크다",
+          "fp32 마스터 사본이 필요한 이유: bf16 로 누적하면 작은 갱신이 "
+          "반올림에 먹힌다 ([11.0](00_reproducibility.qmd) G11.0.5 의 그것)",
+          "그래서 메모리를 줄이려는 시도가 옵티마이저 상태부터 겨냥한다 — "
+          "8비트 Adam, Adafactor, 그리고 **ZeRO**",
+          f"7B 학습에 {(sum(state_mem(7e9)))/GB:.0f}GB 가 필요하다는 것이 "
+          "이 장의 출발점이다 — 80GB 한 장으로 안 된다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-memory
+#| fig-cap: "G11.2.1 — 학습 상태 메모리의 구성. Adam의 옵티마이저 상태가 파라미터의 6배를 차지한다. 메모리 절약이 여기서 시작되는 이유다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+nms = [m[0] for m in MEM]
+fig = go.Figure()
+for i, (lbl, k) in enumerate([("파라미터 (bf16)", 2), ("그래디언트", 3),
+                              ("옵티마이저 상태 (Adam)", 4)]):
+    fig.add_trace(go.Bar(x=nms, y=[m[k]/GB for m in MEM], name=lbl,
+                         marker_color=viz.color(i)))
+fig.add_hline(y=80, line=dict(color=viz.WARM, width=2, dash="dash"))
+fig.add_annotation(x=0, y=80, text="80GB GPU 한 장", showarrow=False,
+                   xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.WARM))
+viz.fig_defaults(
+    fig, "모델 크기별 학습 상태 메모리 (로그)", height=450,
+    xaxis_title="", yaxis_title="GB (로그)", barmode="stack",
+    yaxis_type="log")
+fig
+```
+
+---
+
+## G11.2.2 — ZeRO: 무엇을 언제 나누나
+
+데이터 병렬(DDP)은 **모든 GPU 가 모든 것의 사본을 갖는다.**
+그래디언트만 all-reduce 하면 되니 단순하지만, 메모리는 하나도 안 줄어든다.
+
+ZeRO 는 그 중복을 단계적으로 없앤다.
+
+| 단계 | 나누는 것 | GPU 당 메모리 |
+|------|----------|--------------|
+| 0 (DDP) | 없음 | $16\Psi$ |
+| **1** | 옵티마이저 상태 | $4\Psi + 12\Psi/N$ |
+| **2** | + 그래디언트 | $2\Psi + 14\Psi/N$ |
+| **3** (FSDP) | + 파라미터 | $16\Psi/N$ |
+
+```{python}
+#| label: zero
+#| code-fold: false
+
+import numpy as np
+
+P7 = 7e9
+par, grad, st = state_mem(P7)
+print(f"7B 모델, Adam, 혼합정밀 — GPU 당 상태 메모리 (GB)")
+print()
+print(f"{'N GPU':>7} {'ZeRO 0 (DDP)':>14} {'ZeRO 1':>10} {'ZeRO 2':>10} "
+      f"{'ZeRO 3 (FSDP)':>15}")
+print("-" * 62)
+ZERO = []
+for N in [1, 2, 4, 8, 16, 64, 256]:
+    z = [(par + grad + st)/GB,
+         (par + grad + st/N)/GB,
+         (par + grad/N + st/N)/GB,
+         (par + grad + st)/N/GB]
+    ZERO.append((N, *z))
+    print(f"{N:>7} {z[0]:>13.1f}G {z[1]:>9.1f}G {z[2]:>9.1f}G {z[3]:>14.1f}G")
+print()
+n8 = [z for z in ZERO if z[0] == 8][0]
+print(f"**N=8 에서: DDP {n8[1]:.0f}GB → ZeRO-1 {n8[2]:.0f}GB → "
+      f"ZeRO-2 {n8[3]:.0f}GB → ZeRO-3 {n8[4]:.0f}GB**")
+print()
+for s in ["ZeRO-1 만으로도 절반 이하가 된다 — **옵티마이저 상태가 가장 크니까**",
+          "ZeRO-3 는 N 에 반비례해 계속 줄어든다 — "
+          f"N=256 이면 {[z for z in ZERO if z[0]==256][0][4]:.1f}GB",
+          "**대신 파라미터를 매 층마다 모아야 한다** — 통신이 는다 (G11.2.5)",
+          "FSDP 는 ZeRO-3 를 '모으고-쓰고-버리기' 로 구현한 것이다 — "
+          "층을 쓰기 직전에 all-gather, 쓰고 나면 즉시 해제",
+          "그래서 **파라미터의 순간 메모리는 한 층치**면 된다"]:
+    print(f"  · {s}")
+print()
+print("**80GB GPU 에 7B 학습을 올리려면**")
+print()
+print(f"{'구성':<28} {'GPU 당 상태':>12} {'가능?'}")
+print("-" * 52)
+for nm, v in [("DDP (몇 장이든)", (par+grad+st)/GB),
+              ("ZeRO-1, N=8", (par+grad+st/8)/GB),
+              ("ZeRO-2, N=8", (par+grad/8+st/8)/GB),
+              ("ZeRO-3, N=8", (par+grad+st)/8/GB)]:
+    print(f"{nm:<28} {v:>11.1f}G {'예' if v < 80 else '**아니오**':>6}")
+print()
+print("  DDP 로는 GPU 를 아무리 늘려도 안 된다 — **중복이 줄지 않으니까**.")
+print("  이것이 ZeRO 가 나온 이유다.")
+```
+
+---
+
+## G11.2.3 — 활성화: 잊기 쉬운 나머지 절반
+
+지금까지 센 것은 **상태**뿐이다. 역전파에는 순전파의 중간값이 필요하고,
+그 양은 **배치와 시퀀스 길이에 비례**한다.
+
+층당 대략 $16 \cdot B \cdot S \cdot H$ 개의 값이 필요하다 (트랜스포머 근사).
+
+```{python}
+#| label: activations
+#| code-fold: false
+
+import numpy as np
+
+B_, S_, H_, L_ = 8, 4096, 4096, 32
+
+
+def act_mem(L, B, S, H, bytes_=2, ckpt=None):
+    per_layer = B*S*H*16*bytes_
+    if ckpt is None:
+        return L*per_layer, 0.0                    # 전부 보관
+    if ckpt == "sqrt":
+        g = int(round(np.sqrt(L)))
+        return (g + L/g)*per_layer, 1/3            # 경계 + 한 그룹 재계산
+    return per_layer, 1.0                          # 층마다 전부 재계산
+
+
+print(f"배치 {B_}, 시퀀스 {S_}, 은닉 {H_}, 층 {L_} (bf16)")
+print(f"  층 하나의 활성화 ≈ {B_*S_*H_*16*2/GB:.1f}GB")
+print()
+print(f"{'방식':<24} {'활성화 메모리':>14} {'추가 순전파 연산':>16}")
+print("-" * 58)
+ACT = []
+for nm, c in [("전부 보관", None), ("√L 체크포인팅", "sqrt"),
+              ("모든 층 재계산", "all")]:
+    m, extra = act_mem(L_, B_, S_, H_, ckpt=c)
+    ACT.append((nm, m/GB, extra))
+    print(f"{nm:<24} {m/GB:>13.1f}G {extra:>16.0%}")
+print()
+full, sq = ACT[0], ACT[1]
+print(f"**활성화가 {full[1]:.0f}GB 다.** 7B 의 상태 메모리 "
+      f"{(par+grad+st)/GB:.0f}GB 보다 크다.")
+print(f"  √L 체크포인팅이면 {sq[1]:.0f}GB — **{full[1]/sq[1]:.1f}배 절감**에 "
+      f"연산은 {sq[2]:.0%} 만 더 든다")
+print()
+print("배치·시퀀스에 따라 (전부 보관 기준)")
+print()
+print(f"{'배치':>6} {'시퀀스 1024':>13} {'2048':>10} {'4096':>10} {'8192':>10}")
+print("-" * 54)
+for b in [1, 4, 8, 16]:
+    row = [act_mem(L_, b, s, H_)[0]/GB for s in [1024, 2048, 4096, 8192]]
+    print(f"{b:>6} {row[0]:>12.1f}G {row[1]:>9.1f}G {row[2]:>9.1f}G "
+          f"{row[3]:>9.1f}G")
+print()
+for s in ["**활성화는 배치 x 시퀀스에 선형**이다 — 긴 문맥이 비싼 진짜 이유",
+          "상태 메모리는 GPU 를 늘리면 나눌 수 있지만 (ZeRO), "
+          "활성화는 **배치를 쪼개야** 준다",
+          "그래서 대형 학습은 **마이크로배치를 잘게** 쪼개고 그래디언트를 누적한다",
+          "체크포인팅은 메모리를 연산으로 바꾸는 거래다 — "
+          "√L 지점이 대개 좋은 절충",
+          "시퀀스 병렬·문맥 병렬은 **시퀀스 축으로** 활성화를 나눈다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G11.2.4 — 파이프라인: 버블은 같고, 메모리가 다르다
+
+층을 $P$ 구간으로 쪼개 각 GPU 가 한 구간씩 맡는다.
+그러면 첫 구간이 일하는 동안 나머지가 논다 — **버블**이다.
+
+배치를 $M$ 개의 마이크로배치로 쪼개 그 틈을 메운다.
+스케줄이 두 가지다.
+
+- **GPipe**: 마이크로배치 전부를 순전파한 뒤 전부 역전파
+- **1F1B**: 순전파 하나, 역전파 하나를 번갈아
+
+의존성을 지키는 이산 사건 모사로 둘을 비교한다.
+
+```{python}
+#| label: pipeline
+#| code-fold: false
+
+import numpy as np
+
+
+def simulate(P, M, tf=1.0, tb=2.0, sched="gpipe"):
+    """단계별 연산 순서를 정한 뒤, 의존성이 풀릴 때까지 반복해 시각을 채운다.
+    반환: (총 시간, 버블 비율, 단계별 최대 보관 활성화 수)"""
+    seqs = []
+    for p in range(P):
+        if sched == "gpipe":
+            s = [("F", m) for m in range(M)] + [("B", m) for m in range(M)]
+        else:                                     # 1F1B
+            warm = min(P - 1 - p, M)
+            s = [("F", i) for i in range(warm)]
+            f, b = warm, 0
+            while b < M:
+                if f < M:
+                    s.append(("F", f)); f += 1
+                s.append(("B", b)); b += 1
+        seqs.append(s)
+
+    fdone = np.full((M, P), np.nan)
+    bdone = np.full((M, P), np.nan)
+    idx = [0]*P
+    free = np.zeros(P)
+    stash = np.zeros(P, int)
+    peak = np.zeros(P, int)
+    done, total_ops = 0, sum(len(s) for s in seqs)
+    while done < total_ops:
+        moved = False
+        for p in range(P):
+            if idx[p] >= len(seqs[p]):
+                continue
+            kind, m = seqs[p][idx[p]]
+            dep = ((0.0 if p == 0 else fdone[m, p-1]) if kind == "F"
+                   else (fdone[m, P-1] if p == P-1 else bdone[m, p+1]))
+            if np.isnan(dep):
+                continue                          # 아직 준비 안 됨
+            start = max(free[p], dep)
+            if kind == "F":
+                free[p] = start + tf
+                fdone[m, p] = free[p]
+                stash[p] += 1
+                peak[p] = max(peak[p], stash[p])
+            else:
+                free[p] = start + tb
+                bdone[m, p] = free[p]
+                stash[p] -= 1
+            idx[p] += 1; done += 1; moved = True
+        if not moved:
+            raise RuntimeError("교착")
+    total = float(np.nanmax(bdone))
+    return total, 1 - M*(tf + tb)/total, peak
+
+
+print("순전파 1, 역전파 2 로 두고 두 스케줄을 모사한다")
+print()
+print(f"{'P':>3} {'M':>4} {'GPipe 버블':>11} {'1F1B 버블':>10} "
+      f"{'이론 (P−1)/(M+P−1)':>20} {'GPipe 보관':>11} {'1F1B 보관':>10}")
+print("-" * 66)
+PIPE = []
+for P_ in [4, 8]:
+    for M_ in [4, 8, 16, 32]:
+        _, bg, pg = simulate(P_, M_, sched="gpipe")
+        _, b1, p1 = simulate(P_, M_, sched="1f1b")
+        PIPE.append((P_, M_, bg, b1, int(pg.max()), int(p1.max())))
+        print(f"{P_:>3} {M_:>4} {bg:>11.4f} {b1:>10.4f} "
+              f"{(P_-1)/(M_+P_-1):>20.4f} {pg.max():>11} {p1.max():>10}")
+    print()
+print("**① 버블은 두 스케줄이 똑같다** — 그리고 이론값과 정확히 맞는다.")
+print("  1F1B 가 버블을 줄인다는 설명은 틀렸다.")
+print()
+big = [p for p in PIPE if p[0] == 4 and p[1] == 32][0]
+print(f"**② 다른 것은 활성화 보관량이다.**")
+print(f"  P=4, M=32: GPipe 는 {big[4]}개를 쥐고 있고 1F1B 는 {big[5]}개다 — "
+      f"**{big[4]/big[5]:.0f}배 차이**")
+for s in ["GPipe 는 M 개를 전부 순전파한 뒤에야 역전파를 시작하므로 "
+          "**M 개의 활성화를 쌓는다**",
+          "1F1B 는 역전파를 일찍 시작해 바로바로 해제한다 — "
+          "**보관량이 min(P, M) 로 묶인다**",
+          "M 을 늘려 버블을 줄이고 싶은데 GPipe 는 그러면 메모리가 는다 — "
+          "**1F1B 는 그 결합을 끊는다**",
+          "이것이 1F1B(PipeDream-Flush)가 표준이 된 이유다"]:
+    print(f"  · {s}")
+print()
+print("**③ 버블을 줄이려면 M 을 키워야 한다.**")
+for P_, M_, bg, b1, a, b in PIPE:
+    if P_ == 8:
+        print(f"  P=8, M={M_:>2}: 버블 {bg:.1%} — "
+              f"{'GPU 의 ' + f'{bg:.0%}' + ' 가 논다' if bg > 0.2 else '허용 범위'}")
+print("  그런데 M 을 키우면 마이크로배치가 작아져 **연산 효율이 떨어진다**.")
+print("  그래서 P 는 되도록 작게 두고 다른 축(TP·DP)과 섞는다.")
+```
+
+```{python}
+#| label: fig-pipeline
+#| fig-cap: "G11.2.4 — 파이프라인 스케줄. 버블은 GPipe와 1F1B가 같지만(왼쪽), 보관하는 활성화 수는 1F1B가 min(P,M)으로 묶인다(오른쪽). 메모리와 버블의 결합이 끊어진다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("버블 비율 (둘이 겹친다)",
+                                    "최대 보관 활성화 수"))
+for i, P_ in enumerate([4, 8]):
+    rows = [p for p in PIPE if p[0] == P_]
+    ms = [r[1] for r in rows]
+    fig.add_trace(go.Scatter(x=ms, y=[r[2] for r in rows], mode="lines+markers",
+                             name=f"GPipe P={P_}",
+                             line=dict(color=viz.color(i), width=3),
+                             marker=dict(size=10)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=ms, y=[r[3] for r in rows], mode="markers",
+                             name=f"1F1B P={P_}",
+                             marker=dict(size=6, color="white",
+                                         symbol="circle-open")),
+                  row=1, col=1)
+    fig.add_trace(go.Scatter(x=ms, y=[r[4] for r in rows], mode="lines+markers",
+                             name=f"GPipe P={P_}", showlegend=False,
+                             line=dict(color=viz.color(i), width=3),
+                             marker=dict(size=10)), row=1, col=2)
+    fig.add_trace(go.Scatter(x=ms, y=[r[5] for r in rows], mode="lines+markers",
+                             name=f"1F1B P={P_}", showlegend=False,
+                             line=dict(color=viz.color(i), width=2, dash="dot"),
+                             marker=dict(size=8)), row=1, col=2)
+viz.fig_defaults(fig, "GPipe vs 1F1B", height=440)
+fig.update_xaxes(title_text="마이크로배치 수 M", row=1, col=1)
+fig.update_xaxes(title_text="마이크로배치 수 M", row=1, col=2)
+fig.update_yaxes(title_text="버블 비율", row=1, col=1)
+fig.update_yaxes(title_text="보관 수", row=1, col=2)
+fig
+```
+
+::: {.interaction-hint}
+왼쪽에서 흰 원(1F1B)이 색 선(GPipe) 위에 정확히 얹혀 있다 — **버블이 같다**.
+오른쪽에서만 갈린다.
+
+교과서를 읽을 때 "1F1B 가 파이프라인을 개선한다"는 문장을 보면
+**무엇을 개선하는지** 물어야 한다. 답은 메모리다.
 :::
 
-모델이 GPU 한 장에 안 들어가는 순간 병렬화 전략이 아키텍처만큼 중요해진다. 어떤 축으로 쪼갤지가 통신 비용을 결정한다.
+---
+
+## G11.2.5 — 통신: 어디서 대역폭이 부족해지나
+
+병렬화의 대가는 통신이다. 각 전략이 스텝당 얼마를 주고받는지 센다.
+
+$N$ 개 장치의 ring all-reduce 는 원소당 $2(N-1)/N$ 바이트를 주고받는다.
+
+```{python}
+#| label: comm
+#| code-fold: false
+
+import numpy as np
+
+P7 = 7e9
+N = 8
+BYTES = 2
+ar = 2*(N-1)/N                       # all-reduce 계수
+ag = (N-1)/N                         # all-gather 계수
+
+print(f"7B 모델, N={N} 장치, bf16 — 장치 하나가 스텝당 주고받는 바이트")
+print()
+print(f"{'전략':<24} {'스텝당 (GB)':>13} {'DDP 대비':>10} {'식'}")
+print("-" * 66)
+COMM = []
+for nm, v, f in [
+    ("DDP (그래디언트만)", ar*P7*BYTES/GB, "2(N−1)/N · Ψ"),
+    ("ZeRO-1", ar*P7*BYTES/GB, "= DDP"),
+    ("ZeRO-2", ar*P7*BYTES/GB, "= DDP"),
+    ("ZeRO-3 / FSDP", (ar + ag)*P7*BYTES/GB, "+ 파라미터 all-gather"),
+]:
+    COMM.append((nm, v))
+    print(f"{nm:<24} {v:>13.2f} {v/COMM[0][1]:>10.2f}x {f}")
+print()
+print("**ZeRO-3 는 통신이 1.5배다** — 메모리를 N분의 1로 줄인 대가.")
+print()
+print("대역폭에 따른 스텝당 통신 시간")
+print()
+print(f"{'연결':<24} {'대역폭':>12} {'DDP':>10} {'ZeRO-3':>10}")
+print("-" * 60)
+BW = []
+for nm, bw in [("NVLink (노드 내)", 600), ("InfiniBand HDR", 25),
+               ("100GbE", 12.5), ("10GbE", 1.25)]:
+    BW.append((nm, bw, COMM[0][1]/bw*1000, COMM[3][1]/bw*1000))
+    print(f"{nm:<24} {bw:>9.1f}GB/s {COMM[0][1]/bw*1000:>9.0f}ms "
+          f"{COMM[3][1]/bw*1000:>9.0f}ms")
+print()
+print("  참고: 7B 모델의 한 스텝 연산 시간은 A100 기준 대략 수백 ms 다.")
+print()
+nv, ge = BW[0], BW[2]
+print(f"**NVLink 면 DDP 통신이 {nv[2]:.0f}ms 로 계산에 숨길 만하다.**")
+print(f"**100GbE 면 {ge[2]:.0f}ms — 계산보다 오래 걸린다.**")
+for s in ["그래서 **노드 간 대역폭이 병렬 전략을 정한다**",
+          "그래디언트 all-reduce 는 역전파와 **겹칠 수 있다** — "
+          "층별로 준비되는 대로 보낸다 (버킷)",
+          "ZeRO-3 의 파라미터 all-gather 도 다음 층 계산과 겹친다",
+          "**겹치지 못하는 통신이 진짜 비용**이다"]:
+    print(f"  · {s}")
+```
+
+**텐서 병렬은 양보다 빈도가 문제다.**
+
+```{python}
+#| label: tp-comm
+#| code-fold: false
+
+import numpy as np
+
+Bt, St, Ht, Lt = 8, 4096, 4096, 32
+Ntp = 8
+act = Bt*St*Ht*2                              # bf16 활성화 한 덩어리
+tp_step = 2*Lt*ar*act                         # 층당 2회(어텐션·MLP), 순+역
+dp_step = ar*P7*BYTES
+
+print(f"층 {Lt}개, 배치 {Bt}, 시퀀스 {St}, 은닉 {Ht}, TP={Ntp}")
+print()
+print(f"{'전략':<26} {'스텝당 총량 (GB)':>17} {'동기 횟수':>11} {'1회 크기 (MB)':>14}")
+print("-" * 72)
+print(f"{'데이터 병렬 (7B)':<26} {dp_step/GB:>17.1f} {1:>11} "
+      f"{dp_step/1e6:>14.0f}")
+print(f"{'텐서 병렬 (활성화)':<26} {tp_step/GB:>17.1f} {2*Lt:>11} "
+      f"{tp_step/(2*Lt)/1e6:>14.0f}")
+print()
+print(f"**총량은 비슷한데({tp_step/dp_step:.1f}배) 동기 횟수가 {2*Lt}배다.**")
+for s in ["DDP 의 all-reduce 는 스텝 끝에 **한 번**, 역전파와 겹칠 수 있다",
+          "TP 의 all-reduce 는 **층마다 두 번**, 그 결과가 바로 다음 연산의 입력이다 "
+          "— **겹칠 수 없다**",
+          "그래서 TP 는 **지연(latency)이 지배**하고, "
+          "노드 안(NVLink)에서만 쓴다",
+          "노드를 넘어 TP 를 하면 매 층마다 네트워크 왕복을 기다린다 — 치명적",
+          "**TP 는 노드 내, PP 는 노드 간, DP 는 그 위** — 이것이 3D 병렬의 기본 배치"]:
+    print(f"  · {s}")
+print()
+print("**3D 병렬화를 고를 때의 순서**")
+print()
+print(f"{'상황':<30} {'먼저 쓸 축':<20} {'이유'}")
+print("-" * 76)
+for a, b, c in [
+    ("모델이 한 장에 들어간다", "DP (또는 ZeRO-1/2)", "가장 단순하고 통신이 적다"),
+    ("상태가 안 들어간다", "**ZeRO-3 / FSDP**", "코드 변경이 적다"),
+    ("한 층도 안 들어간다", "TP (노드 내)", "층을 쪼개는 유일한 방법"),
+    ("층이 너무 많다", "PP (노드 간)", "경계 활성화만 보내면 된다"),
+    ("전부 해당", "TP x PP x DP", "토폴로지에 맞춰 배치"),
+]:
+    print(f"{a:<30} {b:<20} {c}")
+```
+
+```{python}
+#| label: fig-comm
+#| fig-cap: "G11.2.5 — 대역폭별 스텝당 통신 시간. NVLink에서는 계산에 숨길 만하지만, 이더넷으로 내려가면 통신이 학습을 지배한다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+nms = [b[0] for b in BW]
+fig = go.Figure()
+fig.add_trace(go.Bar(x=nms, y=[b[2] for b in BW], name="DDP",
+                     marker_color=viz.ACCENT))
+fig.add_trace(go.Bar(x=nms, y=[b[3] for b in BW], name="ZeRO-3",
+                     marker_color=viz.WARM))
+fig.add_hline(y=300, line=dict(color=viz.GREEN, width=2, dash="dash"))
+fig.add_annotation(x=0, y=300, text="한 스텝 연산 시간 (대략)", showarrow=False,
+                   xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.GREEN))
+viz.fig_defaults(
+    fig, "스텝당 통신 시간 (7B, N=8)", height=440,
+    xaxis_title="", yaxis_title="밀리초 (로그)", barmode="group",
+    yaxis_type="log")
+viz.annotate_box(fig, "초록 선 위로 올라가면<br>"
+                      "<b>통신이 학습을 지배한다</b>", x=0.02, y=0.98,
+                 xanchor="left", yanchor="top")
+fig
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 장애 내성과 나머지
 
-- 데이터 병렬(DP/DDP): 그래디언트 all-reduce, 동기와 비동기
-- 메모리 구성 요소: 파라미터, 그래디언트, 옵티마이저 상태, 활성화
-- ZeRO 단계 1/2/3와 각 단계가 줄이는 것
-- FSDP: 샤딩된 파라미터의 모으고-쓰고-버리기
-- 텐서 병렬(TP): 행/열 분할과 통신 지점
-- 파이프라인 병렬(PP): 마이크로배치, 버블, 스케줄(GPipe, 1F1B)
-- 시퀀스·문맥 병렬과 긴 문맥 학습
-- 전문가 병렬(MoE)과 all-to-all 통신
-- 3D 병렬화 조합과 토폴로지 인지 배치
-- 통신 원시연산: all-reduce, all-gather, reduce-scatter의 비용 모델
-- 활성화 체크포인팅과 재계산 트레이드오프
-- 장애 내성: 체크포인트, 탄력적 학습, 실패 복구
+```{python}
+#| label: misc
+#| code-fold: false
 
----
-
-## G11.2.1 — 메모리 구성 분해
-
-파라미터·그래디언트·옵티마이저 상태가 차지하는 바이트 계산
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 크기·옵티마이저 슬라이더
-:::
-
----
-
-## G11.2.2 — ZeRO 단계별 절감
-
-각 ZeRO 단계에서 GPU당 메모리가 줄어드는 정도
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단계 슬라이더
-:::
-
----
-
-## G11.2.3 — 파이프라인 버블
-
-파이프라인 유휴 구간이 마이크로배치로 메워지는 타임라인
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 마이크로배치 수 슬라이더
-:::
-
----
-
-## G11.2.4 — 통신량 비교
-
-전략별 스텝당 통신 바이트와 대역폭 요구
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 병렬 전략 전환
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| DDP |  |
-| ZeRO |  |
-| FSDP |  |
-| 텐서 병렬 |  |
-| 파이프라인 병렬 |  |
-| all-reduce |  |
+GB = 1024**3
+print("**체크포인트 비용** (7B, Adam, fp32 상태 저장)")
+print()
+ck = (2*7e9 + 12*7e9)/GB
+print(f"  체크포인트 한 번의 크기 ≈ {ck:.0f}GB")
+for bw, nm in [(2.0, "네트워크 스토리지 2GB/s"), (10.0, "로컬 NVMe 10GB/s")]:
+    print(f"    {nm:<28} 저장에 {ck/bw:>5.0f}초")
+print()
+print(f"{'주기':<16} {'오버헤드 (2GB/s 기준)':<24} {'실패 시 잃는 학습'}")
+print("-" * 68)
+for mins, nm in [(10, "10분마다"), (30, "30분마다"), (120, "2시간마다")]:
+    ov = (ck/2.0)/(mins*60)
+    print(f"{nm:<16} {ov:>8.1%}{'':<16} 평균 {mins/2:.0f}분")
+print()
+for s in ["**체크포인트 주기는 실패율과 저장 비용의 절충**이다",
+          "1000장 규모에서는 하루에 여러 번 장애가 난다 — "
+          "주기가 길면 그만큼 다시 해야 한다",
+          "**비동기 저장**(계산과 겹치기)과 **샤딩된 체크포인트**로 "
+          "오버헤드를 줄인다",
+          "탄력적 학습(elastic)은 장치 수가 변해도 이어 가게 한다 — "
+          "그러려면 체크포인트가 **장치 수에 독립**이어야 한다"]:
+    print(f"  · {s}")
+print()
+print("**MoE 의 통신 — all-to-all**")
+for s in ["전문가를 장치에 나눠 두고 토큰을 **해당 전문가에게 보낸다**",
+          "그래서 all-reduce 가 아니라 **all-to-all** 이 필요하다",
+          "토큰 배분이 균등하지 않으면 일부 장치가 논다 — "
+          "**부하 불균형**이 MoE 의 고질병",
+          "보조 손실로 균형을 유도하고, 용량 계수로 상한을 둔다"]:
+    print(f"  · {s}")
+print()
+print("**요약하면, 통신 원시연산의 비용 모델**")
+print()
+print(f"{'연산':<20} {'원소당 바이트':<18} {'언제'}")
+print("-" * 62)
+for a, b, c in [
+    ("all-reduce", "2(N−1)/N", "DDP 그래디언트, TP 활성화"),
+    ("all-gather", "(N−1)/N", "ZeRO-3 파라미터 모으기"),
+    ("reduce-scatter", "(N−1)/N", "ZeRO-2 그래디언트 나누기"),
+    ("all-to-all", "(N−1)/N", "MoE 토큰 라우팅"),
+    ("point-to-point", "1", "파이프라인 경계"),
+]:
+    print(f"{a:<20} {b:<18} {c}")
+print()
+print("  all-reduce = reduce-scatter + all-gather 이므로 계수가 두 배다.")
+print("  ZeRO-2 가 DDP 와 통신량이 같은 이유가 이것이다 — 같은 두 단계를 쓴다.")
+```
 
 ---
 
-**다음**: [11.3 하드웨어와 성능](03_hardware.qmd) — GPU·메모리 대역폭·산술 강도 — 왜 이론 FLOPs는 안 나오는가
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **학습 상태 메모리** | 파라미터당 **16바이트** | bf16 파라미터의 8배 |
+| Adam의 비중 | 7B에서 **75%** (104GB 중 78GB) | 절약이 여기서 시작 |
+| 7B의 벽 | 상태만 **104GB** | 80GB 한 장에 안 된다 |
+| **ZeRO** | N=8에서 104 → 36 → 24 → **13GB** | 단계마다 중복을 없앤다 |
+| DDP의 한계 | GPU를 늘려도 **그대로 104GB** | 중복이 안 줄어든다 |
+| **활성화** | B=8, S=4096에서 **128GB** | 상태보다 크다 |
+| 체크포인팅 | √L이면 45GB (**2.8배 절감**)에 연산 +33% | 메모리를 연산으로 |
+| 활성화의 성질 | 배치 × 시퀀스에 **선형** | 긴 문맥이 비싼 이유 |
+| **파이프라인 버블** | GPipe와 1F1B가 **똑같다** | (P−1)/(M+P−1), 이론과 일치 |
+| 진짜 차이 | 보관 활성화 M vs **min(P,M)** | P=4, M=32에서 8배 |
+| 그 함의 | M을 키워 버블을 줄여도 메모리가 안 는다 | 1F1B가 표준인 이유 |
+| **통신량** | ZeRO-3가 DDP의 **1.5배** | 메모리 절감의 대가 |
+| 대역폭이 정한다 | NVLink 38ms vs 100GbE 1,825ms | 계산 시간이 수백 ms |
+| **텐서 병렬** | 총량은 1.2배인데 **동기 64배** | 겹칠 수 없는 통신 |
+| 그래서 배치는 | TP는 노드 내, PP는 노드 간, DP는 그 위 | 3D 병렬의 기본형 |
+| 체크포인트 | 7B에서 91GB, 2GB/s면 46초 | 주기는 실패율과의 절충 |
+
+여러 장치로 쪼갰다. 그런데 **그 장치가 실제로 뭘 잘하는지**는 아직 안 봤다.
+
+---
+
+**다음**: [11.3 하드웨어와 성능](03_hardware.qmd) — 가속기가 실제로 하는 일
 
 **이전**: [11.1 데이터 파이프라인](01_data_pipeline.qmd)
