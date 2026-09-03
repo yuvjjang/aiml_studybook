@@ -4,67 +4,522 @@ subtitle: "자주 쓰는 공식 모음 — 유도는 본문, 결과는 여기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+유도는 본문에 있다. 여기는 **결과만** 모은다.
+
+그리고 마지막 두 절은 계산기다 —
+모델 크기와 연산량을 직접 넣어 보고, **공개된 실제 모델 수치와 대조**한다.
+공식이 맞는지 확인할 수 있어야 쓸 수 있다.
+
+---
+
+## 행렬 미분
+
+스칼라 $y$ 를 벡터·행렬로 미분한 결과. **분모 배치(denominator layout)** 기준이다.
+
+| 식 | 미분 |
+|-----|------|
+| $y = \mathbf{a}^\top \mathbf{x}$ | $\partial y/\partial \mathbf{x} = \mathbf{a}$ |
+| $y = \mathbf{x}^\top A \mathbf{x}$ | $\partial y/\partial \mathbf{x} = (A + A^\top)\mathbf{x}$ |
+| $y = \|\mathbf{x}\|_2^2$ | $\partial y/\partial \mathbf{x} = 2\mathbf{x}$ |
+| $\mathbf{y} = A\mathbf{x}$ | $\partial \mathbf{y}/\partial \mathbf{x} = A^\top$ |
+| $y = \text{tr}(A^\top B)$ | $\partial y/\partial A = B$ |
+| $y = \text{tr}(X^\top A X)$ | $\partial y/\partial X = (A + A^\top)X$ |
+| $y = \log\det X$ | $\partial y/\partial X = (X^{-1})^\top$ |
+| $Z = XW$, 손실 $L$ | $\partial L/\partial W = X^\top\,\partial L/\partial Z$ |
+| " | $\partial L/\partial X = (\partial L/\partial Z)\,W^\top$ |
+
+마지막 두 줄이 신경망 역전파의 전부다. [3.8](../03_deep_learning/08_autodiff.qmd) 에서 직접 구현했다.
+
+**연쇄법칙의 형태**: $\dfrac{\partial L}{\partial \theta} = \dfrac{\partial L}{\partial z}\dfrac{\partial z}{\partial \theta}$ —
+역전파는 이것을 **오른쪽에서 왼쪽으로** 곱해 나가는 것이다 (벡터-야코비 곱).
+
+---
+
+## 확률분포 요약
+
+```{python}
+#| label: dists
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+
+print(f"{'분포':<18} {'모수':<16} {'평균':<16} {'분산':<20} {'켤레사전분포'}")
+print("-" * 96)
+for a, b, c, d, e in [
+    ("베르누이", "p", "p", "p(1−p)", "베타"),
+    ("이항", "n, p", "np", "np(1−p)", "베타"),
+    ("범주형", "p_1..p_K", "p_k", "p_k(1−p_k)", "디리클레"),
+    ("포아송", "λ", "λ", "λ", "감마"),
+    ("기하", "p", "1/p", "(1−p)/p²", "베타"),
+    ("균등", "a, b", "(a+b)/2", "(b−a)²/12", "—"),
+    ("정규", "μ, σ²", "μ", "σ²", "정규(μ) / 역감마(σ²)"),
+    ("지수", "λ", "1/λ", "1/λ²", "감마"),
+    ("감마", "α, β", "α/β", "α/β²", "—"),
+    ("베타", "α, β", "α/(α+β)", "αβ/((α+β)²(α+β+1))", "—"),
+    ("라플라스", "μ, b", "μ", "2b²", "—"),
+    ("검벨", "μ, β", "μ + βγ", "π²β²/6", "—"),
+]:
+    print(f"{a:<18} {b:<16} {c:<16} {d:<20} {e}")
+print()
+print("  (γ ≈ 0.5772 는 오일러-마스케로니 상수)")
+print()
+print("**다변량 정규분포**")
+for s in ["밀도  N(x; μ, Σ) = (2π)^(−d/2) |Σ|^(−1/2) exp(−½ (x−μ)ᵀ Σ⁻¹ (x−μ))",
+          "선형 변환  x ~ N(μ, Σ) ⟹ Ax + b ~ N(Aμ + b, AΣAᵀ)",
+          "주변분포·조건부분포가 **둘 다 정규**다 — 가우시안 과정의 근거",
+          "두 정규분포의 KL: "
+          "KL(N₀‖N₁) = ½[tr(Σ₁⁻¹Σ₀) + (μ₁−μ₀)ᵀΣ₁⁻¹(μ₁−μ₀) − d + ln(|Σ₁|/|Σ₀|)]",
+          "**대각 공분산 vs 표준정규** (VAE 의 KL 항):  "
+          "½ Σ_j (μ_j² + σ_j² − 1 − ln σ_j²)"]:
+    print(f"  · {s}")
+print()
+print("**검벨 분포가 왜 여기 있나** — argmax 샘플링과 직결된다")
+for s in ["로짓 z 에 검벨 잡음을 더해 argmax 를 취하면 **softmax(z) 에서 뽑은 것**과 같다",
+          "이것이 Gumbel-max 트릭이고, 미분 가능하게 완화한 것이 Gumbel-softmax",
+          "12.2 의 합성 데이터도 이 성질을 써서 베이즈 오차를 만들었다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 정보이론
+
+$$
+H(X) = -\sum_x p(x)\log p(x), \qquad
+H(X, Y) = H(X) + H(Y\mid X)
+$$
+
+$$
+D_{\mathrm{KL}}(p\,\|\,q) = \sum_x p(x)\log\frac{p(x)}{q(x)} \ \ge\ 0
+\qquad(\text{등호는 } p = q)
+$$
+
+$$
+H(p, q) = H(p) + D_{\mathrm{KL}}(p\,\|\,q)
+$$
+
+$$
+I(X; Y) = D_{\mathrm{KL}}\big(p(x,y)\,\|\,p(x)p(y)\big) = H(X) - H(X\mid Y)
+$$
+
+$$
+\mathrm{JS}(p\,\|\,q) = \tfrac12 D_{\mathrm{KL}}(p\,\|\,m) + \tfrac12 D_{\mathrm{KL}}(q\,\|\,m),
+\quad m = \tfrac{p+q}{2}
+$$
 
 ::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+## 세 가지 주의
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
-
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
-
-본문을 다시 뒤지지 않고 바로 확인할 수 있는 결과 모음이 필요하다.
-
----
-
-## 이 장에서 다루는 것
-
-- 행렬 미분 공식 모음
-- 주요 확률분포 요약표 (PDF, 평균, 분산, 켤레사전분포)
-- 정보이론 항등식
-- 주요 손실함수와 그 그래디언트
-- 옵티마이저 갱신 식 모음
-- 트랜스포머 shape와 파라미터 수 공식
-- 확산 모델 주요 식 (전방·역방향·목적함수)
-- 복잡도와 FLOPs 추정 공식
-- 자주 쓰는 근사와 부등식
-
----
-
-## GA.2.1 — 파라미터 수 계산기
-
-d_model·층 수·어휘 크기로 총 파라미터를 계산
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 하이퍼파라미터 슬라이더
+1. **KL 은 거리가 아니다** — 비대칭이고 삼각부등식도 성립하지 않는다.
+2. **교차 엔트로피 최소화 = KL 최소화** — $H(p)$ 가 상수이기 때문. 라벨이 고정이면 같은 문제다.
+3. **방향이 다르면 결과가 다르다** — $D_{\mathrm{KL}}(p\|q)$ 는 $p$ 를 덮으려 하고(mode-covering),
+   $D_{\mathrm{KL}}(q\|p)$ 는 한 봉우리에 붙으려 한다(mode-seeking).
+   VAE 는 후자 쪽이라 흐릿한 표본이 나온다.
 :::
 
 ---
 
-## GA.2.2 — FLOPs 계산기
+## 손실함수와 그래디언트
 
-학습·추론 연산량 추정
+가장 자주 필요한 것은 **손실의 로짓에 대한 그래디언트**다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델·데이터 슬라이더
+| 손실 | 정의 | $\partial L/\partial z$ |
+|------|------|------------------------|
+| **MSE** | $\frac{1}{2}(\hat y - y)^2$ | $\hat y - y$ |
+| **MAE** | $\|\hat y - y\|$ | $\text{sign}(\hat y - y)$ |
+| **Huber** ($\delta$) | 작으면 MSE, 크면 MAE | $\text{clip}(\hat y - y, \pm\delta)$ |
+| **이진 CE** | $-y\log\sigma(z) - (1-y)\log(1-\sigma(z))$ | $\sigma(z) - y$ |
+| **소프트맥스 CE** | $-\log p_y,\ p = \text{softmax}(z)$ | $p - \mathbf{e}_y$ |
+| **힌지** | $\max(0, 1 - yz)$ | $-y$ if $yz<1$ else $0$ |
+| **InfoNCE** | $-\log\frac{e^{s_+/\tau}}{\sum_j e^{s_j/\tau}}$ | 소프트맥스 CE와 같은 꼴 |
+
+**$p - \mathbf{e}_y$ 가 이 책 전체에서 가장 많이 나온 식**이다.
+시그모이드·소프트맥스가 지수족의 표준 연결함수라서 미분이 이렇게 깔끔해진다.
+
+---
+
+## 옵티마이저 갱신식
+
+$$
+\begin{aligned}
+\textbf{SGD:}\quad & \theta \leftarrow \theta - \eta\, g \\[2pt]
+\textbf{Momentum:}\quad & v \leftarrow \mu v + g,\quad \theta \leftarrow \theta - \eta v \\[2pt]
+\textbf{Nesterov:}\quad & v \leftarrow \mu v + g,\quad \theta \leftarrow \theta - \eta(\mu v + g) \\[2pt]
+\textbf{AdaGrad:}\quad & s \leftarrow s + g^2,\quad \theta \leftarrow \theta - \frac{\eta}{\sqrt{s}+\epsilon} g \\[2pt]
+\textbf{RMSProp:}\quad & s \leftarrow \rho s + (1-\rho)g^2,\quad \theta \leftarrow \theta - \frac{\eta}{\sqrt{s}+\epsilon} g \\[2pt]
+\textbf{Adam:}\quad & m \leftarrow \beta_1 m + (1-\beta_1)g,\quad s \leftarrow \beta_2 s + (1-\beta_2)g^2 \\
+& \hat m = \frac{m}{1-\beta_1^t},\quad \hat s = \frac{s}{1-\beta_2^t},\quad
+\theta \leftarrow \theta - \frac{\eta\,\hat m}{\sqrt{\hat s}+\epsilon} \\[2pt]
+\textbf{AdamW:}\quad & \theta \leftarrow \theta - \eta\Big(\frac{\hat m}{\sqrt{\hat s}+\epsilon} + \lambda\theta\Big)
+\end{aligned}
+$$
+
+**AdamW 가 Adam+L2 와 다른 이유**: L2 를 손실에 넣으면 그 항도 $\sqrt{\hat s}$ 로 나뉜다.
+AdamW 는 감쇠를 **갱신식에 직접** 붙여 적응적 스케일링을 피한다.
+
+기본값: $\beta_1{=}0.9$, $\beta_2{=}0.999$(LLM 은 0.95 도 흔함), $\epsilon{=}10^{-8}$.
+
+**학습률 스케줄** — 코사인:
+$\eta_t = \eta_{\min} + \tfrac12(\eta_{\max}-\eta_{\min})\big(1 + \cos(\pi t/T)\big)$
+
+---
+
+## G13.2.1 — 트랜스포머 파라미터 수 계산기
+
+먼저 공식을 세우고, **공개된 모델 수치와 대조해 검증**한다.
+
+층 하나당 (bias 있는 GPT-2 계열 기준):
+
+$$
+\underbrace{4d^2 + 4d}_{\text{어텐션 }W_{q,k,v,o}} \;+\;
+\underbrace{2 d\,d_{ff} + d_{ff} + d}_{\text{FFN}} \;+\;
+\underbrace{4d}_{\text{LayerNorm} \times 2}
+$$
+
+여기에 임베딩 $Vd$, 학습형 위치 임베딩 $Ld$, 최종 정규화 $2d$ 를 더한다.
+$d_{ff} = 4d$ 이면 층당 약 $12d^2$ 이므로 — **비임베딩 파라미터 $\approx 12 L d^2$** 다.
+
+```{python}
+#| label: params
+#| code-fold: false
+
+import numpy as np
+
+
+def n_params(L, d, V, ctx=0, d_ff=None, ffn_mult=4, n_ffn_mat=2,
+             bias=True, tie=True, learned_pos=True, norm_params=2):
+    """트랜스포머 파라미터 수.
+       n_ffn_mat: 2 = 일반 FFN, 3 = SwiGLU (gate·up·down)
+       norm_params: 2 = LayerNorm(γ,β), 1 = RMSNorm(γ만)
+       tie: 임베딩과 출력 헤드를 묶는가"""
+    dff = d_ff if d_ff else ffn_mult*d
+    attn = 4*d*d + (4*d if bias else 0)
+    ffn = n_ffn_mat*d*dff + ((dff + d) if (bias and n_ffn_mat == 2) else 0)
+    norms = 2*norm_params*d
+    per_layer = attn + ffn + norms
+    emb = V*d + (ctx*d if learned_pos else 0)
+    head = 0 if tie else V*d
+    return per_layer*L + emb + head + norm_params*d, per_layer*L
+
+
+GPT2 = dict(bias=True, tie=True, learned_pos=True, norm_params=2,
+            n_ffn_mat=2, ffn_mult=4)
+LLAMA = dict(bias=False, tie=False, learned_pos=False, norm_params=1,
+             n_ffn_mat=3)
+REF = [
+    ("GPT-2 small", dict(L=12, d=768, V=50257, ctx=1024, **GPT2), 124e6),
+    ("GPT-2 medium", dict(L=24, d=1024, V=50257, ctx=1024, **GPT2), 355e6),
+    ("GPT-2 large", dict(L=36, d=1280, V=50257, ctx=1024, **GPT2), 774e6),
+    ("GPT-2 XL", dict(L=48, d=1600, V=50257, ctx=1024, **GPT2), 1558e6),
+    ("GPT-3 175B", dict(L=96, d=12288, V=50257, ctx=2048, **GPT2), 175e9),
+    ("LLaMA-7B", dict(L=32, d=4096, V=32000, d_ff=11008, **LLAMA), 6.74e9),
+    ("LLaMA-13B", dict(L=40, d=5120, V=32000, d_ff=13824, **LLAMA), 13.0e9),
+    ("LLaMA-65B", dict(L=80, d=8192, V=32000, d_ff=22016, **LLAMA), 65.2e9),
+]
+
+
+def human(n):
+    for u, s in [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]:
+        if abs(n) >= u:
+            return f"{n/u:.2f}{s}"
+    return f"{n:.0f}"
+
+
+print("**공식 검증** — 공개된 파라미터 수와 대조한다")
+print()
+print(f"{'모델':<14} {'L':>4} {'d':>7} {'계산값':>16} {'공개값':>10} "
+      f"{'오차':>8} {'비임베딩 비율':>14}")
+print("-" * 82)
+ERRS = []
+for nm, kw, ref in REF:
+    tot, nonemb = n_params(**kw)
+    ERRS.append(abs(tot-ref)/ref)
+    print(f"{nm:<14} {kw['L']:>4} {kw['d']:>7} {tot:>16,} {human(ref):>10} "
+          f"{(tot-ref)/ref:>+7.2%} {nonemb/tot:>13.1%}")
+print()
+print(f"**최대 오차 {max(ERRS):.2%}** — 공개 수치가 반올림돼 있으니 "
+      f"이 정도면 공식이 맞다.")
+print()
+print("**비임베딩 비율에 주목**하라 —")
+small, big = REF[0], REF[4]
+_, ne_s = n_params(**small[1]); t_s, _ = n_params(**small[1])
+_, ne_b = n_params(**big[1]); t_b, _ = n_params(**big[1])
+print(f"  GPT-2 small 은 {ne_s/t_s:.1%}, GPT-3 는 {ne_b/t_b:.1%} 다.")
+for s in ["작은 모델일수록 **임베딩이 파라미터의 상당 부분**을 먹는다",
+          "그래서 스케일링 법칙 논문들은 대개 **비임베딩 파라미터**로 센다 "
+          "([7.4](../07_language/04_scaling.qmd))",
+          "12Ld² 근사도 비임베딩 기준이다 — 작은 모델에 쓰면 크게 빗나간다"]:
+    print(f"  · {s}")
+print()
+print("**12Ld² 근사의 정확도**")
+print(f"{'모델':<14} {'실제 비임베딩':>16} {'12Ld²':>16} {'오차':>8}")
+print("-" * 58)
+for nm, kw, ref in REF:
+    _, ne = n_params(**kw)
+    approx = 12*kw["L"]*kw["d"]**2
+    print(f"{nm:<14} {ne:>16,} {approx:>16,} {(approx-ne)/ne:>+7.1%}")
+print()
+print("  GPT-2 계열은 잘 맞고, **LLaMA 계열은 SwiGLU 때문에 과소평가**된다 —")
+print("  FFN 행렬이 2개가 아니라 3개다 (d_ff 를 줄여 보정하지만 완전히는 아니다).")
+```
+
+```{python}
+#| label: fig-params
+#| fig-cap: "G13.2.1 — 파라미터 수의 구성. 모델이 커질수록 층 파라미터(12Ld²)가 지배하고 임베딩 비중이 줄어든다. 슬라이더로 d_model을 바꿔 볼 수 있다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+DS = [256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288]
+LAYERS, VOC, CTX = 32, 50257, 2048
+NAMES = ["어텐션", "FFN", "정규화", "토큰 임베딩", "위치 임베딩"]
+COLS = [viz.ACCENT, viz.WARM, viz.GREEN, viz.PINK, viz.YELLOW]
+
+
+def parts(d):
+    return [LAYERS*(4*d*d + 4*d), LAYERS*(2*d*4*d + 5*d),
+            LAYERS*4*d + 2*d, VOC*d, CTX*d]
+
+
+ACTIVE = 4
+steps = [(str(d), {"y": [parts(d)],
+                   "text": [[human(v) for v in parts(d)]]}) for d in DS]
+fig = go.Figure(go.Bar(
+    x=NAMES, y=parts(DS[ACTIVE]), marker_color=COLS,
+    text=[human(v) for v in parts(DS[ACTIVE])], textposition="outside",
+    hovertemplate="%{x}<br>%{y:,} 개<extra></extra>"))
+viz.fig_defaults(
+    fig, f"파라미터 구성 (L={LAYERS}, V={VOC:,}, ctx={CTX})", height=490,
+    xaxis_title="", yaxis_title="파라미터 수",
+    yaxis=dict(type="log", range=[5.5, 10.5]), showlegend=False,
+    sliders=[viz.slider(steps, prefix="d_model = ", active=ACTIVE)])
+fig
+```
+
+::: {.interaction-hint}
+슬라이더로 $d_{model}$ 을 키워 보라. 세로축이 **로그 척도**다.
+
+작은 $d$ 에서는 **토큰 임베딩(분홍)이 가장 큰 막대**다.
+$d$ 가 커지면 어텐션·FFN 이 $d^2$ 로 자라 임베딩($Vd$, 선형)을 앞지른다.
+
+교차점이 대략 $d \approx 1500$ 근처 — GPT-2 XL 크기다.
 :::
 
 ---
 
-## 핵심 용어
+## G13.2.2 — FLOPs 와 메모리 계산기
 
-| 용어 | 비고 |
+```{python}
+#| label: flops
+#| code-fold: false
+
+import numpy as np
+
+print("**핵심 공식 세 개**")
+print()
+print(f"{'대상':<20} {'공식':<28} {'유래'}")
+print("-" * 76)
+for a, b, c in [
+    ("학습 (토큰당)", "≈ 6N", "순전파 2N + 역전파 4N"),
+    ("추론 prefill (토큰당)", "≈ 2N", "행렬곱 1회당 곱셈+덧셈"),
+    ("추론 decode (토큰당)", "≈ 2N", "같지만 **메모리 제한** (11.3)"),
+]:
+    print(f"{a:<20} {b:<28} {c}")
+print()
+print("  N = 비임베딩 파라미터 수. 어텐션의 O(n²) 항은 여기에 안 들어간다 —")
+print("  문맥이 아주 길지 않으면 무시할 만하다 (아래에서 확인).")
+print()
+print("**공식 검증** — 보고된 학습 연산량과 대조")
+print()
+print(f"{'모델':<14} {'N':>10} {'D (토큰)':>12} {'6ND':>12} {'보고값':>12} "
+      f"{'오차':>8}")
+print("-" * 76)
+for nm, N, Dt, ref in [("GPT-3", 175e9, 300e9, 3.14e23),
+                       ("Chinchilla", 70e9, 1.4e12, 5.76e23)]:
+    c = 6*N*Dt
+    print(f"{nm:<14} {human(N):>10} {human(Dt):>12} {c:>12.3e} "
+          f"{ref:>12.3e} {(c-ref)/ref:>+7.1%}")
+print()
+print("  **2% 안쪽으로 맞는 근사**다. 논문의 정확한 회계는 어텐션 항과")
+print("  활성화 재계산까지 포함하므로 조금 다르다.")
+print()
+print("**어텐션 항은 언제부터 무시할 수 없나**")
+print()
+print(f"{'문맥 길이 n':>12} {'6N (파라미터)':>16} {'어텐션 항':>16} {'비중':>9}")
+print("-" * 58)
+Nb, Lb, db = 6.5e9, 32, 4096          # LLaMA-7B 규모
+for n in [512, 2048, 8192, 32768, 131072]:
+    # 층당 어텐션 점수·가중합: 2·2·n·d FLOP/토큰 (QK^T 와 AV)
+    att = 12*Lb*n*db                  # 학습 기준 (순전파 4nd, ×3 for bwd)
+    print(f"{n:>12,} {6*Nb:>16.3e} {att:>16.3e} {att/(6*Nb+att):>8.1%}")
+print()
+print("  **문맥 2K 에서 이미 7.6%, 8K 에서 25%, 128K 에서는 84% 로 지배한다.**")
+print("  비중은 n/(6d) 로 결정된다 — 문맥이 6d 에 이르면 어텐션이 절반이다.")
+print("  긴 문맥 모델의 비용 곡선이 다른 이유다 ([11.3](../11_systems/03_hardware.qmd)).")
+```
+
+```{python}
+#| label: memory
+#| code-fold: false
+
+import numpy as np
+
+print("**학습 메모리** (Adam, 혼합정밀)")
+print()
+print(f"{'항목':<24} {'파라미터당 바이트':>16} {'7B 모델':>12}")
+print("-" * 56)
+N7 = 7e9
+tot = 0
+for a, b in [("가중치 (fp16)", 2), ("그래디언트 (fp16)", 2),
+             ("Adam m (fp32)", 4), ("Adam v (fp32)", 4),
+             ("가중치 사본 (fp32)", 4)]:
+    tot += b
+    print(f"{a:<24} {b:>16} {N7*b/2**30:>11.1f}GB")
+print("-" * 56)
+print(f"{'합계':<24} {tot:>16} {N7*tot/2**30:>11.1f}GB")
+print()
+print("  여기에 **활성화**가 더 붙는다. 배치와 문맥에 비례하므로 별도 계산이다.")
+print("  [11.2](../11_systems/02_distributed_training.qmd) 에서 재계산·ZeRO 로 줄인다.")
+print()
+print("**추론 메모리** — KV 캐시가 지배한다")
+print()
+print("  KV 캐시 = 2 × L × n_kv_heads × d_head × n_tokens × 배치 × 바이트")
+print()
+print(f"{'설정':<28} {'문맥 4K':>12} {'문맥 32K':>12} {'문맥 128K':>12}")
+print("-" * 68)
+for nm, L_, nkv, dh, bt in [
+    ("7B MHA (32 heads, fp16)", 32, 32, 128, 2),
+    ("7B GQA (8 kv heads, fp16)", 32, 8, 128, 2),
+    ("7B GQA + KV 8비트", 32, 8, 128, 1),
+    ("70B GQA (8 kv heads, fp16)", 80, 8, 128, 2),
+]:
+    row = [2*L_*nkv*dh*n*bt/2**30 for n in [4096, 32768, 131072]]
+    print(f"{nm:<28} " + " ".join(f"{v:>11.2f}GB" for v in row))
+print()
+print("  (배치 1 기준. 배치가 늘면 그대로 곱해진다)")
+print()
+for s in ["**GQA 가 KV 캐시를 4배 줄인다** — 32 헤드를 8 그룹으로 묶어서",
+          "그래도 128K 문맥이면 7B GQA 의 KV 캐시가 16GB 다 — "
+          "**가중치(14GB)를 넘는다**",
+          "**KV 양자화**가 또 2배를 줄인다",
+          "이 표가 [11.5](../11_systems/05_serving.qmd) 의 PagedAttention 이 "
+          "필요한 이유 전부다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 확산 모델 주요 식
+
+전방 과정 ($\bar\alpha_t = \prod_{s\le t}\alpha_s$, $\alpha_t = 1-\beta_t$):
+
+$$
+q(x_t \mid x_0) = \mathcal{N}\big(x_t;\ \sqrt{\bar\alpha_t}\,x_0,\ (1-\bar\alpha_t)I\big)
+\quad\Longleftrightarrow\quad
+x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\epsilon
+$$
+
+학습 목적함수 (단순화된 DDPM 손실):
+
+$$
+\mathcal{L} = \mathbb{E}_{t, x_0, \epsilon}\Big[\big\|\epsilon - \epsilon_\theta(x_t, t)\big\|^2\Big]
+$$
+
+역방향 한 걸음:
+
+$$
+x_{t-1} = \frac{1}{\sqrt{\alpha_t}}\Big(x_t - \frac{1-\alpha_t}{\sqrt{1-\bar\alpha_t}}\epsilon_\theta(x_t,t)\Big) + \sigma_t z
+$$
+
+스코어와의 관계 — **같은 것을 다르게 매개변수화**한 것이다:
+
+$$
+s_\theta(x_t, t) = \nabla_{x_t}\log p_t(x_t) = -\frac{\epsilon_\theta(x_t,t)}{\sqrt{1-\bar\alpha_t}}
+$$
+
+분류자 없는 안내 (guidance scale $w$):
+
+$$
+\tilde\epsilon = \epsilon_\theta(x_t, \varnothing) + w\big(\epsilon_\theta(x_t, c) - \epsilon_\theta(x_t, \varnothing)\big)
+$$
+
+흐름 정합 — 확률 경로의 속도장을 직접 회귀한다:
+
+$$
+\mathcal{L}_{\text{FM}} = \mathbb{E}_{t, x_0, x_1}\big\|v_\theta(x_t, t) - (x_1 - x_0)\big\|^2,
+\quad x_t = (1-t)x_0 + t x_1
+$$
+
+---
+
+## 자주 쓰는 근사와 부등식
+
+```{python}
+#| label: approx
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'이름':<22} {'식':<44} {'쓰이는 곳'}")
+print("-" * 92)
+for a, b, c in [
+    ("옌센 부등식", "f 볼록 ⟹ E[f(X)] ≥ f(E[X])", "ELBO 유도"),
+    ("코시-슈바르츠", "|⟨u,v⟩| ≤ ‖u‖‖v‖", "어텐션 상한"),
+    ("마르코프", "P(X ≥ a) ≤ E[X]/a", "집중 부등식의 출발"),
+    ("체비셰프", "P(|X−μ| ≥ kσ) ≤ 1/k²", "분포 무관 꼬리"),
+    ("회프딩", "P(|X̄−μ| ≥ t) ≤ 2exp(−2nt²/R²)", "표본 크기 결정"),
+    ("스털링", "n! ≈ √(2πn)(n/e)ⁿ", "조합 근사"),
+    ("로그합-지수", "logΣe^{x_i} = m + logΣe^{x_i−m}", "**수치 안정 softmax**"),
+    ("소프트플러스", "log(1+e^x) ≈ max(0,x) (|x| 클 때)", "ReLU 와의 관계"),
+    ("테일러 1차", "f(x+δ) ≈ f(x) + ∇f·δ", "적대적 예제 (12.3)"),
+    ("델타 방법", "Var[g(X)] ≈ g′(μ)² Var[X]", "오차 전파"),
+    ("유니온 바운드", "P(∪A_i) ≤ ΣP(A_i)", "**다중 비교** (11.0)"),
+]:
+    print(f"{a:<22} {b:<44} {c}")
+print()
+print("**로그합-지수의 중요성을 실측으로 확인한다**")
+z = np.array([1000.0, 1001.0, 1002.0])
+naive = np.exp(z).sum()
+stable = z.max() + np.log(np.exp(z - z.max()).sum())
+print(f"  로짓 {z} 에 대해")
+print(f"    순진하게: exp 합 = {naive}  ← **오버플로**")
+print(f"    안정화:   logsumexp = {stable:.6f}")
+print(f"    검산:     1002 + log(e⁻² + e⁻¹ + 1) = "
+      f"{1002 + np.log(np.exp(-2)+np.exp(-1)+1):.6f}")
+print()
+print("**유니온 바운드가 왜 11.0 과 연결되나**")
+K = 20
+alpha = 0.05
+print(f"  독립인 검정 {K}개를 각각 유의수준 {alpha} 로 하면,")
+print(f"  적어도 하나가 우연히 유의할 확률 = "
+      f"1 − (1−{alpha})^{K} = {1-(1-alpha)**K:.3f}")
+print(f"  유니온 바운드 상한: {K}×{alpha} = {K*alpha:.2f}")
+print(f"  **{1-(1-alpha)**K:.1%}** — 하이퍼파라미터 20개를 훑고 "
+      f"'유의미한 개선' 을 찾았다면 대개 이것이다.")
+```
+
+---
+
+## 요약
+
+| 항목 | 핵심 |
 |------|------|
-| 행렬 미분 |  |
-| 분포 요약표 |  |
-| 파라미터 수 공식 |  |
-| FLOPs 추정 |  |
+| **행렬 미분** | $\partial L/\partial W = X^\top \delta$, $\partial L/\partial X = \delta W^\top$ — 역전파의 전부 |
+| **손실 그래디언트** | 소프트맥스 CE는 $p - \mathbf{e}_y$ — 이 책에서 가장 많이 나온 식 |
+| **KL** | 거리가 아니다. 방향에 따라 mode-covering / mode-seeking |
+| **파라미터 수** | 비임베딩 $\approx 12Ld^2$ (검증: 공개 수치 대비 오차 0.4% 이내) |
+| 주의 | 작은 모델은 임베딩 비중이 크다 — GPT-2 small은 비임베딩이 68.3% |
+| SwiGLU | FFN 행렬이 3개라 12Ld²가 과소평가한다 |
+| **FLOPs** | 학습 6ND, 추론 2N (검증: GPT-3 +0.3%, Chinchilla +2.1%) |
+| 어텐션 항 | 문맥 8K에서 25%, 128K에서 84% (비중 = n/6d) |
+| **학습 메모리** | 파라미터당 16바이트 (Adam 혼합정밀) → 7B에 104GB |
+| **KV 캐시** | 7B GQA 128K 문맥에서 16GB — 가중치(14GB)를 넘는다 |
+| **logsumexp** | 로짓 1000대에서 순진한 exp는 오버플로 |
+| **유니온 바운드** | 20개 훑으면 우연한 "유의미"가 64% |
 
 ---
 
-**다음**: [A.3 학습 자료와 다음 단계](03_resources.qmd) — 강의·책·도구·프로젝트 — 이 책 다음에 갈 곳
+**다음**: [A.3 학습 자료와 다음 단계](03_resources.qmd) — 이 책 다음에 갈 곳
 
 **이전**: [A.1 용어 사전](01_glossary.qmd)
