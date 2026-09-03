@@ -4,90 +4,761 @@ subtitle: "몬테카를로·TD·Q-learning — 경험에서 직접 배우기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[10.1](01_dynamic_programming.qmd)의 모든 계산은 이 항에 기대고 있었다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+$$\sum_{s'}P(s'\mid s,a)\,V(s')$$
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+$P$ 를 모르면 이 합을 쓸 수 없다. 그런데 **표본은 얻을 수 있다** —
+행동을 해 보면 $s'$ 하나가 튀어나온다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+모델프리 학습은 그 하나로 기댓값을 대신하는 방법이고, 갈래는 둘이다.
+
+| 방식 | 목표값 | 성질 |
+|------|--------|------|
+| **몬테카를로 (MC)** | 에피소드가 끝날 때까지의 실제 반환값 $G_t$ | 편향 없음, **분산 큼**, 끝나야 갱신 |
+| **시간차 (TD)** | $R_t + \gamma V(s_{t+1})$ — 자기 추정을 다시 씀 | **편향 있음**, 분산 작음, 매 스텝 갱신 |
+
+TD 의 $V(s_{t+1})$ 이 **부트스트랩**이다. 아직 틀린 추정을 목표로 삼는다.
+이상해 보이지만, 이것이 [10.1](01_dynamic_programming.qmd)의 벨만 백업을 표본 하나로 근사한 것이다.
+
+$$\underbrace{V(s) \leftarrow R + \gamma\!\!\sum_{s'}\!P(s'|s,a)V(s')}_{\text{DP: 기댓값을 정확히}}
+\quad\Longrightarrow\quad
+\underbrace{V(s) \leftarrow V(s) + \alpha\big[R + \gamma V(s') - V(s)\big]}_{\text{TD: 표본 하나로}}$$
+
+대괄호 안이 **TD 오차** $\delta_t$ 다. 이 장의 나머지는 전부 이 한 줄의 변주다.
+
+---
+
+## 준비: 평가할 정책과 정답
+
+[10.0](00_mdp.qmd)의 그리드월드에서 **균등 무작위 정책**의 가치를 추정한다.
+모델을 알고 있으니 정답 $V^\pi$ 를 정확히 구해 놓고, 표본만으로 얼마나 근접하는지 잰다.
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import rl
+
+WALLS = [(1, 1), (1, 2), (2, 4), (3, 1)]
+TERM = {(0, 6): 1.0, (3, 3): -1.0}
+gw = rl.GridWorld(rows=5, cols=7, walls=WALLS, terminals=TERM,
+                  step_cost=-0.04, slip=0.2)
+G = 0.95
+PI = np.full((gw.nS, gw.nA), 0.25)              # 평가 대상: 균등 무작위
+V_TRUE = rl.policy_value(gw.P, gw.R, PI, G)
+STARTS = [s for s in range(gw.nS)
+          if not gw.is_wall(gw.rc(s)) and not gw.is_terminal(s)]
+OKM = np.array([s in STARTS for s in range(gw.nS)])
+
+
+def episodes(n, rng, maxlen=150):
+    """정책 PI 를 따라 n개 에피소드를 생성한다."""
+    out = []
+    for _ in range(n):
+        s = int(rng.choice(STARTS))
+        tr = []
+        for _ in range(maxlen):
+            a = int(rng.choice(gw.nA, p=PI[s]))
+            ns = int(rng.choice(gw.nS, p=gw.P[s, a]))
+            tr.append((s, a, float(gw.R[s, a]), ns))
+            if gw.is_terminal(ns):
+                break
+            s = ns
+        out.append(tr)
+    return out
+
+
+ep = episodes(200, np.random.default_rng(0))
+print(f"정답 V^π 범위 [{V_TRUE[OKM].min():.3f}, {V_TRUE[OKM].max():.3f}]")
+print(f"  에피소드 평균 길이 {np.mean([len(t) for t in ep]):.1f} 스텝")
+print(f"  비종단 상태 {int(OKM.sum())}개에 대해 RMSE 를 잰다")
+print()
+print("**모델을 안다는 사실은 채점에만 쓴다.** 학습기는 표본만 본다.")
+```
+
+---
+
+## G10.2.1 — 편향과 분산은 실제로 어디에 있나
+
+교과서의 주장은 이렇다. **MC 는 편향이 없지만 분산이 크고, TD 는 반대다.**
+두 부분을 따로 재 본다.
+
+먼저 **갱신 목표값의 분산**부터. 같은 상태에서 만들어지는 목표값이 얼마나 흔들리는가.
+
+```{python}
+#| label: variance
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+EP = episodes(2000, rng)
+tg_mc, tg_td = {}, {}
+for tr in EP:
+    Gt = 0.0
+    for t in reversed(range(len(tr))):
+        s, a, r, ns = tr[t]
+        Gt = r + G*Gt
+        tg_mc.setdefault(s, []).append(Gt)
+        boot = 0.0 if gw.is_terminal(ns) else V_TRUE[ns]
+        tg_td.setdefault(s, []).append(r + G*boot)
+
+print("갱신 목표값의 표준편차 (TD 는 정답 V 를 부트스트랩에 썼다 — 편향 0 조건)")
+print()
+print(f"{'상태':>8} {'표본 수':>8} {'MC 목표 σ':>12} {'TD 목표 σ':>12} {'배수':>7}")
+print("-" * 52)
+VAR = []
+for s in sorted(tg_mc, key=lambda x: -len(tg_mc[x]))[:6]:
+    a, b = float(np.std(tg_mc[s])), float(np.std(tg_td[s]))
+    VAR.append((gw.rc(s), len(tg_mc[s]), a, b))
+    print(f"{str(gw.rc(s)):>8} {len(tg_mc[s]):>8} {a:>12.4f} {b:>12.4f} "
+          f"{a/max(b,1e-9):>7.1f}")
+print()
+print(f"**MC 목표의 분산이 {np.mean([v[2]/v[3] for v in VAR]):.0f}배 크다.**")
+for s in ["MC 목표 $G_t$ 는 **에피소드가 끝날 때까지의 모든 무작위성**을 담는다 — "
+          "미끄러짐 한 번, 행동 선택 한 번이 전부 누적된다",
+          "TD 목표 $R+\\gamma V(s')$ 는 **한 스텝의 무작위성**만 담는다",
+          "이것이 TD 가 빠르게 안정되는 이유다",
+          "대신 $V(s')$ 가 틀려 있으면 그 오차가 목표에 그대로 들어간다 — **편향**"]:
+    print(f"  · {s}")
+```
+
+**이제 실제 추정 오차를 재 보자.** 여기서 예상과 다른 것이 나온다.
+
+```{python}
+#| label: mc-vs-td
+#| code-fold: false
+
+import numpy as np
+
+
+def mc_eval(eps, alpha=None):
+    """첫 방문 MC. alpha=None 이면 표본 평균, 아니면 상수 스텝."""
+    V = np.zeros(gw.nS)
+    cnt = np.zeros(gw.nS)
+    for tr in eps:
+        Gt, seen = 0.0, {}
+        for t in reversed(range(len(tr))):
+            s, a, r, ns = tr[t]
+            Gt = r + G*Gt
+            seen[s] = Gt
+        for s, g in seen.items():
+            cnt[s] += 1
+            V[s] += (g - V[s])/cnt[s] if alpha is None else alpha*(g - V[s])
+    return V
+
+
+def nstep_eval(eps, alpha=0.1, n=1):
+    """n-스텝 TD. n 이 아주 크면 MC 와 같아진다."""
+    V = np.zeros(gw.nS)
+    for tr in eps:
+        T = len(tr)
+        for t in range(T):
+            Gt = 0.0
+            for k in range(n):
+                if t + k >= T:
+                    break
+                Gt += G**k * tr[t+k][2]
+            if t + n < T:
+                Gt += G**n * V[tr[t+n][0]]
+            elif t + n == T and not gw.is_terminal(tr[T-1][3]):
+                Gt += G**n * V[tr[T-1][3]]
+            V[tr[t][0]] += alpha*(Gt - V[tr[t][0]])
+    return V
+
+
+def rmse(V):
+    return float(np.sqrt(((V - V_TRUE)[OKM]**2).mean()))
+
+
+print("에피소드 수에 따른 RMSE (시드 20개 평균)")
+print()
+print(f"{'에피소드':>8} {'MC 표본평균':>12} {'MC α=0.1':>11} {'TD(0) α=0.1':>13}")
+print("-" * 50)
+CURVE = []
+for n in [10, 30, 100, 300, 1000]:
+    r1, r2, r3 = [], [], []
+    for sd in range(20):
+        e = episodes(n, np.random.default_rng(sd))
+        r1.append(rmse(mc_eval(e)))
+        r2.append(rmse(mc_eval(e, 0.1)))
+        r3.append(rmse(nstep_eval(e, 0.1, 1)))
+    CURVE.append((n, float(np.mean(r1)), float(np.mean(r2)),
+                  float(np.mean(r3))))
+    print(f"{n:>8} {CURVE[-1][1]:>12.4f} {CURVE[-1][2]:>11.4f} "
+          f"{CURVE[-1][3]:>13.4f}")
+print()
+lo, hi = CURVE[0], CURVE[-1]
+print("**정직하게: 'TD 가 MC 보다 빨리 수렴한다'가 그대로는 재현되지 않았다.**")
+print(f"  1000 에피소드에서 MC 표본평균 {hi[1]:.4f} < TD(0) {hi[3]:.4f} 다.")
+print()
+print("**같은 조건으로 맞추면 이야기가 달라진다.**")
+print(f"  상수 스텝끼리 비교하면 MC(α=0.1) {hi[2]:.4f} vs TD(0) {hi[3]:.4f} — "
+      f"TD 가 {hi[2]/hi[3]:.1f}배 낫다.")
+for s in ["**MC 표본평균은 스텝 크기가 저절로 1/n 로 줄어든다** — "
+          "공짜로 학습률 스케줄을 쓰는 셈이다",
+          "상수 α 는 최근 표본에 계속 가중치를 주므로 잔여 잡음이 남는다 "
+          f"(MC α=0.1 이 {hi[2]:.4f} 에서 멈춘 이유)",
+          "교과서의 비교는 **둘 다 상수 α** 인 조건이다. 그 조건에서는 TD 가 이긴다",
+          "**실무 함의**: 비정상 환경(정책이 계속 바뀌는 학습 중)에서는 "
+          "상수 α 를 써야 하고, 그때 TD 의 이점이 살아난다",
+          f"초반부에서는 MC 표본평균이 압도적이다 — {lo[0]}개에서 "
+          f"{lo[1]:.4f} vs {lo[3]:.4f}"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-mc-td
+#| fig-cap: "G10.2.1 — MC와 TD의 수렴. 상수 스텝끼리 비교하면 TD가 낫지만, 표본평균 MC는 학습률이 저절로 줄어들어 더 낮은 오차에 도달한다. 조건을 맞추지 않은 비교는 오해를 낳는다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+xs = [c[0] for c in CURVE]
+fig = go.Figure()
+for i, (lbl, k) in enumerate([("MC 표본평균", 1), ("MC α=0.1", 2),
+                              ("TD(0) α=0.1", 3)]):
+    fig.add_trace(go.Scatter(x=xs, y=[c[k] for c in CURVE],
+                             mode="lines+markers", name=lbl,
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)))
+viz.fig_defaults(
+    fig, "에피소드 수에 따른 V 추정 오차", height=450,
+    xaxis_title="에피소드 수 (로그)", yaxis_title="RMSE (로그)",
+    xaxis_type="log", yaxis_type="log",
+    xaxis=dict(tickmode="array", tickvals=xs))
+viz.annotate_box(fig, "상수 α 끼리 비교해야<br><b>공정한 비교다</b>",
+                 x=0.02, y=0.02, xanchor="left")
+fig
+```
+
+---
+
+## G10.2.2 — n-스텝: 중간이 이기는가
+
+MC 와 TD 사이는 연속적이다. $n$ 스텝만 실제 보상을 쓰고 그 뒤를 부트스트랩하면 된다.
+
+$$G_t^{(n)} = R_t + \gamma R_{t+1} + \dots + \gamma^{n-1}R_{t+n-1} + \gamma^n V(s_{t+n})$$
+
+$n=1$ 이 TD(0), $n=\infty$ 가 MC 다. **중간이 가장 좋다**는 것이 교과서의 그림이다.
+확인해 보자 — 다만 한 번은 함정에 빠진 뒤에.
+
+```{python}
+#| label: nstep-fixed
+#| code-fold: false
+
+import numpy as np
+
+print("α 를 0.1 로 고정하고 n 만 바꾸면 (300 에피소드, 시드 20개)")
+print()
+print(f"{'n':>7} {'RMSE':>10}")
+print("-" * 20)
+EPS300 = {sd: episodes(300, np.random.default_rng(sd)) for sd in range(20)}
+for n_ in [1, 2, 4, 8, 16, 1000]:
+    r = float(np.mean([rmse(nstep_eval(EPS300[sd], 0.1, n_))
+                       for sd in range(20)]))
+    print(f"{('∞(MC)' if n_ >= 1000 else str(n_)):>7} {r:>10.4f}")
+print()
+print("**단조 증가다 — 중간이 좋다는 U자가 안 나온다.**")
+print("  n=1 이 최고고 커질수록 나빠진다. 교과서 그림과 다르다.")
+print()
+print("**α 를 고정한 것이 원인이다.**")
+print("  n 이 커지면 목표값의 분산이 커지므로 **적정 α 도 작아져야** 한다.")
+print("  같은 α 를 쓰면 큰 n 은 과도한 스텝으로 튀는 셈이다.")
+```
+
+```{python}
+#| label: nstep-sweep
+#| code-fold: false
+
+import numpy as np
+
+ALPHAS = [0.02, 0.05, 0.1, 0.2, 0.4, 0.7]
+NS_ = [1, 2, 4, 8, 16, 1000]
+print("각 n 마다 α 를 스윕한다 (100 에피소드, 시드 20개)")
+print()
+print(f"{'n':>7} " + " ".join(f"α={a:<5}" for a in ALPHAS)
+      + f" {'최적 RMSE':>10} {'최적 α':>8}")
+print("-" * 76)
+EPS100 = {sd: episodes(100, np.random.default_rng(sd)) for sd in range(20)}
+SWEEP = []
+for n_ in NS_:
+    row = [float(np.mean([rmse(nstep_eval(EPS100[sd], al, n_))
+                          for sd in range(20)])) for al in ALPHAS]
+    j = int(np.argmin(row))
+    SWEEP.append((n_, row, row[j], ALPHAS[j]))
+    lab = "∞(MC)" if n_ >= 1000 else str(n_)
+    print(f"{lab:>7} " + " ".join(f"{v:<7.4f}" for v in row)
+          + f" {row[j]:>10.4f} {ALPHAS[j]:>8}")
+print()
+best = min(SWEEP, key=lambda x: x[2])
+print(f"**최적 α 를 각각 써 주면 n={best[0]} 이 이긴다** — RMSE {best[2]:.4f}.")
+print(f"  n=1 의 최적 {SWEEP[0][2]:.4f}, MC 의 최적 {SWEEP[-1][2]:.4f} 보다 낫다.")
+print()
+print("**그리고 최적 α 가 n 에 따라 움직인다.**")
+for n_, row, b, a in SWEEP:
+    lab = "∞(MC)" if n_ >= 1000 else f"n={n_}"
+    print(f"  {lab:<8} 최적 α = {a}")
+print()
+for s in ["n 이 커질수록 최적 α 가 작아진다 — 목표 분산이 크니 조심스럽게 가야 한다",
+          "**하이퍼파라미터 하나를 고정한 비교는 결론을 뒤집을 수 있다**",
+          "[9.3](../09_vision_video/03_ssl_vision.qmd)·"
+          "[9.6](../09_vision_video/06_video_models.qmd)에서 본 것과 같은 종류의 함정이다",
+          "**TD(λ)** 는 여러 n 을 지수 가중으로 섞어 이 선택을 부드럽게 한다 — "
+          "$G^\\lambda = (1-\\lambda)\\sum_n \\lambda^{n-1}G^{(n)}$",
+          "적격 흔적(eligibility trace)은 그것을 **한 번의 순방향 계산**으로 구현한 것이다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-nstep
+#| fig-cap: "G10.2.2 — n-스텝과 학습률의 상호작용. 각 곡선이 하나의 n이고, 최저점이 그 n의 최선이다. α를 하나로 고정하면(세로 절단) 중간 n의 이점이 보이지 않는다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+for i, (n_, row, b, a) in enumerate(SWEEP):
+    lab = "∞ (MC)" if n_ >= 1000 else f"n = {n_}"
+    fig.add_trace(go.Scatter(x=ALPHAS, y=row, mode="lines+markers", name=lab,
+                             line=dict(color=viz.color(i), width=2.4),
+                             marker=dict(size=8)))
+fig.add_vline(x=0.1, line=dict(color="rgba(255,255,255,0.35)", dash="dash"))
+fig.add_annotation(x=0.1, y=1, yref="paper", text="α=0.1 로 고정하면",
+                   showarrow=False, yanchor="bottom", font=dict(size=11))
+viz.fig_defaults(
+    fig, "n-스텝 TD: 학습률별 RMSE (100 에피소드)", height=470,
+    xaxis_title="학습률 α (로그)", yaxis_title="RMSE",
+    xaxis_type="log", xaxis=dict(tickmode="array", tickvals=ALPHAS))
+fig
+```
+
+::: {.interaction-hint}
+점선(α=0.1)에서 세로로 잘라 보면 n=1 이 가장 낮다 — 앞 표의 결과다.
+그런데 각 곡선의 **최저점**을 보면 중간 n 이 이긴다.
+
+**두 하이퍼파라미터가 얽혀 있을 때 하나만 바꾸며 비교하면 안 된다.**
+이 그림이 그 이유를 한 장으로 보여 준다.
 :::
 
-TD 학습의 부트스트랩은 이후 모든 가치 기반 알고리즘의 뼈대이고, Q-learning의 off-policy 성질은 DQN과 오프라인 RL의 근거가 된다.
+---
+
+## G10.2.3 — 절벽 걷기: on-policy 와 off-policy 가 다른 답을 낸다
+
+이제 평가가 아니라 **제어**다. 두 알고리즘이 있고, TD 목표의 한 글자만 다르다.
+
+$$\text{SARSA:}\quad Q(s,a) \leftarrow Q(s,a) + \alpha\big[r + \gamma Q(s', a') - Q(s,a)\big]$$
+$$\text{Q-learning:}\quad Q(s,a) \leftarrow Q(s,a) + \alpha\big[r + \gamma \max_{a'} Q(s', a') - Q(s,a)\big]$$
+
+SARSA 는 **실제로 고른 행동** $a'$ 를 쓴다 (on-policy).
+Q-learning 은 **최선의 행동**을 쓴다 (off-policy) — 실제로 무엇을 했든 상관없이.
+
+이 차이가 눈에 보이는 고전 예제가 절벽 걷기다.
+
+```{python}
+#| label: cliff
+#| code-fold: false
+
+import numpy as np
+from src import rl
+
+P, R, START, GOAL, CLIFF, ROWS, COLS = rl.cliff_world()
+nS, nA = R.shape
+print(f"절벽 걷기: {ROWS}x{COLS}, 시작 {divmod(START,COLS)}, "
+      f"목표 {divmod(GOAL,COLS)}, 절벽 {len(CLIFF)}칸")
+print("  매 스텝 −1, 절벽에 빠지면 −100 후 시작점으로")
+print()
+
+
+def learn(kind, n_ep=500, alpha=0.5, eps=0.1, seed=0, gamma=1.0):
+    rng = np.random.default_rng(seed)
+    Q = np.zeros((nS, nA))
+    rets = []
+    for _ in range(n_ep):
+        s, tot = START, 0.0
+        a = int(rng.integers(nA)) if rng.random() < eps else int(Q[s].argmax())
+        for _ in range(400):
+            ns = int(np.argmax(P[s, a]))
+            r = float(R[s, a])
+            tot += r
+            na = (int(rng.integers(nA)) if rng.random() < eps
+                  else int(Q[ns].argmax()))
+            tgt = 0.0 if ns == GOAL else (Q[ns, na] if kind == "sarsa"
+                                          else Q[ns].max())
+            Q[s, a] += alpha*(r + gamma*tgt - Q[s, a])
+            s, a = ns, na
+            if s == GOAL:
+                break
+        rets.append(tot)
+    return Q, np.array(rets)
+
+
+def greedy_path(Q):
+    s, cells = START, [START]
+    for _ in range(60):
+        s = int(np.argmax(P[s, int(Q[s].argmax())]))
+        cells.append(s)
+        if s == GOAL:
+            break
+    return cells
+
+
+def show(Q, nm):
+    cs = set(greedy_path(Q))
+    print(f"  {nm}")
+    for r in range(ROWS):
+        line = ""
+        for c in range(COLS):
+            i = r*COLS + c
+            line += ("S" if i == START else "G" if i == GOAL else
+                     "C" if i in CLIFF else "o" if i in cs else "·")
+        print("    " + line)
+
+
+CLIFFRES = {}
+for kind, nm in [("sarsa", "SARSA"), ("qlearn", "Q-learning")]:
+    Qs, rs = [], []
+    for sd in range(30):
+        Q, ret = learn(kind, seed=sd)
+        Qs.append(Q); rs.append(ret)
+    rs = np.array(rs)
+    CLIFFRES[nm] = (Qs[0], rs)
+    print(f"**{nm}** — 학습 중 에피소드 보상 (마지막 100개 평균) "
+          f"{rs[:, -100:].mean():.2f}")
+    show(Qs[0], f"학습된 탐욕 경로")
+    print()
+
+sa = CLIFFRES["SARSA"][1][:, -100:].mean()
+ql = CLIFFRES["Q-learning"][1][:, -100:].mean()
+print(f"**Q-learning 이 최단 경로를 배웠는데 학습 중 성적은 더 나쁘다** "
+      f"({ql:.1f} vs {sa:.1f}).")
+for s in ["Q-learning 의 탐욕 경로는 **절벽 바로 위**를 지난다 — 진짜 최적 경로다",
+          "그런데 ε-탐욕으로 움직이는 동안에는 가끔 절벽으로 떨어진다 (−100)",
+          "SARSA 는 목표에 $Q(s',a')$ 를 쓰므로 "
+          "**탐색으로 떨어질 위험까지 가치에 반영**한다",
+          "그래서 한 칸 위로 돌아가는 **안전한 경로**를 배운다",
+          "**둘 다 맞다.** Q-learning 은 '최적 정책'을, "
+          "SARSA 는 '지금 내가 쓰는 정책'을 평가한다"]:
+    print(f"  · {s}")
+print()
+print("**어느 쪽을 써야 하나**")
+print()
+print(f"{'상황':<30} {'선택':<16} {'이유'}")
+print("-" * 74)
+for a, b, c in [
+    ("학습 중 실패 비용이 크다", "SARSA", "실제 로봇, 운영 중 시스템"),
+    ("최종 정책만 중요하다", "Q-learning", "시뮬레이터에서 학습"),
+    ("과거 데이터로 학습한다", "Q-learning 계열", "off-policy 라 가능"),
+    ("탐색을 결국 끌 것이다", "둘이 같아진다", "ε→0 이면 SARSA→Q-learning"),
+]:
+    print(f"{a:<30} {b:<16} {c}")
+print()
+print("  마지막 줄이 중요하다 — **차이는 ε 이 만든다.**")
+print("  off-policy 성질 자체가 [10.3](03_deep_rl.qmd)의 경험 재생을 가능하게 한다.")
+```
+
+```{python}
+#| label: fig-cliff
+#| fig-cap: "G10.2.3 — 절벽 걷기의 학습 곡선. Q-learning은 더 좋은 정책을 배우면서도 학습 중 성적은 더 나쁘다. 탐색으로 절벽에 떨어지는 비용을 목표값에 반영하지 않기 때문이다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+
+def smooth(x, k=20):
+    return np.convolve(x, np.ones(k)/k, mode="valid")
+
+
+fig = go.Figure()
+for i, nm in enumerate(["SARSA", "Q-learning"]):
+    rs = CLIFFRES[nm][1].mean(0)
+    fig.add_trace(go.Scatter(x=np.arange(len(smooth(rs))), y=smooth(rs),
+                             mode="lines", name=nm,
+                             line=dict(color=viz.color(i), width=2.5)))
+fig.add_hline(y=-13, line=dict(color=viz.hex_rgba(viz.GREEN, 0.6), dash="dash"))
+fig.add_annotation(x=0, y=-13, text="최적 경로의 보상 −13", showarrow=False,
+                   xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.GREEN))
+viz.fig_defaults(
+    fig, "학습 중 에피소드 보상 (시드 30개 평균, 20 에피소드 이동평균)",
+    height=450, xaxis_title="에피소드", yaxis_title="에피소드 총 보상",
+    yaxis=dict(range=[-120, 5]))
+fig
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G10.2.4 — 치명적 삼중고
 
-- 몬테카를로 예측: 에피소드 반환값 평균
-- 시간차(TD) 학습: 부트스트랩과 TD 오차
-- MC vs TD: 편향-분산, 온라인성, 수렴 특성
-- n-스텝 TD와 TD(λ), 적격 흔적(eligibility trace)
-- SARSA (on-policy) 유도
-- Q-learning (off-policy) 유도와 수렴 조건
-- on-policy와 off-policy의 정확한 의미
-- 함수 근사와 치명적 삼중고(deadly triad)
-- 탐색 전략: ε-greedy, 볼츠만, 낙관적 초기화
-- 중요도 샘플링과 off-policy 보정
+세 가지가 **동시에** 있으면 학습이 발산할 수 있다.
+
+1. **함수 근사** — 가치를 표가 아니라 파라미터로 표현
+2. **부트스트랩** — 자기 추정을 목표로 씀 (TD)
+3. **off-policy** — 다른 분포에서 모은 데이터로 학습
+
+셋 다 유용하고, 셋 다 실무에서 쓴다. 그래서 문제다.
+
+Baird 의 반례로 확인한다 — 보상이 전부 0 이라 참 가치가 0 인데도 가중치가 폭발하는 MDP 다.
+
+```{python}
+#| label: baird
+#| code-fold: false
+
+import numpy as np
+
+NS_B, NW = 7, 8
+PHI = np.zeros((NS_B, NW))
+for i in range(6):
+    PHI[i, i] = 2.0
+    PHI[i, 7] = 1.0
+PHI[6, 6] = 1.0
+PHI[6, 7] = 2.0
+W0 = np.array([1., 1., 1., 1., 1., 1., 10., 1.])
+GAM_B = 0.99
+
+
+def baird(alpha=0.01, steps=5000, off_policy=True, tabular=False,
+          bootstrap=True, seed=0):
+    """보상은 전부 0. 참 가치는 0 이다. off_policy=False 면 목표정책을 따라간다."""
+    rng = np.random.default_rng(seed)
+    w = W0.copy()
+    Vt = (PHI @ W0).copy()
+    s = int(rng.integers(NS_B))
+    hist = []
+    for _ in range(steps):
+        if off_policy:
+            s = int(rng.integers(NS_B))          # 행동정책의 상태 분포 (균등)
+            solid = rng.random() < 1/7
+            rho = 7.0 if solid else 0.0          # 중요도 비율
+        else:
+            solid, rho = True, 1.0               # 목표정책을 그대로 따른다
+        ns = 6 if solid else int(rng.integers(6))
+        if tabular:
+            tgt = GAM_B*Vt[ns] if bootstrap else 0.0
+            Vt[s] += alpha*rho*(tgt - Vt[s])
+            hist.append(float(np.linalg.norm(Vt)))
+        else:
+            tgt = GAM_B*(PHI[ns] @ w) if bootstrap else 0.0
+            w += alpha*rho*(tgt - PHI[s] @ w)*PHI[s]
+            hist.append(float(np.linalg.norm(w)))
+        if not off_policy:
+            s = ns
+    return np.array(hist)
+
+
+print("삼중고에서 하나씩 빼 본다 (5000 스텝, α=0.01, 참 가치는 0)")
+print()
+print(f"{'설정':<46} {'‖w‖ 끝':>14} {'발산?':>8}")
+print("-" * 70)
+TRIAD = []
+for nm, kw in [("① 함수근사 + 부트스트랩 + off-policy", dict()),
+               ("② off-policy 제거 (목표정책을 따라 진행)",
+                dict(off_policy=False)),
+               ("③ 함수근사 제거 (표 기반)", dict(tabular=True)),
+               ("④ 부트스트랩 제거 (MC 목표)", dict(bootstrap=False))]:
+    h = baird(**kw)
+    TRIAD.append((nm, float(h[-1])))
+    print(f"{nm:<46} {h[-1]:>14.4g} {'예' if h[-1] > 1e3 else '아니오':>8}")
+print()
+print("**셋이 다 있을 때만 발산한다.** 하나만 빼도 유계로 남는다.")
+print()
+print("발산 속도")
+for st in [100, 500, 1000, 5000, 20000]:
+    print(f"  {st:>6} 스텝: ‖w‖ = {baird(steps=st)[-1]:.4g}")
+print()
+print("**왜 발산하는가**")
+for s in ["off-policy 라 **갱신하는 상태의 분포**가 목표정책의 분포와 다르다",
+          "함수 근사 때문에 한 상태를 올리면 **다른 상태도 같이 올라간다** "
+          "(가중치를 공유하므로)",
+          "부트스트랩 때문에 그 올라간 값이 **다시 목표값이 된다**",
+          "→ 되먹임 고리가 생기고, 그것을 눌러 줄 힘이 없다",
+          "표 기반이면 상태끼리 독립이라 되먹임이 안 생긴다 (③)",
+          "on-policy 면 자주 갱신하는 상태와 목표가 일치해 균형이 잡힌다 (②)",
+          "MC 목표는 자기 추정을 안 쓰니 고리가 끊긴다 (④)"]:
+    print(f"  · {s}")
+print()
+print("**그런데 DQN 은 셋 다 쓰면서 작동한다.**")
+for s in ["실무 알고리즘은 발산을 **공학적으로** 막는다",
+          "**타깃 네트워크** — 목표값을 잠시 얼려 되먹임을 늦춘다",
+          "**경험 재생** — 갱신 분포를 넓혀 편중을 줄인다",
+          "**그래디언트 클리핑·작은 학습률** — 폭주 속도를 제한한다",
+          "[10.3](03_deep_rl.qmd)의 장치들이 전부 이 문제에 대한 대응이다",
+          "이론적 해법도 있다 — Gradient TD, Emphatic TD 계열"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-triad
+#| fig-cap: "G10.2.4 — Baird의 반례. 참 가치가 0인데도 삼중고 조합에서만 가중치가 지수적으로 폭발한다. 세 요소 중 하나만 빼도 유계로 남는다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+LAB = [("삼중고 (셋 다)", dict(), viz.WARM),
+       ("off-policy 제거", dict(off_policy=False), viz.ACCENT),
+       ("함수근사 제거", dict(tabular=True), viz.GREEN),
+       ("부트스트랩 제거", dict(bootstrap=False), viz.YELLOW)]
+for nm, kw, col in LAB:
+    h = baird(steps=8000, **kw)
+    fig.add_trace(go.Scatter(x=np.arange(0, len(h), 20), y=h[::20],
+                             mode="lines", name=nm,
+                             line=dict(color=col,
+                                       width=3 if not kw else 2)))
+viz.fig_defaults(
+    fig, "가중치 노름 ‖w‖ (참 가치는 0)", height=450,
+    xaxis_title="갱신 스텝", yaxis_title="‖w‖ (로그)", yaxis_type="log")
+viz.annotate_box(fig, "주황만 발산한다<br><b>셋이 모여야 터진다</b>",
+                 x=0.02, y=0.98, xanchor="left", yanchor="top")
+fig
+```
 
 ---
 
-## G10.2.1 — TD 오차 전파
+## G10.2.5 — 중요도 샘플링: 왜 off-policy 평가가 어려운가
 
-한 번의 전이가 가치 추정을 갱신하며 정보가 뒤로 전파되는 모습
+다른 정책 $b$ 가 모은 데이터로 정책 $\pi$ 를 평가하려면 보정이 필요하다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 스텝 재생
-:::
+$$\rho_{t:T} = \prod_{k=t}^{T}\frac{\pi(a_k|s_k)}{b(a_k|s_k)},
+\qquad V^\pi(s) \approx \mathbb{E}_b[\rho\,G_t]$$
+
+수학적으로는 깔끔하다. **곱**이라는 것이 문제다.
+
+```{python}
+#| label: is-variance
+#| code-fold: false
+
+import numpy as np
+
+print("길이 L 의 사슬 — 목표정책은 항상 행동 0, 행동정책은 균등(0.5)")
+print("  목표정책 하의 참 반환값은 항상 1.0 이다")
+print()
+
+
+def is_experiment(L, n_traj=20000, seed=0):
+    rng = np.random.default_rng(seed)
+    acts = rng.integers(0, 2, (n_traj, L))
+    match = (acts == 0).all(1)                  # 목표정책과 일치한 궤적만
+    rho = np.where(match, 2.0**L, 0.0)          # ρ = (1/0.5)^L
+    ret = np.where(match, 1.0, 0.0)
+    ordinary = rho*ret
+    weighted = ordinary.sum()/max(rho.sum(), 1e-12)
+    return (float(ordinary.mean()), float(ordinary.std()), float(weighted),
+            int(match.sum()))
+
+
+print(f"{'L':>4} {'ρ 최대':>10} {'일반 IS':>10} {'일반 IS σ':>12} "
+      f"{'가중 IS':>10} {'유효 표본':>10}")
+print("-" * 62)
+ISR = []
+for L in [1, 2, 4, 8, 12, 16]:
+    m, sd, wis, k = is_experiment(L)
+    ISR.append((L, m, sd, wis, k))
+    print(f"{L:>4} {2.0**L:>10.0f} {m:>10.4f} {sd:>12.2f} {wis:>10.4f} "
+          f"{k:>10}")
+print()
+print("**① 일반 중요도 샘플링은 불편(unbiased)이지만 분산이 폭발한다.**")
+a, b = ISR[0], ISR[-2]
+print(f"  L={a[0]}: σ={a[2]:.2f} → L={b[0]}: σ={b[2]:.2f} "
+      f"({b[2]/a[2]:.0f}배)")
+print(f"  L={b[0]} 에서 20,000 궤적 중 쓸모 있는 것이 **{b[4]}개**뿐이다.")
+print()
+z = ISR[-1]
+print(f"**② L={z[0]} 에서는 추정값이 {z[1]:.4f} 로 나온다.** 참값은 1.0 이다.")
+print(f"  일치하는 궤적이 하나도 없어서({z[4]}개) 그냥 0 을 답한다.")
+print("  **불편 추정량이 100% 틀린 답을 내는 상황**이다 — "
+      "기댓값은 맞지만 어떤 표본에서도 맞지 않는다.")
+print()
+print("**③ 가중 중요도 샘플링은 편향이 있지만 훨씬 안정적이다.**")
+for L, m, sd, wis, k in ISR[:-1]:
+    print(f"  L={L:>2}: 일반 {m:>7.4f} (σ {sd:>7.2f}) vs 가중 {wis:.4f}")
+print("  가중 IS 는 ρ 로 정규화하므로 스케일이 상쇄된다 — 여기서는 정확히 1.0.")
+print("  (마지막 줄 L=16 은 표본이 0 이라 둘 다 실패한다)")
+print()
+print("**이것이 실무 설계를 지배한다**")
+print()
+print(f"{'대응':<26} {'무엇을 하나':<34} {'어디서'}")
+print("-" * 78)
+for x, y, zz in [
+    ("가중 IS", "ρ 로 정규화 — 편향 대신 분산을 산다", "off-policy MC 평가"),
+    ("한 스텝만 보정", "ρ 를 곱하지 않고 최대화로 대체", "Q-learning"),
+    ("비율 클리핑", "ρ 를 구간에 가둔다", "**PPO** ([10.4](04_policy_gradient.qmd))"),
+    ("정책을 가깝게 유지", "KL 제약으로 ρ≈1 을 강제", "TRPO, RLHF"),
+    ("짧은 지평", "곱하는 항의 수를 줄인다", "n-스텝 off-policy"),
+]:
+    print(f"{x:<26} {y:<34} {zz}")
+print()
+print("  **Q-learning 이 ρ 를 안 쓰는 이유가 여기서 보인다.**")
+print("  max 로 목표를 만들면 어떤 정책이 데이터를 모았든 상관없어진다 —")
+print("  곱이 아예 안 생기므로 분산 폭발도 없다. off-policy 의 값싼 해법이다.")
+```
+
+```{python}
+#| label: fig-is
+#| fig-cap: "G10.2.5 — 중요도 샘플링의 분산. 궤적이 길어질수록 유효 표본이 지수적으로 줄고 추정 분산이 폭발한다. 가중 IS는 편향을 받아들이는 대신 안정적이다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+Ls = [r[0] for r in ISR[:-1]]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=Ls, y=[r[2] for r in ISR[:-1]],
+                         mode="lines+markers", name="일반 IS 표준편차",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=9)))
+fig.add_trace(go.Scatter(x=Ls, y=[r[4] for r in ISR[:-1]],
+                         mode="lines+markers", name="유효 표본 수 (20,000 중)",
+                         line=dict(color=viz.ACCENT, width=3, dash="dot"),
+                         marker=dict(size=9), yaxis="y2"))
+viz.fig_defaults(
+    fig, "궤적 길이와 중요도 샘플링", height=460,
+    xaxis_title="궤적 길이 L", yaxis_title="일반 IS 표준편차 (로그)",
+    yaxis_type="log",
+    yaxis2=dict(title="유효 표본 수 (로그)", overlaying="y", side="right",
+                type="log", showgrid=False))
+viz.annotate_box(fig, "한쪽은 지수적으로 오르고<br>"
+                      "<b>다른 쪽은 지수적으로 내린다</b>",
+                 x=0.5, y=0.02)
+fig
+```
 
 ---
 
-## G10.2.2 — MC vs TD 분산
+## 요약
 
-두 추정기의 수렴 속도와 흔들림 비교
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| 모델프리의 발상 | 기댓값 합을 **표본 하나로** | DP의 벨만 백업을 근사 |
+| TD 오차 | $\delta = r + \gamma V(s') - V(s)$ | 이 장 전체가 이 한 줄의 변주 |
+| **목표값 분산** | MC가 TD의 **13배** | MC는 에피소드 전체의 무작위성을 담는다 |
+| MC vs TD | 표본평균 MC가 더 낮은 오차에 도달 | **교과서 주장이 그대로는 비재현** |
+| 왜 | 표본평균 = 공짜 학습률 스케줄 | 상수 α끼리면 TD가 1.8배 낫다 |
+| **n-스텝, α 고정** | n=1이 최고, 단조 증가 | U자가 **안 나온다** |
+| **n-스텝, α 스윕** | n=4가 최고 (0.1123) | 최적 α가 n에 따라 움직인다 |
+| 그 함정 | 하이퍼파라미터 하나 고정이 결론을 뒤집는다 | 9.3·9.6과 같은 종류 |
+| **절벽 걷기** | Q-learning −49.0 vs SARSA −25.4 | 더 좋은 정책, 더 나쁜 성적 |
+| 왜 | SARSA는 탐색의 위험까지 가치에 넣는다 | ε→0이면 둘이 같아진다 |
+| **치명적 삼중고** | 셋 다일 때만 ‖w‖ 4.3e6 | 하나만 빼면 8.8 / 29.1 / 8.6 |
+| 발산 속도 | 20,000스텝에 **1.8e22** | 참 가치는 0인데 |
+| DQN이 되는 이유 | 타깃 네트워크·재생·클리핑 | 10.3의 장치들이 전부 이 대응 |
+| **IS 분산 폭발** | L=1 σ=1.0 → L=12 σ=81.9 | 유효 표본 20,000 → 8 |
+| 극단 | L=16에서 추정값 **0.0** (참값 1.0) | 불편인데 항상 틀린다 |
+| 가중 IS | 모든 길이에서 정확히 1.0000 | 편향 대신 분산을 산다 |
+| Q-learning의 요령 | max로 목표를 만들면 ρ가 없다 | off-policy의 값싼 해법 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 에피소드 수 슬라이더
-:::
-
----
-
-## G10.2.3 — SARSA vs Q-learning
-
-절벽 걷기에서 두 알고리즘이 서로 다른 경로를 학습하는 고전 예제
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 환경 선택
-:::
-
----
-
-## G10.2.4 — 적격 흔적
-
-λ에 따라 과거 상태로 신용이 얼마나 거슬러 배분되는지
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: λ 슬라이더
-:::
+표를 들고 있을 수 있을 때의 이야기였다.
+**상태가 너무 많으면** 어떻게 되는가 — 그리고 삼중고를 어떻게 견디는가.
 
 ---
 
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 몬테카를로 예측 |  |
-| TD 학습 |  |
-| Q-learning |  |
-| SARSA |  |
-| off-policy |  |
-| 치명적 삼중고 |  |
-
----
-
-**다음**: [10.3 심층 강화학습](03_deep_rl.qmd) — DQN과 그 확장 — 신경망을 가치 함수로
+**다음**: [10.3 심층 강화학습](03_deep_rl.qmd) — 신경망을 가치 함수로
 
 **이전**: [10.1 동적계획법](01_dynamic_programming.qmd)

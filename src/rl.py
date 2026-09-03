@@ -249,3 +249,35 @@ def bandit_run(means, algo, n_steps=1000, rng=None, eps=0.1, c=2.0,
         tot += best - means[a]
         regret[t] = tot
     return regret, n
+
+
+def cliff_world(rows=4, cols=12, step=-1.0, cliff=-100.0):
+    """Sutton & Barto 의 절벽 걷기. 결정적 이동.
+
+    시작 (rows-1, 0), 목표 (rows-1, cols-1),
+    그 사이 아랫줄이 절벽 — 밟으면 cliff 보상을 받고 시작점으로 돌아간다.
+    반환: (P, R, start, goal, cliff_cells, rows, cols)
+    """
+    nS, nA = rows*cols, 4
+    idx = lambda r, c: r*cols + c
+    start, goal = idx(rows-1, 0), idx(rows-1, cols-1)
+    cliff_cells = [idx(rows-1, c) for c in range(1, cols-1)]
+    P = np.zeros((nS, nA, nS))
+    R = np.zeros((nS, nA))
+    for r in range(rows):
+        for c in range(cols):
+            s = idx(r, c)
+            if s == goal:
+                P[s, :, s] = 1.0
+                continue
+            for a, (dr, dc) in enumerate(ACTIONS):
+                nr = min(max(r + dr, 0), rows-1)
+                nc = min(max(c + dc, 0), cols-1)
+                ns = idx(nr, nc)
+                if ns in cliff_cells:
+                    P[s, a, start] = 1.0
+                    R[s, a] = cliff
+                else:
+                    P[s, a, ns] = 1.0
+                    R[s, a] = step
+    return P, R, start, goal, cliff_cells, rows, cols
