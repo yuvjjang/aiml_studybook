@@ -4,89 +4,742 @@ subtitle: "적재·검증·특성 스토어 — 학습을 먹여 살리는 배�
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+대형 학습에서 GPU 가 노는 가장 흔한 이유는 모델이 아니다. **데이터 로더**다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+[11.0](00_reproducibility.qmd)에서 실험의 신뢰성을 봤다면, 이 장은 그 실험에 들어가는
+데이터가 **제때, 제대로** 도착하는가의 문제다. 두 가지가 조용히 프로젝트를 태운다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+| 문제 | 증상 | 이 장의 절 |
+|------|------|-----------|
+| **처리량** | 비싼 가속기가 대부분의 시간을 기다린다 | G11.1.1–3 |
+| **품질** | 몇 주 뒤에야 "그 열이 언제부터 이랬죠?" | G11.1.4–5 |
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+둘 다 눈에 잘 안 띈다는 공통점이 있다.
+학습은 어쨌든 돌아가고, 손실도 어쨌든 내려가기 때문이다.
 
-대형 학습에서 GPU가 노는 가장 흔한 이유는 모델이 아니라 데이터 로더다. 그리고 데이터 품질 사고는 조용히 몇 주를 태운다.
-
----
-
-## 이 장에서 다루는 것
-
-- 배치 처리와 스트리밍 처리, 람다/카파 아키텍처
-- 저장 포맷: Parquet, WebDataset, TFRecord, Arrow와 각각의 이점
-- 샤딩·셔플·프리페치와 입출력 병목 진단
-- 데이터 로더 최적화: 워커 수, 핀 메모리, 디코딩 오프로드
-- 대규모 코퍼스의 온라인 토크나이즈 vs 사전 토크나이즈
-- 데이터 검증: 스키마 검사, 통계 기반 이상 탐지, 데이터 계약
-- 특성 스토어와 학습/서빙 일관성
-- 라벨링 파이프라인과 품질 관리, 능동 학습
-- 개인정보 처리: 익명화, 마스킹, 접근 통제
-- 데이터 계보(lineage)와 사고 추적
+그래서 이 장은 **재는 법**을 먼저 만든다.
 
 ---
 
-## G11.1.1 — 입출력 병목 진단
+## G11.1.1 — 워커 몇 개면 GPU 가 안 노는가
 
-데이터 로딩과 GPU 연산의 타임라인 겹침 정도
+파이프라인은 생산자-소비자 구조다.
+워커가 배치를 만들어 큐에 넣고, 가속기가 꺼내 계산한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 워커 수 슬라이더
-:::
+배치당 계산 시간 $c$, 워커 하나의 적재 시간 $l$, 워커 $w$ 개라면
+처리량은 $\min(1/c,\ w/l)$ 로 묶인다. 즉 **가동률은 $\min(1,\ wc/l)$** 이다.
+
+이산 사건 모사로 확인한다.
+
+```{python}
+#| label: pipeline
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+
+def pipeline(n_batch=200, t_compute=1.0, t_load=3.0, workers=1):
+    """워커가 순서대로 배치를 만들고, 가속기가 준비되는 대로 소비한다."""
+    free = np.zeros(workers)              # 각 워커가 다음에 비는 시각
+    ready = np.zeros(n_batch)
+    for i in range(n_batch):
+        w = int(np.argmin(free))
+        ready[i] = free[w] + t_load
+        free[w] += t_load
+    gpu = idle = 0.0
+    for i in range(n_batch):
+        start = max(gpu, ready[i])        # 배치가 준비될 때까지 기다린다
+        idle += start - gpu
+        gpu = start + t_compute
+    return gpu, idle
+
+
+C, LOAD = 1.0, 3.0
+print(f"배치당 가속기 계산 {C}, 워커 하나의 적재 {LOAD} "
+      f"→ 이론상 {LOAD/C:.0f}개 워커에서 포화")
+print()
+print(f"{'워커 수':>7} {'총 시간':>10} {'가속기 유휴':>12} {'가동률':>9} "
+      f"{'이론 min(1, wc/l)':>18}")
+print("-" * 60)
+PIPE = []
+for w in [1, 2, 3, 4, 6, 8, 12]:
+    tot, idle = pipeline(t_compute=C, t_load=LOAD, workers=w)
+    util = 1 - idle/tot
+    PIPE.append((w, tot, util, min(1.0, w*C/LOAD)))
+    print(f"{w:>7} {tot:>10.1f} {idle:>12.1f} {util:>9.3f} {min(1,w*C/LOAD):>18.3f}")
+print()
+print("**측정이 이론과 정확히 맞는다** (마지막 0.985 는 첫 배치를 기다린 예열분).")
+for s in ["워커 1개: 가동률 0.333 — **가속기가 3분의 2를 논다**",
+          "워커 3개에서 포화하고, 그 뒤로는 늘려도 **아무 이득이 없다**",
+          "이것이 '워커를 늘렸는데 안 빨라져요' 의 정체다 — 이미 포화한 것",
+          "반대로 포화 전이면 워커 하나가 그대로 처리량이 된다"]:
+    print(f"  · {s}")
+print()
+print("**병목이 어디인지 먼저 판별해야 한다**")
+print()
+print(f"{'관찰':<28} {'병목':<16} {'처방'}")
+print("-" * 74)
+for a, b, c in [
+    ("가속기 사용률이 낮다", "입력 파이프라인", "워커·프리페치·형식"),
+    ("워커를 늘려도 그대로", "**단일 워커의 대역폭**", "디코딩 비용, 디스크·네트워크"),
+    ("CPU 가 100%", "전처리 연산", "가속기로 오프로드, 사전 계산"),
+    ("첫 에폭만 느리다", "캐시 미스", "정상 — 페이지 캐시가 데워진다"),
+    ("주기적으로 멈춘다", "셔플 버퍼 재충전 / 체크포인트", "버퍼·저장 주기 조정"),
+]:
+    print(f"{a:<28} {b:<16} {c}")
+```
+
+```{python}
+#| label: fig-pipeline
+#| fig-cap: "G11.1.1 — 워커 수와 가속기 가동률. 포화점(여기서는 3)까지는 선형으로 오르고 그 뒤로는 평평하다. 포화 뒤에 워커를 늘리는 것은 메모리만 쓴다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+ws = [p[0] for p in PIPE]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ws, y=[p[2] for p in PIPE], mode="lines+markers",
+                         name="측정된 가동률",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=10)))
+fig.add_trace(go.Scatter(x=ws, y=[p[3] for p in PIPE], mode="lines",
+                         name="이론 min(1, wc/l)",
+                         line=dict(color=viz.GREEN, width=2, dash="dash")))
+fig.add_vline(x=LOAD/C, line=dict(color=viz.hex_rgba(viz.WARM, 0.7),
+                                  dash="dot"))
+fig.add_annotation(x=LOAD/C, y=0.35, text="포화점 w = l/c", showarrow=False,
+                   xanchor="left", font=dict(size=11, color=viz.WARM))
+viz.fig_defaults(
+    fig, "워커 수와 가속기 가동률", height=430,
+    xaxis_title="워커 수", yaxis_title="가동률",
+    yaxis=dict(range=[0, 1.08]))
+fig
+```
 
 ---
 
-## G11.1.2 — 저장 포맷 비교
+## G11.1.2 — 셔플 버퍼는 정렬된 데이터를 못 구한다
 
-포맷별 읽기 처리량과 저장 크기
+대규모 데이터는 통째로 셔플할 수 없다. 스트리밍하면서 **버퍼 $B$ 개**만 들고
+그 안에서 무작위로 뽑아 내보낸다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 포맷 전환
-:::
+문제는 데이터가 **정렬돼 있을 때**다.
+클래스별로 모아 저장했거나, 시간순으로 쌓였거나, 샤드가 출처별로 나뉜 경우.
+
+버퍼가 얼마나 커야 하는지 잰다.
+
+```{python}
+#| label: shuffle
+#| code-fold: false
+
+import numpy as np
+
+N, K = 20000, 10
+LABELS = np.repeat(np.arange(K), N//K)      # 최악의 경우: 클래스로 완전 정렬
+
+
+def stream_shuffle(x, B, rng):
+    """버퍼 B 개를 채우고, 무작위로 하나 꺼내 다음 것으로 채운다."""
+    buf = list(x[:B])
+    out = []
+    i = B
+    while buf:
+        j = int(rng.integers(len(buf)))
+        out.append(buf[j])
+        if i < len(x):
+            buf[j] = x[i]
+            i += 1
+        else:
+            buf.pop(j)
+    return np.array(out)
+
+
+HMAX = float(np.log(K))
+BS = 128
+print(f"클래스 {K}개로 정렬된 {N}개를 스트리밍 셔플한다 (배치 {BS})")
+print()
+print(f"{'버퍼 B':>8} {'데이터 대비':>11} {'배치 라벨 엔트로피':>18} "
+      f"{'균등 대비':>10} {'라벨 자기상관':>14}")
+print("-" * 66)
+SHUF = []
+for B in [1, 64, 256, 1024, 4096, 20000]:
+    o = stream_shuffle(LABELS, B, np.random.default_rng(0))
+    nb = len(o)//BS
+    Hs = []
+    for b in range(nb):
+        c = np.bincount(o[b*BS:(b+1)*BS], minlength=K)/BS
+        Hs.append(-(c[c > 0]*np.log(c[c > 0])).sum())
+    ac = float(np.corrcoef(o[:-1], o[1:])[0, 1])
+    SHUF.append((B, float(np.mean(Hs)), ac))
+    print(f"{B:>8} {B/N:>11.1%} {np.mean(Hs):>18.4f} "
+          f"{np.mean(Hs)/HMAX:>10.3f} {ac:>14.4f}")
+print()
+print(f"  (완전히 섞였을 때의 배치 엔트로피 = {HMAX:.4f})")
+print()
+b4 = [s for s in SHUF if s[0] == 4096][0]
+b1k = [s for s in SHUF if s[0] == 1024][0]
+print("**버퍼가 데이터의 상당 비율이어야 섞인다.**")
+print(f"  B={b1k[0]} (데이터의 {b1k[0]/N:.0%}): 균등 대비 {b1k[1]/HMAX:.1%} — "
+      "거의 안 섞였다")
+print(f"  B={b4[0]} (데이터의 {b4[0]/N:.0%}): {b4[1]/HMAX:.1%} — 아직 부족하다")
+print()
+for s in ["버퍼는 **국소적으로만** 섞는다 — 멀리 떨어진 샘플은 절대 안 만난다",
+          "라벨 자기상관이 그것을 보여 준다 — "
+          f"B=1024 에서도 {b1k[2]:.3f} 로 여전히 강하게 상관돼 있다",
+          "**해법은 버퍼를 키우는 것이 아니라 저장 단계에서 섞는 것**이다",
+          "샤드를 만들 때 무작위로 배분하고, 학습 때 **샤드 순서를 섞고**, "
+          "그 위에 버퍼 셔플을 얹는다 — 3단 구조",
+          "정렬된 채로 저장해 놓고 버퍼로 해결하려 하면 "
+          "**메모리를 다 써도 안 된다**"]:
+    print(f"  · {s}")
+print()
+print("**셔플의 3단 구조**")
+print()
+print(f"{'단계':<20} {'무엇을 섞나':<28} {'비용'}")
+print("-" * 68)
+for a, b, c in [
+    ("저장 시 무작위 배분", "전역 — 어떤 샘플도 만날 수 있다", "한 번, 오프라인"),
+    ("샤드 순서 셔플", "샤드 단위", "거의 공짜"),
+    ("샤드 내 버퍼 셔플", "국소 — 버퍼 크기만큼", "메모리 B개"),
+]:
+    print(f"{a:<20} {b:<28} {c}")
+print()
+print("  **첫 줄을 건너뛰면 나머지 둘로는 못 메운다.**")
+```
+
+```{python}
+#| label: fig-shuffle
+#| fig-cap: "G11.1.2 — 셔플 버퍼 크기와 섞임 정도. 클래스로 정렬된 데이터는 버퍼가 데이터의 20%가 되어도 균등의 69%밖에 못 미친다. 저장 단계에서 섞지 않으면 못 메운다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=[s[0] for s in SHUF],
+                         y=[s[1]/HMAX for s in SHUF],
+                         mode="lines+markers", name="배치 엔트로피 / 균등",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=10)))
+fig.add_trace(go.Scatter(x=[s[0] for s in SHUF], y=[s[2] for s in SHUF],
+                         mode="lines+markers", name="라벨 자기상관",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=10)))
+viz.fig_defaults(
+    fig, "버퍼 크기와 섞임 (데이터 20,000개)", height=440,
+    xaxis_title="버퍼 크기 B (로그)", yaxis_title="비율 / 상관",
+    xaxis_type="log",
+    xaxis=dict(tickmode="array", tickvals=[s[0] for s in SHUF]))
+viz.annotate_box(fig, "버퍼가 데이터 전체가 되어야<br>"
+                      "<b>비로소 완전히 섞인다</b>", x=0.02, y=0.5,
+                 xanchor="left")
+fig
+```
 
 ---
 
-## G11.1.3 — 셔플 버퍼
+## G11.1.3 — 저장 형식: 무엇이 크기를 정하고 무엇이 속도를 정하나
 
-버퍼 크기에 따른 샘플 섞임 정도와 메모리 사용
+형식 선택은 세 가지 축의 절충이다 — **크기, 인코딩·디코딩 비용, 접근 패턴**.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 버퍼 크기 슬라이더
-:::
+```{python}
+#| label: formats
+#| code-fold: false
+
+import io
+import time
+import zlib
+import numpy as np
+
+g = np.random.default_rng(0)
+N_, D_ = 20000, 16
+X_RAND = g.normal(0, 1, (N_, D_)).astype(np.float32)          # 순수 잡음
+X_REAL = np.round(g.normal(0, 1, (N_, D_)), 1).astype(np.float32)
+X_REAL[:, :4] = np.repeat(g.integers(0, 5, (N_, 1)).astype(np.float32),
+                          4, axis=1)                          # 반복·저카디널리티
+
+
+def npy(X):
+    b = io.BytesIO()
+    np.save(b, X)
+    return b.getvalue()
+
+
+def timeit(f, rep=3):
+    ts = []
+    for _ in range(rep):
+        s = time.perf_counter()
+        r = f()
+        ts.append(time.perf_counter() - s)
+    return min(ts), r
+
+
+print(f"같은 {N_}x{D_} 배열, 형식만 바꿔서")
+print()
+print(f"{'형식':<20} {'잡음 MB':>9} {'현실 데이터 MB':>14} {'인코딩 s':>10} "
+      f"{'디코딩 s':>10}")
+print("-" * 68)
+FMT = []
+for nm, fn in [("npy float32", lambda X: npy(X)),
+               ("npy float16", lambda X: npy(X.astype(np.float16))),
+               ("npy + zlib(1)", lambda X: zlib.compress(npy(X), 1)),
+               ("npy + zlib(6)", lambda X: zlib.compress(npy(X), 6))]:
+    _, b1 = timeit(lambda: fn(X_RAND))
+    e, b2 = timeit(lambda: fn(X_REAL))
+    if "zlib" in nm:
+        d, _ = timeit(lambda: np.load(io.BytesIO(zlib.decompress(b2))))
+    else:
+        d, _ = timeit(lambda: np.load(io.BytesIO(b2)))
+    FMT.append((nm, len(b1)/1e6, len(b2)/1e6, e, d))
+    print(f"{nm:<20} {len(b1)/1e6:>9.2f} {len(b2)/1e6:>14.2f} {e:>10.4f} "
+          f"{d:>10.4f}")
+ec, blob = timeit(
+    lambda: "\n".join(",".join(f"{v:.6g}" for v in r)
+                      for r in X_REAL).encode(), 1)
+csv_str = blob.decode()
+dc, _ = timeit(lambda: np.array([[float(v) for v in l.split(",")]
+                                 for l in csv_str.split("\n")]), 1)
+print(f"{'CSV 텍스트':<20} {'—':>9} {len(blob)/1e6:>14.2f} {ec:>10.4f} "
+      f"{dc:>10.4f}")
+print()
+f32 = FMT[0]
+z6 = FMT[3]
+print("**① 압축률은 형식이 아니라 데이터의 성질이다.**")
+print(f"  잡음: {f32[1]:.2f}MB → zlib(6) {z6[1]:.2f}MB "
+      f"({(1-z6[1]/f32[1])*100:.0f}% 절감)")
+print(f"  현실 데이터: {f32[2]:.2f}MB → {z6[2]:.2f}MB "
+      f"({(1-z6[2]/f32[2])*100:.0f}% 절감)")
+print("  무작위 실수는 **거의 안 줄어든다** — 엔트로피가 이미 최대라서다")
+print()
+print("**② 정밀도를 낮추는 것이 압축보다 확실하다.**")
+print(f"  float16: 무조건 절반 ({f32[2]:.2f} → {FMT[1][2]:.2f}MB), "
+      f"인코딩도 더 빠르다")
+print("  대신 되돌릴 수 없다 — 저장용으로는 대개 괜찮고, 원본은 따로 둔다")
+print()
+print("**③ 텍스트 형식의 디코딩 비용이 압도적이다.**")
+print(f"  CSV 디코딩 {dc:.4f}s vs npy {f32[4]:.4f}s — "
+      f"**{dc/f32[4]:.0f}배**")
+print("  파싱은 CPU 를 먹고, 그 CPU 가 바로 G11.1.1 의 워커다")
+print("  **CSV 로 학습하면 워커를 아무리 늘려도 못 따라간다**")
+```
+
+**그리고 네 번째 축이 있다 — 무엇을 읽을 것인가.**
+
+```{python}
+#| label: layout
+#| code-fold: false
+
+import time
+import numpy as np
+
+g2 = np.random.default_rng(0)
+W_ = g2.normal(0, 1, (20000, 200)).astype(np.float32)
+ROW = np.ascontiguousarray(W_)          # 행 우선 — 레코드가 붙어 있다
+COL = np.asfortranarray(W_)             # 열 우선 — 컬럼이 붙어 있다
+
+
+def bench(f, rep=20):
+    return min((lambda: (lambda s: (f(), time.perf_counter()-s)[1])(
+        time.perf_counter()))() for _ in range(rep))
+
+
+print("20,000 x 200 표에서 일부만 읽을 때 (같은 데이터, 배치만 다름)")
+print()
+print(f"{'배치':<18} {'1열':>10} {'5열':>10} {'전체':>10} {'전체/1열':>10}")
+print("-" * 62)
+LAY = []
+for nm, A in [("행 우선 (C order)", ROW), ("열 우선 (F order)", COL)]:
+    t1 = bench(lambda: A[:, 7].sum())
+    t5 = bench(lambda: A[:, :5].sum())
+    ta = bench(lambda: A.sum())
+    LAY.append((nm, t1, t5, ta))
+    print(f"{nm:<18} {t1*1e3:>9.3f}ms {t5*1e3:>9.3f}ms {ta*1e3:>9.3f}ms "
+          f"{ta/t1:>10.1f}")
+print()
+r, c = LAY
+print(f"**한 열만 읽을 때 열 우선이 {r[1]/c[1]:.1f}배 빠르다.**")
+print(f"  전체 대비 비율을 보라 — 행 우선 {r[3]/r[1]:.0f}배, "
+      f"열 우선 {c[3]/c[1]:.0f}배")
+print("  열 우선이면 필요한 열만 **연속으로** 읽고 나머지는 아예 건드리지 않는다")
+print()
+for s in ["이것이 **Parquet 같은 컬럼 지향 형식**의 근거다",
+          "특성 200개 중 8개만 쓰는 실험이면 I/O 가 25분의 1로 준다",
+          "반대로 **레코드 전체를 늘 읽는다면** 행 지향이 낫다 — "
+          "이미지·오디오 같은 것",
+          "**WebDataset·TFRecord 가 행 지향인 이유**가 이것이다 — "
+          "샘플 하나를 통째로 쓴다",
+          "표 형태 특성은 컬럼 지향, 미디어는 행 지향 — "
+          "**접근 패턴이 형식을 정한다**"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G11.1.4 — 데이터 품질 게이트
+## G11.1.4 — 검증 게이트: 무엇을 잡고 무엇을 놓치나
 
-각 검증 단계가 걸러내는 불량 레코드 비율
+데이터 사고는 조용하다. 학습은 돌아가고 손실도 내려간다.
+그래서 **들어오는 길목에서 자동으로 막아야** 한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 검사 토글
-:::
+결함을 알고 주입한 뒤, 검사 단계별로 무엇이 잡히는지 센다.
+
+```{python}
+#| label: gates
+#| code-fold: false
+
+import numpy as np
+
+M = 50000
+rng = np.random.default_rng(1)
+X = rng.normal(0, 1, (M, 4))
+CLEAN_MU, CLEAN_SD = X.mean(0), X.std(0)        # 오염 전 기준 스냅샷
+
+i_null = rng.choice(M, int(M*0.02), replace=False)
+X[i_null, 0] = np.nan
+i_range = rng.choice(M, int(M*0.01), replace=False)
+X[i_range, 1] = rng.uniform(50, 100, len(i_range))
+i_dup = rng.choice(M, int(M*0.03), replace=False)
+X[i_dup] = X[0]
+i_drift = rng.choice(M, int(M*0.05), replace=False)
+X[i_drift, 2] += 6.0
+
+BAD = np.zeros(M, bool)
+for idx in (i_null, i_range, i_dup, i_drift):
+    BAD[idx] = True
+
+print(f"레코드 {M}개에 결함을 주입했다 — 불량 {BAD.sum()}개 ({BAD.mean():.1%})")
+print("  결측 2% / 범위 초과 1% / 중복 3% / 분포 드리프트 5%")
+print()
+print(f"{'검사':<22} {'새로 걸림':>10} {'그중 진짜':>10} {'정밀도':>9} "
+      f"{'누적 재현율':>12}")
+print("-" * 68)
+caught = np.zeros(M, bool)
+Xf = np.nan_to_num(X)
+_, inv, cnt = np.unique(Xf, axis=0, return_inverse=True, return_counts=True)
+GATES = []
+for nm, mask in [
+    ("스키마: 결측", np.isnan(X).any(1)),
+    ("범위: |x| > 10", (np.abs(Xf) > 10).any(1)),
+    ("중복 행", cnt[inv] > 1),
+    ("통계: |z| > 4 (자기 통계)",
+     (np.abs(Xf - Xf.mean(0))/Xf.std(0) > 4).any(1)),
+]:
+    new = mask & ~caught
+    prec = float((new & BAD).sum()/max(new.sum(), 1))
+    caught |= mask
+    GATES.append((nm, int(new.sum()), int((new & BAD).sum()), prec,
+                  float((caught & BAD).sum()/BAD.sum())))
+    print(f"{nm:<22} {new.sum():>10} {int((new & BAD).sum()):>10} "
+          f"{prec:>9.3f} {GATES[-1][4]:>12.3f}")
+print()
+print(f"**최종 재현율 {GATES[-1][4]:.1%}** — "
+      f"불량의 {1-GATES[-1][4]:.0%} 가 통과했다.")
+print(f"  정상인데 버린 것은 {int((caught & ~BAD).sum())}개 "
+      f"({(caught & ~BAD).sum()/(~BAD).sum():.2%}) — 정밀도는 높다")
+print()
+print("**놓친 것은 대부분 분포 드리프트다.** 왜 안 잡혔는지가 중요하다.")
+```
+
+```{python}
+#| label: contaminated-stats
+#| code-fold: false
+
+import numpy as np
+
+print("**오염된 데이터로 낸 통계는 그 오염을 못 잡는다**")
+print()
+print(f"  열 2 의 통계: 오염 전 μ={CLEAN_MU[2]:+.3f} σ={CLEAN_SD[2]:.3f}")
+print(f"                오염 후 μ={X[:, 2].mean():+.3f} σ={X[:, 2].std():.3f}")
+print("  드리프트가 평균을 끌고 가고 표준편차를 부풀렸다 — "
+      "**이상치가 정상 범위 안으로 들어온다**")
+print()
+DMASK = np.zeros(M, bool); DMASK[i_drift] = True     # 드리프트만 따로 본다
+CLEANR = ~BAD                                        # 결함이 전혀 없는 레코드
+print(f"{'기준':<26} {'문턱':>6} {'드리프트 검출':>13} {'정상 오탐':>10}")
+print("-" * 60)
+DRIFT = []
+for nm, mu, sd in [("자기 통계 (오염된 배치)", X.mean(0), X.std(0)),
+                   ("기준 스냅샷 (오염 전)", CLEAN_MU, CLEAN_SD)]:
+    z = np.abs((X - mu)/sd)
+    for thr in [3, 4]:
+        m = (z > thr).any(1)
+        rec = float((m & DMASK).sum()/DMASK.sum())
+        fp = float((m & CLEANR).sum()/CLEANR.sum())
+        DRIFT.append((nm, thr, rec, fp))
+        print(f"{nm:<26} {thr:>6} {rec:>13.1%} {fp:>10.2%}")
+print()
+a4 = [d for d in DRIFT if d[0].startswith("자기") and d[1] == 4][0]
+b4 = [d for d in DRIFT if d[0].startswith("기준") and d[1] == 4][0]
+print(f"**|z|>4 에서 자기 통계는 {a4[2]:.1%}, 기준 스냅샷은 {b4[2]:.1%} 를 잡는다.**")
+print(f"  {b4[2]/a4[2]:.1f}배 차이다. 같은 검사, 같은 문턱인데.")
+print()
+for s in ["오염이 통계에 섞이면 **오염이 정상으로 보이게 된다** — 자기 참조의 함정",
+          "그래서 검증은 **고정된 기준 스냅샷**과 비교해야 한다",
+          "그 스냅샷 자체를 언제 갱신할지가 다음 문제다 — "
+          "진짜 분포 변화와 사고를 구별해야 한다",
+          "실무에서는 **기준을 버전으로 관리**하고 갱신 시 사람이 승인한다",
+          "[11.0](00_reproducibility.qmd)의 '경로는 버전이 아니다' 가 "
+          "여기서도 그대로다"]:
+    print(f"  · {s}")
+print()
+print("**데이터 계약(data contract)이라는 관점**")
+print()
+print(f"{'항목':<20} {'무엇을 약속하나'}")
+print("-" * 62)
+for a, b in [
+    ("스키마", "열 이름·타입·필수 여부"),
+    ("값의 범위", "허용 구간, 허용 카테고리 집합"),
+    ("결측률 상한", "'이 열의 결측은 1% 를 넘지 않는다'"),
+    ("분포", "기준 스냅샷 대비 허용 이동폭"),
+    ("신선도", "'최근 24시간 내 데이터가 있다'"),
+    ("계보", "이 데이터가 어디서 왔는지"),
+]:
+    print(f"{a:<20} {b}")
+print()
+print("  약속을 어기면 **파이프라인이 멈춰야** 한다. 조용히 통과하면 안 된다.")
+```
+
+```{python}
+#| label: fig-gates
+#| fig-cap: "G11.1.4 — 검증 단계별 누적 재현율. 앞의 세 단계는 정밀도 1.0으로 확실히 잡지만, 마지막 통계 검사는 오염된 통계 위에서 돌아 대부분을 놓친다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=[g[0] for g in GATES], y=[g[2] for g in GATES],
+                     name="새로 잡은 진짜 불량", marker_color=viz.ACCENT))
+fig.add_trace(go.Scatter(x=[g[0] for g in GATES], y=[g[4] for g in GATES],
+                         mode="lines+markers", name="누적 재현율",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=11), yaxis="y2"))
+fig.add_hline(y=1.0, yref="y2",
+              line=dict(color=viz.hex_rgba(viz.GREEN, 0.5), dash="dash"))
+viz.fig_defaults(
+    fig, "검증 게이트가 걸러내는 것", height=440,
+    xaxis_title="", yaxis_title="새로 잡은 불량 레코드 수",
+    yaxis2=dict(title="누적 재현율", overlaying="y", side="right",
+                range=[0, 1.08], showgrid=False))
+fig.update_xaxes(tickangle=-12)
+fig
+```
 
 ---
 
-## 핵심 용어
+## G11.1.5 — 학습/서빙 왜곡
 
-| 용어 | 비고 |
-|------|------|
-| 데이터 로더 |  |
-| 샤딩 |  |
-| 특성 스토어 |  |
-| 데이터 검증 |  |
-| 데이터 계보 |  |
+특성 스토어가 존재하는 이유는 하나다.
+**학습 때 계산한 특성과 서빙 때 계산한 특성이 달라지기 때문**이다.
+
+같은 코드를 두 번 쓰지 않으면 반드시 어긋난다. 얼마나 아픈지 잰다.
+
+```{python}
+#| label: skew
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+SCALE = np.array([0.01, 0.05, 1.0, 1.0, 5.0, 20.0, 100.0, 300.0])
+OFFSET = np.array([0.0, 2.0, 0.0, -5.0, 10.0, 0.0, 50.0, 1000.0])
+
+
+def make(n, seed):
+    """단위가 제각각인 원시 특성 — 실제 표 데이터의 모습."""
+    gg = np.random.default_rng(seed)
+    W = np.random.default_rng(7).normal(0, 1, (8, 3))
+    Zs = gg.normal(0, 1, (n, 8))
+    y = (np.tanh(Zs @ W)*2.5 + gg.normal(0, 1.0, (n, 3))).argmax(1)
+    return Zs*SCALE + OFFSET, y
+
+
+Ztr, ytr = make(3000, 1)
+Zte, yte = make(4000, 2)
+MU, SD = Ztr.mean(0), Ztr.std(0)
+model = nn.MLP([8, 32, 32, 3], out_activation="softmax", seed=0)
+nn.train(model, (Ztr - MU)/SD, ytr, loss="softmax_ce",
+         opt=nn.Optimizer("adam", lr=0.01), steps=600, batch_size=64, seed=0)
+BASE = float((model.predict((Zte - MU)/SD).argmax(1) == yte).mean())
+
+print(f"특성 스케일이 {SCALE.min()}~{SCALE.max()} 로 제각각인 데이터")
+print(f"  학습과 **동일한** 정규화로 서빙: 정확도 {BASE:.4f} (기준선)")
+print(f"  무작위 추측 = {1/3:.4f}")
+print()
+print(f"{'서빙 쪽에서 벌어진 일':<34} {'정확도':>9} {'손실':>9}")
+print("-" * 56)
+SKEW = []
+for nm, Xs in [
+    ("μ·σ 를 서빙 배치로 다시 계산", (Zte - Zte.mean(0))/Zte.std(0)),
+    ("정규화를 아예 잊음 (원시값)", Zte),
+    ("특성 두 개의 순서가 뒤바뀜",
+     ((Zte - MU)/SD)[:, [1, 0, 2, 3, 4, 5, 6, 7]]),
+    ("한 특성 결측 → 0 (정규화 후)",
+     np.where(np.arange(8) == 6, 0.0, (Zte - MU)/SD)),
+]:
+    a = float((model.predict(Xs).argmax(1) == yte).mean())
+    SKEW.append((nm, a, BASE - a))
+    print(f"{nm:<34} {a:>9.4f} {BASE-a:>+9.4f}")
+print()
+forgot = [s for s in SKEW if "잊음" in s[0]][0]
+recomp = SKEW[0]
+miss = SKEW[-1]
+print(f"**① 정규화를 잊으면 치명적이다** — "
+      f"{BASE:.4f} → {forgot[1]:.4f} ({forgot[2]:+.4f}).")
+print(f"  무작위 추측({1/3:.3f}) 수준으로 떨어진다. "
+      "특성 스케일이 100배 넘게 차이 나니 당연하다")
+print()
+print(f"**② 그런데 μ·σ 를 서빙 배치로 다시 계산한 것은 "
+      f"거의 안 아프다** ({recomp[2]:+.4f}).")
+for s in ["서빙 데이터의 분포가 학습과 **같기 때문**이다",
+          "그래서 이 실수는 **테스트에서 안 잡힌다** — "
+          "분포가 바뀌는 날 조용히 터진다",
+          "가장 위험한 왜곡은 '지금은 괜찮아 보이는' 것이다"]:
+    print(f"  · {s}")
+print()
+print(f"**③ 결측을 0 으로 채운 것도 거의 안 아프다** ({miss[2]:+.4f}).")
+print("  정규화된 공간에서 **0 은 곧 학습 평균**이기 때문이다 — "
+      "우연히 옳은 대치를 한 셈")
+print("  원시값 공간에서 0 으로 채웠다면 완전히 다른 결과가 나온다")
+```
+
+```{python}
+#| label: skew-drift
+#| code-fold: false
+
+import numpy as np
+
+print("서빙 쪽 μ 가 학습 μ 에서 조금씩 어긋날 때 (σ 단위)")
+print()
+print(f"{'δ (σ 배수)':>11} {'정확도':>9} {'손실':>9}")
+print("-" * 32)
+DRIFTC = []
+for d in [0.0, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]:
+    a = float((model.predict((Zte - (MU + d*SD))/SD).argmax(1) == yte).mean())
+    DRIFTC.append((d, a))
+    print(f"{d:>11.2f} {a:>9.4f} {BASE-a:>+9.4f}")
+print()
+small = [x for x in DRIFTC if x[0] == 0.1][0]
+big = [x for x in DRIFTC if x[0] == 1.0][0]
+print(f"**작은 어긋남은 거의 안 보인다** — δ=0.1σ 에서 {BASE-small[1]:+.4f}.")
+print(f"**그런데 δ=1σ 가 되면 {BASE-big[1]:+.4f} 다.**")
+for s in ["즉 왜곡은 **서서히 나빠지다가 어느 순간 무너진다**",
+          "모니터링 없이는 그 진행을 못 본다 — "
+          "[11.6](06_monitoring.qmd)의 주제",
+          "**특성 스토어**의 해법은 단순하다 — "
+          "학습과 서빙이 **같은 코드로 같은 값**을 읽게 한다",
+          "특성 정의를 한 곳에 두고, 계산 결과를 저장해 양쪽이 조회한다",
+          "그러면 '두 번 구현했다'는 문제 자체가 사라진다"]:
+    print(f"  · {s}")
+print()
+print("**특성 스토어가 실제로 푸는 것들**")
+print()
+print(f"{'문제':<24} {'특성 스토어의 답'}")
+print("-" * 66)
+for a, b in [
+    ("학습/서빙 구현 중복", "정의를 한 번만 쓴다"),
+    ("시점 누수(time travel)", "**그 시점에 알 수 있던 값**만 조회"),
+    ("재계산 비용", "미리 계산해 저장, 조회는 싸게"),
+    ("팀 간 중복 작업", "특성 카탈로그로 공유"),
+    ("계보 추적", "어떤 모델이 어떤 특성 버전을 썼는지"),
+]:
+    print(f"{a:<24} {b}")
+print()
+print("  두 번째 줄이 가장 자주 사고를 낸다 —")
+print("  **미래의 정보로 과거를 예측하면** 검증 성능이 실전보다 훨씬 좋게 나온다.")
+```
 
 ---
 
-**다음**: [11.2 분산 학습](02_distributed_training.qmd) — DDP·ZeRO·FSDP·텐서/파이프라인 병렬 — 여러 장치로 쪼개기
+## 나머지 배관
+
+```{python}
+#| label: misc
+#| code-fold: false
+
+print("**배치 vs 스트리밍**")
+print()
+print(f"{'':<14} {'배치 (람다의 배치 층)':<28} {'스트리밍 (속도 층)'}")
+print("-" * 74)
+for a, b, c in [
+    ("지연", "시간~일", "초~분"),
+    ("정확성", "**완전** (전체 재계산 가능)", "근사 (늦게 온 이벤트)"),
+    ("복잡도", "낮다", "높다 (상태, 워터마크)"),
+    ("재처리", "쉽다", "어렵다"),
+]:
+    print(f"{a:<14} {b:<28} {c}")
+print()
+print("  **람다 아키텍처**는 둘을 다 돌려 합친다 — 정확하지만 로직이 두 벌이다.")
+print("  **카파 아키텍처**는 스트리밍만 두고 재처리로 배치를 대신한다 — "
+      "로직은 한 벌이지만 스트리밍 엔진에 많이 의존한다.")
+print("  [11.0](00_reproducibility.qmd)의 '두 번 구현하면 어긋난다' 가 "
+      "여기서도 판단 기준이 된다.")
+print()
+print("**토크나이즈: 미리 할 것인가 그때 할 것인가**")
+print()
+print(f"{'방식':<18} {'장점':<30} {'단점'}")
+print("-" * 72)
+for a, b, c in [
+    ("사전 토크나이즈", "학습 중 CPU 부담 없음", "토크나이저 바꾸면 전부 재처리"),
+    ("온라인 토크나이즈", "유연, 저장 공간 절약", "**워커 CPU 를 먹는다** (G11.1.1)"),
+    ("사전 + 패킹", "고정 길이 청크로 미리 묶음", "문서 경계가 흐려진다"),
+]:
+    print(f"{a:<18} {b:<30} {c}")
+print()
+print("  대규모 사전학습은 대개 첫째다 — 토큰화가 워커 병목이 되기 때문.")
+print()
+print("**라벨링과 개인정보**")
+for s in ["라벨 품질은 **모델 성능의 상한**이다 — "
+          "[11.0](00_reproducibility.qmd)의 잡음 논의와 같은 구조",
+          "복수 라벨러 + 일치도(카파) 측정이 기본, "
+          "불일치 항목은 재검토 큐로",
+          "**능동 학습** — 모델이 헷갈리는 것부터 라벨링해 예산을 아낀다",
+          "개인정보는 **수집 단계에서** 처리해야 한다 — "
+          "학습 데이터에 들어간 뒤에는 지우기 어렵다",
+          "가명화·마스킹·접근 통제, 그리고 **어떤 모델이 어떤 데이터를 봤는지**의 계보"]:
+    print(f"  · {s}")
+print()
+print("**계보(lineage)가 있으면 사고 대응이 달라진다**")
+print()
+print(f"{'질문':<34} {'계보 없이':<16} {'계보 있으면'}")
+print("-" * 72)
+for a, b, c in [
+    ("이 예측이 왜 이상한가", "추측", "입력 특성 버전까지 역추적"),
+    ("오염된 원본이 어디까지 퍼졌나", "전수 조사", "영향받은 산출물 목록"),
+    ("이 모델을 재학습하려면", "기억에 의존", "정확한 입력 스냅샷"),
+    ("삭제 요청이 왔다", "**대응 불가**", "포함된 데이터셋·모델 식별"),
+]:
+    print(f"{a:<34} {b:<16} {c}")
+```
+
+---
+
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **입출력 병목** | 가동률 = min(1, wc/l), 측정이 이론과 일치 | 워커 1개면 가속기가 **2/3를 논다** |
+| 포화점 | w = l/c (여기서는 3) | 그 뒤로는 늘려도 무이득 |
+| **셔플 버퍼** | 정렬 데이터에서 B=20%여도 균등의 **69%** | 버퍼로는 못 메운다 |
+| 해법 | 저장 시 배분 → 샤드 셔플 → 버퍼 셔플 | **첫 단계를 건너뛰면 끝** |
+| 압축률 | 잡음 7% vs 현실 데이터 **75%** 절감 | 형식이 아니라 데이터의 성질 |
+| float16 | 무조건 절반, 인코딩도 더 빠름 | 되돌릴 수 없다 |
+| **CSV 디코딩** | npy의 **100배 이상** 느리다 | 그 CPU가 곧 워커다 |
+| 열 지향 | 1열 읽기가 행 지향의 **4.4배** 빠름 | Parquet의 근거 |
+| 행 지향 | 레코드 전체를 쓸 때 | WebDataset·TFRecord |
+| **검증 재현율** | 4단계 누적 **63.9%**, 정밀도 ~1.0 | 놓친 건 대부분 드리프트 |
+| **오염된 통계** | \|z\|>4에서 자기 통계 18.9% vs 스냅샷 **97.6%** | 5.2배 차이 |
+| 왜 | 드리프트가 μ·σ를 끌고 간다 | 자기 참조의 함정 |
+| **정규화 망각** | 0.635 → **0.319** (거의 우연) | 스케일이 100배 다르면 |
+| 위험한 왜곡 | μ·σ 재계산은 **지금은 안 아프다** | 분포가 바뀌는 날 터진다 |
+| 서서히 무너진다 | δ=0.1σ에서 −0.005, 1σ에서 **−0.177** | 모니터링 없이는 못 본다 |
+| 특성 스토어 | 학습과 서빙이 같은 코드·같은 값 | 시점 누수 방지가 핵심 |
+
+배관을 깔았다. 이제 그 데이터를 **여러 장치로** 먹여야 한다.
+
+---
+
+**다음**: [11.2 분산 학습](02_distributed_training.qmd) — 여러 장치로 쪼개기
 
 **이전**: [11.0 재현성과 실험 관리](00_reproducibility.qmd)
