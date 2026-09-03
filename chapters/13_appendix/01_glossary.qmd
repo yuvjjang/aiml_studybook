@@ -4,56 +4,323 @@ subtitle: "한국어-영어 대역 — 번역어가 흔들리는 용어들"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+한국어 자료를 읽다 보면 같은 개념이 계속 다른 이름으로 나온다.
+*embedding* 은 임베딩·매장·삽입, *bias* 는 편향·바이어스·치우침,
+*inference* 는 추론·추정·예측.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 부록은 **이 책이 쓰는 용어를 한곳에 고정**한다.
+표준을 제안하려는 게 아니라, 읽는 사람이 헷갈리지 않게 하려는 것이다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+```{python}
+#| label: principles
+#| code-fold: false
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+import sys; sys.path.append("../..")
+
+print("**이 책의 번역 원칙**")
+print()
+print(f"{'원칙':<26} {'예':<30} {'이유'}")
+print("-" * 84)
+for a, b, c in [
+    ("정착된 번역어를 쓴다", "gradient → 그래디언트", "이미 통용된다"),
+    ("직역이 어색하면 음차", "embedding → 임베딩", "'매장'은 오해를 부른다"),
+    ("모호하면 원어 병기", "정규화(normalization)", "**두 정규화가 다르다**"),
+    ("고유명사는 원어 유지", "Transformer, ReLU", "번역이 검색을 방해한다"),
+    ("수식 기호는 원문대로", "logit, softmax", "코드와 일치해야 한다"),
+    ("맥락에 따라 다르게", "inference → 추론/추정", "통계와 배포에서 뜻이 다르다"),
+]:
+    print(f"{a:<26} {b:<30} {c}")
+print()
+print("  세 번째 원칙이 특히 중요하다 —")
+print("  **normalization 과 regularization 이 한국어로 둘 다 '정규화'** 가 되는 문제.")
+print("  이 책은 전자를 정규화, 후자를 **규제화**로 구분하되 원어를 병기한다.")
+```
+
+---
+
+## G13.1.1 — 용어 대역표
+
+```{python}
+#| label: terms
+#| code-fold: false
+
+# (분류, 한국어, 영어, 비고)
+TERMS = [
+    # ── 수학·통계 ──
+    ("수학·통계", "그래디언트", "gradient", "기울기 벡터. '경사'로도 쓰나 이 책은 음차"),
+    ("수학·통계", "야코비 행렬", "Jacobian", "벡터→벡터 함수의 1차 미분"),
+    ("수학·통계", "헤세 행렬", "Hessian", "2차 미분 행렬"),
+    ("수학·통계", "고윳값 / 고유벡터", "eigenvalue / eigenvector", ""),
+    ("수학·통계", "특잇값 분해", "SVD", "특이값이 아니라 **특잇값** (사이시옷)"),
+    ("수학·통계", "볼록", "convex", "볼록 최적화 = convex optimization"),
+    ("수학·통계", "기댓값", "expectation", "기대값이 아니라 **기댓값**"),
+    ("수학·통계", "분산 / 표준편차", "variance / std", ""),
+    ("수학·통계", "공분산", "covariance", ""),
+    ("수학·통계", "우도 / 가능도", "likelihood", "이 책은 **우도**"),
+    ("수학·통계", "사전분포 / 사후분포", "prior / posterior", ""),
+    ("수학·통계", "켤레사전분포", "conjugate prior", ""),
+    ("수학·통계", "주변화", "marginalization", "변수를 적분해 없애기"),
+    ("수학·통계", "교환가능성", "exchangeability", "conformal 의 전제 (12.2)"),
+    ("수학·통계", "쿨백-라이블러 발산", "KL divergence", "거리가 아니다 (비대칭)"),
+    ("수학·통계", "엔트로피", "entropy", ""),
+    ("수학·통계", "상호정보량", "mutual information", ""),
+    # ── 머신러닝 일반 ──
+    ("ML 일반", "지도학습 / 비지도학습", "supervised / unsupervised", ""),
+    ("ML 일반", "자기지도학습", "self-supervised", "라벨을 데이터에서 만든다"),
+    ("ML 일반", "특성", "feature", "'피처'로도 쓴다. 이 책은 **특성**"),
+    ("ML 일반", "레이블 / 라벨", "label", "이 책은 **라벨**"),
+    ("ML 일반", "과적합 / 과소적합", "overfitting / underfitting", ""),
+    ("ML 일반", "편향-분산 절충", "bias-variance tradeoff", ""),
+    ("ML 일반", "규제화", "regularization", "**정규화와 구분** (L2, 드롭아웃 등)"),
+    ("ML 일반", "정규화", "normalization", "**규제화와 구분** (BatchNorm 등)"),
+    ("ML 일반", "교차검증", "cross-validation", ""),
+    ("ML 일반", "하이퍼파라미터", "hyperparameter", "학습으로 안 정해지는 값"),
+    ("ML 일반", "앙상블", "ensemble", ""),
+    ("ML 일반", "캘리브레이션 / 보정", "calibration", "이 책은 둘 다 (12.2)"),
+    ("ML 일반", "분포 이동", "distribution shift", ""),
+    ("ML 일반", "지름길 학습", "shortcut learning", "허위 상관에 기대기 (12.3)"),
+    ("ML 일반", "추론", "inference", "**두 뜻**: 통계적 추정 / 모델 실행"),
+    # ── 딥러닝·아키텍처 ──
+    ("딥러닝", "순전파 / 역전파", "forward / backpropagation", ""),
+    ("딥러닝", "활성화 함수", "activation function", ""),
+    ("딥러닝", "손실함수", "loss function", "목적함수(objective)와 구분"),
+    ("딥러닝", "옵티마이저", "optimizer", ""),
+    ("딥러닝", "학습률", "learning rate", ""),
+    ("딥러닝", "배치 / 미니배치", "batch / mini-batch", ""),
+    ("딥러닝", "에폭", "epoch", "데이터 전체를 한 번 도는 것"),
+    ("딥러닝", "드롭아웃", "dropout", ""),
+    ("딥러닝", "잔차 연결", "residual/skip connection", ""),
+    ("딥러닝", "합성곱", "convolution", ""),
+    ("딥러닝", "수용 영역", "receptive field", ""),
+    ("딥러닝", "풀링", "pooling", ""),
+    ("딥러닝", "보폭", "stride", "'스트라이드'로도 쓴다"),
+    ("딥러닝", "채움", "padding", "이 책은 **패딩**"),
+    ("딥러닝", "임베딩", "embedding", ""),
+    ("딥러닝", "미세조정", "fine-tuning", ""),
+    ("딥러닝", "전이학습", "transfer learning", ""),
+    ("딥러닝", "증류", "distillation", "교사→학생 (11.4)"),
+    # ── 트랜스포머·LLM ──
+    ("트랜스포머", "어텐션", "attention", ""),
+    ("트랜스포머", "자기 어텐션", "self-attention", ""),
+    ("트랜스포머", "교차 어텐션", "cross-attention", ""),
+    ("트랜스포머", "질의 / 키 / 값", "query / key / value", ""),
+    ("트랜스포머", "다중 헤드", "multi-head", ""),
+    ("트랜스포머", "인과 마스크", "causal mask", "미래를 못 보게 (5.1)"),
+    ("트랜스포머", "위치 인코딩", "positional encoding", ""),
+    ("트랜스포머", "잔차 스트림", "residual stream", "12.1 의 핵심 관점"),
+    ("트랜스포머", "토큰화", "tokenization", ""),
+    ("트랜스포머", "어휘", "vocabulary", ""),
+    ("트랜스포머", "로짓", "logit", "softmax 이전 값"),
+    ("트랜스포머", "온도", "temperature", "샘플링/보정 양쪽에 쓰인다"),
+    ("트랜스포머", "문맥 내 학습", "in-context learning", ""),
+    ("트랜스포머", "사고 사슬", "chain-of-thought", ""),
+    ("트랜스포머", "환각", "hallucination", ""),
+    ("트랜스포머", "정렬", "alignment", "**표현 정렬과 구분** (맥락 주의)"),
+    ("트랜스포머", "KV 캐시", "KV cache", "11.5 의 메모리 병목"),
+    ("트랜스포머", "사전학습 / 사후학습", "pre-training / post-training", ""),
+    # ── 생성 모델 ──
+    ("생성", "잠재 변수 / 잠재 공간", "latent variable / space", ""),
+    ("생성", "변분 추론", "variational inference", ""),
+    ("생성", "증거 하한", "ELBO", "evidence lower bound"),
+    ("생성", "재매개변수화 트릭", "reparameterization trick", ""),
+    ("생성", "판별자 / 생성자", "discriminator / generator", ""),
+    ("생성", "모드 붕괴", "mode collapse", ""),
+    ("생성", "확산 모델", "diffusion model", ""),
+    ("생성", "잡음 제거", "denoising", ""),
+    ("생성", "스코어", "score", "로그밀도의 그래디언트"),
+    ("생성", "분류자 없는 안내", "classifier-free guidance", "CFG"),
+    ("생성", "흐름 정합", "flow matching", ""),
+    # ── 오디오·음성 ──
+    ("오디오", "표본화율", "sample rate", "'샘플링 레이트'"),
+    ("오디오", "스펙트로그램", "spectrogram", ""),
+    ("오디오", "멜 스펙트로그램", "mel spectrogram", ""),
+    ("오디오", "단시간 푸리에 변환", "STFT", ""),
+    ("오디오", "켑스트럼", "cepstrum", "spectrum 의 철자 뒤집기"),
+    ("오디오", "보코더", "vocoder", ""),
+    ("오디오", "음소", "phoneme", ""),
+    ("오디오", "운율", "prosody", "억양·리듬·강세"),
+    ("오디오", "화자 분할", "diarization", "누가 언제 말했나"),
+    ("오디오", "단어 오류율", "WER", "word error rate"),
+    # ── 비전·비디오 ──
+    ("비전", "객체 탐지", "object detection", ""),
+    ("비전", "분할", "segmentation", "의미/인스턴스/파놉틱"),
+    ("비전", "경계 상자", "bounding box", ""),
+    ("비전", "합집합 대비 교집합", "IoU", "intersection over union"),
+    ("비전", "비최대 억제", "NMS", "non-maximum suppression"),
+    ("비전", "패치", "patch", "ViT 의 입력 단위"),
+    ("비전", "광류", "optical flow", ""),
+    ("비전", "추적", "tracking", ""),
+    ("비전", "대조학습", "contrastive learning", ""),
+    # ── 시스템·인프라 ──
+    ("시스템", "처리량 / 지연", "throughput / latency", "**서로 상충한다** (11.5)"),
+    ("시스템", "꼬리 지연", "tail latency", "p95, p99"),
+    ("시스템", "산술 강도", "arithmetic intensity", "FLOP/byte (11.3)"),
+    ("시스템", "루프라인", "roofline", "연산 제한 vs 메모리 제한"),
+    ("시스템", "데이터 병렬 / 모델 병렬", "data / model parallel", ""),
+    ("시스템", "텐서 병렬 / 파이프라인 병렬", "tensor / pipeline parallel", ""),
+    ("시스템", "거품", "bubble", "파이프라인의 유휴 구간 (11.2)"),
+    ("시스템", "샤딩", "sharding", "ZeRO 의 핵심"),
+    ("시스템", "양자화", "quantization", ""),
+    ("시스템", "가지치기", "pruning", ""),
+    ("시스템", "연속 배칭", "continuous batching", ""),
+    ("시스템", "드리프트", "drift", "공변량 이동 vs 개념 드리프트 (11.6)"),
+    ("시스템", "재현성", "reproducibility", ""),
+    # ── 신뢰·해석 ──
+    ("신뢰", "설명 가능성 / 해석가능성", "explainability / interpretability", "구분해 쓰기도 한다"),
+    ("신뢰", "섀플리 값", "Shapley value", ""),
+    ("신뢰", "충실성", "faithfulness", "설명이 모델을 반영하는가"),
+    ("신뢰", "활성화 패칭", "activation patching", "인과 개입 (12.1)"),
+    ("신뢰", "어블레이션", "ablation", "제거해 보기"),
+    ("신뢰", "프로빙", "probing", "선형 분류기로 읽어내기"),
+    ("신뢰", "중첩", "superposition", "차원보다 많은 특성 (12.1)"),
+    ("신뢰", "다의미 뉴런", "polysemantic neuron", ""),
+    ("신뢰", "우연적 / 인식적 불확실성", "aleatoric / epistemic", "12.2"),
+    ("신뢰", "적대적 예제", "adversarial example", ""),
+    ("신뢰", "분포 밖", "out-of-distribution (OOD)", ""),
+    ("신뢰", "차등 프라이버시", "differential privacy", ""),
+    ("신뢰", "멤버십 추론", "membership inference", ""),
+    ("신뢰", "기계 언러닝", "machine unlearning", ""),
+]
+
+CATS = ["수학·통계", "ML 일반", "딥러닝", "트랜스포머", "생성",
+        "오디오", "비전", "시스템", "신뢰"]
+print(f"수록 용어 {len(TERMS)}개, 분류 {len(CATS)}개")
+print()
+print(f"{'분류':<12} {'개수':>6}")
+print("-" * 22)
+for c in CATS:
+    print(f"{c:<12} {sum(1 for t in TERMS if t[0]==c):>6}")
+print()
+noted = sum(1 for t in TERMS if t[3])
+print(f"주석이 붙은 용어 {noted}개 ({noted/len(TERMS):.0%}) — "
+      f"번역이 흔들리거나 혼동되기 쉬운 것들이다.")
+```
+
+```{python}
+#| label: fig-glossary
+#| fig-cap: "G13.1.1 — 용어 대역표. 위쪽 버튼으로 분류를 골라 볼 수 있다. 표는 스크롤된다."
+
+import plotly.graph_objects as go
+from src import viz
+
+HDR = ["분류", "한국어", "English", "비고"]
+
+
+def cols(rows):
+    return [[r[i] for r in rows] for i in range(4)]
+
+
+fig = go.Figure()
+fig.add_trace(go.Table(
+    columnwidth=[70, 150, 170, 260],
+    header=dict(values=[f"<b>{h}</b>" for h in HDR],
+                fill_color="rgba(255,255,255,0.10)",
+                font=dict(size=12, color="white"),
+                align="left", height=30),
+    cells=dict(values=cols(TERMS),
+               fill_color=[["rgba(255,255,255,0.03)",
+                            "rgba(255,255,255,0.06)"]*len(TERMS)],
+               font=dict(size=11), align="left", height=25)))
+buttons = [dict(label=f"전체 ({len(TERMS)})", method="restyle",
+                args=[{"cells.values": [cols(TERMS)]}])]
+for c in CATS:
+    rows = [t for t in TERMS if t[0] == c]
+    buttons.append(dict(label=f"{c} ({len(rows)})", method="restyle",
+                        args=[{"cells.values": [cols(rows)]}]))
+viz.fig_defaults(fig, "", height=680)
+fig.update_layout(
+    margin=dict(l=10, r=10, t=64, b=10),
+    updatemenus=[dict(type="buttons", direction="right", showactive=True,
+                      x=0, xanchor="left", y=1.10, yanchor="top",
+                      pad=dict(t=2, b=2, l=4, r=4),
+                      font=dict(size=10), buttons=buttons)])
+fig
+```
+
+::: {.interaction-hint}
+버튼으로 분류를 고르면 그 갈래만 남는다. 표 안쪽은 스크롤된다.
+
+**비고 열이 붙은 항목**을 먼저 훑어보길 권한다 —
+번역이 흔들리거나 뜻이 갈리는 용어들만 모아 둔 것이다.
 :::
 
-한국어 자료마다 번역어가 달라 같은 개념을 다르게 부른다. 이 책이 쓰는 용어를 한곳에 모아 고정한다.
+---
+
+## 자주 혼동되는 용어 쌍
+
+```{python}
+#| label: confusing
+#| code-fold: false
+
+print("**같은 한국어, 다른 개념**")
+print()
+print(f"{'한국어':<12} {'영어 A':<20} {'영어 B':<22} {'구분'}")
+print("-" * 86)
+for a, b, c, d in [
+    ("정규화", "normalization", "regularization",
+     "이 책은 후자를 **규제화**"),
+    ("추론", "inference (통계)", "inference (배포)",
+     "전자는 추정, 후자는 실행"),
+    ("정렬", "alignment (안전)", "alignment (표현/시퀀스)",
+     "맥락으로 구분"),
+    ("편향", "bias (통계)", "bias (사회적)",
+     "전자는 오차 성분, 후자는 불공정"),
+    ("분산", "variance (통계)", "distributed (시스템)",
+     "'분산 학습'은 후자"),
+    ("표현", "representation", "expression",
+     "ML 에서는 거의 항상 전자"),
+]:
+    print(f"{a:<12} {b:<20} {c:<22} {d}")
+print()
+print("**다른 한국어, 같은 개념** (자료마다 다르게 부르는 것들)")
+print()
+print(f"{'영어':<24} {'흔한 번역들':<40} {'이 책'}")
+print("-" * 84)
+for a, b, c in [
+    ("gradient", "그래디언트 / 기울기 / 경사", "그래디언트"),
+    ("embedding", "임베딩 / 매장 / 삽입", "임베딩"),
+    ("feature", "특성 / 특징 / 피처", "특성"),
+    ("label", "라벨 / 레이블 / 표지", "라벨"),
+    ("loss", "손실 / 비용 / 오차", "손실"),
+    ("layer", "층 / 레이어 / 계층", "층"),
+    ("token", "토큰 / 낱말조각", "토큰"),
+    ("prompt", "프롬프트 / 지시문", "프롬프트"),
+    ("fine-tuning", "미세조정 / 파인튜닝 / 세부조정", "미세조정"),
+    ("inference", "추론 / 추정 / 예측", "추론 (맥락 병기)"),
+    ("robustness", "견고성 / 강건성 / 로버스트니스", "견고성"),
+    ("calibration", "캘리브레이션 / 보정 / 교정", "보정 (원어 병기)"),
+]:
+    print(f"{a:<24} {b:<40} {c}")
+print()
+print("**뜻이 반대로 쓰이기 쉬운 것들**")
+for s in ["**KL 발산은 거리가 아니다** — 비대칭이고 삼각부등식도 안 성립한다",
+          "**'정규화(normalization)'가 성능을 정규화하지 않는다** — "
+          "분포를 맞추는 것이지 규제가 목적이 아니다 (부수적으로는 규제 효과가 있다)",
+          "**'무작위 평활화(randomized smoothing)'는 평활 필터가 아니다** — "
+          "잡음을 넣고 다수결하는 인증 기법",
+          "**'온도'가 두 곳에 쓰인다** — "
+          "샘플링 온도(6장·7장)와 보정 온도(12.2)는 같은 수식, 다른 목적",
+          "**'어텐션 가중치가 중요도'가 아니다** — "
+          "12.1 에서 확인했듯 패턴이 회로를 증명하지 않는다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 요약
 
-- 이 책의 번역 원칙 (정착된 번역어 우선, 애매하면 원어 병기)
-- 수학·통계 용어
-- 머신러닝 일반 용어
-- 딥러닝·아키텍처 용어
-- 트랜스포머·LLM 용어
-- 생성 모델 용어
-- 오디오·음성 용어
-- 비전·비디오 용어
-- 시스템·인프라 용어
-- 자주 혼동되는 용어 쌍 정리
-
----
-
-## GA.1.1 — 용어 표
-
-한국어·영어 양방향으로 훑을 수 있는 용어 대역표
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 분류 필터
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
+| 항목 | 내용 |
 |------|------|
-| 용어 대역 |  |
-| 번역 원칙 |  |
+| **수록 용어** | 9개 분류 125개 (주석 붙은 것 56개) |
+| **번역 원칙** | 정착어 우선 → 음차 → 원어 병기 |
+| 가장 성가신 문제 | normalization / regularization 이 둘 다 "정규화" |
+| 이 책의 처리 | 정규화(normalization) / **규제화**(regularization) |
+| **맥락에 따라 갈리는 말** | 추론, 정렬, 편향, 분산 |
+| **흔한 오해** | KL 발산은 거리가 아니다 |
+| | 어텐션 가중치는 중요도가 아니다 (12.1) |
 
 ---
 
-**다음**: [A.2 수식 치트시트](02_math_cheatsheet.qmd) — 자주 쓰는 공식 모음 — 유도는 본문, 결과는 여기
+**다음**: [A.2 수식 치트시트](02_math_cheatsheet.qmd) — 자주 쓰는 공식 모음
 
 **이전**: [A.0 논문 지도](00_paper_map.qmd)
