@@ -4,93 +4,662 @@ subtitle: "편향 측정·차등 프라이버시·연합학습 — 사회적 제
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+Part 12 의 앞 세 장은 모두 **모델이 무엇을 아는가**를 물었다.
+설명할 수 있는가, 확신이 정직한가, 시험셋 밖에서도 버티는가.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 장의 질문은 다르다. **모델이 누구에게 어떻게 작동하는가**,
+그리고 **학습 데이터에서 무엇이 새어 나가는가**.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이것은 이제 윤리적 권고가 아니라 **공학적 요구사항이자 법적 요구사항**이다.
+그리고 다행히 — 그리고 불행히 — **정량화할 수 있다.**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+다행인 이유는 잴 수 있으면 관리할 수 있기 때문이고,
+불행인 이유는 재 보면 **원하는 것들을 동시에 가질 수 없다**는 게 드러나기 때문이다.
 
-모델이 누구에게 어떻게 다르게 작동하는지, 그리고 학습 데이터에서 무엇이 새어나가는지는 이제 기술적 요구사항이자 법적 요구사항이다.
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+D, KC = 12, 2
+
+
+def pop(n, seed, fr=0.25):
+    """집단 A(다수)와 B(소수).
+       B 는 기저율이 높고(0.55 vs 0.30), 특성 측정이 더 부정확하다."""
+    g = np.random.default_rng(seed)
+    grp = (g.random(n) < fr).astype(int)             # 1 = 소수 집단 B
+    z = g.normal(0, 1, n)                            # 관측되지 않는 참 위험도
+    base = np.where(grp == 1, 0.55, 0.30)
+    y = (g.random(n) < 1/(1 + np.exp(-(z*1.2 + np.log(base/(1-base)))))
+         ).astype(int)
+    X = g.normal(0, 1, (n, D))
+    X[:, 0] = z + g.normal(0, np.where(grp == 1, 0.9, 0.35))
+    X[:, 1] = 0.7*z + g.normal(0, np.where(grp == 1, 1.2, 0.5), n)
+    X[:, 2] = grp*1.0
+    return X, y, grp
+
+
+Xtr, ytr, gtr = pop(12000, 0)
+Xte, yte, gte = pop(6000, 1)
+M = nn.MLP([D, 48, 48, KC], out_activation="softmax", seed=0)
+nn.train(M, Xtr, ytr, loss="softmax_ce", opt=nn.Optimizer("adam", lr=0.004),
+         steps=2500, batch_size=128, seed=0)
+SC = M.predict(Xte)[:, 1]
+mA, mB = gte == 0, gte == 1
+
+
+def auc(s, y):
+    o = np.argsort(s); r = np.empty(len(s)); r[o] = np.arange(1, len(s)+1)
+    n1 = float((y == 1).sum()); n0 = len(y) - n1
+    return float((r[y == 1].sum() - n1*(n1+1)/2)/(n1*n0))
+
+
+def rates(s, y, thr):
+    p = s >= thr
+    tp = float((p & (y == 1)).sum()); fp = float((p & (y == 0)).sum())
+    fn = float((~p & (y == 1)).sum()); tn = float((~p & (y == 0)).sum())
+    return dict(sel=float(p.mean()), tpr=tp/max(tp+fn, 1), fpr=fp/max(fp+tn, 1),
+                ppv=tp/max(tp+fp, 1))
+
+
+print("**편향은 어디서 들어오는가** — 모델이 아니라 파이프라인 전체다")
+print()
+print(f"{'출처':<14} {'무엇':<34} {'이 실험에서'}")
+print("-" * 78)
+for a, b, c in [
+    ("역사적", "과거 데이터가 과거의 차별을 담음", "—"),
+    ("표집", "집단마다 표본 수가 다름", "**B 가 25%**"),
+    ("측정", "같은 개념을 집단마다 다르게 잼", "**B 의 특성 잡음 2.6배**"),
+    ("집계", "한 모델로 이질적 집단을 다룸", "**단일 모델**"),
+    ("배포", "예측이 현실을 바꿔 되먹임", "—"),
+]:
+    print(f"{a:<14} {b:<34} {c}")
+print()
+print("이 실험은 표집·측정·집계 편향만 심었다. 그것만으로도 충분하다.")
+print()
+print(f"{'집단':<8} {'표본 수':>9} {'기저율':>9} {'AUC':>9}")
+print("-" * 40)
+for m, nm in [(mA, "A (다수)"), (mB, "B (소수)")]:
+    print(f"{nm:<8} {m.sum():>9} {yte[m].mean():>9.4f} "
+          f"{auc(SC[m], yte[m]):>9.4f}")
+print()
+print(f"**같은 모델인데 AUC 가 {auc(SC[mA], yte[mA]):.4f} vs "
+      f"{auc(SC[mB], yte[mB]):.4f} 다.**")
+print("  차별 의도가 아니라 **측정 품질의 차이**가 만든 격차다.")
+print("  집단 특성(X[:,2])을 모델에서 빼도 사라지지 않는다 —")
+print("  다른 특성들이 그것을 대신 담고 있다 ([12.0](00_interpretability.qmd)의 대리 특성).")
+```
+
+```{python}
+#| label: fig-roc
+#| fig-cap: "G12.4.1 — 집단별 ROC. 같은 모델이 소수 집단에서 체계적으로 나쁘다. 곡선이 아예 다르므로 어떤 단일 임계값도 두 집단을 동등하게 대우할 수 없다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+
+def roc(s, y):
+    o = np.argsort(-s); y = y[o]
+    tp = np.cumsum(y == 1); fp = np.cumsum(y == 0)
+    return np.r_[0, fp/max(fp[-1], 1)], np.r_[0, tp/max(tp[-1], 1)]
+
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="무작위",
+                         line=dict(color="rgba(255,255,255,0.35)", dash="dash")))
+for m, nm, col in [(mA, "A (다수)", viz.ACCENT), (mB, "B (소수)", viz.WARM)]:
+    fx, ty = roc(SC[m], yte[m])
+    fig.add_trace(go.Scatter(x=fx, y=ty, mode="lines",
+                             name=f"{nm} — AUC {auc(SC[m], yte[m]):.3f}",
+                             line=dict(color=col, width=3)))
+    r = rates(SC[m], yte[m], 0.5)
+    fig.add_trace(go.Scatter(x=[r["fpr"]], y=[r["tpr"]], mode="markers",
+                             name=f"{nm} @ 임계값 0.5", showlegend=True,
+                             marker=dict(size=14, color=col,
+                                         line=dict(color="white", width=2))))
+viz.fig_defaults(fig, "같은 모델, 다른 곡선", height=470,
+                 xaxis_title="위양성률 (FPR)", yaxis_title="진양성률 (TPR)")
+fig
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G12.4.2 — 불가능성: 하나를 맞추면 다른 게 어긋난다
 
-- 편향의 출처: 역사적·표집·측정·집계·배포 편향
-- 공정성 정의: 인구통계학적 동등성, 균등 기회, 균등 오즈, 예측 동등성
-- 공정성 정의들 사이의 불가능성 정리
-- 개별 공정성과 인과적 공정성
-- 완화 기법: 전처리·학습중·후처리
-- 공정성-정확도 트레이드오프와 그 실제 크기
-- 프라이버시 위협: 멤버십 추론, 속성 추론, 학습 데이터 추출
-- 차등 프라이버시(DP)의 정의와 ε·δ의 의미
-- DP-SGD: 그래디언트 클리핑 + 잡음, 프라이버시 예산 회계
-- DP의 비용: 유틸리티 손실과 소수 집단에 대한 불균등 영향
-- 연합학습: 구조, 통신 비용, 비IID 문제, 보안 집계
-- 기계 언러닝(machine unlearning)과 삭제 요구 대응
-- 규제 지형(GDPR, EU AI Act 등)의 기술적 함의
+공정성의 정의는 하나가 아니다. 그리고 서로 충돌한다.
+
+| 정의 | 요구 조건 | 관점 |
+|------|----------|------|
+| **인구통계학적 동등성** | 선택률 $P(\hat y{=}1)$ 이 집단 간 같다 | 결과의 동등 |
+| **균등 기회** | TPR 이 같다 | 자격 있는 사람의 동등 |
+| **균등 오즈** | TPR 과 FPR 이 모두 같다 | 오류의 동등 |
+| **예측 동등성** | PPV(정밀도)가 같다 | 점수의 의미가 동등 |
+
+**Kleinberg 등(2016)·Chouldechova(2017)의 불가능성 정리**는
+기저율이 다르고 예측이 완벽하지 않으면 이 중 여러 개를 **동시에 만족할 수 없다**고 말한다.
+
+증명 대신 재 본다. 집단 B 의 임계값을 조절해 지표를 하나씩 맞춰 본다.
+
+```{python}
+#| label: impossibility
+#| code-fold: false
+
+import numpy as np
+
+GRID = np.linspace(0.02, 0.98, 193)
+
+
+def find_thr(mask, key, target):
+    return min(GRID, key=lambda t: abs(rates(SC[mask], yte[mask], t)[key]
+                                       - target))
+
+
+rA = rates(SC[mA], yte[mA], 0.5)
+STRAT = [("동일 임계값 0.5", 0.5, 0.5),
+         ("인구통계학적 동등성", 0.5, find_thr(mB, "sel", rA["sel"])),
+         ("균등 기회 (TPR)", 0.5, find_thr(mB, "tpr", rA["tpr"])),
+         ("예측 동등성 (PPV)", 0.5, find_thr(mB, "ppv", rA["ppv"]))]
+
+print(f"{'전략':<22} {'thr_B':>7} " +
+      " ".join(f"{k:>9}" for k in ["선택률A", "선택률B", "TPR A", "TPR B",
+                                   "FPR A", "FPR B", "PPV A", "PPV B",
+                                   "정확도"]))
+print("-" * 116)
+ROWS = []
+for nm, ta, tb in STRAT:
+    ra = rates(SC[mA], yte[mA], ta); rb = rates(SC[mB], yte[mB], tb)
+    pred = np.where(mA, SC >= ta, SC >= tb)
+    acc = float((pred == (yte == 1)).mean())
+    ROWS.append((nm, ta, tb, ra, rb, acc))
+    print(f"{nm:<22} {tb:>7.3f} " +
+          " ".join(f"{v:>9.4f}" for v in
+                   [ra["sel"], rb["sel"], ra["tpr"], rb["tpr"],
+                    ra["fpr"], rb["fpr"], ra["ppv"], rb["ppv"], acc]))
+print()
+print("각 전략이 **맞춘 지표**와 **어긋난 지표**")
+print()
+KEY = {"sel": "선택률", "tpr": "TPR", "fpr": "FPR", "ppv": "PPV"}
+for nm, ta, tb, ra, rb, acc in ROWS:
+    gaps = {k: abs(ra[k]-rb[k]) for k in KEY}
+    ok = [KEY[k] for k, v in gaps.items() if v < 0.01]
+    bad = sorted(((v, KEY[k]) for k, v in gaps.items() if v >= 0.01),
+                 reverse=True)
+    print(f"  {nm:<22} 맞춤: {', '.join(ok) if ok else '없음':<14} "
+          f"어긋남: " + ", ".join(f"{k} {v:.3f}" for v, k in bad))
+print()
+dp_, eo_, pp_ = ROWS[1], ROWS[2], ROWS[3]
+print("**어떤 전략도 전부를 맞추지 못한다.** 정리가 말한 그대로다.")
+print(f"  인구통계학적 동등성을 맞추면 PPV 가 "
+      f"{abs(dp_[3]['ppv']-dp_[4]['ppv']):.3f} 어긋난다")
+print(f"  균등 기회를 맞춰도 PPV 는 여전히 "
+      f"{abs(eo_[3]['ppv']-eo_[4]['ppv']):.3f} 어긋난다")
+print(f"  PPV 를 맞추면 **FPR 이 {abs(pp_[3]['fpr']-pp_[4]['fpr']):.3f} "
+      f"어긋난다** — 임계값이 {pp_[2]:.3f} 까지 내려간다")
+print(f"    그 결과 B 의 {pp_[4]['sel']:.1%} 를 선택하게 된다. "
+      f"**정책으로서 무의미하다**")
+print()
+for s in ["**근본 원인은 기저율의 차이**다 — "
+          f"A {yte[mA].mean():.3f} vs B {yte[mB].mean():.3f}",
+          "기저율이 같으면 이 충돌은 사라진다. "
+          "그런데 기저율 차이는 대개 **역사적 불평등의 결과**다",
+          "**즉 이것은 알고리즘 문제가 아니라 사회 문제가 수식에 비친 것**이다",
+          "그러므로 '공정한 모델을 만들어 주세요' 는 완결된 요구가 아니다 — "
+          "**어떤 공정성인지 먼저 정해야 한다**",
+          "그 선택은 기술적 판단이 아니라 **정책적 판단**이고, "
+          "엔지니어가 혼자 내려서는 안 된다",
+          "엔지니어의 일은 **선택지와 대가를 정확히 제시하는 것**이다 — "
+          "위 표가 정확히 그것이다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-impossible
+#| fig-cap: "G12.4.2 — 공정성 지표의 충돌. 각 전략은 목표 지표(테두리)를 0으로 맞추지만 다른 지표를 벌린다. 예측 동등성은 FPR 격차를 0.69까지 키운다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+KEYS = ["sel", "tpr", "fpr", "ppv"]
+LBL = {"sel": "선택률 격차", "tpr": "TPR 격차", "fpr": "FPR 격차",
+       "ppv": "PPV 격차"}
+fig = go.Figure()
+for k, col in zip(KEYS, [viz.ACCENT, viz.GREEN, viz.PINK, viz.WARM]):
+    vals = [abs(r[3][k] - r[4][k]) for r in ROWS]
+    fig.add_trace(go.Bar(x=[r[0] for r in ROWS], y=vals, name=LBL[k],
+                         marker_color=col,
+                         text=[f"{v:.2f}" for v in vals],
+                         textposition="outside", textfont=dict(size=10)))
+viz.fig_defaults(fig, "하나를 0으로 만들면 다른 것이 커진다", height=460,
+                 xaxis_title="", yaxis_title="두 집단 간 격차 (0이 공정)",
+                 yaxis=dict(range=[0, 0.82]), barmode="group")
+fig
+```
+
+```{python}
+#| label: mitigation
+#| code-fold: false
+
+print("**공정성-정확도 절충의 실제 크기**")
+print()
+base_acc = ROWS[0][5]
+print(f"{'전략':<22} {'정확도':>9} {'기준 대비':>10}")
+print("-" * 44)
+for nm, ta, tb, ra, rb, acc in ROWS:
+    print(f"{nm:<22} {acc:>9.4f} {acc-base_acc:>+10.4f}")
+print()
+worst = min(ROWS, key=lambda r: r[5])
+print(f"**가장 비싼 전략도 정확도 손실이 {base_acc-worst[5]:.4f} "
+      f"({(base_acc-worst[5])/base_acc:.1%}) 다.**")
+for s in ["'공정성은 정확도를 크게 희생한다' 는 통념이 "
+          "**항상 맞지는 않는다**",
+          "특히 **후처리(집단별 임계값)** 는 값싸다 — "
+          "모델을 다시 학습할 필요가 없다",
+          "다만 집단별 임계값은 **법적으로 문제가 될 수 있다** — "
+          "보호 속성을 명시적으로 쓰기 때문",
+          "그래서 학습 중 완화(제약 최적화, 적대적 편향 제거)나 "
+          "전처리(재가중, 재표집)를 쓰기도 한다"]:
+    print(f"  · {s}")
+print()
+print(f"{'시점':<12} {'방법':<30} {'장점':<20} {'단점'}")
+print("-" * 88)
+for a, b, c, e in [
+    ("전처리", "재가중·재표집·특성 변환", "모델 무관", "효과가 간접적"),
+    ("학습 중", "제약 최적화, 적대적 편향 제거", "직접적", "재학습 필요, 불안정"),
+    ("후처리", "집단별 임계값", "**값싸고 정확**", "보호 속성을 명시적으로 씀"),
+    ("데이터", "소수 집단 데이터 확충", "**근본 해결**", "가장 느리고 비쌈"),
+]:
+    print(f"{a:<12} {b:<30} {c:<20} {e}")
+print()
+print("  마지막 줄이 진짜 해법이다 — 이 실험의 격차는 "
+      "**B 의 측정 품질이 나빠서** 생겼다.")
+print("  임계값을 어떻게 옮겨도 없는 정보가 생기지는 않는다.")
+```
 
 ---
 
-## G12.4.1 — 공정성 지표 충돌
+## G12.4.3 — 멤버십 추론: 과적합은 프라이버시 문제다
 
-한 지표를 맞추면 다른 지표가 어긋나는 불가능성의 실증
+이제 다른 축이다. **모델이 학습 데이터에 대해 무엇을 누설하는가.**
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 임계값 슬라이더
-:::
+가장 기본적인 공격은 **멤버십 추론**이다 —
+"이 사람의 데이터가 학습에 쓰였는가?" 를 맞히는 것.
+
+원리는 단순하다. **모델은 본 적 있는 데이터에서 손실이 더 낮다.**
+
+```{python}
+#| label: mia
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+Xin, yin, _ = pop(3000, 20)
+Xout, yout, _ = pop(3000, 21)
+print("공격: 표본별 손실에 임계값을 걸어 '학습에 쓰였다' 를 맞힌다")
+print()
+print(f"{'학습 표본':>9} {'스텝':>6} {'학습 정확도':>11} {'시험 정확도':>11} "
+      f"{'과적합 격차':>12} {'공격 AUC':>10}")
+print("-" * 64)
+MIA = []
+for n, steps in [(3000, 800), (3000, 4000), (800, 4000), (250, 4000)]:
+    Xi, yi = Xin[:n], yin[:n]
+    m = nn.MLP([D, 128, 128, KC], out_activation="softmax", seed=0)
+    nn.train(m, Xi, yi, loss="softmax_ce", opt=nn.Optimizer("adam", lr=0.004),
+             steps=steps, batch_size=64, seed=0)
+    tr_a = float((m.predict(Xi).argmax(1) == yi).mean())
+    te_a = float((m.predict(Xout).argmax(1) == yout).mean())
+    li = -np.log(m.predict(Xi)[np.arange(n), yi] + 1e-12)
+    lo = -np.log(m.predict(Xout[:n])[np.arange(n), yout[:n]] + 1e-12)
+    a = auc(np.concatenate([-li, -lo]),
+            np.concatenate([np.ones(n), np.zeros(n)]).astype(int))
+    MIA.append((n, steps, tr_a, te_a, tr_a - te_a, a))
+    print(f"{n:>9} {steps:>6} {tr_a:>11.4f} {te_a:>11.4f} {tr_a-te_a:>12.4f} "
+          f"{a:>10.4f}")
+print()
+lo_, hi_ = MIA[0], MIA[2]
+print(f"**공격 성공률이 과적합과 함께 오른다** — "
+      f"AUC {lo_[5]:.4f} → {hi_[5]:.4f}.")
+print(f"  과적합 격차 {lo_[4]:.3f} → {hi_[4]:.3f} 와 나란히 움직인다.")
+print()
+for s in ["**과적합은 일반화 문제이자 프라이버시 문제다** — "
+          "두 축이 같은 원인을 공유한다",
+          "AUC 0.75 는 '완전히 노출' 은 아니지만 "
+          "**충분히 위험**하다 — 의료·금융 맥락에서 "
+          "'이 사람이 이 질병 데이터셋에 있었다' 만으로도 피해가 된다",
+          "더 강한 공격들이 있다 — **그림자 모델**(같은 분포로 여러 모델을 "
+          "학습해 공격 분류기를 만드는 것), 난이도 보정 공격(LiRA)",
+          "그리고 생성 모델에서는 **학습 데이터 추출**까지 간다 — "
+          "LLM 이 학습 문서를 그대로 뱉는 사례",
+          "**중복 제거가 첫 번째 방어**다. 여러 번 본 문서일수록 외운다",
+          "정규화·조기 종료도 도움이 되지만 **보장은 아니다**. "
+          "보장을 원하면 다음 절"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G12.4.2 — 집단별 ROC
+## G12.4.4 — 차등 프라이버시: 보장과 그 값
 
-동일 모델이 집단마다 다른 성능을 내는 모습
+**차등 프라이버시**는 보장을 준다.
+데이터셋 $D$ 와 한 사람만 다른 $D'$ 에 대해, 모든 출력 집합 $S$ 에서
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 집단 선택
-:::
+$$
+\Pr[\mathcal{M}(D) \in S] \ \le\ e^{\varepsilon}\,\Pr[\mathcal{M}(D') \in S] + \delta
+$$
+
+"내가 데이터에 있든 없든 결과가 $e^\varepsilon$ 배 안쪽으로 비슷하다."
+**나 한 사람 때문에 드러날 것이 거의 없다**는 뜻이다.
+
+**DP-SGD** 는 이것을 두 단계로 만든다 —
+표본별 그래디언트를 노름 $C$ 로 **자르고**, 합에 **가우시안 잡음**을 더한다.
+
+여기서는 소프트맥스 회귀를 쓴다. 표본 $i$ 의 그래디언트가
+$x_i \otimes (p_i - y_i)$ 이라 **노름이 닫힌 형태**여서 정확한 클리핑이 가능하다.
+
+```{python}
+#| label: dp
+#| code-fold: false
+
+import numpy as np
+
+
+def softmax(z):
+    z = z - z.max(1, keepdims=True); e = np.exp(z)
+    return e/e.sum(1, keepdims=True)
+
+
+def dp_fit(X, y, sigma, C=1.0, steps=600, lr=0.5, bs=256, seed=0):
+    g = np.random.default_rng(seed)
+    Xa = np.hstack([X, np.ones((len(X), 1))]); Y = np.eye(KC)[y]
+    W = np.zeros((D+1, KC))
+    for t in range(steps):
+        i = g.integers(0, len(Xa), bs)
+        x, yy = Xa[i], Y[i]
+        r = softmax(x @ W) - yy
+        nrm = np.linalg.norm(x, axis=1)*np.linalg.norm(r, axis=1)   # 표본별 노름
+        G = (x*np.minimum(1.0, C/np.maximum(nrm, 1e-12))[:, None]).T @ r
+        if sigma:
+            G = G + g.normal(0, sigma*C, G.shape)                   # 잡음
+        W -= lr*G/bs
+    return W
+
+
+def eps_rdp(sigma, q, T, delta=1e-5, alphas=np.arange(2, 256)):
+    """부분표집 가우시안의 RDP 상한 근사 (작은 q 영역). 정확한 회계가 아니다."""
+    rdp = T*2*q**2*alphas/sigma**2
+    eps = rdp + np.log1p(-1/alphas) - (np.log(delta) + np.log(alphas))/(alphas-1)
+    return float(np.min(eps))
+
+
+Xv, yv, gv = pop(8000, 1)
+
+
+def ev(W, X=Xv, y=yv, gg=gv):
+    p = softmax(np.hstack([X, np.ones((len(X), 1))]) @ W).argmax(1)
+    return (float((p == y).mean()), float((p[gg == 0] == y[gg == 0]).mean()),
+            float((p[gg == 1] == y[gg == 1]).mean()))
+
+
+NTR = 1500
+print(f"n={NTR}, 배치 256, 600 스텝. 시드 5개 평균.")
+print()
+print(f"{'σ':>7} {'ε (δ=1e-5)':>12} {'전체':>9} {'A (다수)':>10} "
+      f"{'B (소수)':>10} {'격차':>8}")
+print("-" * 62)
+DP = []
+for sig in [0.0, 8.0, 16.0, 32.0, 64.0]:
+    rs = np.array([ev(dp_fit(*pop(NTR, 100+s)[:2], sig, seed=s))
+                   for s in range(5)]).mean(0)
+    e = "∞" if sig == 0 else f"{eps_rdp(sig, 256/NTR, 600):.2f}"
+    DP.append((sig, e, *rs))
+    print(f"{('없음' if sig==0 else f'{sig:.0f}'):>7} {e:>12} {rs[0]:>9.4f} "
+          f"{rs[1]:>10.4f} {rs[2]:>10.4f} {rs[1]-rs[2]:>8.4f}")
+print(f"  (다수 예측 기준선 {max(yv.mean(), 1-yv.mean()):.4f})")
+print()
+n0, n32, n64 = DP[0], DP[3], DP[4]
+print("**유틸리티 비용은 명확하다.**")
+print(f"  ε≈{n32[1]} (σ=32): 전체 정확도 {n0[2]:.4f} → {n32[2]:.4f} "
+      f"({n32[2]-n0[2]:+.4f})")
+print(f"  ε≈{n64[1]} (σ=64): {n0[2]:.4f} → {n64[2]:.4f} "
+      f"({n64[2]-n0[2]:+.4f})")
+print(f"  실용적인 ε 은 대개 1~10 이다. 그 구간에서 이미 값을 치른다.")
+```
+
+문헌에는 더 강한 주장이 있다 —
+**DP 가 소수 집단에 불균등하게 손해를 입힌다**(Bagdasaryan 등, 2019).
+그래디언트 클리핑과 잡음이 드문 패턴의 신호를 먼저 지운다는 것이다.
+
+이 실험에서는 **재현되지 않았다.**
+
+```{python}
+#| label: dp-disparate
+#| code-fold: false
+
+import numpy as np
+
+print("DP 의 불균등 영향 — 집단별 손실을 나란히 본다 (시드 5개 평균)")
+print()
+print(f"{'σ':>7} {'ε':>10} {'A 손실':>9} {'B 손실':>9} {'B/A 배율':>10} "
+      f"{'격차':>9}")
+print("-" * 60)
+base = DP[0]
+for sig, e, tot, aA, aB in DP[1:]:
+    lA, lB = base[3]-aA, base[4]-aB
+    ratio = lB/lA if abs(lA) > 1e-6 else float("nan")
+    print(f"{sig:>7.0f} {e:>10} {lA:>9.4f} {lB:>9.4f} "
+          f"{ratio:>10.2f} {aA-aB:>9.4f}")
+print()
+g0 = base[3]-base[4]
+g_last = DP[-1][3]-DP[-1][4]
+print(f"**집단 격차가 거의 안 움직인다** — DP 없이 {g0:.4f}, "
+      f"σ=64 에서 {g_last:.4f}.")
+print(f"  두 집단이 비슷한 비율로 함께 나빠진다 "
+      f"(σ=32 에서 A {base[3]-DP[3][3]:.4f} vs B {base[4]-DP[3][4]:.4f}).")
+print()
+print("**단일 시드로 봤을 때는 불균등해 보였다.** 그것이 함정이었다.")
+print("  시드 하나에서는 σ=32 의 손실이 A 0.010 vs B 0.034 로 나왔다.")
+print("  시드 5개를 평균하니 사라졌다 — "
+      "**[11.0](../11_systems/00_reproducibility.qmd)의 시드 분산 문제**가")
+print("  여기서 그대로 반복된다. 소수 집단은 표본이 적어 분산이 더 크다.")
+print()
+for s in ["**왜 재현되지 않았는가**: 이 모델은 소프트맥스 회귀다 — "
+          f"파라미터가 {(D+1)*KC}개인 선형 모델",
+          "선형 경계는 두 집단이 **같은 파라미터를 공유**한다. "
+          "소수 집단만 담당하는 파라미터가 없으니 잡음도 고르게 퍼진다",
+          "문헌의 결과는 **과매개변수 신경망**에서 나온 것이다. "
+          "거기서는 드문 패턴이 소수의 파라미터에 담기고, "
+          "클리핑이 그 신호를 먼저 자른다",
+          "**그러므로 '재현 실패' 가 '문헌이 틀렸다' 는 아니다** — "
+          "성립 조건이 다르다는 뜻이다",
+          "실무 함의는 분명하다 — "
+          "**DP 를 도입하면 집단별 성능을 반드시 따로 재야 한다.** "
+          "전체 정확도만 보면 놓친다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-dp
+#| fig-cap: "G12.4.4 — 차등 프라이버시의 대가. ε을 조일수록 정확도가 떨어진다. 다만 이 선형 모델에서는 두 집단이 비슷한 비율로 함께 나빠지고, 집단 격차는 거의 변하지 않는다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+xs = ["없음"] + [f"σ={d[0]:.0f}\nε≈{d[1]}" for d in DP[1:]]
+fig = go.Figure()
+for nm, i, col in [("전체", 2, viz.GREEN), ("A (다수)", 3, viz.ACCENT),
+                   ("B (소수)", 4, viz.WARM)]:
+    fig.add_trace(go.Scatter(x=xs, y=[d[i] for d in DP], mode="lines+markers",
+                             name=nm, line=dict(color=col, width=3),
+                             marker=dict(size=11)))
+fig.add_trace(go.Bar(x=xs, y=[d[3]-d[4] for d in DP], name="집단 격차 (A−B)",
+                     marker_color=viz.hex_rgba(viz.PINK, 0.5), yaxis="y2"))
+fig.add_hline(y=float(max(yv.mean(), 1-yv.mean())),
+              line=dict(color="rgba(255,255,255,0.3)", dash="dash"),
+              annotation_text="다수 예측 기준선", annotation_position="bottom left")
+viz.fig_defaults(
+    fig, "프라이버시 예산을 조이면 정확도가 떨어진다", height=460,
+    xaxis_title="잡음 배수와 프라이버시 예산", yaxis_title="정확도",
+    yaxis=dict(range=[0.55, 0.78]),
+    yaxis2=dict(title="집단 격차", overlaying="y", side="right",
+                range=[0, 0.4], showgrid=False))
+fig
+```
 
 ---
 
-## G12.4.3 — DP 잡음과 유틸리티
+## 연합학습·언러닝·규제
 
-프라이버시 예산을 조일수록 떨어지는 정확도
+```{python}
+#| label: rest
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: ε 슬라이더
-:::
+print("**연합학습** — 데이터를 옮기지 않고 모델만 옮긴다")
+print()
+print(f"{'요소':<16} {'내용':<34} {'현실의 문제'}")
+print("-" * 84)
+for a, b, c in [
+    ("기본 구조", "각 기기가 지역 학습 → 가중치 평균", "FedAvg"),
+    ("통신", "라운드마다 모델 전체를 주고받음", "**대역폭이 병목**"),
+    ("비-IID", "기기마다 데이터 분포가 다름", "**수렴이 느려지고 불안정**"),
+    ("보안 집계", "개별 갱신을 서버도 못 보게", "암호 비용"),
+    ("기기 이질성", "느린 기기가 라운드를 지연", "부분 참여, 비동기"),
+]:
+    print(f"{a:<16} {b:<34} {c}")
+print()
+for s in ["**연합학습 자체는 프라이버시 보장이 아니다** — "
+          "그래디언트에서 원본을 복원하는 공격이 알려져 있다",
+          "그래서 실무에서는 **연합학습 + 보안 집계 + DP** 를 함께 쓴다",
+          "세 가지가 서로 다른 위협을 막는다 — "
+          "데이터 이동, 서버 신뢰, 개인 식별"]:
+    print(f"  · {s}")
+print()
+print("**기계 언러닝** — '삭제해 주세요' 에 답하기")
+print()
+print(f"{'방법':<18} {'내용':<32} {'문제'}")
+print("-" * 76)
+for a, b, c in [
+    ("재학습", "그 데이터를 빼고 처음부터", "**정확하지만 비쌈**"),
+    ("SISA 분할", "샤드별로 학습해 해당 샤드만 재학습", "정확도 손실, 사전 설계 필요"),
+    ("근사 언러닝", "영향 함수로 파라미터를 되돌림", "**보장이 약하다**"),
+    ("사전 DP", "애초에 한 사람의 영향을 제한", "유틸리티 비용"),
+]:
+    print(f"{a:<18} {b:<32} {c}")
+print()
+for s in ["**'잊혀질 권리' 는 기술적으로 어렵다** — "
+          "모델은 데이터를 저장하지 않고 **녹여 넣기** 때문",
+          "근사 언러닝은 **검증이 어렵다** — "
+          "'정말 지워졌나' 를 확인할 표준 방법이 없다",
+          "**멤버십 추론이 사실상의 검증 도구**로 쓰인다 — "
+          "언러닝 후 공격 AUC 가 0.5 로 돌아가는지 보는 식",
+          "그래서 앞 절의 공격이 방어 도구이기도 하다"]:
+    print(f"  · {s}")
+print()
+print("**규제가 요구하는 것 (기술적 함의만)**")
+print()
+print(f"{'요구':<24} {'무엇을 만들어야 하나'}")
+print("-" * 68)
+for a, b in [
+    ("설명 요구", "[12.0](00_interpretability.qmd)의 도구 + 문서화"),
+    ("삭제 요구", "데이터 계보 + 언러닝 절차"),
+    ("자동 결정 이의 제기", "사람 검토 경로, [12.2](02_uncertainty.qmd)의 거부 옵션"),
+    ("영향 평가", "집단별 성능 보고 (이 장의 표)"),
+    ("고위험 분류", "감사 로그, 모델 카드 ([11.6](../11_systems/06_monitoring.qmd))"),
+    ("학습 데이터 투명성", "출처·라이선스 기록"),
+]:
+    print(f"{a:<24} {b}")
+print()
+print("  **공통점이 하나 있다 — 전부 '기록' 을 요구한다.**")
+print("  사후에 만들 수 없고, 파이프라인에 내장돼 있어야 한다.")
+```
 
 ---
 
-## G12.4.4 — 멤버십 추론 공격
+## 요약
 
-모델이 과적합될수록 학습 데이터 포함 여부가 드러나는 현상
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 과적합 정도 슬라이더
-:::
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **집단별 성능** | AUC A 0.700 vs B 0.650 | 원인은 측정 품질 차이 |
+| 속성 제거로 안 됨 | 다른 특성이 대리한다 | 12.0의 대리 특성 문제 |
+| **불가능성 정리** | 어떤 전략도 전부를 못 맞춘다 | 근본 원인은 기저율 차이 |
+| 인구통계학적 동등성 | 선택률 0, 그런데 PPV 0.132 | |
+| 균등 기회 | TPR 0, 그런데 PPV 0.132 | |
+| **예측 동등성** | PPV 0, 그런데 **FPR 0.693** | B의 92%를 선택 — 무의미 |
+| 함의 | "공정한 모델"은 완결된 요구가 아니다 | **정책적 판단이 먼저** |
+| **정확도 비용** | 최대 −0.0113 (1.7%) | 통념보다 작다 |
+| 진짜 해법 | 소수 집단 데이터 확충 | 임계값으로 정보는 안 생긴다 |
+| **멤버십 추론** | 공격 AUC 0.630 → 0.753 | 과적합 0.205 → 0.337과 나란히 |
+| 함의 | 과적합은 **프라이버시 문제**다 | 중복 제거가 첫 방어 |
+| **DP-SGD** | ε≈1.06에서 −0.0204, ε≈0.50에서 −0.0538 | 실용 ε 1~10에서 이미 값을 치른다 |
+| **재현 실패** | 불균등 영향이 안 나타난다 | A 손실 0.0207 vs B 0.0195 |
+| 왜 | 선형 모델은 파라미터를 공유한다 | 문헌은 과매개변수 모델 결과 |
+| 함정이었던 것 | 단일 시드로는 불균등해 보였다 | **11.0의 시드 분산이 여기서도** |
+| 실무 함의 | DP 도입 시 집단별 성능을 따로 재라 | 전체 정확도로는 못 본다 |
+| **연합학습** | 그 자체로는 프라이버시 보장 아님 | 보안 집계 + DP와 함께 |
+| **언러닝** | 근사 언러닝은 검증이 어렵다 | 멤버십 추론이 검증 도구 |
 
 ---
 
-## 핵심 용어
+## Part 12 를 닫으며
 
-| 용어 | 비고 |
-|------|------|
-| 공정성 정의 |  |
-| 불가능성 정리 |  |
-| 차등 프라이버시 |  |
-| DP-SGD |  |
-| 연합학습 |  |
-| 기계 언러닝 |  |
+```{python}
+#| label: part12
+#| code-fold: false
+
+print("**다섯 장이 같은 구조를 반복했다**")
+print()
+print(f"{'장':<7} {'믿고 싶었던 것':<30} {'실제로 잰 결과'}")
+print("-" * 84)
+for a, b, c in [
+    ("12.0", "SHAP 이 '왜' 를 알려준다", "같은 성능, 정반대 설명"),
+    ("12.0", "saliency 가 모델을 보여준다", "정확도 0.082인데 지도는 0.645 상관"),
+    ("12.1", "유도 헤드처럼 생기면 유도 헤드", "제거해도 0.0000 변화"),
+    ("12.2", "확신이 신뢰도다", "ECE 0.309, 커질수록 악화"),
+    ("12.2", "앙상블이 모르는 걸 안다", "외삽 영역 E/A 0.23 — 못 잡는다"),
+    ("12.3", "확신이 낮으면 OOD 다", "AUROC 0.186 — 방향이 반대"),
+    ("12.3", "시험셋 정확도가 실력이다", "워터마크 빼면 1.000 → 0.415"),
+    ("12.4", "공정한 모델을 만들면 된다", "무엇이 공정인지부터 골라야"),
+    ("12.4", "DP 는 소수 집단에 더 나쁘다", "이 설정에선 재현 안 됨"),
+]:
+    print(f"{a:<7} {b:<30} {c}")
+print()
+print("**세 가지 교훈이 반복됐다.**")
+print()
+print("① **관찰은 인과가 아니다.**")
+for s in ["12.0 — SHAP 은 모델이 쓴 것이지 세계의 원인이 아니다",
+          "12.1 — 어텐션 패턴이 회로를 증명하지 않는다. 개입해야 한다",
+          "12.4 — 집단 속성을 지워도 대리 특성이 남는다",
+          "**신뢰의 도구는 개입을 포함해야 한다** — "
+          "패칭, 어블레이션, 상관이 깨진 환경에서의 평가"]:
+    print(f"   · {s}")
+print()
+print("② **정확도는 거의 아무것도 말해 주지 않는다.**")
+for s in ["12.2 — 정확도가 같은데 ECE 는 9배 차이",
+          "12.3 — 시험셋 1.000, 워터마크 없는 환경 0.415",
+          "12.4 — 전체 정확도가 같아도 집단별로 갈린다",
+          "**무엇을 재지 않았는지가 사고를 만든다**"]:
+    print(f"   · {s}")
+print()
+print("③ **재현되지 않은 것도 결과다.**")
+for s in ["12.2 외삽 영역, 12.3 적대적 학습의 절충, 12.4 DP 의 불균등 영향",
+          "셋 다 문헌의 정설인데 이 설정에서는 안 나왔다",
+          "그때마다 **왜 안 나왔는지**를 확인하니 성립 조건이 드러났다",
+          "**'문헌이 틀렸다' 가 아니라 '조건이 다르다'** — "
+          "그 조건을 아는 것이 실무 지식이다"]:
+    print(f"   · {s}")
+print()
+print("  Part 11 은 '재지 않는 것은 지표조차 없다' 였다.")
+print("  Part 12 는 그 다음이다 — **잰 것이 내가 믿는 것인지 확인해야 한다.**")
+```
 
 ---
 
-**다음**: [A.0 논문 지도](../13_appendix/00_paper_map.qmd) — 분야별 필독 논문 계보 — 무엇을 어떤 순서로 읽을 것인가
+**다음**: [13.0 논문 지도](../13_appendix/00_paper_map.qmd) — Part 13 부록
 
 **이전**: [12.3 견고성과 분포 이동](03_robustness.qmd)
