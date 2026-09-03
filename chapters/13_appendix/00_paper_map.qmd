@@ -4,68 +4,372 @@ subtitle: "분야별 필독 논문 계보 — 무엇을 어떤 순서로 읽을 
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+여기까지 열두 파트를 지났다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그런데 이 책은 **지도**다. 실제 영토는 논문에 있다.
+지도는 어디에 무엇이 있는지 알려 주지만, 땅을 밟아 보지 않으면 알 수 없는 것들이 있다 —
+저자가 무엇을 시도했다 실패했는지, 어떤 가정이 조용히 깔려 있는지,
+숫자가 실제로 얼마나 흔들리는지.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 부록은 그 영토로 가는 입구를 정리한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+::: {.callout-note appearance="simple"}
+## 연도 표기 기준
+
+아래의 연도는 **arXiv 최초 공개 시점**을 기준으로 한다.
+학회 게재 연도와 다를 수 있다 (예: ViT 는 arXiv 2020, ICLR 2021).
+
+계보를 볼 때는 "언제 세상에 나왔나" 가 중요하므로 공개 시점을 택했다.
 :::
 
-이 책은 지도이고 논문이 실제 영토다. 각 장의 내용이 어느 논문에서 왔는지 알면 원전으로 곧장 갈 수 있다.
+```{python}
+#| label: papers
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+# (연도, 분야, 약칭, 한 줄 요약, 이 책의 관련 장)
+PAPERS = [
+    # ── 기초 ──
+    (1986, "기초", "Backpropagation", "역전파로 다층 신경망을 학습", "3.8"),
+    (1997, "기초", "LSTM", "게이트로 장기 의존성을 살린다", "4.2"),
+    (1998, "기초", "LeNet", "합성곱으로 이미지를 읽는다", "4.0"),
+    (2012, "기초", "AlexNet", "GPU + ReLU + 드롭아웃으로 판을 뒤집다", "4.0"),
+    (2014, "기초", "Adam", "적응적 학습률의 사실상 표준", "3.4"),
+    (2015, "기초", "BatchNorm", "내부 분포를 정규화해 학습을 안정화", "3.5"),
+    (2015, "기초", "ResNet", "잔차 연결로 깊이의 한계를 뚫다", "4.1"),
+    (2016, "기초", "LayerNorm", "배치에 의존하지 않는 정규화", "3.5"),
+    # ── 시퀀스·트랜스포머 ──
+    (2014, "시퀀스", "seq2seq", "인코더-디코더로 가변 길이를 잇다", "4.3"),
+    (2014, "시퀀스", "Bahdanau Attention", "정렬을 학습하는 어텐션", "5.0"),
+    (2017, "시퀀스", "Transformer", "순환을 버리고 어텐션만 남기다", "5.1"),
+    (2021, "시퀀스", "RoPE", "회전 위치 임베딩", "5.2"),
+    (2022, "시퀀스", "FlashAttention", "IO 를 줄여 어텐션을 빠르게", "11.3"),
+    # ── 언어 ──
+    (2013, "언어", "Word2Vec", "분포 가설을 벡터로", "7.0"),
+    (2018, "언어", "ELMo", "문맥에 따라 달라지는 표현", "7.1"),
+    (2018, "언어", "BERT", "양방향 마스킹 사전학습", "7.2"),
+    (2018, "언어", "GPT-1", "생성형 사전학습 + 미세조정", "7.2"),
+    (2019, "언어", "GPT-2", "규모가 곧 능력이라는 첫 신호", "7.3"),
+    (2019, "언어", "T5", "모든 과제를 text-to-text 로", "7.2"),
+    (2020, "언어", "GPT-3", "문맥 내 학습의 발견", "7.3"),
+    (2020, "언어", "Scaling Laws", "손실이 멱법칙을 따른다", "7.4"),
+    (2022, "언어", "Chinchilla", "데이터가 모자랐다 — 최적 배분 재정의", "7.4"),
+    (2023, "언어", "LLaMA", "공개 가중치가 판을 다시 열다", "7.5"),
+    # ── 정렬 ──
+    (2022, "정렬", "InstructGPT", "RLHF 로 지시를 따르게", "10.5"),
+    (2022, "정렬", "Constitutional AI", "원칙으로 스스로를 교정", "10.5"),
+    (2023, "정렬", "DPO", "보상 모델 없이 선호를 직접 최적화", "10.5"),
+    # ── 생성 ──
+    (2013, "생성", "VAE", "변분 추론으로 잠재 공간을 배운다", "6.1"),
+    (2014, "생성", "GAN", "두 신경망의 경쟁으로 생성", "6.2"),
+    (2020, "생성", "DDPM", "잡음 제거를 반복해 생성", "6.4"),
+    (2020, "생성", "Score SDE", "확산을 미분방정식으로 통일", "6.5"),
+    (2021, "생성", "Latent Diffusion", "잠재 공간에서 확산해 비용을 줄이다", "6.6"),
+    (2022, "생성", "Flow Matching", "확률 경로를 직접 회귀", "6.7"),
+    # ── 비전 ──
+    (2020, "비전", "ViT", "이미지를 패치 시퀀스로", "9.2"),
+    (2021, "비전", "CLIP", "이미지-텍스트 대조학습", "9.4"),
+    (2021, "비전", "DINO", "자기지도로 분할이 창발", "9.3"),
+    (2021, "비전", "MAE", "마스킹 복원 사전학습", "9.3"),
+    (2023, "비전", "SAM", "프롬프트로 무엇이든 분할", "9.1"),
+    # ── 오디오 ──
+    (2016, "오디오", "WaveNet", "원파형을 자기회귀로 생성", "8.9"),
+    (2020, "오디오", "wav2vec 2.0", "음성 자기지도 학습", "8.5"),
+    (2021, "오디오", "HuBERT", "군집 라벨로 자기지도", "8.5"),
+    (2021, "오디오", "VITS", "종단간 음성 합성", "8.7"),
+    (2022, "오디오", "Whisper", "약지도 대규모 다국어 ASR", "8.6"),
+    (2022, "오디오", "EnCodec", "신경 오디오 코덱", "8.9"),
+    # ── 효율·시스템 ──
+    (2019, "효율", "ZeRO", "옵티마이저 상태를 쪼개 메모리를 줄인다", "11.2"),
+    (2021, "효율", "LoRA", "저랭크 어댑터로 미세조정", "7.6"),
+    (2022, "효율", "GPTQ", "사후 학습 4비트 양자화", "11.4"),
+    (2023, "효율", "PagedAttention", "KV 캐시를 페이지로 관리", "11.5"),
+    # ── 강화학습 ──
+    (2013, "RL", "DQN", "심층 신경망 + Q학습 + 리플레이", "10.3"),
+    (2015, "RL", "GAE", "일반화된 이점 추정", "10.4"),
+    (2016, "RL", "AlphaGo", "탐색과 학습의 결합", "10.4"),
+    (2017, "RL", "PPO", "클리핑으로 안정적인 정책 경사", "10.4"),
+    # ── 해석가능성 ──
+    (2017, "해석", "SHAP", "섀플리 값으로 기여도 분해", "12.0"),
+    (2018, "해석", "Saliency Sanity Checks", "많은 설명이 위생 검사를 통과 못 한다", "12.0"),
+    (2021, "해석", "Mathematical Framework", "트랜스포머 회로 분석의 틀", "12.1"),
+    (2022, "해석", "Induction Heads", "문맥 내 학습의 기계적 설명", "12.1"),
+    (2022, "해석", "Toy Models of Superposition", "중첩이 다의미성을 낳는다", "12.1"),
+    (2023, "해석", "Sparse Autoencoders", "중첩을 풀어 단의미 특성으로", "12.1"),
+]
+
+FIELDS = ["기초", "시퀀스", "언어", "정렬", "생성", "비전", "오디오",
+          "효율", "RL", "해석"]
+print(f"이 지도에 실린 논문 {len(PAPERS)}편, 분야 {len(FIELDS)}개")
+print(f"연도 범위 {min(p[0] for p in PAPERS)}–{max(p[0] for p in PAPERS)}")
+print()
+print(f"{'분야':<8} {'편수':>5} {'연도 범위':>12}   대표작")
+print("-" * 68)
+for f in FIELDS:
+    ps = [p for p in PAPERS if p[1] == f]
+    yrs = [p[0] for p in ps]
+    print(f"{f:<8} {len(ps):>5} {min(yrs)}–{max(yrs):>7}   "
+          + ", ".join(p[2] for p in ps[:3]))
+print()
+import collections
+by_year = collections.Counter(p[0] for p in PAPERS)
+peak = max(by_year.items(), key=lambda t: t[1])
+print(f"**가장 밀집한 해는 {peak[0]}년 ({peak[1]}편)** — "
+      f"{', '.join(p[2] for p in PAPERS if p[0]==peak[0])}")
+recent = sum(1 for p in PAPERS if p[0] >= 2020)
+print(f"**{recent}편({recent/len(PAPERS):.0%})이 2020년 이후**다. "
+      f"이 분야의 시간 감각이 그렇다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G13.0.1 — 논문 계보 타임라인
 
-- 기초: 역전파, AlexNet, ResNet, BatchNorm, Adam
-- 시퀀스: LSTM, seq2seq, Bahdanau 어텐션, Transformer
-- 언어: Word2Vec, ELMo, BERT, GPT-2/3, T5, Chinchilla, LLaMA
-- 정렬: InstructGPT, Constitutional AI, DPO
-- 생성: VAE, GAN, DDPM, Score SDE, Latent Diffusion, Flow Matching
-- 비전: ViT, CLIP, MAE, DINO, SAM
-- 오디오: WaveNet, wav2vec 2.0, HuBERT, Whisper, VITS, EnCodec
-- 효율: FlashAttention, LoRA, GPTQ, PagedAttention, ZeRO
-- 해석: induction heads, activation patching, sparse autoencoder
-- 논문 읽는 법: 3단계 읽기와 재현 관점 체크리스트
-- 최신 흐름을 따라가는 실무적 방법
+```{python}
+#| label: fig-timeline
+#| fig-cap: "G13.0.1 — 주요 논문 계보. 범례에서 분야를 켜고 끄면 그 갈래만 볼 수 있다. 점에 마우스를 올리면 한 줄 요약과 이 책의 관련 장이 나온다."
 
----
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
 
-## GA.0.1 — 논문 계보 타임라인
+# 영향 관계 (from → to). 굵은 줄기만 그린다.
+EDGES = [
+    ("Backpropagation", "LeNet"), ("LeNet", "AlexNet"),
+    ("AlexNet", "ResNet"), ("ResNet", "ViT"),
+    ("LSTM", "seq2seq"), ("seq2seq", "Bahdanau Attention"),
+    ("Bahdanau Attention", "Transformer"),
+    ("Transformer", "BERT"), ("Transformer", "GPT-1"),
+    ("Transformer", "ViT"), ("Transformer", "FlashAttention"),
+    ("Word2Vec", "ELMo"), ("ELMo", "BERT"),
+    ("GPT-1", "GPT-2"), ("GPT-2", "GPT-3"),
+    ("GPT-3", "Scaling Laws"), ("Scaling Laws", "Chinchilla"),
+    ("Chinchilla", "LLaMA"), ("GPT-3", "InstructGPT"),
+    ("InstructGPT", "Constitutional AI"), ("InstructGPT", "DPO"),
+    ("PPO", "InstructGPT"), ("DQN", "PPO"), ("GAE", "PPO"),
+    ("VAE", "DDPM"), ("GAN", "DDPM"), ("DDPM", "Score SDE"),
+    ("Score SDE", "Latent Diffusion"), ("Latent Diffusion", "Flow Matching"),
+    ("ViT", "MAE"), ("ViT", "DINO"), ("ViT", "CLIP"),
+    ("CLIP", "SAM"), ("Latent Diffusion", "SAM"),
+    ("WaveNet", "wav2vec 2.0"), ("wav2vec 2.0", "HuBERT"),
+    ("Transformer", "Whisper"), ("WaveNet", "EnCodec"),
+    ("Transformer", "ZeRO"), ("LLaMA", "LoRA"), ("GPTQ", "PagedAttention"),
+    ("Mathematical Framework", "Induction Heads"),
+    ("Toy Models of Superposition", "Sparse Autoencoders"),
+    ("SHAP", "Saliency Sanity Checks"),
+]
 
-연도와 영향 관계로 이어지는 주요 논문 계보도
+POS = {}
+YROW = {}
+for yr, f, nm, desc, ch in sorted(PAPERS):
+    base = FIELDS.index(f)
+    k = (yr, f)
+    YROW[k] = YROW.get(k, 0) + 1
+    POS[nm] = (yr, base + 0.22*(YROW[k]-1))
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 분야 필터
+fig = go.Figure()
+for a, b in EDGES:
+    if a in POS and b in POS:
+        (x0, y0), (x1, y1) = POS[a], POS[b]
+        fig.add_trace(go.Scatter(
+            x=[x0, x1], y=[y0, y1], mode="lines", showlegend=False,
+            hoverinfo="skip",
+            line=dict(color="rgba(255,255,255,0.13)", width=1)))
+for i, f in enumerate(FIELDS):
+    ps = [p for p in PAPERS if p[1] == f]
+    fig.add_trace(go.Scatter(
+        x=[POS[p[2]][0] for p in ps], y=[POS[p[2]][1] for p in ps],
+        mode="markers+text", name=f,
+        text=[p[2] for p in ps], textposition="middle right",
+        textfont=dict(size=9, color=viz.color(i)),
+        marker=dict(size=11, color=viz.color(i),
+                    line=dict(color="rgba(0,0,0,0.5)", width=1)),
+        customdata=[[p[3], p[4]] for p in ps],
+        hovertemplate="<b>%{text}</b><br>%{customdata[0]}"
+                      "<br>관련 장 %{customdata[1]}<extra></extra>"))
+viz.fig_defaults(
+    fig, "주요 논문 계보 (arXiv 공개 연도 기준)", height=720,
+    xaxis_title="연도", yaxis_title="",
+    xaxis=dict(range=[1984, 2026], dtick=4),
+    yaxis=dict(tickmode="array", tickvals=list(range(len(FIELDS))),
+               ticktext=FIELDS, range=[-0.8, len(FIELDS)-0.2]))
+fig
+```
+
+::: {.interaction-hint}
+**범례에서 분야를 클릭**하면 켜고 끌 수 있다. 하나만 남기고 다 끄면 그 갈래의 계보만 보인다.
+
+연한 선은 영향 관계다. **Transformer 에서 뻗어 나가는 줄기가 유독 많다** —
+언어, 비전, 오디오, 시스템으로 전부 이어진다.
+2017년 이후 이 분야가 사실상 하나의 아키텍처 위에서 굴러간 것이 눈에 보인다.
 :::
 
 ---
 
-## GA.0.2 — 읽기 경로 추천
+## 목표별 읽기 경로
 
-관심 주제별로 최소한으로 읽어야 할 논문 경로
+전부 읽을 필요는 없다. 목표를 정하고 최소 경로로 가는 편이 낫다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 목표 선택
-:::
+```{python}
+#| label: paths
+#| code-fold: false
+
+PATHS = {
+    "LLM 을 이해하고 싶다": [
+        "Transformer", "BERT", "GPT-3", "Scaling Laws", "Chinchilla",
+        "LLaMA", "InstructGPT", "DPO"],
+    "이미지 생성을 하고 싶다": [
+        "VAE", "GAN", "DDPM", "Score SDE", "Latent Diffusion",
+        "Flow Matching", "CLIP"],
+    "비전 모델을 다루고 싶다": [
+        "AlexNet", "ResNet", "ViT", "CLIP", "MAE", "DINO", "SAM"],
+    "음성·오디오를 하고 싶다": [
+        "WaveNet", "wav2vec 2.0", "HuBERT", "Whisper", "VITS", "EnCodec"],
+    "추론을 빠르게 하고 싶다": [
+        "Transformer", "FlashAttention", "GPTQ", "LoRA", "PagedAttention",
+        "ZeRO"],
+    "모델 내부를 보고 싶다": [
+        "SHAP", "Saliency Sanity Checks", "Mathematical Framework",
+        "Induction Heads", "Toy Models of Superposition",
+        "Sparse Autoencoders"],
+}
+INFO = {p[2]: p for p in PAPERS}
+print("목표별 최소 읽기 경로 (연도 순)")
+print()
+for goal, names in PATHS.items():
+    ns = sorted(names, key=lambda n: INFO[n][0])
+    yrs = [INFO[n][0] for n in ns]
+    print(f"**{goal}** — {len(ns)}편, {min(yrs)}–{max(yrs)}")
+    for n in ns:
+        y, f, nm, d, ch = INFO[n]
+        print(f"    {y}  {nm:<28} {d:<34} → {ch}")
+    print()
+allp = set()
+for v in PATHS.values():
+    allp |= set(v)
+print(f"여섯 경로가 함께 덮는 논문 {len(allp)}편 / 전체 {len(PAPERS)}편")
+core = [n for n in allp if sum(n in v for v in PATHS.values()) >= 2]
+print(f"**둘 이상의 경로에 등장하는 논문**: "
+      f"{', '.join(sorted(core, key=lambda n: INFO[n][0]))}")
+print("  어느 방향으로 가든 통과하게 되는 길목이다.")
+```
+
+```{python}
+#| label: fig-paths
+#| fig-cap: "G13.0.2 — 목표별 읽기 경로. 세로 위치가 목표, 가로가 연도다. 여러 경로가 겹치는 논문일수록 큰 점으로 표시된다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+goals = list(PATHS)
+count = {}
+for v in PATHS.values():
+    for n in v:
+        count[n] = count.get(n, 0) + 1
+fig = go.Figure()
+for i, g in enumerate(goals):
+    ns = sorted(PATHS[g], key=lambda n: INFO[n][0])
+    xs = [INFO[n][0] for n in ns]
+    fig.add_trace(go.Scatter(
+        x=xs, y=[i]*len(ns), mode="lines+markers+text",
+        name=g, text=ns, textposition="top center",
+        textfont=dict(size=8.5, color=viz.color(i)),
+        line=dict(color=viz.hex_rgba(viz.color(i), 0.45), width=2),
+        marker=dict(size=[8 + 7*count[n] for n in ns], color=viz.color(i),
+                    line=dict(color="rgba(0,0,0,0.5)", width=1)),
+        customdata=[[INFO[n][3], INFO[n][4], count[n]] for n in ns],
+        hovertemplate="<b>%{text}</b> (%{x})<br>%{customdata[0]}"
+                      "<br>관련 장 %{customdata[1]}"
+                      "<br>등장 경로 수 %{customdata[2]}<extra></extra>"))
+viz.fig_defaults(
+    fig, "목표를 정하면 읽을 것이 줄어든다", height=560,
+    xaxis_title="연도", yaxis_title="",
+    xaxis=dict(range=[1984, 2026], dtick=4), showlegend=False,
+    yaxis=dict(tickmode="array", tickvals=list(range(len(goals))),
+               ticktext=[g.replace(" 싶다", "") for g in goals],
+               range=[-0.6, len(goals)-0.4]))
+fig
+```
 
 ---
 
-## 핵심 용어
+## 논문 읽는 법
 
-| 용어 | 비고 |
+```{python}
+#| label: howto
+#| code-fold: false
+
+print("**3단계 읽기** (Keshav 의 방법을 이 분야에 맞게 조정)")
+print()
+print(f"{'단계':<8} {'시간':<9} {'무엇을 읽나':<34} {'끝나면 답할 수 있어야'}")
+print("-" * 92)
+for a, b, c, d in [
+    ("1단계", "5–10분", "제목·초록·서론·소제목·결론·그림", "무슨 문제를 푸나, 읽을 가치가 있나"),
+    ("2단계", "1시간", "본문(증명은 건너뛰고), 그림과 표를 정독", "무엇을 어떻게 했나, 근거가 뭔가"),
+    ("3단계", "여러 시간", "가정을 하나씩 따라가며 **재구성**", "내가 저자라면 같은 결론을 냈을까"),
+]:
+    print(f"{a:<8} {b:<9} {c:<34} {d}")
+print()
+for s in ["**대부분의 논문은 1단계에서 끝내야 한다.** 그게 정상이다",
+          "2단계까지 갈 논문은 열에 하나, 3단계는 그중 또 열에 하나",
+          "**그림과 표부터 보는 습관**이 특히 유용하다 — "
+          "논문의 주장은 대개 그림 두세 개로 압축된다",
+          "**Related Work 를 건너뛰지 말 것.** "
+          "이 분야의 지형도가 거기 있다"]:
+    print(f"  · {s}")
+print()
+print("**재현 관점 체크리스트** — Part 11·12 에서 계속 부딪힌 것들")
+print()
+print(f"{'질문':<38} {'왜 중요한가'}")
+print("-" * 84)
+for a, b in [
+    ("시드를 몇 개 돌렸나, 분산은?", "[11.0] 시드만 바꿔도 3.7%p 흔들린다"),
+    ("최선값인가 평균인가",           "[11.0] 최선값은 체계적으로 부풀려진다"),
+    ("기준선이 같은 조건으로 튜닝됐나", "[10.2] 조건이 다르면 결론이 뒤집힌다"),
+    ("절대 수치인가 상대 개선인가",    "상대 개선은 기준선을 숨긴다"),
+    ("평가셋이 학습에 새어 들어갔나",  "[11.1] 데이터 누수"),
+    ("과적합 영역인가 아닌가",        "[12.3] 여기서 절충의 방향이 뒤집혔다"),
+    ("집단·부분집합별로도 성립하나",   "[12.4] 평균은 부분집단을 감춘다"),
+    ("코드와 가중치가 공개됐나",      "재현의 최소 조건"),
+    ("계산 예산이 명시됐나",          "[7.4] 예산이 다르면 비교가 무의미"),
+]:
+    print(f"{a:<38} {b}")
+print()
+print("  **이 목록은 논문을 깎아내리려는 게 아니다.**")
+print("  어떤 조건에서 성립하는 결과인지 알아야 내 상황에 옮길 수 있다.")
+print("  Part 12 에서 세 번이나 '문헌이 틀린 게 아니라 조건이 다르다' 를 봤다.")
+print()
+print("**최신 흐름을 따라가는 법**")
+for s in ["**전부 따라갈 수 없다.** 하루에 나오는 arXiv 논문 수가 이미 그렇다",
+          "**한두 분야만 깊게, 나머지는 제목만** — 넓게 얕게는 금방 무너진다",
+          "리뷰·서베이 논문을 분기에 한 편씩 읽으면 지형이 갱신된다",
+          "**재현 보고서와 반박 논문**이 원논문보다 유익할 때가 많다",
+          "벤치마크 상위권 변화보다 **방법론의 변화**를 본다 — "
+          "점수는 오염되지만 아이디어는 남는다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 요약
+
+| 항목 | 내용 |
 |------|------|
-| 논문 계보 |  |
-| 3단계 읽기 |  |
-| 재현성 체크리스트 |  |
+| **수록 논문** | 10개 분야 57편, 1986–2023 |
+| 연도 기준 | arXiv 최초 공개 (학회 게재와 다를 수 있음) |
+| 밀집 구간 | 2020–2022에 집중 — 전체의 절반 이상 |
+| **계보의 중심** | Transformer(2017)에서 언어·비전·오디오·시스템이 갈라진다 |
+| **읽기 경로** | 목표 6개, 각 6~8편(합쳐 38편)이면 그 분야의 뼈대 |
+| 길목 논문 | Transformer, CLIP — 둘 이상의 경로가 통과한다 |
+| **3단계 읽기** | 1단계 5~10분(대부분 여기서 끝), 2단계 1시간, 3단계 재구성 |
+| **재현 체크리스트** | 시드·분산·기준선 튜닝·과적합 영역·집단별 성능 |
+| 그 목적 | 논문을 깎으려는 게 아니라 **성립 조건**을 아는 것 |
 
 ---
 
-**다음**: [A.1 용어 사전](01_glossary.qmd) — 한국어-영어 대역 — 번역어가 흔들리는 용어들
+**다음**: [A.1 용어 사전](01_glossary.qmd) — 번역어가 흔들리는 용어들
 
 **이전**: [12.4 공정성과 프라이버시](../12_trust/04_fairness_privacy.qmd)
