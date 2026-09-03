@@ -4,92 +4,470 @@ subtitle: "GPU·메모리 대역폭·산술 강도 — 왜 이론 FLOPs는 안 �
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+A100 의 사양표에는 bf16 으로 312 TFLOP/s 라고 적혀 있다.
+실제 학습에서 나오는 값은 대개 그 **30~50%** 다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+나머지는 어디로 갔을까. 답은 대부분 하나다 — **연산이 아니라 데이터 이동을 기다렸다.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장의 목표는 질문 하나에 답하는 도구를 만드는 것이다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+> **이 연산은 연산 제한인가, 메모리 제한인가.**
+
+그 답이 무엇을 고쳐야 할지 정한다. 연산 제한이면 정밀도를 낮추거나 연산을 줄여야 하고,
+메모리 제한이면 **데이터 이동을 줄여야** 한다. 둘은 전혀 다른 처방이다.
+
+---
+
+## 산술 강도와 루프라인
+
+연산 하나를 두 숫자로 요약한다.
+
+$$\text{산술 강도(AI)} = \frac{\text{FLOPs}}{\text{이동한 바이트}}$$
+
+가속기는 두 상한을 갖는다 — 최대 연산 속도 $\pi$ 와 최대 대역폭 $\beta$.
+달성 가능한 성능은 그 둘 중 작은 쪽이다.
+
+$$\text{달성 가능} = \min\big(\pi,\ \beta \times \text{AI}\big)$$
+
+두 선이 만나는 지점이 **능선점(ridge point)** $\pi/\beta$ 다.
+AI 가 그보다 작으면 무엇을 해도 대역폭에 묶인다.
+
+```{python}
+#| label: roofline
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+PEAK = 312e12          # A100 bf16 텐서 코어 (TFLOP/s)
+BW = 2039e9            # A100 80GB HBM2e (GB/s)
+RIDGE = PEAK/BW
+
+print(f"A100: 연산 {PEAK/1e12:.0f} TFLOP/s, 대역폭 {BW/1e9:.0f} GB/s")
+print(f"  **능선점 = {RIDGE:.0f} FLOP/byte**")
+print(f"  바이트 하나를 읽어 올 때마다 {RIDGE:.0f} 번은 계산해야 본전이다")
+print()
+
+S, H = 4096, 4096
+OPS = [
+    ("GEMM n=4096 (정사각)", 2*4096**3/(3*4096*4096*2)),
+    ("어텐션 prefill S=4096",
+     (2*S*S*H*2)/(2*(S*H*2) + 2*(S*H*2))),   # 아래 G11.3.2 와 같은 회계
+    ("GEMM 배치1 (행렬-벡터)", 2*H*H/((H*H + 2*H)*2)),
+    ("LayerNorm", 5/(2*2*2)),
+    ("softmax", 5/(2*2*2)),
+    ("elementwise (x*2+1)", 2/(2*4)),
+]
+print(f"{'연산':<28} {'산술 강도':>11} {'제한':>8} {'달성 상한':>14} {'피크 대비':>10}")
+print("-" * 76)
+ROOF = []
+for nm, ai in OPS:
+    ach = min(PEAK, BW*ai)
+    ROOF.append((nm, ai, ach))
+    print(f"{nm:<28} {ai:>11.2f} {'연산' if ai > RIDGE else '메모리':>8} "
+          f"{ach/1e12:>12.1f}T {ach/PEAK:>10.1%}")
+print()
+print("**같은 하드웨어에서 성능이 600배 차이 난다.**")
+for s in ["큰 GEMM 은 능선점의 9배 — 연산 유닛을 채울 수 있다",
+          "**elementwise 는 피크의 0.2%** 밖에 못 낸다. "
+          "값 하나 읽어 곱셈 한 번 하고 다시 쓰기 때문",
+          "LayerNorm·softmax 도 같은 처지다 — "
+          "이들은 FLOPs 로 세면 무시할 만한데 **시간은 많이 먹는다**",
+          "그래서 '모델 FLOPs 의 몇 %' 로 성능을 논하면 "
+          "**어디서 시간이 가는지 못 본다**",
+          "**처방이 갈린다**: GEMM 은 정밀도를 낮춰 빨라지고, "
+          "elementwise 는 정밀도를 낮춰도 그대로다 (대역폭이 반으로 줄어야 빨라진다)"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-roofline
+#| fig-cap: "G11.3.1 — 루프라인 모델. 능선점(153 FLOP/byte) 왼쪽은 대역폭이, 오른쪽은 연산 속도가 상한이다. 대부분의 비-GEMM 연산은 왼쪽 끝에 있다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+ai = np.logspace(-2, 4, 400)
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ai, y=np.minimum(PEAK, BW*ai)/1e12, mode="lines",
+                         name="루프라인 상한",
+                         line=dict(color=viz.ACCENT, width=3)))
+for i, (nm, a, ach) in enumerate(ROOF):
+    fig.add_trace(go.Scatter(x=[a], y=[ach/1e12], mode="markers+text",
+                             text=[nm], textposition="top left",
+                             textfont=dict(size=10),
+                             marker=dict(size=11, color=viz.color(i+1),
+                                         line=dict(width=1,
+                                                   color="rgba(255,255,255,.5)")),
+                             showlegend=False))
+fig.add_vline(x=RIDGE, line=dict(color=viz.WARM, dash="dash"))
+fig.add_annotation(x=RIDGE, y=0.02, text=f"능선점 {RIDGE:.0f}", showarrow=False,
+                   xanchor="left", font=dict(size=11, color=viz.WARM))
+viz.fig_defaults(
+    fig, "루프라인 (A100 bf16)", height=470,
+    xaxis_title="산술 강도 (FLOP/byte)", yaxis_title="달성 가능 TFLOP/s",
+    xaxis_type="log", yaxis_type="log")
+fig
+```
+
+---
+
+## G11.3.2 — 어텐션 디코드가 메모리 제한인 이유
+
+LLM 추론은 두 단계다.
+
+- **prefill**: 프롬프트 전체를 한 번에 — 행렬 × 행렬
+- **decode**: 토큰 하나씩 — 행렬 × **벡터**
+
+같은 어텐션인데 산술 강도가 완전히 다르다.
+
+```{python}
+#| label: attention-ai
+#| code-fold: false
+
+import numpy as np
+
+H_ = 4096
+print("어텐션의 산술 강도 (KV 캐시를 읽는 비용까지 세면)")
+print()
+print(f"{'상황':<28} {'FLOPs':>11} {'이동 바이트':>13} {'산술 강도':>10} {'제한':>8}")
+print("-" * 76)
+ATT = []
+for nm, B_, Sq, Skv in [("prefill  B=1, S=4096", 1, 4096, 4096),
+                        ("decode   B=1, KV=4096", 1, 1, 4096),
+                        ("decode   B=32, KV=4096", 32, 1, 4096),
+                        ("decode   B=256, KV=4096", 256, 1, 4096)]:
+    fl = 2*B_*Sq*Skv*H_*2                 # QK^T + AV
+    byt = 2*(B_*Skv*H_*2) + 2*(B_*Sq*H_*2)
+    ATT.append((nm, fl, byt, fl/byt))
+    print(f"{nm:<28} {fl/1e9:>9.2f}G {byt/1e6:>11.1f}M {fl/byt:>10.2f} "
+          f"{'연산' if fl/byt > RIDGE else '메모리':>8}")
+print()
+pre, dec = ATT[0], ATT[1]
+print(f"**prefill 은 산술 강도 {pre[3]:.0f}, decode 는 {dec[3]:.0f} 다** "
+      f"— {pre[3]/dec[3]:.0f}배 차이.")
+print(f"  능선점 {RIDGE:.0f} 을 기준으로 **완전히 반대편**에 있다.")
+print()
+for s in ["decode 는 토큰 하나를 만들려고 **KV 캐시 전체를 읽는다** — "
+          "읽은 바이트당 계산이 거의 없다",
+          "**배치를 키워도 산술 강도가 안 오른다** — "
+          "요청마다 자기 KV 캐시를 읽어야 하니 FLOPs 와 바이트가 같이 는다",
+          "이것이 LLM 추론이 근본적으로 **메모리 대역폭 문제**인 이유다",
+          "그래서 처방이 전부 '읽는 바이트를 줄이기' 쪽이다"]:
+    print(f"  · {s}")
+print()
+print("**KV 캐시를 줄이는 방법들**")
+print()
+print(f"{'기법':<24} {'무엇을 줄이나':<30} {'대가'}")
+print("-" * 74)
+for a, b, c in [
+    ("MQA / GQA", "KV 헤드 수를 1개 또는 그룹으로", "표현력 약간 손해"),
+    ("KV 캐시 양자화", "bf16 → int8/int4", "정확도 약간 손해"),
+    ("슬라이딩 윈도우", "먼 과거를 버린다", "장거리 의존성 손실"),
+    ("PagedAttention", "단편화를 없애 실효 배치를 키움", "구현 복잡도"),
+    ("추측 디코딩", "**한 번 읽고 여러 토큰**", "검증 비용, 수용률"),
+]:
+    print(f"{a:<24} {b:<30} {c}")
+print()
+print("  마지막 줄이 특히 산술 강도를 직접 올린다 —")
+print("  가중치를 한 번 읽어 **k 개 토큰을 검증**하면 AI 가 k 배가 된다.")
+print("  [11.5](05_serving.qmd)에서 다시 본다.")
+```
+
+::: {.interaction-hint}
+prefill 과 decode 가 루프라인의 양 끝에 있다는 사실이 서빙 설계 전체를 지배한다.
+
+**prefill 은 연산 제한**이라 GPU 를 꽉 채우고, **decode 는 메모리 제한**이라 놀린다.
+그래서 둘을 분리해 스케줄링하는 것(prefill-decode disaggregation)이
+최근 서빙 시스템의 표준이 되었다.
 :::
 
-모델 최적화의 절반은 '이 연산이 연산 제한인가 메모리 제한인가'를 아는 것이다. 그 답이 무엇을 고쳐야 할지 결정한다.
+---
+
+## G11.3.3 — 메모리 왕복을 실제로 재 본다
+
+이론은 그렇다 치고, 데이터 이동이 정말 시간을 먹는지 이 기계에서 직접 잰다.
+
+같은 결과를 **여러 단계로 나눠 계산**하면 중간 결과가 매번 메모리를 왕복한다.
+수학적으로 하나로 합칠 수 있는 식으로 비교하면 그 비용만 남는다.
+
+```{python}
+#| label: fusion
+#| code-fold: false
+
+import time
+import numpy as np
+
+
+def bench(f, rep=5, warm=2):
+    for _ in range(warm):
+        f()
+    ts = []
+    for _ in range(rep):
+        s = time.perf_counter()
+        f()
+        ts.append(time.perf_counter() - s)
+    return float(np.median(ts))
+
+
+print("같은 결과를 나눠 계산 vs 한 번에 (numpy 는 중간 결과를 매번 새 배열로 만든다)")
+print()
+print(f"{'배열 크기':>10} {'연산 수':>8} {'분리 (ms)':>11} {'융합 (ms)':>11} "
+      f"{'비율':>7} {'메모리 통과':>12}")
+print("-" * 66)
+FUSE = []
+for MB in [32, 200]:
+    n = MB*1000000//4
+    x = np.random.default_rng(0).normal(0, 1, n).astype(np.float32)
+
+    def u3():
+        y = x*2.0
+        y = y + 1.0
+        return y*3.0
+
+    def u5():
+        y = x*2.0
+        y = y + 1.0
+        y = y*3.0
+        y = y - 0.5
+        return y*1.5
+
+    t3 = bench(u3); f3 = bench(lambda: x*6.0 + 3.0)
+    t5 = bench(u5); f5 = bench(lambda: x*9.0 + 3.75)
+    FUSE.append((MB, 3, t3, f3))
+    FUSE.append((MB, 5, t5, f5))
+    print(f"{MB:>8}MB {3:>8} {t3*1e3:>11.2f} {f3*1e3:>11.2f} "
+          f"{t3/f3:>7.2f} {'6회 → 2회':>12}")
+    print(f"{MB:>8}MB {5:>8} {t5*1e3:>11.2f} {f5*1e3:>11.2f} "
+          f"{t5/f5:>7.2f} {'10회 → 2회':>12}")
+print()
+big5 = [f for f in FUSE if f[0] == 200 and f[1] == 5][0]
+big3 = [f for f in FUSE if f[0] == 200 and f[1] == 3][0]
+print(f"**연산을 나눠 하면 {big3[2]/big3[3]:.1f}~{big5[2]/big5[3]:.1f}배 느리다.**")
+print("  계산량은 똑같다. 늘어난 것은 **메모리 왕복뿐**이다.")
+print()
+for s in ["이론상 배수는 메모리 통과 횟수의 비(3배·5배)에 가까워야 한다",
+          f"실측은 그보다 작다 ({big5[2]/big5[3]:.1f}배) — "
+          "일부가 캐시에서 처리되고, 연산 자체의 비용도 섞여 있어서다",
+          "**그래도 방향은 분명하다**: 같은 계산을 나누면 느려진다",
+          "이것이 **커널 융합**이 존재하는 이유다 — "
+          "torch.compile·Triton·XLA 가 하는 일의 핵심",
+          "FlashAttention 도 같은 원리다 — "
+          "어텐션 행렬을 HBM 에 쓰지 않고 **SRAM 안에서 소비**한다"]:
+    print(f"  · {s}")
+print()
+print("**메모리 계층과 왕복 비용**")
+print()
+print(f"{'계층':<18} {'대략 용량':<14} {'대략 대역폭':<16} {'왕복하면'}")
+print("-" * 70)
+for a, b, c, d in [
+    ("레지스터", "SM 당 256KB", "수십 TB/s", "공짜"),
+    ("SRAM (공유 메모리)", "SM 당 ~200KB", "~19 TB/s", "싸다"),
+    ("L2 캐시", "40MB", "~5 TB/s", "보통"),
+    ("HBM", "80GB", "2 TB/s", "**비싸다**"),
+    ("호스트 (PCIe)", "TB 급", "~64 GB/s", "**아주 비싸다**"),
+]:
+    print(f"{a:<18} {b:<14} {c:<16} {d}")
+print()
+print("  융합의 목표는 하나다 — **HBM 왕복을 SRAM 왕복으로 바꾼다.**")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G11.3.4 — 작은 행렬은 왜 느린가
 
-- GPU 구조: SM, 텐서 코어, 메모리 계층(레지스터·SRAM·HBM)
-- FLOPs와 메모리 대역폭, 산술 강도(arithmetic intensity)
-- 루프라인 모델과 연산 제한 vs 메모리 제한
-- 왜 어텐션 디코드는 메모리 제한인가 (FlashAttention 재해석)
-- 정밀도: FP32/TF32/FP16/BF16/FP8과 텐서 코어 처리량
-- 혼합정밀도 학습의 실제 구성과 손실 스케일링
-- 커널 융합과 컴파일러(torch.compile, Triton, XLA)
-- 연산자 실행 오버헤드와 CUDA 그래프
-- 다중 GPU 상호연결: NVLink, PCIe, InfiniBand 대역폭
-- TPU·NPU 등 대안 가속기의 설계 차이
-- 프로파일링: 어디서 시간이 가는지 실제로 측정하기
-- 비용 모델: 학습 예산을 GPU-시간으로 환산하기
+이론 FLOPs 는 크기와 무관하게 $2n^3$ 이다. 실제로는 그렇지 않다.
+이 기계에서 직접 재 본다.
+
+```{python}
+#| label: gemm
+#| code-fold: false
+
+import time
+import numpy as np
+
+print("정사각 행렬곱의 실측 처리량 (float32, median)")
+print()
+print(f"{'n':>6} {'시간 (ms)':>11} {'GFLOP/s':>10} {'산술 강도':>10} "
+      f"{'작업집합 MB':>12}")
+print("-" * 56)
+GEMM = []
+for n in [64, 128, 256, 512, 1024, 2048, 3072]:
+    g = np.random.default_rng(0)
+    A = g.normal(0, 1, (n, n)).astype(np.float32)
+    B = g.normal(0, 1, (n, n)).astype(np.float32)
+    t = bench(lambda: A @ B,
+              rep=25 if n <= 512 else (9 if n <= 1024 else 3),
+              warm=5 if n <= 512 else 2)
+    fl = 2*n**3
+    byt = 3*n*n*4
+    GEMM.append((n, t, fl/t/1e9, fl/byt, byt/1e6))
+    print(f"{n:>6} {t*1e3:>11.3f} {fl/t/1e9:>10.1f} {fl/byt:>10.1f} "
+          f"{byt/1e6:>12.2f}")
+print()
+best = max(GEMM, key=lambda r: r[2])
+small = GEMM[0]
+print(f"**최고 {best[2]:.0f} GFLOP/s (n={best[0]}), "
+      f"n={small[0]} 에서는 {small[2]:.0f} GFLOP/s** — "
+      f"{best[2]/small[2]:.0f}배 차이.")
+print()
+for s in ["작은 행렬은 **호출 오버헤드와 데이터 이동**이 계산을 압도한다",
+          "산술 강도가 $n/6$ 로 자라므로, n 이 작으면 능선점에 못 미친다",
+          "**이 측정은 잡음이 있다** — CPU 의 BLAS 는 크기마다 다른 "
+          "알고리즘·스레드 수를 고르고, 캐시 상태에 민감하다",
+          "그래도 **작은 행렬이 피크에 못 미친다**는 방향은 일관되다",
+          "GPU 에서도 같다 — 작은 배치, 좁은 층, 많은 작은 커널이 "
+          "**연산 유닛을 못 채운다**"]:
+    print(f"  · {s}")
+print()
+print("**그래서 실무에서 하는 것들**")
+print()
+print(f"{'증상':<26} {'처방'}")
+print("-" * 66)
+for a, b in [
+    ("작은 커널이 아주 많다", "융합, **CUDA 그래프**로 실행 오버헤드 제거"),
+    ("배치가 작다", "동적/연속 배칭 ([11.5](05_serving.qmd))"),
+    ("층이 좁다", "너비를 키우고 깊이를 줄이는 편이 유리할 때가 있다"),
+    ("차원이 8·16 배수가 아니다", "**텐서 코어가 안 쓰인다** — 패딩"),
+    ("메모리 제한이 확실하다", "정밀도를 낮춰 **바이트를 줄인다**"),
+]:
+    print(f"{a:<26} {b}")
+```
+
+```{python}
+#| label: fig-gemm
+#| fig-cap: "G11.3.4 — 이 기계에서 실측한 행렬곱 처리량. 작은 행렬은 산술 강도가 낮아 피크에 한참 못 미친다. 측정 잡음이 있지만 방향은 분명하다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=[g[3] for g in GEMM], y=[g[2] for g in GEMM],
+                         mode="lines+markers+text",
+                         text=[f"n={g[0]}" for g in GEMM],
+                         textposition="bottom right", textfont=dict(size=10),
+                         name="실측 처리량",
+                         line=dict(color=viz.ACCENT, width=2.5),
+                         marker=dict(size=10)))
+viz.fig_defaults(
+    fig, "산술 강도와 실측 처리량 (CPU float32)", height=440,
+    xaxis_title="산술 강도 n/6 (FLOP/byte)", yaxis_title="GFLOP/s",
+    xaxis_type="log")
+viz.annotate_box(fig, "왼쪽 아래 = 작은 행렬<br>"
+                      "<b>산술 강도가 낮아 못 채운다</b>",
+                 x=0.02, y=0.98, xanchor="left", yanchor="top")
+fig
+```
 
 ---
 
-## G11.3.1 — 루프라인 모델
+## G11.3.5 — 정밀도와 6ND: 예산 계산
 
-연산 제한 영역과 메모리 제한 영역의 경계
+```{python}
+#| label: precision
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 산술 강도 슬라이더
-:::
+print("A100 의 정밀도별 이론 처리량 (텐서 코어)")
+print()
+print(f"{'정밀도':<12} {'TFLOP/s':>10} {'FP32 대비':>10} {'바이트/값':>10} "
+      f"{'쓰임'}")
+print("-" * 72)
+for nm, tf, by, use in [
+    ("FP32", 19.5, 4, "기준 (텐서 코어 미사용)"),
+    ("TF32", 156, 4, "코드 변경 없이 8배"),
+    ("BF16", 312, 2, "**학습의 표준**"),
+    ("FP16", 312, 2, "손실 스케일링 필요"),
+    ("INT8", 624, 1, "추론 양자화 ([11.4](04_efficiency.qmd))"),
+]:
+    print(f"{nm:<12} {tf:>10.1f} {tf/19.5:>9.0f}x {by:>10} {use}")
+print()
+for s in ["**BF16 이 FP16 을 대체한 이유는 속도가 아니라 지수 범위**다 — "
+          "둘 다 312 TFLOP/s 인데 BF16 은 FP32 와 같은 지수 비트를 갖는다",
+          "그래서 손실 스케일링 없이도 오버플로·언더플로가 덜 난다",
+          "정밀도를 낮추면 **연산도 빨라지고 바이트도 준다** — "
+          "메모리 제한 연산에도 도움이 된다",
+          "다만 [11.2](02_distributed_training.qmd)에서 봤듯 "
+          "**옵티마이저 상태는 fp32 로 남긴다** — 누적 오차 때문"]:
+    print(f"  · {s}")
+print()
+print("**학습 총 연산량의 어림식: 6ND**")
+print("  파라미터 N 개, 토큰 D 개면 총 FLOPs ≈ 6ND")
+print("  (순전파 2ND + 역전파 4ND. 역전파가 입력·가중치 양쪽 그래디언트를 계산)")
+print()
+MFU = 0.4
+print(f"{'모델':<8} {'N':>8} {'D':>9} {'총 FLOPs':>11} {'A100-시간':>13} "
+      f"{'1024장이면':>12}")
+print("-" * 66)
+COST = []
+for nm, N_, D_ in [("125M", 125e6, 2.5e9), ("1.3B", 1.3e9, 26e9),
+                   ("7B", 7e9, 2e12), ("70B", 70e9, 15e12),
+                   ("405B", 405e9, 15e12)]:
+    fl = 6*N_*D_
+    hrs = fl/(PEAK*MFU)/3600
+    COST.append((nm, fl, hrs))
+    print(f"{nm:<8} {N_/1e9:>7.2f}B {D_/1e12:>8.3f}T {fl:>11.2e} "
+          f"{hrs:>13,.0f} {hrs/1024/24:>10.1f}일")
+print()
+print(f"  (MFU {MFU:.0%} 가정 — 이 값이 이 장 전체의 주제다)")
+print()
+c7, c405 = COST[2], COST[4]
+print(f"**7B 는 1024장으로 {c7[2]/1024/24:.1f}일, "
+      f"405B 는 {c405[2]/1024/24:.0f}일이다.**")
+for s in ["MFU 를 40% 에서 50% 로 올리면 **비용이 20% 준다** — "
+          "그래서 커널 최적화에 사람을 붙인다",
+          "MFU 를 떨어뜨리는 것들: 파이프라인 버블 "
+          "([11.2](02_distributed_training.qmd)), 겹치지 못한 통신, "
+          "메모리 제한 연산, 데이터 로더 대기 ([11.1](01_data_pipeline.qmd))",
+          "**Part 11 의 앞 세 장이 전부 이 한 숫자를 위한 것**이었다",
+          "6ND 는 어림식이다 — 어텐션의 $S^2$ 항은 무시했고, "
+          "긴 문맥에서는 그 항이 커진다"]:
+    print(f"  · {s}")
+print()
+print("**프로파일링 없이 최적화하지 말 것**")
+print()
+print(f"{'질문':<30} {'보는 것'}")
+print("-" * 66)
+for a, b in [
+    ("GPU 가 놀고 있나", "가속기 사용률, 커널 타임라인의 빈틈"),
+    ("연산 제한인가 메모리 제한인가", "**달성 대역폭 vs 달성 FLOPs**"),
+    ("어떤 커널이 오래 걸리나", "커널별 시간 상위 목록"),
+    ("커널이 너무 많나", "커널 개수와 평균 실행 시간"),
+    ("통신이 겹치고 있나", "통신 커널과 계산 커널의 중첩"),
+]:
+    print(f"{a:<30} {b}")
+print()
+print("  **두 번째 줄이 이 장의 요점이다.** 그것을 모르면 처방이 반대가 된다.")
+```
 
 ---
 
-## G11.3.2 — 정밀도별 처리량
+## 요약
 
-같은 하드웨어에서 정밀도에 따른 이론 성능 차이
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **산술 강도** | FLOPs / 이동 바이트 | 연산 제한인지 메모리 제한인지 |
+| A100 능선점 | **153 FLOP/byte** | 바이트당 153번은 계산해야 본전 |
+| 같은 하드웨어에서 | GEMM 312 TFLOP/s vs elementwise **0.5** | 600배 차이 |
+| LayerNorm·softmax | 피크의 0.4% | FLOPs로 세면 안 보인다 |
+| **어텐션 prefill** | AI **2,048** — 연산 제한 | GPU를 꽉 채운다 |
+| **어텐션 decode** | AI **1.00** — 메모리 제한 | 2,048배 차이 |
+| 배치를 키워도 | decode의 AI는 **그대로 1.00** | 요청마다 KV를 읽어야 |
+| 그래서 | MQA/GQA·KV 양자화·추측 디코딩 | 전부 '읽는 바이트 줄이기' |
+| **메모리 왕복 실측** | 연산을 나누면 **1.3~2.5배** 느리다 | 계산량은 같은데 |
+| 커널 융합 | HBM 왕복을 SRAM 왕복으로 | FlashAttention의 원리 |
+| **작은 행렬** | 실측에서 최고치의 몇 분의 1 | AI가 n/6이라 능선점에 못 미침 |
+| 실무 처방 | 융합·CUDA 그래프·배칭·패딩 | 커널 오버헤드 제거 |
+| **BF16** | FP16과 같은 312 TFLOP/s | 속도가 아니라 **지수 범위** 때문 |
+| 6ND | 7B×2T = 8.4e22 FLOPs | 1024장으로 7.6일 |
+| MFU | 40 → 50%면 비용 20% 절감 | 앞 세 장이 전부 이 숫자를 위한 것 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 정밀도 전환
-:::
-
----
-
-## G11.3.3 — 커널 융합 효과
-
-메모리 왕복이 줄어들며 실행 시간이 감소하는 모습
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 융합 토글
-:::
-
----
-
-## G11.3.4 — 학습 비용 추정
-
-6ND 근사로 총 FLOPs와 GPU-시간을 계산
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 파라미터·토큰 슬라이더
-:::
+하드웨어가 무엇을 잘하는지 알았다.
+이제 **모델을 그 모양에 맞게 줄이는** 이야기다.
 
 ---
 
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 산술 강도 |  |
-| 루프라인 모델 |  |
-| 메모리 대역폭 |  |
-| BF16/FP8 |  |
-| 커널 융합 |  |
-| 6ND 근사 |  |
-
----
-
-**다음**: [11.4 모델 효율화](04_efficiency.qmd) — 양자화·프루닝·증류 — 같은 성능을 더 싸게
+**다음**: [11.4 모델 효율화](04_efficiency.qmd) — 같은 성능을 더 싸게
 
 **이전**: [11.2 분산 학습](02_distributed_training.qmd)
