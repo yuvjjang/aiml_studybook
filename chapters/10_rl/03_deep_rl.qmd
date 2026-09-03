@@ -4,90 +4,658 @@ subtitle: "DQN과 그 확장 — 신경망을 가치 함수로"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[10.2](02_model_free.qmd)의 마지막에서 본 것은 경고였다.
+함수 근사 · 부트스트랩 · off-policy 가 모이면 학습이 발산할 수 있다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+DQN 은 그 셋을 **전부** 쓴다. 신경망으로 $Q$ 를 근사하고, TD 목표로 부트스트랩하고,
+버퍼에 쌓인 옛날 데이터로 학습한다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그런데 작동했다. Atari 49개 게임을 같은 구조·같은 하이퍼파라미터로 학습해 냈다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 장의 질문은 하나다. **무엇이 그것을 가능하게 했는가.**
+
+답은 이론이 아니라 **공학 장치 몇 개**였고, 이 장에서 그 장치들을
+하나씩 켜고 끄며 무엇이 실제로 일하는지 잰다.
+그 과정에서 통념 하나가 깨진다 — 경험 재생과 타깃 네트워크는 **같은 문제를 풀지 않는다.**
+
+---
+
+## DQN 의 뼈대
+
+$$L(\theta) = \mathbb{E}_{(s,a,r,s')\sim \mathcal{D}}
+\Big[\big(\underbrace{r + \gamma\max_{a'}Q_{\theta^-}(s',a')}_{\text{타깃 네트워크 }\theta^-}
+- Q_\theta(s,a)\big)^2\Big]$$
+
+기호 두 개가 전부다.
+
+| 장치 | 무엇을 바꾸나 | 무엇을 막으려 했나 |
+|------|-------------|------------------|
+| **경험 재생** $\mathcal{D}$ | 갱신 표본을 버퍼에서 무작위로 뽑는다 | 연속 표본의 **상관** |
+| **타깃 네트워크** $\theta^-$ | 목표값의 파라미터를 주기적으로만 갱신 | 목표가 따라 움직이는 **되먹임** |
+
+나머지(프레임 스택, 보상 클리핑, 그래디언트 클리핑)는 전처리와 안전장치다.
+
+이 장에서는 **PyTorch 를 실행하지 않는다.** 장치들의 효과를 격리해서 보려면
+작은 선형 근사기로 충분하고, 그래야 원인이 보인다.
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import rl
+
+WALLS = [(1, 1), (1, 2), (2, 4), (3, 1)]
+TERM = {(0, 6): 1.0, (3, 3): -1.0}
+gw = rl.GridWorld(rows=5, cols=7, walls=WALLS, terminals=TERM,
+                  step_cost=-0.04, slip=0.2)
+G = 0.95
+V_STAR, _, _ = rl.value_iteration(gw.P, gw.R, G)
+Q_STAR = rl.q_from_v(gw.P, gw.R, V_STAR, G)
+OK = np.array([not gw.is_wall(gw.rc(s)) and not gw.is_terminal(s)
+               for s in range(gw.nS)])
+START = gw.idx((4, 0))
+
+D = 8
+_r = np.random.default_rng(7)
+PHI = np.hstack([_r.normal(0, 1, (gw.nS, D))/np.sqrt(D),
+                 np.ones((gw.nS, 1))])         # 손실 있는 선형 특성
+DF = PHI.shape[1]
+
+print(f"상태 {gw.nS}개를 특성 {DF}차원으로 근사한다 — "
+      f"**표보다 {gw.nS/DF:.1f}배 작다**")
+print(f"  즉 상태들이 서로 간섭한다. 이것이 함수 근사의 본질이다")
+print(f"  Q* 범위 [{Q_STAR[OK].min():.3f}, {Q_STAR[OK].max():.3f}]")
+```
+
+---
+
+## G10.3.1 — 최대화 편향: max 가 잡음을 낙관으로 바꾼다
+
+Q-learning 의 목표에는 $\max_{a'}$ 가 있다.
+추정에 잡음이 있으면 **최댓값은 체계적으로 과대평가된다.**
+
+$$\mathbb{E}\big[\max_a \hat{Q}(a)\big] \ \ge\ \max_a \mathbb{E}\big[\hat{Q}(a)\big]$$
+
+젠센 부등식이다. 참 $Q$ 가 전부 0 이어도, 잡음 섞인 추정의 최댓값은 양수가 된다.
+얼마나 되는지 재 보자.
+
+```{python}
+#| label: max-bias
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+N = 200000
+print("참 Q 가 전부 0 인데, 잡음 섞인 추정의 max 는 얼마인가")
+print()
+print(f"{'행동 수 k':>9} {'잡음 σ':>8} {'단일 추정 E[max]':>17} "
+      f"{'이중 추정':>11} {'참값':>7}")
+print("-" * 56)
+MB = []
+for k in [2, 4, 8, 16]:
+    for sg in [0.5, 1.0]:
+        q1 = rng.normal(0, sg, (N, k))
+        q2 = rng.normal(0, sg, (N, k))
+        single = float(q1.max(1).mean())
+        a = q1.argmax(1)
+        double = float(q2[np.arange(N), a].mean())   # 고르기와 평가를 분리
+        MB.append((k, sg, single, double))
+        print(f"{k:>9} {sg:>8.1f} {single:>17.4f} {double:>11.4f} {0.0:>7.1f}")
+print()
+big = [m for m in MB if m[0] == 16 and m[1] == 1.0][0]
+sml = [m for m in MB if m[0] == 2 and m[1] == 1.0][0]
+print(f"**행동이 많고 잡음이 클수록 편향이 커진다** — "
+      f"k=2 에서 {sml[2]:.3f}, k=16 에서 {big[2]:.3f}.")
+print(f"  잡음 σ 에 비례하고, k 에는 대략 $\\sqrt{{\\log k}}$ 로 자란다.")
+print()
+print("**이중 추정은 편향을 없앤다.**")
+print(f"  k=16, σ=1 에서 {big[2]:.4f} → {big[3]:.4f} (참값 0).")
+for s in ["한 추정기로 **행동을 고르고**, 다른 추정기로 **값을 매긴다**",
+          "고를 때의 잡음과 평가할 때의 잡음이 **독립**이라 낙관이 상쇄된다",
+          "이것이 Double Q-learning 이고, DQN 판이 **Double DQN** 이다",
+          "Double DQN 은 표를 두 개 두는 대신 "
+          "**온라인 네트워크로 고르고 타깃 네트워크로 평가**한다 — 공짜에 가깝다"]:
+    print(f"  · {s}")
+```
+
+**추정 편향이 정책까지 망치는지** 보자. Sutton & Barto 의 고전 예제다.
+
+```{python}
+#| label: max-bias-mdp
+#| code-fold: false
+
+import numpy as np
+
+print("상태 A 에서 right 는 즉시 종료(보상 0), left 는 상태 B 로 간다.")
+print("B 에서는 어떤 행동을 해도 N(−0.1, 1) 보상 후 종료 — 즉 left 는 손해다.")
+print("그런데 B 의 행동이 10개라 max 가 낙관적으로 부푼다.")
+print()
+
+
+def maxbias(double=False, n_ep=300, alpha=0.1, eps=0.1, seed=0, nB=10):
+    rng = np.random.default_rng(seed)
+    QA, QB = np.zeros(2), np.zeros(nB)
+    QA2, QB2 = np.zeros(2), np.zeros(nB)
+    lefts = np.zeros(n_ep)
+    for ep in range(n_ep):
+        qa = (QA + QA2)/2 if double else QA
+        a = int(rng.integers(2)) if rng.random() < eps else int(qa.argmax())
+        lefts[ep] = (a == 0)
+        if a == 1:                                   # right → 종료
+            if double and rng.random() < 0.5:
+                QA2[a] += alpha*(0.0 - QA2[a])
+            else:
+                QA[a] += alpha*(0.0 - QA[a])
+            continue
+        qb = (QB + QB2)/2 if double else QB
+        b = int(rng.integers(nB)) if rng.random() < eps else int(qb.argmax())
+        r = rng.normal(-0.1, 1.0)
+        if double:
+            if rng.random() < 0.5:
+                QB[b] += alpha*(r - QB[b])
+                QA[0] += alpha*(QB2[int(QB.argmax())] - QA[0])
+            else:
+                QB2[b] += alpha*(r - QB2[b])
+                QA2[0] += alpha*(QB[int(QB2.argmax())] - QA2[0])
+        else:
+            QB[b] += alpha*(r - QB[b])
+            QA[0] += alpha*(QB.max() - QA[0])
+    return lefts
+
+
+print(f"{'알고리즘':<16} {'left 선택률 (첫 100)':>21} "
+      f"{'left 선택률 (마지막 100)':>24}")
+print("-" * 64)
+MBM = []
+for dbl, nm in [(False, "Q-learning"), (True, "Double Q")]:
+    L = np.mean([maxbias(dbl, seed=s) for s in range(200)], 0)
+    MBM.append((nm, L, float(L[:100].mean()), float(L[-100:].mean())))
+    print(f"{nm:<16} {MBM[-1][2]:>21.4f} {MBM[-1][3]:>24.4f}")
+print()
+print("  (최적은 right. ε=0.1 이므로 left 선택률의 하한은 0.05 다)")
+print()
+q, d = MBM
+print(f"**Q-learning 은 초반 100 에피소드에서 {q[2]:.1%} 를 잘못 고른다.**")
+print(f"  Double Q 는 {d[2]:.1%} — {q[2]/d[2]:.1f}배 차이다.")
+print(f"  끝까지 가도 {q[3]:.1%} vs {d[3]:.1%} 로 격차가 남는다 "
+      f"(하한 5%).")
+print()
+print("**과대평가가 왜 정책까지 망치나**")
+for s in ["B 의 Q 최댓값이 부풀면 A 의 left 가치도 따라 부푼다 — "
+          "부트스트랩으로 전파된다",
+          "그러면 left 를 더 자주 고르고, 더 자주 고르면 더 많이 갱신되고…",
+          "**낙관이 스스로를 강화한다**",
+          "Atari 에서 DQN 의 Q 값이 실제 반환값보다 크게 나온다는 것이 "
+          "Double DQN 논문의 출발점이었다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-maxbias
+#| fig-cap: "G10.3.1 — 최대화 편향. 왼쪽은 참값이 0인데도 max가 만들어 내는 낙관(행동 수와 잡음에 따라), 오른쪽은 그 낙관이 정책을 어떻게 망치는지."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("추정 편향 E[max] (참값 0)",
+                                    "잘못된 행동 선택률"))
+for i, sg in enumerate([0.5, 1.0]):
+    ks = [m[0] for m in MB if m[1] == sg]
+    vs = [m[2] for m in MB if m[1] == sg]
+    fig.add_trace(go.Scatter(x=ks, y=vs, mode="lines+markers",
+                             name=f"단일 추정 σ={sg}",
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)), row=1, col=1)
+    ds = [m[3] for m in MB if m[1] == sg]
+    fig.add_trace(go.Scatter(x=ks, y=ds, mode="lines+markers",
+                             name=f"이중 추정 σ={sg}",
+                             line=dict(color=viz.color(i), width=1.6,
+                                       dash="dot"),
+                             marker=dict(size=6)), row=1, col=1)
+for i, (nm, L, a, b) in enumerate(MBM):
+    sm = np.convolve(L, np.ones(15)/15, mode="valid")
+    fig.add_trace(go.Scatter(x=np.arange(len(sm)), y=sm, mode="lines", name=nm,
+                             line=dict(color=viz.color(i+2), width=2.5)),
+                  row=1, col=2)
+fig.add_hline(y=0.05, line=dict(color=viz.hex_rgba(viz.GREEN, 0.6),
+                                dash="dash"), row=1, col=2)
+viz.fig_defaults(fig, "최대화 편향과 그 결과", height=430)
+fig.update_xaxes(title_text="행동 수 k", row=1, col=1)
+fig.update_xaxes(title_text="에피소드", row=1, col=2)
+fig.update_yaxes(title_text="추정값", row=1, col=1)
+fig.update_yaxes(title_text="left 선택률", row=1, col=2)
+fig
+```
+
+---
+
+## G10.3.2 — 경험 재생: 상관은 확실히 깨진다, 그런데 이득은?
+
+연속된 전이는 서로 닮았다. 신경망을 그 순서대로 학습시키면
+**최근 지역의 데이터에만 맞춰지고 그 전을 잊는다.**
+
+버퍼에 쌓아 두고 무작위로 뽑으면 그 상관이 깨진다. 실제로 그런지부터 확인한다.
+
+```{python}
+#| label: correlation
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+s = START
+seq = []
+for _ in range(6000):
+    a = int(rng.integers(gw.nA))
+    ns = int(rng.choice(gw.nS, p=gw.P[s, a]))
+    seq.append(s)
+    s = START if gw.is_terminal(ns) else ns
+seq = np.array(seq)
+
+print("연속 전이의 상태 자기상관 vs 버퍼에서 무작위 추출")
+print()
+LAGS = [1, 2, 5, 10, 20, 50]
+ac = [float(np.corrcoef(seq[:-k], seq[k:])[0, 1]) for k in LAGS]
+print(f"{'시차 k':>7} " + " ".join(f"{k:>8}" for k in LAGS))
+print(f"{'상관':>7} " + " ".join(f"{v:>+8.3f}" for v in ac))
+idx = np.random.default_rng(1).integers(0, len(seq), len(seq))
+shuf = seq[idx]
+AC1 = ac[0]
+AC_SHUF = float(np.corrcoef(shuf[:-1], shuf[1:])[0, 1])
+print()
+print(f"  버퍼에서 무작위 추출한 표본의 k=1 상관: {AC_SHUF:+.3f}")
+print()
+print(f"**연속 표본은 {AC1:+.3f} 로 강하게 상관돼 있고, "
+      f"무작위 추출은 {AC_SHUF:+.3f} 다.**")
+print("  경험 재생이 하려는 일은 정확히 이것이고, 확실히 작동한다.")
+print("  덤으로 **한 전이를 여러 번 재사용**하므로 표본 효율도 오른다.")
+```
+
+**그런데 그 탈상관이 성능으로 이어지는가.** 직접 재 보면 이야기가 단순하지 않다.
+
+```{python}
+#| label: replay
+#| code-fold: false
+
+import numpy as np
+
+
+def train(mode="replay", n_steps=6000, alpha=0.05, eps=0.2, batch=32,
+          cap=2000, tp=100, seed=0):
+    """선형 Q 근사. mode='online' 이면 방금 겪은 전이 하나로만 갱신."""
+    rng = np.random.default_rng(seed)
+    W = np.zeros((DF, gw.nA))
+    Wt = W.copy()
+    S = np.zeros(cap, int); A = np.zeros(cap, int); R_ = np.zeros(cap)
+    NX = np.zeros(cap, int); DN = np.zeros(cap, bool)
+    n, ptr, s = 0, 0, START
+    for t in range(n_steps):
+        a = (int(rng.integers(gw.nA)) if rng.random() < eps
+             else int((PHI[s] @ W).argmax()))
+        ns = int(rng.choice(gw.nS, p=gw.P[s, a]))
+        r, d = float(gw.R[s, a]), gw.is_terminal(ns)
+        S[ptr], A[ptr], R_[ptr], NX[ptr], DN[ptr] = s, a, r, ns, d
+        ptr = (ptr + 1) % cap
+        n = min(n + 1, cap)
+        i = (np.array([(ptr - 1) % cap]) if mode == "online"
+             else rng.integers(0, n, batch))
+        Wref = Wt if tp > 0 else W
+        bs, ba, br, bn, bd = S[i], A[i], R_[i], NX[i], DN[i]
+        tgt = np.where(bd, br, br + G*(PHI[bn] @ Wref).max(1))
+        td = tgt - (PHI[bs]*W[:, ba].T).sum(1)
+        gW = np.zeros_like(W)
+        np.add.at(gW.T, ba, td[:, None]*PHI[bs])
+        W += alpha*gW/len(i)
+        if tp > 0 and t % tp == 0:
+            Wt = W.copy()
+        s = START if d else ns
+        if not np.isfinite(W).all():
+            return np.inf
+    return float(np.sqrt(((PHI @ W - Q_STAR)[OK]**2).mean()))
+
+
+def summarize(vals):
+    v = np.array(vals)
+    ok = np.isfinite(v)
+    tail = f" [발산 {int((~ok).sum())}]" if (~ok).any() else ""
+    return f"{v[ok].mean():.4f}±{v[ok].std():.3f}{tail}"
+
+
+print("온라인 갱신 vs 경험 재생 — Q 함수 RMSE (시드 8개)")
+print()
+print(f"{'α':>7} {'온라인':>20} {'경험 재생':>20}")
+print("-" * 50)
+REP = []
+for al in [0.02, 0.05, 0.1, 0.2]:
+    o = [train("online", alpha=al, seed=sd) for sd in range(8)]
+    r = [train("replay", alpha=al, seed=sd) for sd in range(8)]
+    REP.append((al, float(np.mean(o)), float(np.mean(r))))
+    print(f"{al:>7} {summarize(o):>20} {summarize(r):>20}")
+print()
+print("**정직하게: 경험 재생의 이득이 뚜렷하지 않다.**")
+for al, o, r in REP:
+    mark = "재생 우세" if r < o else "온라인 우세"
+    print(f"  α={al}: 온라인 {o:.4f} vs 재생 {r:.4f} — {mark}")
+print()
+print("**작은 α 에서는 재생이 낫고, 큰 α 에서는 차이가 사라진다.**")
+for s in ["이 환경은 상태 35개에 선형 특성 9개다 — **너무 쉽다**",
+          "에피소드가 짧아 금방 시작점으로 돌아가므로 "
+          "온라인도 어느 정도 다양한 상태를 본다",
+          "DQN 이 재생을 절실히 필요로 한 이유는 **Atari 의 규모** 때문이다 — "
+          "픽셀 입력, 심층 비선형 네트워크, 수천 스텝짜리 에피소드",
+          "**장치의 효과는 문제의 난이도에 딸려 있다.** "
+          "쉬운 문제에서 재현이 안 되는 것이 장치가 쓸모없다는 뜻은 아니다",
+          f"그래도 **탈상관이라는 메커니즘 자체는 위에서 확실히 측정됐다** "
+          f"({AC1:+.3f} → {AC_SHUF:+.3f})"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G10.3.3 — 타깃 네트워크: 이건 확실히 일한다
+
+경험 재생과 타깃 네트워크는 흔히 한 묶음으로 이야기된다.
+그런데 **다른 문제를 푼다.**
+
+- 경험 재생 → 표본의 **상관**
+- 타깃 네트워크 → 목표값의 **되먹임**
+
+[10.2](02_model_free.qmd)에서 발산시킨 Baird 의 반례로 이 둘을 따로 시험한다.
+거기서는 확실히 터졌으니, 무엇이 그것을 막는지 보면 된다.
+
+```{python}
+#| label: baird-devices
+#| code-fold: false
+
+import numpy as np
+
+NS_B, NW = 7, 8
+PHI_B = np.zeros((NS_B, NW))
+for i in range(6):
+    PHI_B[i, i] = 2.0
+    PHI_B[i, 7] = 1.0
+PHI_B[6, 6] = 1.0
+PHI_B[6, 7] = 2.0
+W0 = np.array([1., 1., 1., 1., 1., 1., 10., 1.])
+GAM_B = 0.99
+
+
+def baird_dqn(alpha=0.01, steps=5000, tp=0, batch=1, cap=1000, seed=0):
+    """Baird 반례 + DQN 장치. tp>0 이면 타깃 네트워크, batch>1 이면 경험 재생."""
+    rng = np.random.default_rng(seed)
+    w = W0.copy()
+    wt = w.copy()
+    S = np.zeros(cap, int); NX = np.zeros(cap, int); RHO = np.zeros(cap)
+    n, ptr = 0, 0
+    for t in range(steps):
+        s = int(rng.integers(NS_B))
+        solid = rng.random() < 1/7
+        rho = 7.0 if solid else 0.0
+        ns = 6 if solid else int(rng.integers(6))
+        S[ptr], NX[ptr], RHO[ptr] = s, ns, rho
+        ptr = (ptr + 1) % cap
+        n = min(n + 1, cap)
+        i = (np.array([(ptr - 1) % cap]) if batch == 1
+             else rng.integers(0, n, min(batch, n)))
+        wref = wt if tp > 0 else w
+        bs, bn, br = S[i], NX[i], RHO[i]
+        td = GAM_B*(PHI_B[bn] @ wref) - (PHI_B[bs] @ w)
+        w = w + alpha*((br*td)[:, None]*PHI_B[bs]).mean(0)
+        if tp > 0 and t % tp == 0:
+            wt = w.copy()
+        if not np.isfinite(w).all():
+            return np.inf
+    return float(np.linalg.norm(w))
+
+
+print("Baird 반례(참 가치 0)에 장치를 하나씩 붙인다 — 5000 스텝, 시드 5개 중앙값")
+print()
+print(f"{'설정':<38} {'‖w‖':>14} {'발산?':>8}")
+print("-" * 62)
+DEV = []
+for nm, kw in [("장치 없음 (10.2 의 그것)", dict()),
+               ("경험 재생만 (배치 32)", dict(batch=32)),
+               ("타깃 네트워크만 (주기 100)", dict(tp=100)),
+               ("타깃 네트워크만 (주기 1000)", dict(tp=1000)),
+               ("둘 다 (주기 1000 + 배치 32)", dict(tp=1000, batch=32))]:
+    v = float(np.median([baird_dqn(seed=s, **kw) for s in range(5)]))
+    DEV.append((nm, v))
+    print(f"{nm:<38} {v:>14.4g} {'예' if v > 1e3 else '아니오':>8}")
+print()
+none_, rep_, tn_ = DEV[0][1], DEV[1][1], DEV[3][1]
+print("**갈린 지점이 분명하다.**")
+print(f"  경험 재생만: {rep_:.4g} — **발산을 못 막는다** "
+      f"(장치 없음 {none_:.4g} 와 같은 수준)")
+print(f"  타깃 네트워크만: {tn_:.4g} — **완전히 막는다**")
+print()
+print("길게 돌려도 유계로 남는가 (주기 1000 + 배치 32)")
+for st in [1000, 5000, 20000, 50000]:
+    v = float(np.median([baird_dqn(steps=st, tp=1000, batch=32, seed=s)
+                         for s in range(3)]))
+    print(f"  {st:>6} 스텝: ‖w‖ = {v:.4g}")
+print()
+print("**왜 타깃 네트워크만 통하는가**")
+for s in ["발산의 원인은 **목표값이 자기 갱신을 따라 움직이는 것**이었다 "
+          "([10.2](02_model_free.qmd)의 되먹임 고리)",
+          "타깃을 얼리면 그 고리가 **주기 동안 끊긴다** — "
+          "그 사이에는 지도학습 회귀와 같아진다",
+          "경험 재생은 **표본을 섞을 뿐** 목표값의 되먹임에는 손대지 않는다",
+          "Baird 의 상태 분포는 이미 균등(무작위 추출)이라 섞을 것도 없었다 — "
+          "그래서 재생이 아무 일도 못 했다",
+          "**두 장치를 한 묶음으로 외우면 안 되는 이유**가 이 표에 있다"]:
+    print(f"  · {s}")
+print()
+print("**주기를 어떻게 고르나**")
+print()
+print(f"{'주기':<14} {'효과':<30} {'대가'}")
+print("-" * 68)
+for a, b, c in [
+    ("너무 짧다 (1)", "타깃 네트워크가 없는 것과 같다", "되먹임 그대로"),
+    ("적당하다", "되먹임이 끊기고 안정적", "—"),
+    ("너무 길다", "안정적이지만 **정보가 늦게 반영**", "학습이 느려진다"),
+    ("소프트 갱신 (τ)", "$\\theta^- \\leftarrow \\tau\\theta + (1-\\tau)\\theta^-$",
+     "DDPG·SAC 의 방식"),
+]:
+    print(f"{a:<14} {b:<30} {c}")
+```
+
+```{python}
+#| label: fig-devices
+#| fig-cap: "G10.3.3 — Baird 반례에서 두 장치의 효과. 로그 축이다. 타깃 네트워크만 발산을 막고, 경험 재생은 막지 못한다 — 두 장치는 다른 문제를 푼다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+nms = [d[0] for d in DEV]
+vals = [d[1] for d in DEV]
+cols = [viz.WARM if v > 1e3 else viz.GREEN for v in vals]
+fig = go.Figure(go.Bar(x=nms, y=vals, marker_color=cols,
+                       text=[f"{v:.3g}" for v in vals],
+                       textposition="outside"))
+fig.add_hline(y=1e3, line=dict(color="rgba(255,255,255,0.35)", dash="dash"))
+fig.add_annotation(x=0, y=np.log10(1e3), text="발산 판정선", showarrow=False,
+                   xanchor="left", yanchor="bottom", font=dict(size=11))
+viz.fig_defaults(
+    fig, "Baird 반례에서 ‖w‖ (5000 스텝, 참 가치는 0)", height=450,
+    xaxis_title="", yaxis_title="‖w‖ (로그)", yaxis_type="log")
+fig.update_xaxes(tickangle=-15)
+fig
+```
+
+::: {.interaction-hint}
+주황 두 개(장치 없음, 경험 재생만)가 발산했고 초록 셋이 살아남았다.
+차이를 만든 것은 **타깃 네트워크 하나**다.
+
+이것이 이 장의 핵심 교훈이다.
+DQN 논문이 두 장치를 함께 도입했기 때문에 흔히 한 세트로 기억되지만,
+**둘은 서로 다른 병을 고친다** — 재생은 데이터의 상관을, 타깃 네트워크는 목표의 되먹임을.
+
+실제로 이후 알고리즘들은 둘을 따로 쓴다.
+on-policy 인 [10.4](04_policy_gradient.qmd)의 PPO 는 재생 버퍼를 안 쓰지만,
+가치 함수를 학습할 때는 여전히 목표를 고정한다.
 :::
 
-DQN은 딥러닝과 강화학습을 결합할 때 무엇이 깨지는지, 그리고 그것을 어떤 공학적 장치로 막는지를 보여준 최초의 성공 사례다.
+---
+
+## G10.3.4 — Dueling: 쪼개면 유일하지 않다
+
+Dueling DQN 은 $Q$ 를 둘로 쪼갠다.
+
+$$Q(s,a) = V(s) + A(s,a)$$
+
+"이 상태가 얼마나 좋은가"와 "이 행동이 평균보다 얼마나 나은가"를 분리하면,
+행동이 별로 중요하지 않은 상태에서 $V$ 를 효율적으로 배울 수 있다.
+
+그런데 이 분해에는 문제가 하나 있다.
+
+```{python}
+#| label: dueling
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+Q = rng.normal(0, 1, (5, 4))
+print("같은 Q 를 만드는 (V, A) 쌍이 무수히 많다")
+print()
+print(f"{'상수 c':>8} {'V 평균':>10} {'A 평균':>10} {'복원 오차':>12}")
+print("-" * 44)
+for c in [0.0, 5.0, -3.0]:
+    V = Q.mean(1) + c
+    A = Q - V[:, None]
+    print(f"{c:>+8.1f} {V.mean():>+10.4f} {A.mean():>+10.4f} "
+          f"{np.abs((V[:, None] + A) - Q).max():>12.2e}")
+print()
+print("**$V$ 를 c 만큼 올리고 $A$ 를 c 만큼 내리면 Q 는 그대로다.**")
+print("  즉 신경망이 두 갈래를 학습할 때 **어디로든 표류할 수 있다.**")
+print("  실제로 학습 중 V 와 A 가 각각 발산하면서 Q 만 맞는 일이 생긴다.")
+print()
+print("**해법: 한쪽을 고정한다**")
+Vm = Q.mean(1); Am = Q - Vm[:, None]
+Vx = Q.max(1); Ax = Q - Vx[:, None]
+print()
+print(f"{'방식':<24} {'제약':<26} {'확인'}")
+print("-" * 68)
+print(f"{'평균 빼기 (Dueling 기본)':<24} {'A 의 행별 평균 = 0':<26} "
+      f"{np.abs(Am.mean(1)).max():.2e}")
+print(f"{'최댓값 빼기':<24} {'A 의 행별 최댓값 = 0':<26} "
+      f"{np.abs(Ax.max(1)).max():.2e}")
+print()
+for s in ["**최댓값 빼기**가 이론적으로 더 깔끔하다 — "
+          "그러면 $V(s)=\\max_a Q(s,a)$ 가 되어 의미가 정확해진다",
+          "**그런데 논문은 평균 빼기를 택했다.** 최댓값은 argmax 가 바뀔 때 "
+          "불연속이라 최적화가 불안정하기 때문",
+          "평균을 쓰면 $V$ 의 의미가 살짝 어긋나지만(최댓값이 아니라 평균 근처) "
+          "**학습이 훨씬 안정적**이다",
+          "이론적 정확성보다 최적화 안정성을 고른 사례 — "
+          "심층 강화학습에는 이런 선택이 많다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 나머지 확장들
 
-- 가치 함수 근사와 불안정성의 원인
-- DQN의 두 장치: 경험 재생(replay buffer)과 타깃 네트워크
-- Atari 학습 설정: 프레임 스택, 보상 클리핑, 전처리
-- Double DQN: 최대화 편향 완화
-- Dueling DQN: 가치와 이점(advantage) 분리
-- 우선순위 경험 재생(PER)
-- 분포적 RL: C51, QR-DQN
-- Rainbow: 조합의 효과
-- 연속 행동 공간과 DDPG / TD3 / SAC
-- 샘플 효율 문제와 실세계 적용의 벽
+```{python}
+#| label: rainbow
+#| code-fold: false
+
+print("**Rainbow 가 합친 여섯 가지**")
+print()
+print(f"{'요소':<20} {'무엇을 고치나':<32} {'이 책의 근거'}")
+print("-" * 80)
+for a, b, c in [
+    ("Double DQN", "max 의 과대평가", "G10.3.1"),
+    ("우선순위 재생 (PER)", "갱신 가치가 큰 전이부터", "[10.1](01_dynamic_programming.qmd) G10.1.4"),
+    ("Dueling", "V 와 A 를 분리", "G10.3.4"),
+    ("다중 스텝", "편향-분산 절충", "[10.2](02_model_free.qmd) G10.2.2"),
+    ("분포적 RL (C51)", "기댓값 대신 **분포**를 학습", "—"),
+    ("잡음 네트워크", "ε-탐욕 대신 학습된 탐색", "[10.0](00_mdp.qmd) G10.0.4"),
+]:
+    print(f"{a:<20} {b:<32} {c}")
+print()
+print("**여섯 중 넷은 이미 앞에서 잰 원리다.**")
+print("  PER 은 [10.1](01_dynamic_programming.qmd)에서 잰 것과 같다 — "
+      "목표에 가까운 순으로 갱신하면 스윕이 0.56배로 줄었다.")
+print("  TD 오차가 큰 전이부터 뽑는 것이 그 원리의 표본 판이다.")
+print("  대가: 표본 분포가 왜곡되므로 **중요도 가중으로 보정**해야 한다 "
+      "([10.2](02_model_free.qmd) G10.2.5).")
+print()
+print("**분포적 RL 이 특별한 이유**")
+for s in ["Q 는 반환값의 **기댓값**이다 — 분산 정보를 버린다",
+          "C51·QR-DQN 은 반환값의 **분포 전체**를 학습한다",
+          "기댓값만 쓸 거면서도 성능이 오른다 — "
+          "**보조 과제가 표현을 좋게 만든다**는 해석이 유력",
+          "위험 민감 정책, 탐색 보너스 등으로도 쓸 수 있다"]:
+    print(f"  · {s}")
+print()
+print("**연속 행동 공간에서는 max 를 쓸 수 없다**")
+print()
+print(f"{'알고리즘':<12} {'max 를 무엇으로 대체':<32} {'핵심 장치'}")
+print("-" * 74)
+for a, b, c in [
+    ("DDPG", "결정적 액터가 argmax 역할", "소프트 타깃 갱신"),
+    ("TD3", "같음 + 과대평가 억제", "**두 크리틱의 최솟값**, 지연 갱신"),
+    ("SAC", "확률적 액터 + 엔트로피 항", "자동 온도 조절, 두 크리틱"),
+]:
+    print(f"{a:<12} {b:<32} {c}")
+print()
+print("  TD3 의 '두 크리틱 중 최솟값'이 G10.3.1 과 같은 처방이다 —")
+print("  **낙관을 구조적으로 깎는다.** 방향만 반대(비관 쪽으로 치우침)다.")
+print()
+print("**그리고 실세계 적용의 벽**")
+print()
+print(f"{'문제':<22} {'현실'}")
+print("-" * 66)
+for a, b in [
+    ("샘플 효율", "Atari 에서 사람 수준까지 수천만 프레임"),
+    ("안전", "학습 중 탐색이 물리적 손상을 낸다"),
+    ("보상 설계", "무엇을 최대화할지 정의하는 것이 가장 어렵다"),
+    ("시뮬레이션 격차", "시뮬레이터에서 배운 것이 현실에서 안 통한다"),
+    ("재현성", "시드에 따라 결과가 크게 흔들린다"),
+]:
+    print(f"{a:<22} {b}")
+print()
+print("  마지막 줄은 이 장의 실험에서도 보였다 — "
+      "시드 8개의 표준편차가 평균의 10~20% 였다.")
+print("  **심층 강화학습 논문을 읽을 때 시드 수를 먼저 확인해야 하는 이유다.**")
+```
 
 ---
 
-## G10.3.1 — 경험 재생 버퍼
+## 요약
 
-상관된 연속 샘플이 무작위 재생으로 탈상관되는 과정
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| DQN의 두 장치 | 경험 재생, 타깃 네트워크 | 삼중고를 공학으로 견딘다 |
+| **최대화 편향** | 참값 0인데 k=16, σ=1에서 **1.767** | E[max] ≥ max E |
+| 이중 추정 | 같은 조건에서 **−0.001** | 고르기와 평가를 분리 |
+| 정책까지 망친다 | Q-learning left 77.2% vs Double Q 18.0% | 낙관이 부트스트랩으로 전파 |
+| **재생의 메커니즘** | 자기상관 +0.919 → **−0.001** | 확실히 작동한다 |
+| 재생의 이득은 | α=0.02에서 0.979 → 0.912, 큰 α에선 차이 없음 | **작은 문제에선 뚜렷하지 않다** |
+| 왜 | 상태 35개·특성 9개는 너무 쉽다 | Atari 규모에서 절실해진다 |
+| **타깃 네트워크** | Baird에서 4.2e6 → **12.6** | 발산을 완전히 막는다 |
+| **경험 재생은** | 같은 실험에서 **6.6e6** | 발산을 못 막는다 |
+| 그 함의 | 두 장치는 **다른 병을 고친다** | 한 묶음으로 외우면 안 된다 |
+| 50,000스텝까지 | ‖w‖ 10.5로 유계 | 되먹임 고리가 끊긴다 |
+| **Dueling 식별 문제** | (V+c, A−c)가 같은 Q | 분해가 유일하지 않다 |
+| 논문의 선택 | 최댓값 대신 **평균** 빼기 | 이론적 정확성보다 최적화 안정성 |
+| Rainbow | 여섯 중 넷이 앞에서 잰 원리 | PER은 10.1의 순서 효과와 같다 |
+| 연속 행동 | TD3의 두 크리틱 최솟값 | G10.3.1과 같은 처방, 방향만 반대 |
+| 재현성 | 시드 8개 표준편차가 평균의 10~20% | 논문의 시드 수를 확인할 것 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 버퍼 크기 슬라이더
-:::
-
----
-
-## G10.3.2 — 타깃 네트워크 효과
-
-타깃 고정 유무에 따른 학습 안정성 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 갱신 주기 슬라이더
-:::
-
----
-
-## G10.3.3 — 최대화 편향
-
-max 연산이 잡음을 과대평가로 바꾸는 현상과 Double DQN의 교정
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 잡음 수준 슬라이더
-:::
+가치 함수를 근사했다.
+그런데 **정책을 직접 다루면** 이 모든 우회로가 필요 없을지도 모른다.
 
 ---
 
-## G10.3.4 — Dueling 분해
-
-가치와 이점으로 분해된 Q값의 구성
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 상태 선택
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| DQN |  |
-| 경험 재생 |  |
-| 타깃 네트워크 |  |
-| Double DQN |  |
-| SAC |  |
-| 분포적 RL |  |
-
----
-
-**다음**: [10.4 정책 경사법](04_policy_gradient.qmd) — REINFORCE·A2C·PPO — 정책을 직접 미분하기
+**다음**: [10.4 정책 경사법](04_policy_gradient.qmd) — 정책을 직접 미분하기
 
 **이전**: [10.2 모델프리 학습](02_model_free.qmd)
