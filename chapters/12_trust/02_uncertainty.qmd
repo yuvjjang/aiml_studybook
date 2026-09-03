@@ -4,92 +4,769 @@ subtitle: "우연적·인식적 불확실성·conformal — 모른다고 말할 
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+모델이 "이 환자는 90% 확률로 양성입니다" 라고 말했다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+이 문장을 의사결정에 쓰려면 조건이 하나 있다 —
+**그렇게 말한 사례 100건 중 실제로 90건이 양성이어야 한다.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그렇지 않으면 0.9 는 숫자 모양을 한 장식일 뿐이고,
+임계값도, 기대손실 계산도, 사람에게 넘길 시점도 전부 틀어진다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+그런데 현대 신경망은 대개 그렇지 않다. 그리고 이 장의 첫 실험이 보여주듯,
+**모델을 키우고 오래 학습시킬수록 더 나빠진다.**
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+D, K = 10, 4
+_g = np.random.default_rng(3)
+W1 = _g.normal(0, 1, (D, 12)); W2 = _g.normal(0, 1, (12, K))
+
+
+def gen(n, seed, noise=1.1):
+    """줄일 수 없는 잡음(Gumbel)이 섞인 4-클래스 과제. 베이즈 오차가 크다."""
+    g = np.random.default_rng(seed)
+    X = g.normal(0, 1, (n, D))
+    y = (np.tanh(X @ W1) @ W2 * 1.2 + g.gumbel(0, noise, (n, K))).argmax(1)
+    return X, y
+
+
+Xtr, ytr = gen(2000, 1)
+Xva, yva = gen(2000, 2)
+Xte, yte = gen(3000, 3)
+
+
+def ece(P, y, bins=15):
+    """Expected Calibration Error — 구간별 |확신 − 정확도| 의 가중 평균."""
+    conf = P.max(1); acc = (P.argmax(1) == y).astype(float)
+    ed = np.linspace(0, 1, bins+1); e = 0.0
+    for i in range(bins):
+        m = (conf > ed[i]) & (conf <= ed[i+1])
+        if m.sum():
+            e += m.mean()*abs(acc[m].mean() - conf[m].mean())
+    return float(e)
+
+
+def reliability(P, y, bins=12):
+    conf = P.max(1); acc = (P.argmax(1) == y).astype(float)
+    ed = np.linspace(0, 1, bins+1); out = []
+    for i in range(bins):
+        m = (conf > ed[i]) & (conf <= ed[i+1])
+        out.append((float(ed[i:i+2].mean()),
+                    float(conf[m].mean()) if m.sum() else np.nan,
+                    float(acc[m].mean()) if m.sum() else np.nan,
+                    int(m.sum())))
+    return out
+
+
+def nll(P, y):
+    return float(-np.log(P[np.arange(len(y)), y] + 1e-12).mean())
+
+
+def logits(m, X):
+    o, _ = m.forward(X, training=False)
+    return o
+
+
+def softmax_T(z, T):
+    z = z/T; z = z - z.max(1, keepdims=True)
+    e = np.exp(z); return e/e.sum(1, keepdims=True)
+
+
+print("**먼저 두 종류의 불확실성을 구분한다** — 이 장 전체가 이 구분 위에 선다")
+print()
+print(f"{'':<12} {'우연적 (aleatoric)':<28} {'인식적 (epistemic)'}")
+print("-" * 76)
+for a, b, c in [
+    ("정체", "데이터 자체의 잡음", "모델이 몰라서 생기는 것"),
+    ("예", "같은 증상, 다른 진단", "본 적 없는 유형의 환자"),
+    ("줄이려면", "**줄일 수 없다**", "데이터를 더 모으면 준다"),
+    ("나타나는 곳", "겹치는 클래스 경계", "데이터가 희박한 영역"),
+    ("대응", "임계값·기대손실로 관리", "**수집하거나 거부한다**"),
+]:
+    print(f"{a:<12} {b:<28} {c}")
+print()
+print("  이 둘을 섞으면 처방이 반대가 된다 —")
+print("  잡음 때문에 틀리는 것에는 데이터를 더 모아도 소용이 없고,")
+print("  모르는 영역에서 틀리는 것은 임계값을 올려도 해결되지 않는다.")
+```
+
+---
+
+## G12.2.1 — 모델이 커질수록 더 뻔뻔해진다
+
+캘리브레이션의 정의는 간단하다. 확신 $p$ 로 말한 예측들의 실제 정확도가 $p$ 여야 한다.
+
+$$
+\mathbb{P}\big(\hat{y} = y \mid \hat{p} = p\big) = p \quad \forall p \in [0,1]
+$$
+
+이를 어긴 정도를 재는 것이 **ECE** 다. 확신을 구간으로 나눠 가중 평균한다.
+
+$$
+\text{ECE} = \sum_{m=1}^{M} \frac{|B_m|}{n}\Big|\,\text{acc}(B_m) - \text{conf}(B_m)\Big|
+$$
+
+같은 데이터에 크기와 학습량만 바꿔 가며 재 본다.
+
+```{python}
+#| label: overconfidence
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+print("모델 크기·학습량과 과신")
+print()
+print(f"{'모델':<20} {'스텝':>6} {'정확도':>9} {'평균 확신':>10} "
+      f"{'ECE':>9} {'NLL':>8}   격차")
+print("-" * 78)
+MD = {}
+OVER = []
+for nm, sz, st in [("작음 [16]", [D, 16, K], 1200),
+                   ("중간 [64,64]", [D, 64, 64, K], 1200),
+                   ("큼 [128,128]", [D, 128, 128, K], 1200),
+                   ("큼 + 오래 학습", [D, 128, 128, K], 4000)]:
+    m = nn.MLP(sz, out_activation="softmax", seed=0)
+    nn.train(m, Xtr, ytr, loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=0.003), steps=st,
+             batch_size=128, seed=0)
+    P = m.predict(Xte)
+    a = float((P.argmax(1) == yte).mean()); c = float(P.max(1).mean())
+    MD[nm] = m
+    OVER.append((nm, st, a, c, ece(P, yte), nll(P, yte)))
+    print(f"{nm:<20} {st:>6} {a:>9.4f} {c:>10.4f} {ece(P,yte):>9.4f} "
+          f"{nll(P,yte):>8.4f}   {c-a:>+.4f}")
+print()
+s0, s3 = OVER[0], OVER[-1]
+print("**정확도는 거의 안 변하는데 확신만 올라간다.**")
+print(f"  정확도 {s0[2]:.4f} → {s3[2]:.4f} ({s3[2]-s0[2]:+.4f})")
+print(f"  평균 확신 {s0[3]:.4f} → {s3[3]:.4f} ({s3[3]-s0[3]:+.4f})")
+print(f"  **ECE {s0[4]:.4f} → {s3[4]:.4f}** — {s3[4]/s0[4]:.1f}배")
+print(f"  NLL {s0[5]:.4f} → {s3[5]:.4f} — "
+      f"**로그 손실은 오히려 {s3[5]/s0[5]:.1f}배 나빠졌다**")
+print()
+for s in ["원인은 교차 엔트로피 손실이다 — "
+          "**이미 맞힌 예측의 확신을 계속 밀어 올려도 손실이 계속 준다**",
+          "정확도가 포화한 뒤에도 최적화는 멈추지 않고 로짓을 키운다",
+          "그래서 **조기 종료와 가중치 감쇠가 보정에도 도움**이 된다 "
+          "— 정확도가 아니라 로짓 크기를 억제하기 때문",
+          "**정확도로 모델을 고르면 이 문제가 안 보인다** — "
+          "네 모델의 정확도 차이는 0.03 이내인데 ECE 는 9배 차이다",
+          "NLL 을 함께 봐야 한다. NLL 은 정확도와 보정을 동시에 벌한다"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 온도 스케일링: 매개변수 하나로 고친다
+
+놀랍게도 이 문제는 거의 공짜로 고쳐진다.
+로짓을 **하나의 스칼라 $T$ 로 나누고**, 검증셋에서 $T$ 만 최적화한다.
+
+$$
+\hat{p} = \text{softmax}(z / T)
+$$
+
+$T$ 는 단조 변환이라 **argmax 가 안 바뀐다 — 정확도가 그대로다.**
+
+```{python}
+#| label: temperature
+#| code-fold: false
+
+import numpy as np
+
+M = MD["큼 + 오래 학습"]
+zv, zt = logits(M, Xva), logits(M, Xte)
+TS = np.linspace(0.5, 10.0, 96)
+NLLv = [nll(softmax_T(zv, T), yva) for T in TS]
+TBEST = float(TS[int(np.argmin(NLLv))])
+
+print(f"검증셋 NLL 을 최소화하는 온도: **T* = {TBEST:.2f}**")
+print("  (T > 1 이면 로짓을 눌러 확신을 낮춘다는 뜻)")
+print()
+print(f"{'':<20} {'정확도':>9} {'평균 확신':>10} {'ECE':>9} {'NLL':>8}")
+print("-" * 60)
+TEMP = []
+for lbl, T in [("보정 전 (T = 1)", 1.0), (f"보정 후 (T = {TBEST:.2f})", TBEST)]:
+    P = softmax_T(zt, T)
+    TEMP.append((lbl, T, float((P.argmax(1) == yte).mean()),
+                 float(P.max(1).mean()), ece(P, yte), nll(P, yte)))
+    print(f"{lbl:<20} {(P.argmax(1)==yte).mean():>9.4f} {P.max(1).mean():>10.4f} "
+          f"{ece(P,yte):>9.4f} {nll(P,yte):>8.4f}")
+print()
+b, a_ = TEMP
+print(f"**정확도가 소수점 이하까지 완전히 같다** ({b[2]:.4f} = {a_[2]:.4f}).")
+print(f"  ECE {b[4]:.4f} → {a_[4]:.4f} ({b[4]/a_[4]:.1f}배 개선)")
+print(f"  NLL {b[5]:.4f} → {a_[5]:.4f}")
+print()
+for s in ["**매개변수 한 개다.** 검증셋 몇 천 개면 충분하고, 재학습이 필요 없다",
+          "그래서 **보정은 거의 항상 해야 한다** — 비용이 사실상 0 이다",
+          "다만 온도 스케일링은 **전체 확신 수준만 조절**한다 — "
+          "클래스별로 다르게 틀어진 경우는 못 고친다",
+          "그때는 Platt 스케일링(클래스별 선형)이나 "
+          "isotonic 회귀(단조 비모수)를 쓴다",
+          "**중요한 한계**: 보정은 **검증셋과 같은 분포**에서만 유효하다. "
+          "[11.6](../11_systems/06_monitoring.qmd)의 드리프트가 오면 다시 어긋난다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-reliability
+#| fig-cap: "G12.2.1 — 신뢰도 다이어그램. 보정 전 막대는 대각선 아래로 크게 처져 있다(확신이 정확도보다 높다). 온도 하나로 대각선에 붙는다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="완벽한 보정",
+                         line=dict(color="rgba(255,255,255,0.45)", dash="dash")))
+for lbl, T, col in [(f"보정 전 (ECE {TEMP[0][4]:.3f})", 1.0, viz.WARM),
+                    (f"보정 후 T={TBEST:.2f} (ECE {TEMP[1][4]:.3f})",
+                     TBEST, viz.ACCENT)]:
+    rows = reliability(softmax_T(zt, T), yte)
+    xs = [r[1] for r in rows]; ys = [r[2] for r in rows]
+    ns = [r[3] for r in rows]
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="lines+markers", name=lbl,
+        line=dict(color=col, width=3),
+        marker=dict(size=[6+22*(n/max(ns)) for n in ns], opacity=0.85),
+        customdata=ns,
+        hovertemplate="확신 %{x:.3f}<br>정확도 %{y:.3f}"
+                      "<br>표본 %{customdata}<extra></extra>"))
+viz.fig_defaults(fig, "신뢰도 다이어그램 — 대각선에서 멀수록 나쁘다", height=470,
+                 xaxis_title="평균 확신", yaxis_title="실제 정확도",
+                 xaxis=dict(range=[0, 1]), yaxis=dict(range=[0, 1]))
+fig
+```
+
+::: {.interaction-hint}
+점 크기가 그 구간의 표본 수다.
+
+**주황(보정 전) 점들이 대각선 한참 아래**에 있다 —
+확신 0.99 라고 말한 예측의 실제 정확도가 0.6 대다.
+
+파랑(보정 후)은 대각선에 붙는다. **모델도, 정확도도 그대로**인데
+로짓을 $T$ 로 나눈 것뿐이다.
 :::
 
-확률 0.9라고 말한 예측이 실제로 90% 맞아야 그 숫자를 의사결정에 쓸 수 있다. 대부분의 신경망은 그렇지 않다.
+---
+
+## 앙상블·MC 드롭아웃: 정확도와 보정은 다른 문제다
+
+```{python}
+#| label: ensembles
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+ENS = []
+for s in range(5):
+    m = nn.MLP([D, 64, 64, K], out_activation="softmax", seed=s)
+    nn.train(m, Xtr, ytr, loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=0.003), steps=1200,
+             batch_size=128, seed=s)
+    ENS.append(m)
+Zt = np.array([logits(m, Xte) for m in ENS])
+Zv = np.array([logits(m, Xva) for m in ENS])
+
+md = nn.MLP([D, 64, 64, K], out_activation="softmax", seed=0, dropout=0.2)
+nn.train(md, Xtr, ytr, loss="softmax_ce", opt=nn.Optimizer("adam", lr=0.003),
+         steps=1200, batch_size=128, seed=0)
+PMC = np.mean([nn.softmax(md.forward(Xte, training=True)[0])
+               for _ in range(20)], 0)
+
+T1 = float(TS[int(np.argmin([nll(softmax_T(Zv[0], T), yva) for T in TS]))])
+TE = float(TS[int(np.argmin([nll(np.mean([softmax_T(z, T) for z in Zv], 0), yva)
+                             for T in TS]))])
+PENS = np.mean([softmax_T(z, 1.0) for z in Zt], 0)
+
+print(f"단일 모델 T* = {T1:.2f},  앙상블 T* = {TE:.2f}")
+print()
+print(f"{'방법':<24} {'정확도':>9} {'평균 확신':>10} {'ECE':>9} {'NLL':>8}")
+print("-" * 66)
+CMP = []
+for lbl, P in [("단일 모델", softmax_T(Zt[0], 1.0)),
+               ("단일 + 온도 스케일링", softmax_T(Zt[0], T1)),
+               ("MC 드롭아웃 (20회)", PMC),
+               ("딥 앙상블 (5개)", PENS),
+               ("딥 앙상블 + 온도", np.mean([softmax_T(z, TE) for z in Zt], 0))]:
+    r = (lbl, float((P.argmax(1) == yte).mean()), float(P.max(1).mean()),
+         ece(P, yte), nll(P, yte))
+    CMP.append(r)
+    print(f"{lbl:<24} {r[1]:>9.4f} {r[2]:>10.4f} {r[3]:>9.4f} {r[4]:>8.4f}")
+print()
+sing, temp, mc, ens, enst = CMP
+print("**두 축이 서로 다르게 움직인다.**")
+print(f"  **정확도**는 앙상블·MC 드롭아웃이 올린다 "
+      f"({sing[1]:.4f} → {ens[1]:.4f} / {mc[1]:.4f}). 온도는 못 올린다.")
+print(f"  **보정**은 온도가 고친다 (ECE {sing[3]:.4f} → {temp[3]:.4f}). "
+      f"앙상블만으로는 {ens[3]:.4f} 에 그친다.")
+print(f"  **둘을 같이 쓰면** 정확도 {enst[1]:.4f} 에 ECE {enst[3]:.4f} — "
+      f"NLL {enst[4]:.4f}.")
+print()
+for s in ["앙상블의 보정 효과는 **부수적**이다 — "
+          "서로 다른 오답이 평균에서 상쇄되며 확신이 조금 내려갈 뿐",
+          "구성원 각각이 과신하면 평균도 과신한다. "
+          f"실제로 앙상블 ECE 가 {ens[3]:.4f} 로 남았다",
+          f"이 과제에서는 **MC 드롭아웃이 가장 좋은 NLL({mc[4]:.4f})** 을 냈다 — "
+          "드롭아웃이 정규화까지 하기 때문이다",
+          "다만 MC 드롭아웃은 **드롭아웃률이라는 임의의 손잡이**에 결과가 달렸고, "
+          "베이지안 근사라는 해석도 논쟁적이다",
+          "**실무 권고는 단순하다** — 앙상블(또는 그냥 좋은 모델) + 온도 스케일링. "
+          "베이지안 신경망의 복잡도를 감당할 이유가 대부분 없다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G12.2.2 — 두 불확실성을 분해한다
 
-- 우연적(aleatoric) vs 인식적(epistemic) 불확실성
-- 캘리브레이션의 정의, 신뢰도 다이어그램, ECE·MCE
-- 현대 신경망의 과신 경향과 그 원인
-- 사후 보정: 온도 스케일링, Platt, isotonic
-- 베이지안 신경망과 변분 근사
-- MC 드롭아웃과 그 해석
-- 딥 앙상블 — 실무에서 가장 강한 기준선
-- 증거 기반 딥러닝(evidential deep learning)
-- conformal prediction: 분포 무관 커버리지 보장
-- 적응형 conformal과 조건부 커버리지
-- 선택적 예측과 거부 옵션, 위험-커버리지 곡선
-- LLM의 불확실성: 로그확률, 자기 일관성, 언어화된 신뢰도
+앙상블에는 보정 말고 다른 쓸모가 있다. **불확실성의 출처를 나눌 수 있다.**
+
+각 구성원이 평균 $\mu_i(x)$ 와 분산 $\sigma_i^2(x)$ 를 함께 출력하게 하면,
+
+$$
+\underbrace{\frac{1}{N}\sum_i \sigma_i^2(x)}_{\text{우연적}} \;+\;
+\underbrace{\frac{1}{N}\sum_i \big(\mu_i(x)-\bar{\mu}(x)\big)^2}_{\text{인식적}}
+$$
+
+구성원들이 **서로 다른 답**을 내면 인식적, **다 같이 넓게** 답하면 우연적이다.
+
+```{python}
+#| label: decompose
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+def f_true(x):
+    return np.sin(1.6*x) + 0.35*x
+
+
+def noise_sd(x):
+    """오른쪽으로 갈수록 잡음이 커진다 (줄일 수 없는 불확실성)."""
+    return 0.05 + 0.55/(1 + np.exp(-(x-1.5)*3))
+
+
+g = np.random.default_rng(0)
+n = 600
+# **데이터 구멍**: x ∈ (−1.2, 0.4) 에는 표본이 하나도 없다
+xs = np.concatenate([g.uniform(-4, -1.2, n//2), g.uniform(0.4, 4, n - n//2)])
+XA = xs[:, None]
+YA = (f_true(xs) + g.normal(0, noise_sd(xs)))[:, None]
+
+
+def train_gauss(seed, steps=2500):
+    """평균과 로그분산을 함께 출력하고 가우시안 NLL 로 학습."""
+    m = nn.MLP([1, 64, 64, 2], seed=seed)
+    opt = nn.Optimizer("adam", lr=0.005)
+    gg = np.random.default_rng(seed)
+    for _ in range(steps):
+        i = gg.integers(0, len(XA), 128)
+        x, y = XA[i], YA[i]
+        out, cache = m.forward(x, training=True)
+        mu, ls = out[:, :1], np.clip(out[:, 1:], -6, 4)
+        var = np.exp(ls)
+        nb = len(x)
+        dout = np.concatenate([-(y-mu)/var/nb,
+                               (0.5 - 0.5*(y-mu)**2/var)/nb], 1)
+        opt.step(m.params(), m.backward(cache, dout))
+    return m
+
+
+GENS = [train_gauss(s) for s in range(5)]
+XG = np.linspace(-5.5, 5.5, 220)[:, None]
+MU = np.array([m.predict(XG)[:, 0] for m in GENS])
+VAR = np.array([np.exp(np.clip(m.predict(XG)[:, 1], -6, 4)) for m in GENS])
+ALEA = VAR.mean(0)
+EPIS = MU.var(0)
+
+print("영역별 불확실성 분해 (구성원 5개)")
+print()
+print(f"{'영역':<28} {'우연적 σ':>10} {'인식적 σ':>10} {'비율 E/A':>10}   진단")
+print("-" * 76)
+REG = []
+for nm, lo, hi, exp in [
+    ("데이터 있음 · 잡음 적음", -3.0, -2.0, "둘 다 작아야"),
+    ("**데이터 구멍**", -0.8, 0.2, "인식적이 커야"),
+    ("데이터 있음 · 잡음 큼", 2.5, 3.5, "우연적이 커야"),
+    ("**외삽 영역**", 4.5, 5.5, "인식적이 커야"),
+]:
+    m_ = (XG[:, 0] >= lo) & (XG[:, 0] <= hi)
+    a_ = float(np.sqrt(ALEA[m_].mean())); e_ = float(np.sqrt(EPIS[m_].mean()))
+    REG.append((nm, a_, e_, e_/a_, exp))
+    print(f"{nm:<28} {a_:>10.4f} {e_:>10.4f} {e_/a_:>10.2f}   {exp}")
+print()
+hole, noisy, extra = REG[1], REG[2], REG[3]
+print("**두 가지는 교과서대로 나온다.**")
+print(f"  데이터 구멍: 인식적/우연적 = {hole[3]:.2f} — "
+      f"인식적이 {hole[3]:.1f}배 크다. **구멍을 감지했다**")
+print(f"  잡음 영역: 비율 {noisy[3]:.2f} — 우연적이 지배한다. "
+      f"**여기서는 데이터를 더 모아도 소용없다**")
+print()
+print("**그런데 하나는 실패한다.**")
+print(f"  외삽 영역(데이터 최댓값 4.0 바깥): 비율 {extra[3]:.2f} 로 "
+      f"**인식적이 안 커진다**.")
+print(f"  인식적 σ 가 구멍에서 {hole[2]:.3f} 였는데 외삽에서는 {extra[2]:.3f} 다.")
+print()
+for s in ["원인은 구성원들이 **같은 방향으로 외삽**하기 때문이다 — "
+          "구조와 손실이 같으니 데이터 밖에서도 비슷하게 행동한다",
+          "**딥 앙상블은 내삽 구멍은 잡지만 외삽은 못 잡는다**",
+          "그리고 여기서 우연적 σ 가 {:.3f} 로 크게 나온 것도 "
+          "'잡음을 안다' 가 아니라 **잡음 모델이 그냥 외삽된 것**이다"
+          .format(extra[1]),
+          "**이것이 '앙상블을 쓰면 OOD 를 안다' 는 통념의 한계**다 — "
+          "[12.3](03_robustness.qmd)에서 OOD 탐지를 따로 다루는 이유",
+          "분포 무관 보장이 필요하면 다음 절의 conformal 로 간다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-decompose
+#| fig-cap: "G12.2.2 — 불확실성 분해. 회색 구간(데이터 구멍)에서는 앙상블 구성원들이 갈라져 인식적 불확실성이 커진다. 오른쪽 잡음 영역에서는 우연적 불확실성이 커진다. 다만 오른쪽 끝 외삽 영역은 감지하지 못한다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+xg = XG[:, 0]
+mu_bar = MU.mean(0)
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.62, 0.38],
+                    vertical_spacing=0.07,
+                    subplot_titles=("예측과 구성원들", "불확실성 분해 (σ)"))
+fig.add_vrect(x0=-1.2, x1=0.4, fillcolor="rgba(255,255,255,0.07)", line_width=0,
+              row=1, col=1)
+fig.add_vrect(x0=-1.2, x1=0.4, fillcolor="rgba(255,255,255,0.07)", line_width=0,
+              row=2, col=1)
+fig.add_vrect(x0=4.0, x1=5.5, fillcolor=viz.hex_rgba(viz.PINK, 0.09),
+              line_width=0, row=1, col=1)
+fig.add_vrect(x0=4.0, x1=5.5, fillcolor=viz.hex_rgba(viz.PINK, 0.09),
+              line_width=0, row=2, col=1)
+tot = np.sqrt(ALEA + EPIS)
+fig.add_trace(go.Scatter(x=np.r_[xg, xg[::-1]],
+                         y=np.r_[mu_bar+2*tot, (mu_bar-2*tot)[::-1]],
+                         fill="toself", fillcolor=viz.hex_rgba(viz.ACCENT, 0.16),
+                         line=dict(width=0), name="±2σ (전체)",
+                         hoverinfo="skip"), row=1, col=1)
+for i in range(len(MU)):
+    fig.add_trace(go.Scatter(x=xg, y=MU[i], mode="lines", showlegend=(i == 0),
+                             name="구성원", hoverinfo="skip",
+                             line=dict(color=viz.hex_rgba(viz.YELLOW, 0.55),
+                                       width=1)), row=1, col=1)
+fig.add_trace(go.Scatter(x=XA[:, 0], y=YA[:, 0], mode="markers", name="데이터",
+                         marker=dict(size=3.5,
+                                     color=viz.hex_rgba(viz.GREEN, 0.5))),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=xg, y=mu_bar, mode="lines", name="앙상블 평균",
+                         line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
+for nm, v, col in [("우연적 σ", np.sqrt(ALEA), viz.WARM),
+                   ("인식적 σ", np.sqrt(EPIS), viz.PINK)]:
+    fig.add_trace(go.Scatter(x=xg, y=v, mode="lines", name=nm,
+                             line=dict(color=col, width=3)), row=2, col=1)
+fig.update_xaxes(title_text="x", row=2, col=1)
+viz.fig_defaults(fig, "데이터 구멍은 잡고, 외삽은 놓친다", height=620)
+fig
+```
 
 ---
 
-## G12.2.1 — 신뢰도 다이어그램
+## G12.2.3 — conformal prediction: 보장을 주는 방법
 
-완벽 캘리브레이션 대각선에서 벗어난 정도와 ECE
+지금까지는 확률을 **더 정직하게** 만드는 이야기였다.
+그런데 온도 스케일링에도 보장은 없다 — 검증셋에서 잘 맞았다는 경험적 사실뿐이다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 모델 전환
-:::
+**conformal prediction** 은 다르다. 하나의 라벨 대신 **집합**을 내놓는 대신,
+분포에 대한 어떤 가정도 없이 **커버리지를 보장**한다.
+
+$$
+\mathbb{P}\big(y_{\text{new}} \in \mathcal{C}(x_{\text{new}})\big) \ \ge\ 1-\alpha
+$$
+
+절차는 놀랄 만큼 단순하다.
+
+1. 보정셋에서 **부적합 점수** $s_i = 1 - \hat{p}(y_i \mid x_i)$ 를 구한다.
+2. 그 점수들의 $\lceil (n+1)(1-\alpha)\rceil / n$ 분위수 $q$ 를 잡는다.
+3. 새 입력에서 $\mathcal{C}(x) = \{k : 1-\hat{p}(k\mid x) \le q\}$ 를 낸다.
+
+필요한 가정은 **교환가능성** 하나뿐이다. 모델이 얼마나 엉망이든 상관없다.
+
+```{python}
+#| label: conformal
+#| code-fold: false
+
+import numpy as np
+
+MC = ENS[0]
+PCA = MC.predict(Xva)          # 보정셋
+PTE = MC.predict(Xte)
+print(f"기반 모델: 정확도 {(PTE.argmax(1)==yte).mean():.4f}, "
+      f"평균 확신 {PTE.max(1).mean():.4f}, ECE {ece(PTE, yte):.4f}")
+print("  **보정이 엉망인 모델이다.** 그래도 커버리지 보장은 성립한다.")
+print()
+print(f"{'α':>6} {'목표':>9} {'실제 커버리지':>14} {'차이':>9} "
+      f"{'평균 집합 크기':>15} {'단일 답 비율':>13}")
+print("-" * 74)
+CONF = []
+scal = 1 - PCA[np.arange(len(yva)), yva]
+ncal = len(scal)
+for a in [0.01, 0.05, 0.10, 0.20, 0.30]:
+    q = float(np.quantile(scal, min(1.0, np.ceil((ncal+1)*(1-a))/ncal),
+                          method="higher"))
+    S = (1 - PTE) <= q
+    cov = float(S[np.arange(len(yte)), yte].mean())
+    sz = float(S.sum(1).mean()); one = float((S.sum(1) == 1).mean())
+    CONF.append((a, cov, sz, one, q))
+    print(f"{a:>6.2f} {1-a:>9.2f} {cov:>14.4f} {cov-(1-a):>+9.4f} "
+          f"{sz:>15.3f} {one:>13.4f}")
+print()
+mx = max(abs(c[1]-(1-c[0])) for c in CONF)
+print(f"**모든 α 에서 커버리지가 목표를 지킨다** — 최대 편차 {mx:.4f}.")
+print("  모델의 확신이 0.87 인데 정확도가 0.62 인 상황에서도 그렇다.")
+print("  **보장은 모델의 품질이 아니라 절차에서 온다.**")
+print()
+c10 = [c for c in CONF if c[0] == 0.10][0]
+c30 = [c for c in CONF if c[0] == 0.30][0]
+print("**대가는 집합의 크기다.**")
+print(f"  90% 커버리지를 원하면 평균 {c10[2]:.2f}개 클래스를 답해야 한다 "
+      f"(4개 중).")
+print(f"  단일 답으로 끝나는 경우는 {c10[3]:.1%} 뿐이다.")
+print(f"  70% 로 낮추면 집합이 {c30[2]:.2f}개로 줄고 단일 답이 {c30[3]:.1%}.")
+print()
+print("**그리고 여기에 결정적인 한계가 있다 — 조건부 커버리지는 보장되지 않는다.**")
+print()
+a = 0.10
+q = float(np.quantile(scal, np.ceil((ncal+1)*(1-a))/ncal, method="higher"))
+S = (1 - PTE) <= q
+print(f"  {'클래스':<8} {'커버리지':>10} {'목표와 차이':>12} "
+      f"{'평균 집합 크기':>15} {'표본 수':>9}")
+print("  " + "-"*58)
+COND = []
+for k in range(K):
+    mk = yte == k
+    cv = float(S[mk, k].mean())
+    COND.append((k, cv, float(S[mk].sum(1).mean()), int(mk.sum())))
+    print(f"  {k:<8} {cv:>10.4f} {cv-0.9:>+12.4f} "
+          f"{S[mk].sum(1).mean():>15.3f} {mk.sum():>9}")
+print()
+lo_ = min(COND, key=lambda t: t[1]); hi_ = max(COND, key=lambda t: t[1])
+print(f"  전체로는 {S[np.arange(len(yte)), yte].mean():.4f} 로 90% 를 지켰는데,")
+print(f"  **클래스 {lo_[0]} 은 {lo_[1]:.4f}, 클래스 {hi_[0]} 은 {hi_[1]:.4f}** — "
+      f"{hi_[1]-lo_[1]:.3f} 차이.")
+print()
+for s in ["**주변부(marginal) 보장은 평균에 대한 보장**이다. "
+          "어떤 부분집단은 덜 커버된다",
+          "이것이 실무에서 위험한 이유는 명확하다 — "
+          "**소수 집단이 체계적으로 덜 보호받을 수 있다** "
+          "([12.4](04_fairness_privacy.qmd))",
+          "완화책은 **집단별로 따로 보정**하거나(Mondrian conformal), "
+          "적응형 점수(APS, RAPS)를 쓰는 것",
+          "또 하나의 전제는 **교환가능성**이다 — "
+          "분포가 이동하면 보장이 깨진다. 시계열에는 그대로 못 쓴다",
+          "그래도 conformal 의 값어치는 분명하다. "
+          "**'모델을 믿을 수 있는가' 를 묻지 않고도 쓸 수 있는 유일한 도구**다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-conformal
+#| fig-cap: "G12.2.3 — conformal 예측. 왼쪽: 실제 커버리지가 목표선 위에 정확히 얹힌다. 오른쪽: 대가로 예측 집합이 커진다. 모델의 ECE가 0.22여도 보장은 성립한다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+al = [c[0] for c in CONF]
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("커버리지 보장", "대가: 예측 집합 크기"))
+fig.add_trace(go.Scatter(x=al, y=[1-a for a in al], mode="lines",
+                         name="목표 1−α",
+                         line=dict(color="rgba(255,255,255,0.5)", dash="dash")),
+              row=1, col=1)
+fig.add_trace(go.Scatter(x=al, y=[c[1] for c in CONF], mode="lines+markers",
+                         name="실제 커버리지",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=11)), row=1, col=1)
+fig.add_trace(go.Bar(x=al, y=[c[2] for c in CONF], name="평균 집합 크기",
+                     marker_color=viz.WARM,
+                     text=[f"{c[2]:.2f}" for c in CONF],
+                     textposition="outside"), row=1, col=2)
+fig.add_trace(go.Scatter(x=al, y=[c[3] for c in CONF], mode="lines+markers",
+                         name="단일 답 비율",
+                         line=dict(color=viz.GREEN, width=3, dash="dot"),
+                         marker=dict(size=10)), row=1, col=2)
+fig.update_xaxes(title_text="α (허용 오류율)", row=1, col=1)
+fig.update_xaxes(title_text="α (허용 오류율)", row=1, col=2)
+fig.update_yaxes(title_text="커버리지", range=[0.6, 1.02], row=1, col=1)
+fig.update_yaxes(title_text="클래스 개수 / 비율", range=[0, 4.2], row=1, col=2)
+viz.fig_defaults(fig, "보장은 공짜가 아니다", height=440)
+fig
+```
 
 ---
 
-## G12.2.2 — 온도 스케일링
+## 선택적 예측: 모르면 넘긴다
 
-온도 하나로 곡선이 대각선에 붙는 과정
+집합을 내놓는 대신, 아예 **답하지 않는 선택지**를 줄 수도 있다.
+확신이 낮으면 사람에게 넘기고, 남은 것만 자동 처리한다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 온도 슬라이더
-:::
+무엇을 기준으로 넘길지가 문제다.
+
+```{python}
+#| label: selective
+#| code-fold: false
+
+import numpy as np
+
+PS = np.array([m.predict(Xte) for m in ENS])
+PE = PS.mean(0)
+P1 = PS[0]
+SCORES = {
+    "최대 softmax (단일)": (P1.max(1), P1),
+    "엔트로피 (단일)": ((P1*np.log(P1 + 1e-12)).sum(1), P1),
+    "앙상블 평균 확신": (PE.max(1), PE),
+    "앙상블 불일치만": (-PS.max(2).var(0), PE),
+}
+print("커버리지를 줄이면 (= 확신 없는 것을 거부하면) 정확도가 얼마나 오르나")
+print()
+print(f"{'커버리지':>9} " + " ".join(f"{k:>19}" for k in SCORES))
+print("-" * 90)
+RISK = {k: [] for k in SCORES}
+for cov in [1.0, 0.8, 0.6, 0.4, 0.2]:
+    row = []
+    for k, (sc, P) in SCORES.items():
+        thr = np.quantile(sc, 1-cov)
+        m_ = sc >= thr
+        v = float((P.argmax(1)[m_] == yte[m_]).mean())
+        RISK[k].append((cov, v)); row.append(v)
+    print(f"{cov:>9.0%} " + " ".join(f"{v:>19.4f}" for v in row))
+print()
+best = "앙상블 평균 확신"
+b20 = RISK[best][-1][1]; b100 = RISK[best][0][1]
+s20 = RISK["최대 softmax (단일)"][-1][1]
+b60 = RISK[best][2][1]; d60 = RISK["앙상블 불일치만"][2][1]
+d20 = RISK["앙상블 불일치만"][-1][1]
+print(f"**거부는 잘 듣는다** — {best}로 20% 만 답하면 "
+      f"정확도가 {b100:.4f} → {b20:.4f}.")
+print(f"  단일 모델 확신으로도 {s20:.4f} 까지 간다.")
+print()
+print(f"**불일치만 쓰면 뒤지는데, 격차는 중간 커버리지에서 가장 크다.**")
+print(f"  커버리지 60%: 평균 확신 {b60:.4f} vs 불일치만 {d60:.4f} "
+      f"({b60-d60:+.4f})")
+print(f"  커버리지 20%: {b20:.4f} vs {d20:.4f} "
+      f"({b20-d20:+.4f}) — 여기서는 거의 붙는다")
+print("  극단적으로 조이면 두 기준이 결국 같은 소수 사례를 남기기 때문이다.")
+print()
+for s in ["잡음 때문에 틀리는 사례(우연적)는 구성원들이 **사이좋게 같이 틀린다** — "
+          "불일치가 안 생긴다",
+          "그래서 **거부 기준으로는 전체 확신이 낫다**. "
+          "불일치는 '데이터를 더 모을까' 를 물을 때 쓴다",
+          "**두 지표는 다른 질문에 답한다** — "
+          "다시 우연적/인식적 구분으로 돌아온다",
+          "실무에서는 **위험-커버리지 곡선**을 그려 놓고 "
+          "사람의 처리 용량에 맞춰 운영점을 고른다",
+          "그리고 이 곡선은 배포 후 계속 다시 그려야 한다 — "
+          "[11.6](../11_systems/06_monitoring.qmd)"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-risk
+#| fig-cap: "G12.2.4 — 위험-커버리지 곡선. 답하는 비율을 줄일수록 정확도가 오른다. 앙상블 불일치만 쓰면 우연적 불확실성을 못 봐 뒤처진다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+for (k, rows), col in zip(RISK.items(),
+                          [viz.ACCENT, viz.GREEN, viz.WARM, viz.PINK]):
+    fig.add_trace(go.Scatter(x=[r[0] for r in rows], y=[r[1] for r in rows],
+                             mode="lines+markers", name=k,
+                             line=dict(color=col, width=3,
+                                       dash="dot" if "불일치" in k else "solid"),
+                             marker=dict(size=10)))
+viz.fig_defaults(fig, "얼마나 답할 것인가 vs 얼마나 맞을 것인가", height=440,
+                 xaxis_title="커버리지 (답한 비율)", yaxis_title="답한 것의 정확도",
+                 xaxis=dict(autorange="reversed"))
+fig
+```
 
 ---
 
-## G12.2.3 — 두 불확실성 분해
+## LLM 의 불확실성
 
-잡음 많은 영역과 데이터 없는 영역에서 각각 커지는 불확실성
+```{python}
+#| label: llm
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 데이터 영역 선택
-:::
+print("생성 모델에서는 '확신' 을 재는 것부터 어렵다")
+print()
+print(f"{'방법':<22} {'무엇을 재나':<30} {'문제'}")
+print("-" * 86)
+for a, b, c in [
+    ("토큰 로그확률", "생성된 토큰들의 평균 logprob", "**길이에 강하게 의존**"),
+    ("길이 정규화", "토큰당 평균으로 나눔", "여전히 형식에 민감"),
+    ("자기 일관성", "여러 번 샘플링해 답이 갈리는지", "비용 N배, 일관되게 틀림"),
+    ("언어화된 신뢰도", "'몇 % 확신하나요?' 라고 묻기", "**과신이 심하다**"),
+    ("의미 엔트로피", "의미가 같은 답끼리 묶어 엔트로피", "묶는 모델이 또 필요"),
+    ("P(True)", "'이 답이 맞나?' 를 다시 묻기", "비교적 잘 듣는 편"),
+]:
+    print(f"{a:<22} {b:<30} {c}")
+print()
+for s in ["**언어화된 신뢰도의 과신**이 특히 유명하다 — "
+          "'95% 확신' 이라고 말한 답의 실제 정확도가 한참 낮다",
+          "RLHF 가 이것을 악화시킨다는 관찰이 있다 — "
+          "**사람이 자신 있는 답을 선호**하므로 확신이 보상된다 "
+          "([10.5](../10_rl/05_rl_for_llm.qmd)의 보상 해킹)",
+          "**자기 일관성은 인식적 불확실성에 가깝다** — "
+          "샘플이 갈리면 모델이 헷갈린다는 뜻",
+          "다만 **모델이 일관되게 틀리는 경우**를 못 잡는다. "
+          "앞 절의 앙상블 불일치와 정확히 같은 한계",
+          "conformal 은 생성에도 적용할 수 있다 — "
+          "'정답을 포함할 확률 90%' 인 **후보 집합**을 내는 식으로",
+          "**가장 실용적인 조합**: 검증 가능한 부분은 검증하고"
+          "([11.6](../11_systems/06_monitoring.qmd)), "
+          "나머지는 거부 임계값으로 사람에게 넘긴다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G12.2.4 — conformal 예측 집합
+## 요약
 
-α에 따라 예측 집합 크기가 변하며 커버리지가 보장되는 모습
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 유의수준 α 슬라이더
-:::
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **과신** | ECE 0.035 → 0.309 (8.8배) | 정확도는 0.663 → 0.629로 그대로 |
+| 원인 | CE 손실은 맞힌 예측의 확신도 계속 민다 | 조기 종료·가중치 감쇠가 도움 |
+| 지표 선택 | 정확도로 고르면 안 보인다 | NLL은 정확도와 보정을 함께 벌한다 |
+| **온도 스케일링** | T*=7.90, ECE 0.309 → 0.038 | **정확도 완전히 동일** |
+| 비용 | 매개변수 **1개**, 재학습 없음 | 거의 항상 해야 한다 |
+| 한계 | 검증셋과 같은 분포에서만 | 드리프트가 오면 다시 어긋난다 |
+| **앙상블 vs 온도** | 앙상블은 정확도 0.624 → 0.673 | 온도는 ECE 0.219 → 0.033 |
+| 결론 | **두 축은 직교한다** | 같이 쓰면 정확도 0.675에 ECE 0.040 |
+| **불확실성 분해** | 데이터 구멍: E/A = 4.65 | 잡음 영역: E/A = 0.16 |
+| **재현 실패** | 외삽 영역: E/A = **0.23** | 구성원들이 같이 외삽한다 |
+| 그 함의 | 앙상블은 내삽 구멍만 잡는다 | OOD 탐지는 따로 필요 (12.3) |
+| **conformal** | 목표 대비 최대 편차 0.019 | ECE 0.22인 모델에서도 성립 |
+| 보장의 출처 | 모델 품질이 아니라 **절차** | 필요한 가정은 교환가능성뿐 |
+| 대가 | α=0.1이면 평균 2.28개 클래스 | 단일 답은 24.1%뿐 |
+| **조건부 실패** | 클래스별 0.894 ~ 0.945 | 주변부 보장은 평균에 대한 것 |
+| **선택적 예측** | 20%만 답하면 0.673 → 0.892 | 앙상블 평균 확신이 최선 |
+| 불일치만 쓰면 | 60% 구간에서 0.772 vs 0.733 | 우연적 불확실성을 못 본다 |
 
 ---
 
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 캘리브레이션 |  |
-| ECE |  |
-| 온도 스케일링 |  |
-| 딥 앙상블 |  |
-| conformal prediction |  |
-| 선택적 예측 |  |
-
----
-
-**다음**: [12.3 견고성과 분포 이동](03_robustness.qmd) — 적대적 예제·OOD·지름길 학습 — 시험셋 바깥에서 벌어지는 일
+**다음**: [12.3 견고성과 분포 이동](03_robustness.qmd) — 시험셋 바깥에서 벌어지는 일
 
 **이전**: [12.1 기계적 해석가능성](01_mechanistic.qmd)
