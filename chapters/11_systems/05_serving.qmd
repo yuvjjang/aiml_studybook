@@ -4,92 +4,560 @@ subtitle: "지연·처리량·SLO — 실제 트래픽을 받는 일"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+오프라인에서 좋은 모델이 온라인에서 쓸모없어지는 이유는 대개 정확도가 아니다.
+**너무 느리거나 너무 비싸서**다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그리고 그 둘은 서로 맞바꾸는 관계다. 배치를 키우면 처리량이 오르고 지연이 는다.
+캐시를 넓게 잡으면 적중률이 오르고 오적중이 는다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장은 그 절충들을 **재는 법**을 만든다. 그리고 하나를 미리 말해 둔다 —
+**평균 지연은 거의 쓸모없는 지표**다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+---
+
+## G11.5.1 — 꼬리 지연은 왜 먼저 무너지나
+
+요청이 무작위로 도착하고 처리 시간도 무작위면 줄이 선다.
+줄의 길이는 **이용률 $\rho$** 에 따라 폭발적으로 는다.
+
+```{python}
+#| label: queue
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+
+
+def sim(lam, serv, seed=0):
+    """도착이 포아송, 서비스 시간이 serv 인 단일 서버 큐. 응답시간을 돌려준다."""
+    n = len(serv)
+    rng = np.random.default_rng(seed)
+    arr = np.cumsum(rng.exponential(1/lam, n))
+    t = 0.0
+    resp = np.zeros(n)
+    for i in range(n):
+        t = max(t, arr[i])          # 서버가 비거나 요청이 오거나
+        resp[i] = t + serv[i] - arr[i]
+        t += serv[i]
+    return resp
+
+
+N = 120000
+EXPO = np.random.default_rng(0).exponential(1.0, N)
+print("이용률에 따른 응답시간 (서비스 시간 평균 1.0, 지수분포)")
+print()
+print(f"{'ρ':>6} {'평균':>9} {'p50':>9} {'p95':>9} {'p99':>9} {'이론 평균':>11}")
+print("-" * 58)
+Q = []
+for rho in [0.3, 0.5, 0.7, 0.8, 0.9, 0.95]:
+    r = sim(rho, EXPO, seed=1)
+    Q.append((rho, float(r.mean()), float(np.percentile(r, 50)),
+              float(np.percentile(r, 95)), float(np.percentile(r, 99))))
+    print(f"{rho:>6.2f} {r.mean():>9.3f} {np.percentile(r,50):>9.3f} "
+          f"{np.percentile(r,95):>9.3f} {np.percentile(r,99):>9.3f} "
+          f"{1/(1-rho):>11.3f}")
+print()
+q5 = [q for q in Q if q[0] == 0.5][0]
+q9 = [q for q in Q if q[0] == 0.9][0]
+q95 = [q for q in Q if q[0] == 0.95][0]
+print(f"**ρ 를 0.5 에서 0.9 로 올리면 p99 가 {q5[4]:.1f} → {q9[4]:.1f} 이 된다.**")
+print(f"  0.95 까지 가면 {q95[4]:.0f} — 서버를 '알뜰하게' 쓴 대가다.")
+print()
+print("**이용률 90% 가 왜 위험한가**")
+for s in ["줄의 길이는 $\\rho/(1-\\rho)$ 로 자란다 — ρ→1 에서 **발산**한다",
+          "0.9 에서 0.95 로 5%p 올리면 대기가 **2배**가 된다",
+          "그래서 SLO 가 있는 서비스는 이용률을 60~70% 로 묶어 둔다",
+          "**놀고 있는 GPU 가 낭비처럼 보이지만 그것이 꼬리 지연의 보험**이다"]:
+    print(f"  · {s}")
+print()
+print("**Little 의 법칙으로 교차 검증**  L = λW")
+print()
+print(f"{'ρ':>6} {'λ·W (측정)':>13} {'ρ/(1−ρ) (이론)':>16}")
+print("-" * 38)
+for rho in [0.5, 0.8, 0.9]:
+    r = sim(rho, EXPO[:60000], seed=2)
+    print(f"{rho:>6.2f} {rho*r.mean():>13.3f} {rho/(1-rho):>16.3f}")
+print()
+print("  시스템에 머무는 요청 수 = 도착률 x 체류시간. 모사가 이론과 맞는다.")
+```
+
+**그런데 위 표에서 평균과 p99 가 거의 같은 배율로 자랐다.**
+꼬리가 "먼저" 무너진다는 흔한 말은 이용률만으로는 설명되지 않는다.
+
+```{python}
+#| label: variability
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+M = 120000
+DISTS = [
+    ("결정적 (모두 1.0)", np.ones(M)),
+    ("지수분포", rng.exponential(1.0, M)),
+    ("로그정규 σ=1.5", rng.lognormal(-1.5*1.5/2, 1.5, M)),
+    ("로그정규 σ=2.0", rng.lognormal(-2.0*2.0/2, 2.0, M)),
+]
+print("서비스 시간의 **변동성**을 바꿔 가며 (평균은 전부 1.0)")
+print()
+print(f"{'서비스 분포':<20} {'변동계수':>9} {'ρ':>5} {'평균':>10} {'p99':>11} "
+      f"{'p99/평균':>10}")
+print("-" * 70)
+VAR = []
+for nm, sv in DISTS:
+    cv = float(sv.std()/sv.mean())
+    for rho in [0.5, 0.9]:
+        r = sim(rho/sv.mean(), sv, seed=1)
+        ratio = float(np.percentile(r, 99)/r.mean())
+        VAR.append((nm, cv, rho, float(r.mean()),
+                    float(np.percentile(r, 99)), ratio))
+        lbl = nm if rho == 0.5 else ""
+        cvs = f"{cv:>9.2f}" if rho == 0.5 else " "*9
+        print(f"{lbl:<20} {cvs} {rho:>5.1f} {r.mean():>10.2f} "
+              f"{np.percentile(r,99):>11.2f} {ratio:>10.1f}")
+print()
+lo = [v for v in VAR if v[0].startswith("결정적") and v[2] == 0.5][0]
+hi = [v for v in VAR if "2.0" in v[0] and v[2] == 0.5][0]
+print(f"**꼬리를 만드는 것은 이용률이 아니라 변동성이다.**")
+print(f"  같은 ρ=0.5 에서 p99/평균이 {lo[5]:.1f} → {hi[5]:.1f} 로 벌어진다.")
+print(f"  변동계수(CV)가 {lo[1]:.1f} → {hi[1]:.1f} 로 커진 결과다.")
+print()
+for s in ["Pollaczek–Khinchine 공식: 대기시간이 $(1+\\mathrm{CV}^2)/2$ 에 비례한다",
+          "**CV 가 2배면 대기가 4배 가까이 는다** — 평균은 그대로인데",
+          "LLM 서빙은 CV 가 아주 크다 — "
+          "출력 길이가 10 토큰일 수도 2000 토큰일 수도 있다",
+          "**그래서 LLM 서빙의 꼬리 문제는 구조적**이다",
+          "처방도 분명하다 — 변동성을 줄이거나(길이 제한), "
+          "긴 요청을 격리하거나(우선순위 큐), "
+          "**작업을 잘게 쪼개 선점 가능하게** 만든다 (연속 배칭)"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-tail
+#| fig-cap: "G11.5.1 — 꼬리 지연. 왼쪽은 이용률(모든 분위수가 같이 자란다), 오른쪽은 변동성(꼬리만 벌어진다). LLM 서빙의 문제는 오른쪽이다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("이용률에 따라", "변동성에 따라 (ρ=0.5)"))
+rhos = [q[0] for q in Q]
+for i, (lbl, k) in enumerate([("평균", 1), ("p50", 2), ("p95", 3), ("p99", 4)]):
+    fig.add_trace(go.Scatter(x=rhos, y=[q[k] for q in Q], mode="lines+markers",
+                             name=lbl, line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=8)), row=1, col=1)
+v5 = [v for v in VAR if v[2] == 0.5]
+fig.add_trace(go.Scatter(x=[v[1] for v in v5], y=[v[5] for v in v5],
+                         mode="lines+markers+text",
+                         text=[v[0].split()[0] for v in v5],
+                         textposition="top left", textfont=dict(size=10),
+                         name="p99 / 평균",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=11)), row=1, col=2)
+viz.fig_defaults(fig, "무엇이 꼬리를 만드나", height=440)
+fig.update_xaxes(title_text="이용률 ρ", row=1, col=1)
+fig.update_xaxes(title_text="서비스 시간의 변동계수 CV", row=1, col=2)
+fig.update_yaxes(title_text="응답시간", type="log", row=1, col=1)
+fig.update_yaxes(title_text="p99 / 평균", row=1, col=2)
+fig
+```
+
+---
+
+## G11.5.2 — 배칭: 처리량과 지연을 맞바꾸기
+
+가속기는 배치가 커야 효율이 난다 ([11.3](03_hardware.qmd) G11.3.4).
+그런데 배치를 채우려면 **기다려야** 한다.
+
+```{python}
+#| label: batching
+#| code-fold: false
+
+import numpy as np
+
+A, C = 0.020, 0.002       # 배치 고정비 20ms + 요청당 2ms
+print(f"배치 처리 시간 = {A*1000:.0f}ms + {C*1000:.0f}ms x 배치 크기")
+print()
+print(f"{'배치':>6} {'배치 시간':>11} {'최대 처리량':>13} {'요청당 연산':>12} "
+      f"{'평균 지연':>11}")
+print("-" * 58)
+BAT = []
+for b in [1, 2, 4, 8, 16, 32, 64, 128]:
+    tb = A + b*C
+    thr = b/tb
+    lat = tb/2 + tb                       # 배치를 채우는 평균 대기 + 처리
+    BAT.append((b, tb, thr, lat))
+    print(f"{b:>6} {tb*1000:>10.1f}ms {thr:>13.0f} {tb/b*1000:>11.2f}ms "
+          f"{lat*1000:>10.1f}ms")
+print()
+b1, b128 = BAT[0], BAT[-1]
+print(f"**배치를 1에서 128로 키우면 처리량이 "
+      f"{b1[2]:.0f} → {b128[2]:.0f} req/s ({b128[2]/b1[2]:.0f}배)**")
+print(f"  대신 지연이 {b1[3]*1000:.0f}ms → {b128[3]*1000:.0f}ms "
+      f"({b128[3]/b1[3]:.0f}배) 로 는다.")
+print()
+print("**수확 체감이 분명하다**")
+for i in range(1, len(BAT)):
+    p, c = BAT[i-1], BAT[i]
+    print(f"  {p[0]:>3}→{c[0]:>3}: 처리량 +{(c[2]/p[2]-1)*100:>5.1f}%, "
+          f"지연 +{(c[3]/p[3]-1)*100:>5.1f}%")
+print()
+print("  배치 8 근처에서 처리량 증가율이 지연 증가율 아래로 내려간다.")
+print("  **SLO 가 정해지면 배치 크기가 자동으로 정해진다** — "
+      "지연 예산 안에서 가장 큰 배치.")
+print()
+print("**LLM 특유의 지연 지표**")
+print()
+print(f"{'지표':<12} {'무엇':<30} {'무엇이 지배하나'}")
+print("-" * 72)
+for a, b, c in [
+    ("TTFT", "첫 토큰까지의 시간", "prefill — **연산 제한**"),
+    ("TPOT", "토큰 하나당 시간", "decode — **메모리 제한**"),
+    ("총 지연", "TTFT + TPOT x 출력 길이", "출력 길이가 지배"),
+]:
+    print(f"{a:<12} {b:<30} {c}")
+print()
+print("  [11.3](03_hardware.qmd) G11.3.2 의 산술 강도 차이가 여기서 두 지표로 나뉜다.")
+print("  **둘의 SLO 를 따로 잡아야 한다** — 평균 지연 하나로는 관리가 안 된다.")
+```
+
+---
+
+## G11.5.3 — 연속 배칭: 출력 길이가 제각각일 때
+
+정적 배칭은 배치의 **모든 요청이 끝날 때까지** 슬롯을 잡고 있다.
+출력 길이가 제각각이면 짧은 요청이 긴 요청을 기다린다.
+
+연속 배칭은 끝난 자리에 **즉시 다음 요청을 넣는다.**
+얼마나 차이 나는지 잰다.
+
+```{python}
+#| label: continuous
+#| code-fold: false
+
+import numpy as np
+
+
+def static_batch(lengths, B, tstep=0.01):
+    """B개를 함께 시작하고, 가장 긴 것이 끝날 때까지 슬롯을 점유한다."""
+    total_slot = 0.0
+    for i in range(0, len(lengths), B):
+        grp = lengths[i:i+B]
+        total_slot += max(grp)*tstep*B
+    return total_slot, float(sum(lengths))*tstep
+
+
+def continuous_batch(lengths, B, tstep=0.01):
+    """끝난 슬롯에 바로 다음 요청을 채운다."""
+    slots = np.zeros(B)
+    for L in lengths:
+        k = int(np.argmin(slots))
+        slots[k] += L*tstep
+    return float(slots.max())*B, float(sum(lengths))*tstep
+
+
+rng = np.random.default_rng(0)
+print("슬롯 활용률 = 실제로 토큰을 만든 시간 / 점유한 슬롯 시간")
+print()
+print(f"{'출력 길이 분포':<26} {'배치':>6} {'정적':>9} {'연속':>9} {'배수':>7}")
+print("-" * 62)
+CB = []
+for spread, nm in [(0, "균일 (모두 200 토큰)"),
+                   (1, "지수분포 (평균 200)")]:
+    L = (np.full(3000, 200) if spread == 0
+         else np.clip(rng.exponential(200, 3000), 10, 3000).astype(int))
+    for B in [8, 32, 128]:
+        s1, u1 = static_batch(L, B)
+        s2, u2 = continuous_batch(L, B)
+        CB.append((nm, B, u1/s1, u2/s2))
+        print(f"{nm if B == 8 else '':<26} {B:>6} {u1/s1:>8.1%} "
+              f"{u2/s2:>8.1%} {(u2/s2)/(u1/s1):>7.2f}")
+print()
+var32 = [c for c in CB if c[0].startswith("지수") and c[1] == 32][0]
+var128 = [c for c in CB if c[0].startswith("지수") and c[1] == 128][0]
+uni = [c for c in CB if c[0].startswith("균일") and c[1] == 32][0]
+print("**길이가 균일하면 차이가 없다** — "
+      f"정적 {uni[2]:.1%} vs 연속 {uni[3]:.1%}.")
+print(f"**길이가 제각각이면 결정적이다** — B=32 에서 "
+      f"{var32[2]:.1%} vs {var32[3]:.1%} ({var32[3]/var32[2]:.1f}배).")
+print(f"  그리고 **배치가 클수록 격차가 벌어진다** — "
+      f"B=128 에서 {var128[3]/var128[2]:.1f}배.")
+print()
+for s in ["정적 배칭은 배치 안의 **최장 요청**에 묶인다 — "
+          "배치가 클수록 최댓값이 커지니 낭비도 는다",
+          "연속 배칭은 그 결합을 끊는다 — 각 슬롯이 독립적으로 회전한다",
+          "**이것이 vLLM 같은 서버가 처리량을 몇 배 올리는 주된 이유**다",
+          "구현이 어려운 이유는 KV 캐시다 — "
+          "요청마다 길이가 다르니 메모리가 단편화된다",
+          "**PagedAttention** 이 그것을 푼다 — "
+          "KV 캐시를 고정 크기 블록으로 쪼개 가상 메모리처럼 관리한다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-batching
+#| fig-cap: "G11.5.2–3 — 왼쪽은 배치 크기의 처리량-지연 절충, 오른쪽은 정적 vs 연속 배칭. 출력 길이가 제각각일 때 정적 배칭의 낭비는 배치가 클수록 심해진다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, specs=[[{"secondary_y": True}, {}]],
+                    subplot_titles=("배치 크기의 절충", "슬롯 활용률"))
+fig.add_trace(go.Scatter(x=[b[0] for b in BAT], y=[b[2] for b in BAT],
+                         mode="lines+markers", name="처리량 (req/s)",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=9)), row=1, col=1, secondary_y=False)
+fig.add_trace(go.Scatter(x=[b[0] for b in BAT], y=[b[3]*1000 for b in BAT],
+                         mode="lines+markers", name="평균 지연 (ms)",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=9)), row=1, col=1, secondary_y=True)
+var = [c for c in CB if c[0].startswith("지수")]
+fig.add_trace(go.Scatter(x=[c[1] for c in var], y=[c[2] for c in var],
+                         mode="lines+markers", name="정적 배칭",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[c[1] for c in var], y=[c[3] for c in var],
+                         mode="lines+markers", name="연속 배칭",
+                         line=dict(color=viz.GREEN, width=3),
+                         marker=dict(size=10)), row=1, col=2)
+viz.fig_defaults(fig, "배칭의 두 축", height=440)
+fig.update_xaxes(title_text="배치 크기", type="log", row=1, col=1)
+fig.update_xaxes(title_text="배치 크기", type="log", row=1, col=2)
+fig.update_yaxes(title_text="슬롯 활용률", range=[0, 1.05], row=1, col=2)
+fig
+```
+
+::: {.interaction-hint}
+오른쪽에서 두 선이 **반대 방향**으로 간다.
+배치를 키우면 연속 배칭은 좋아지고 정적 배칭은 나빠진다.
+
+그래서 정적 배칭을 쓰는 시스템은 배치를 키울 수가 없고,
+결국 [11.3](03_hardware.qmd)에서 본 **작은 배치의 저효율**에 갇힌다.
+연속 배칭은 그 족쇄를 푼다.
 :::
 
-오프라인에서 좋은 모델이 온라인에서 쓸모없어지는 이유는 대개 지연과 비용이다. 서빙 설계는 모델 설계와 함께 이뤄져야 한다.
+---
+
+## G11.5.4 — 모델 계층 라우팅
+
+작은 모델을 먼저 돌리고, **자신 없을 때만** 큰 모델로 넘긴다.
+비용과 품질의 경계선을 그려 본다.
+
+```{python}
+#| label: routing
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(2)
+n = 20000
+diff = rng.beta(2, 3, n)                            # 요청의 난이도
+p_small = np.clip(0.95 - 1.1*diff, 0.05, 0.99)      # 작은 모델의 정답 확률
+p_big = np.clip(0.99 - 0.45*diff, 0.30, 0.995)      # 큰 모델
+conf = np.clip(p_small + rng.normal(0, 0.10, n), 0, 1)   # 자기 확신 (잡음 포함)
+ok_s = rng.random(n) < p_small
+ok_b = rng.random(n) < p_big
+C_S, C_B = 1.0, 20.0
+
+print(f"작은 모델 단독: 정확도 {ok_s.mean():.4f}, 비용 {C_S:.0f}")
+print(f"큰 모델 단독:   정확도 {ok_b.mean():.4f}, 비용 {C_B:.0f}")
+print(f"  (작은 모델의 확신 점수에는 표준편차 0.10 의 잡음이 섞여 있다)")
+print()
+print(f"{'확신 문턱':>9} {'승급 비율':>10} {'정확도':>9} {'평균 비용':>10} "
+      f"{'큰 모델 대비':>12}")
+print("-" * 56)
+ROUTE = []
+for thr in [0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 1.01]:
+    esc = conf < thr
+    a = float(np.where(esc, ok_b, ok_s).mean())
+    c = C_S + float(esc.mean())*C_B
+    ROUTE.append((thr, float(esc.mean()), a, c))
+    print(f"{thr:>9.2f} {esc.mean():>10.1%} {a:>9.4f} {c:>10.2f} "
+          f"{c/C_B:>12.1%}")
+print()
+half = [r for r in ROUTE if r[0] == 0.5][0]
+full = ROUTE[-1]
+print(f"**문턱 0.5: 정확도 {half[2]:.4f} 를 비용 {half[3]:.1f} 로 얻는다.**")
+print(f"  큰 모델 단독은 {ok_b.mean():.4f} 를 {C_B:.0f} 로 — "
+      f"**정확도의 {half[2]/ok_b.mean():.0%} 를 비용의 {half[3]/C_B:.0%} 로**")
+print()
+print(f"**그런데 문턱 {full[0]:.2f}(전부 승급)의 비용이 {full[3]:.1f} 로 "
+      f"큰 모델 단독({C_B:.0f})보다 비싸다.**")
+for s in ["작은 모델을 **항상 먼저 돌리기 때문**이다 — 캐스케이드의 고정 비용",
+          "승급률이 높아지면 그 고정비가 순손실이 된다",
+          "**작은 모델이 대부분을 처리할 때만 이득**이라는 뜻",
+          "라우팅의 품질은 **확신 점수의 품질**에 전적으로 달려 있다 — "
+          "잡음이 크면 쉬운 것도 올려 보내고 어려운 것도 붙잡는다",
+          "그래서 별도의 **라우터 모델**을 두기도 한다 (본 모델을 안 돌리고 판정)"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: caching
+#| code-fold: false
+
+import numpy as np
+
+print("**캐시: 정확 일치 vs 의미 캐시**")
+print()
+n_q, n_intent = 50000, 500
+rng = np.random.default_rng(3)
+intent = np.clip(rng.zipf(1.3, n_q), 1, n_intent) - 1      # 의도 (Zipf)
+surface = rng.integers(0, 8, n_q)                          # 표면형 8가지
+exact_key = intent*8 + surface
+
+
+def hit_rate(keys, cap):
+    seen = {}
+    hits = 0
+    for k in keys:
+        if k in seen:
+            hits += 1
+        seen[k] = True
+        if len(seen) > cap:
+            seen.pop(next(iter(seen)))
+    return hits/len(keys)
+
+
+print(f"질의 {n_q:,}개, 의도 {n_intent}종(Zipf), 의도당 표면형 8가지")
+print()
+print(f"{'캐시 용량':>10} {'정확 일치':>11} {'의미 캐시':>11} {'배수':>7}")
+print("-" * 44)
+CACHE = []
+for cap in [100, 500, 2000, 10000]:
+    h1 = hit_rate(exact_key, cap)
+    h2 = hit_rate(intent, cap)
+    CACHE.append((cap, h1, h2))
+    print(f"{cap:>10} {h1:>11.1%} {h2:>11.1%} {h2/max(h1,1e-9):>7.2f}")
+print()
+c100 = CACHE[0]
+print(f"**캐시가 작을수록 의미 캐시의 이점이 크다** — "
+      f"용량 100 에서 {c100[1]:.1%} vs {c100[2]:.1%}.")
+print("  표면형이 8가지면 정확 일치 캐시는 **같은 것을 8번 저장**한다.")
+print()
+print("**그런데 의미 캐시에는 오적중 위험이 있다**")
+print()
+same = rng.normal(0.90, 0.05, 20000)        # 같은 의도끼리의 유사도
+diff_ = rng.normal(0.50, 0.15, 20000)       # 다른 의도끼리
+print(f"{'유사도 문턱':>11} {'적중률':>9} {'오적중률':>10} "
+      f"{'적중 중 오답 비율':>17}")
+print("-" * 52)
+SEM = []
+for thr in [0.95, 0.90, 0.85, 0.80, 0.70, 0.60]:
+    tp = float((same > thr).mean())
+    fp = float((diff_ > thr).mean())
+    # 실제 질의의 절반이 캐시에 같은 의도가 있다고 가정
+    served_bad = fp*0.5/max(tp*0.5 + fp*0.5, 1e-9)
+    SEM.append((thr, tp, fp, served_bad))
+    print(f"{thr:>11.2f} {tp:>9.1%} {fp:>10.1%} {served_bad:>17.1%}")
+print()
+good = SEM[1]
+bad = SEM[-1]
+print(f"**문턱 {good[0]}: 적중률 {good[1]:.0%} 에 오적중 {good[2]:.1%}.**")
+print(f"**문턱 {bad[0]} 까지 내리면 적중률은 {bad[1]:.0%} 지만 "
+      f"적중의 {bad[3]:.0%} 가 엉뚱한 답이다.**")
+for s in ["**의미 캐시의 오적중은 조용하다** — 그럴듯한 답이 나오므로 안 걸린다",
+          "그래서 문턱을 보수적으로 잡고, 캐시 적중 응답에 표시를 남긴다",
+          "접두사 캐시(prefix cache)는 이 위험이 없다 — "
+          "**정확히 같은 토큰 접두사**만 재사용한다",
+          "시스템 프롬프트가 긴 요청에서 접두사 캐시의 효과가 특히 크다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 배포와 안정성
 
-- 서빙 형태: 배치 추론, 온라인 추론, 스트리밍
-- 지연 지표: TTFT, TPOT, p50/p95/p99 꼬리 지연
-- 처리량과 지연의 트레이드오프, Little의 법칙
-- 동적 배칭과 연속 배칭
-- 자동 확장과 콜드 스타트, GPU 예열
-- 모델 서버 지형: vLLM, TGI, TensorRT-LLM, Triton
-- 라우팅과 모델 계층화(작은 모델 먼저, 필요시 큰 모델)
-- 캐싱: 정확 일치, 의미 캐시, 접두사 캐시
-- 배포 전략: 카나리, 섀도, 블루-그린, 점진적 롤아웃
-- 다중 테넌시와 공정성, 요청 우선순위
-- 비용 모델링: 요청당 비용과 단가 최적화
-- 안정성: 타임아웃, 재시도, 서킷 브레이커, 폴백
+```{python}
+#| label: deploy
+#| code-fold: false
 
----
-
-## G11.5.1 — 지연 분포
-
-부하가 오를 때 꼬리 지연이 먼저 무너지는 현상
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 부하 슬라이더
-:::
-
----
-
-## G11.5.2 — 배칭과 처리량
-
-처리량은 오르고 개별 지연은 늘어나는 곡선
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 배치 크기 슬라이더
-:::
-
----
-
-## G11.5.3 — 모델 계층 라우팅
-
-쉬운 요청을 작은 모델로 보낼 때의 비용 절감과 품질 영향
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 라우팅 임계값 슬라이더
-:::
-
----
-
-## G11.5.4 — 캐시 적중률
-
-정확 일치와 의미 캐시의 적중률과 오적중 위험
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 캐시 종류 전환
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| TTFT/TPOT |  |
-| 꼬리 지연 |  |
-| 연속 배칭 |  |
-| vLLM |  |
-| 카나리 배포 |  |
-| 의미 캐시 |  |
+print("**배포 전략**")
+print()
+print(f"{'전략':<14} {'방식':<32} {'되돌리기':<12} {'비용'}")
+print("-" * 76)
+for a, b, c, d in [
+    ("블루-그린", "두 벌을 띄우고 트래픽을 전환", "즉시", "자원 2배"),
+    ("카나리", "일부 트래픽만 신버전으로", "빠름", "낮다"),
+    ("섀도", "신버전에 **복제 트래픽**, 응답은 버림", "위험 없음", "연산 2배"),
+    ("점진적 롤아웃", "비율을 서서히 올린다", "중간", "낮다"),
+]:
+    print(f"{a:<14} {b:<32} {c:<12} {d}")
+print()
+print("  **섀도 배포가 ML 에 특히 잘 맞는다** —")
+print("  실제 트래픽 분포에서 신모델의 출력을 볼 수 있고, 사용자는 영향을 안 받는다.")
+print("  [11.1](01_data_pipeline.qmd)에서 본 학습/서빙 왜곡도 여기서 잡힌다.")
+print()
+print("**자동 확장의 함정**")
+for s in ["GPU 인스턴스는 **콜드 스타트가 길다** — "
+          "이미지 내려받기, 가중치 적재, 커널 예열",
+          "트래픽이 오른 뒤 늘리면 이미 늦었다 — **선제적 확장**이 필요",
+          "축소는 더 조심해야 한다 — 줄였다가 다시 늘리는 비용이 크다",
+          "그래서 실무에서는 **바닥 용량을 넉넉히** 두고 위쪽만 탄력적으로 한다",
+          "G11.5.1 의 이용률 논의와 같은 이유다"]:
+    print(f"  · {s}")
+print()
+print("**안정성 장치**")
+print()
+print(f"{'장치':<18} {'막는 것':<30} {'주의'}")
+print("-" * 72)
+for a, b, c in [
+    ("타임아웃", "느린 요청이 자원을 붙잡는 것", "**너무 짧으면 재시도 폭풍**"),
+    ("재시도", "일시적 실패", "지수 백오프 + 지터 필수"),
+    ("서킷 브레이커", "죽은 의존성에 계속 요청하는 것", "복구 판정 기준"),
+    ("부하 차단(load shed)", "과부하에서 전체가 무너지는 것", "무엇을 버릴지 정해야"),
+    ("폴백", "완전 실패", "작은 모델·캐시·규칙 기반"),
+]:
+    print(f"{a:<18} {b:<30} {c}")
+print()
+print("  **첫 줄과 둘째 줄이 함께 사고를 만든다** —")
+print("  타임아웃이 짧고 재시도가 즉시면, 부하가 오를 때 요청이 배로 늘어")
+print("  이용률이 1 을 넘고 (G11.5.1) 전체가 무너진다.")
+print()
+print("**요청당 비용 모델**")
+print()
+GPU_HR = 2.0
+for nm, thr, out_tok in [("배치 1", 45, 200), ("배치 32", 381, 200),
+                         ("배치 32 + 연속 배칭", 381*4, 200)]:
+    cost = GPU_HR/3600/thr
+    print(f"  {nm:<24} {thr:>5.0f} req/s → 요청당 ${cost*1000:.4f} (천분의 1달러)")
+print(f"  (GPU 시간당 ${GPU_HR:.0f} 가정)")
+print()
+print("  처리량이 곧 단가다. **연속 배칭 하나가 비용을 몇 분의 1로 만든다.**")
+```
 
 ---
 
-**다음**: [11.6 모니터링과 운영](06_monitoring.qmd) — 드리프트·품질 저하·피드백 — 배포는 시작일 뿐
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **이용률과 지연** | ρ=0.5→0.9에서 p99가 9.3 → 43 | 줄은 ρ/(1−ρ)로 발산 |
+| 0.9 → 0.95 | 대기가 다시 2배 | 노는 GPU가 꼬리의 보험 |
+| Little의 법칙 | λ·W = ρ/(1−ρ), 모사와 일치 | 교차 검증 |
+| **꼬리의 진짜 원인** | ρ가 아니라 **변동성** | 같은 ρ에서 p99/평균 3.0 → 16.2 |
+| 그래서 LLM은 | 출력 길이 10~2000 토큰 | 꼬리 문제가 **구조적** |
+| **배칭** | 1→128에서 처리량 10배, 지연 13배 | SLO가 배치 크기를 정한다 |
+| TTFT vs TPOT | prefill 연산 제한, decode 메모리 제한 | 11.3의 산술 강도가 두 지표로 |
+| **연속 배칭** | 길이 균일하면 차이 없음 | 제각각이면 B=32에서 4배 |
+| 배치가 클수록 | 격차가 더 벌어진다 | 정적은 배치를 못 키운다 |
+| 구현의 벽 | KV 캐시 단편화 | PagedAttention |
+| **계층 라우팅** | 정확도 86% 를 비용 51%로 | 확신 점수의 품질이 전부 |
+| 캐스케이드의 함정 | 전부 승급하면 큰 모델보다 **비싸다** | 작은 모델을 항상 먼저 돌린다 |
+| **의미 캐시** | 용량 100에서 52% → 85% | 표면형 8가지를 하나로 |
+| 그 위험 | 문턱 0.6이면 적중의 **20%**가 오답 | 오적중은 조용하다 |
+| 안정성 | 짧은 타임아웃 + 즉시 재시도 | **재시도 폭풍**으로 ρ>1 |
+| 비용 | 처리량이 곧 단가 | 연속 배칭이 몇 분의 1로 |
+
+배포했다. 그런데 **모델은 배포 순간부터 낡기 시작한다.**
+
+---
+
+**다음**: [11.6 모니터링과 운영](06_monitoring.qmd) — 배포는 시작일 뿐
 
 **이전**: [11.4 모델 효율화](04_efficiency.qmd)
