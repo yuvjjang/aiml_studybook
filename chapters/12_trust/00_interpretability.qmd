@@ -4,91 +4,866 @@ subtitle: "특성 중요도·SHAP·LIME·saliency — 왜 그렇게 예측했는
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+Part 11 은 시스템이 **작동하게** 만드는 일이었다.
+이제 그 시스템이 내린 결정에 **왜냐고 물을** 차례다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+대출이 거절됐다. 종양으로 분류됐다. 이력서가 걸러졌다.
+"모델이 그랬습니다"는 답이 되지 않는다 — 규제도, 디버깅도, 신뢰도 '왜'를 요구한다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그래서 설명 도구가 쏟아져 나왔다. SHAP, LIME, saliency, PDP.
+문제는 이것들이 **각자 다른 질문에 답한다**는 것이고,
+더 큰 문제는 그 답이 **틀렸는지 확인할 방법**이 잘 알려져 있지 않다는 것이다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 장은 네 개의 실험으로 그 경계를 그린다.
+결론을 미리 말하면 불편하다 —
+**설명은 세계에 관한 것이 아니라 모델에 관한 것이고, 그마저도 쉽게 무너진다.**
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import itertools
+from math import factorial
+import numpy as np
+from src import nn
+
+print("먼저 설명의 종류를 정리한다 — 섞으면 잘못된 결론이 나온다")
+print()
+print(f"{'축':<16} {'한쪽':<26} {'다른 쪽'}")
+print("-" * 74)
+for a, b, c in [
+    ("범위", "**전역** — 모델 전체의 경향", "**국소** — 이 한 예측의 근거"),
+    ("대상", "**모델 무관** — 예측만 보고", "**모델 특정** — 내부 구조를 이용"),
+    ("시점", "**사후** — 학습 끝난 뒤 붙임", "**본질적** — 모델 자체가 읽힘"),
+    ("질문", "**기여도** — 무엇이 밀었나", "**인과** — 무엇을 바꾸면 달라지나"),
+]:
+    print(f"{a:<16} {b:<26} {c}")
+print()
+for s in ["**PDP·순열 중요도**는 전역, **SHAP·LIME·saliency**는 국소다",
+          "**넷 다 사후·모델 무관**이다 (saliency 는 그래디언트를 쓰니 반쯤 특정)",
+          "**넷 다 기여도를 답하지 인과를 답하지 않는다** — "
+          "이 혼동이 실무 오류의 대부분이다",
+          "본질적으로 읽히는 모델(선형, GAM, 규칙 목록)이 충분하다면 "
+          "**그것을 먼저 고려하는 게 맞다**"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 섀플리 값: 유일한 '공정한' 분배
+
+$d$ 개 특성이 예측 $f(x)$ 를 함께 만들었다. 각자의 몫을 어떻게 나눌까.
+
+협조 게임 이론의 답은 **섀플리 값**이다. 특성 $j$ 의 기여도는
+
+$$
+\phi_j = \sum_{S \subseteq N \setminus \{j\}} \frac{|S|!\,(d-|S|-1)!}{d!}\Big[v(S \cup \{j\}) - v(S)\Big]
+$$
+
+$S$ 는 "이미 값이 알려진 특성 집합", $v(S)$ 는 그때의 기대 예측이다.
+가중치는 **$j$ 가 들어오는 모든 순서를 똑같이 세는 것**과 같다.
+
+섀플리 값은 네 공리를 **동시에** 만족하는 **유일한** 배분이다.
+
+| 공리 | 뜻 |
+|------|-----|
+| **효율성** | $\sum_j \phi_j = f(x) - \mathbb{E}[f]$ — 남김없이 나눈다 |
+| **대칭성** | 항상 같은 기여를 하는 두 특성은 같은 몫 |
+| **더미** | 어떤 $S$ 에도 영향이 없으면 $\phi_j = 0$ |
+| **가법성** | 모델을 더하면 기여도도 더해진다 |
+
+이 유일성이 SHAP 의 매력이다. 그런데 대가가 있다 — 합이 $2^d$ 개다.
+$d = 8$ 이면 256 개지만 $d = 30$ 이면 10억이 넘는다.
+
+```{python}
+#| label: shap
+#| code-fold: false
+
+import numpy as np
+import itertools
+from math import factorial
+from src import nn
+
+D = 8
+# 진짜 구조: x0,x1 주효과 / x2*x3 상호작용 / x4 비선형
+#            x5 는 x0 의 상관 대리(진짜 함수에 없음) / x6,x7 은 완전 무관
+def truth(X):
+    return (2.0*X[:, 0] - 1.5*X[:, 1] + 2.5*X[:, 2]*X[:, 3]
+            + 0.8*np.tanh(2*X[:, 4]))
+
+
+def make(n, seed, rho=0.95):
+    g = np.random.default_rng(seed)
+    X = g.normal(0, 1, (n, D))
+    X[:, 5] = rho*X[:, 0] + np.sqrt(1 - rho**2)*g.normal(0, 1, n)
+    return X, truth(X) + g.normal(0, 0.3, n)
+
+
+Xtr, ytr = make(6000, 1)
+Xte, yte = make(2000, 2)
+M = nn.MLP([D, 64, 64, 1], seed=0)
+nn.train(M, Xtr, ytr[:, None], loss="mse",
+         opt=nn.Optimizer("adam", lr=0.004), steps=3000, batch_size=256, seed=0)
+pred = lambda X: M.predict(X).ravel()
+R2 = 1 - ((pred(Xte) - yte)**2).mean()/yte.var()
+print(f"모델 학습 완료 — 테스트 R² {R2:.4f}")
+print()
+
+BG = Xtr[:200]                      # 배경 분포
+
+
+def v(S, x):
+    """개입형 가치함수: S 만 x 값으로 고정, 나머지는 배경으로 대체."""
+    Z = BG.copy()
+    for j in S:
+        Z[:, j] = x[j]
+    return pred(Z).mean()
+
+
+def shapley_exact(x, d=D):
+    vals = {S: v(S, x) for r in range(d+1)
+            for S in itertools.combinations(range(d), r)}
+    phi = np.zeros(d)
+    for j in range(d):
+        rest = [k for k in range(d) if k != j]
+        for r in range(d):
+            w = factorial(r)*factorial(d-1-r)/factorial(d)
+            for S in itertools.combinations(rest, r):
+                phi[j] += w*(vals[tuple(sorted(S + (j,)))] - vals[S])
+    return phi, vals[()], vals[tuple(range(d))]
+
+
+xq = Xte[0]
+PHI, BASE, FULL = shapley_exact(xq)
+print(f"정확한 섀플리 값 ({2**D}개 부분집합 전수 계산)")
+print()
+print(f"{'특성':>6} {'값':>9} {'기여도 φ':>11} {'진짜 함수에서의 역할'}")
+print("-" * 58)
+ROLE = ["주효과 (계수 +2.0)", "주효과 (계수 −1.5)", "x3 과 상호작용",
+        "x2 와 상호작용", "비선형 tanh", "**x0 의 상관 대리 (함수에 없음)**",
+        "무관", "무관"]
+for j in range(D):
+    print(f"{'x'+str(j):>6} {xq[j]:>+9.3f} {PHI[j]:>+11.4f} {ROLE[j]}")
+print("-" * 58)
+print(f"{'합':>6} {'':>9} {PHI.sum():>+11.4f}")
+print()
+print(f"**효율성 공리 확인**: f(x) − E[f] = {FULL:.4f} − ({BASE:.4f}) "
+      f"= {FULL-BASE:.4f}")
+print(f"                     기여도 합    = {PHI.sum():.4f}   "
+      f"→ 오차 {abs(PHI.sum()-(FULL-BASE)):.2e}")
+print()
+for s in [f"**대리 특성 x5 의 기여도가 {PHI[5]:+.4f} 로 거의 0 이다** — "
+          "상관이 0.95 인데도",
+          "**개입형**(배경으로 대체) 가치함수를 썼기 때문이다. "
+          "x5 를 배경값으로 바꿔도 x0 는 그대로라 예측이 안 흔들린다",
+          "즉 개입형 SHAP 은 **모델이 실제로 쓰는 특성**에 몫을 준다",
+          "**관측형**(조건부 기댓값)을 쓰면 반대로 x5 가 큰 몫을 받는다 — "
+          "x0 를 예측할 수 있으니까",
+          "**둘은 다른 질문의 답이다.** '모델이 무엇을 쓰나'와 "
+          "'무엇이 정보를 담고 있나' — 섞으면 안 된다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-shap
+#| fig-cap: "G12.0.1 — SHAP 워터폴. 기준값 E[f]에서 시작해 각 특성의 기여도가 쌓여 정확히 f(x)에 도달한다(효율성 공리). 상관 0.95인 대리 특성 x5는 거의 몫을 받지 못한다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+order = np.argsort(-np.abs(PHI))
+names = [f"x{j}" for j in order]
+vals = PHI[order]
+fig = go.Figure(go.Waterfall(
+    orientation="v",
+    measure=["relative"]*D + ["total"],
+    x=["E[f]"] + names + ["f(x)"],
+    y=[BASE] + list(vals) + [0],
+    base=0,
+    increasing=dict(marker=dict(color=viz.WARM)),
+    decreasing=dict(marker=dict(color=viz.ACCENT)),
+    totals=dict(marker=dict(color=viz.GREEN)),
+    connector=dict(line=dict(color="rgba(255,255,255,0.25)")),
+    text=[f"{BASE:.2f}"] + [f"{x:+.2f}" for x in vals] + [f"{FULL:.2f}"],
+    textposition="outside", textfont=dict(size=11),
+))
+viz.fig_defaults(fig, f"한 예측의 섀플리 분해 (E[f]={BASE:.3f} → f(x)={FULL:.3f})",
+                 height=470, yaxis_title="예측값", showlegend=False)
+fig
+```
+
+::: {.interaction-hint}
+막대에 마우스를 올리면 각 특성의 정확한 기여도가 보인다.
+
+**초록 막대(f(x))에 정확히 도달하는 것**이 효율성 공리다 —
+근사가 아니라 항등식이다. 위 출력의 오차가 $10^{-16}$ 수준인 이유다.
+
+$2^8 = 256$ 개 부분집합이라 전수 계산이 가능했다.
+현실의 $d = 50$ 이면 $10^{15}$ 개라 KernelSHAP·TreeSHAP 같은 근사가 필요하다.
 :::
 
-규제든 디버깅이든 신뢰든 결국 '왜'에 답해야 한다. 그리고 이 도구들은 각자 다른 질문에 답하므로 혼동하면 잘못된 결론을 낸다.
+---
+
+## G12.0.2 — 상관 특성: 중요도는 어디로 가는가
+
+섀플리 값은 공정하다. 그런데 **무엇에 대해** 공정한가.
+
+같은 정보를 담은 두 특성이 있으면, 모델은 둘 중 아무거나 쓸 수 있다.
+그 선택은 초기값과 학습 과정이 정한다 — 세계가 정하는 게 아니다.
+
+```{python}
+#| label: dup
+#| code-fold: false
+
+import numpy as np
+import itertools
+from math import factorial
+from src import nn
+
+d = 6
+
+
+def build(rho, seed):
+    """진짜 함수는 y = 2*x0 + 1*x2. x1 은 x0 의 상관 대리로 함수에 없다."""
+    g = np.random.default_rng(seed)
+    X = g.normal(0, 1, (4000, d))
+    X[:, 1] = (X[:, 0] if rho == 1.0
+               else rho*X[:, 0] + np.sqrt(1 - rho**2)*g.normal(0, 1, 4000))
+    return X, 2.0*X[:, 0] + 1.0*X[:, 2] + g.normal(0, 0.3, 4000)
+
+
+def exact_shap(prd, bg, x, dd):
+    vals = {}
+    for r in range(dd+1):
+        for S in itertools.combinations(range(dd), r):
+            Z = bg.copy()
+            for j in S:
+                Z[:, j] = x[j]
+            vals[S] = prd(Z).mean()
+    phi = np.zeros(dd)
+    for j in range(dd):
+        rest = [k for k in range(dd) if k != j]
+        for r in range(dd):
+            w = factorial(r)*factorial(dd-1-r)/factorial(dd)
+            for S in itertools.combinations(rest, r):
+                phi[j] += w*(vals[tuple(sorted(S + (j,)))] - vals[S])
+    return phi
+
+
+print("진짜 함수: y = 2·x0 + 1·x2   (x1 은 x0 의 상관 대리, 함수에 없음)")
+print()
+print(f"{'상관 ρ':>8} {'테스트 R²':>10} {'순열 x0':>9} {'순열 x1':>9} "
+      f"{'둘 함께':>9} {'|SHAP| x0':>11} {'|SHAP| x1':>11}")
+print("-" * 70)
+DUP = []
+for rho in [0.0, 0.9, 0.99, 0.999, 1.0]:
+    Xa, ya = build(rho, 0)
+    Xb, yb = build(rho, 1)
+    m = nn.MLP([d, 48, 48, 1], seed=0)
+    nn.train(m, Xa, ya[:, None], loss="mse",
+             opt=nn.Optimizer("adam", lr=0.005), steps=1500,
+             batch_size=256, seed=0)
+    pr = lambda X, m=m: m.predict(X).ravel()
+    mse0 = ((pr(Xb) - yb)**2).mean()
+    gp = np.random.default_rng(5)
+
+    def pimp(cols):
+        Z = Xb.copy()
+        p = gp.permutation(len(Z))
+        for c in cols:
+            Z[:, c] = Xb[p, c]
+        return ((pr(Z) - yb)**2).mean() - mse0
+
+    p0, p1, pj = pimp([0]), pimp([1]), pimp([0, 1])
+    A = np.abs(np.array([exact_shap(pr, Xa[:150], Xb[i], d)
+                         for i in range(50)])).mean(0)
+    DUP.append((rho, 1 - mse0/yb.var(), p0, p1, pj, A[0], A[1]))
+    print(f"{rho:>8.3f} {1-mse0/yb.var():>10.4f} {p0:>9.4f} {p1:>9.4f} "
+          f"{pj:>9.4f} {A[0]:>11.4f} {A[1]:>11.4f}")
+print()
+z, o = DUP[0], DUP[-1]
+print("**중복이 커질수록 개별 중요도가 녹아 없어진다.**")
+print(f"  ρ=0.0  : x0 혼자 {z[2]:.2f}, x1 은 {z[3]:.2f} — 명확하다")
+print(f"  ρ=1.0  : x0 {o[2]:.2f}, x1 {o[3]:.2f} — 합쳐도 {o[2]+o[3]:.2f} 인데")
+print(f"           **둘을 함께 섞으면 {o[4]:.2f}** 다. 개별 합의 "
+      f"{o[4]/(o[2]+o[3]):.1f}배.")
+print()
+for s in ["순열 중요도는 '**이것만 지우면**' 을 잰다. "
+          "쌍둥이가 있으면 지워도 정보가 남으니 둘 다 안 중요해 보인다",
+          f"**'중요한 특성이 없다' 는 결론이 나온다** — "
+          f"실제로는 둘이 합쳐 {o[4]:.2f} 만큼 필수인데",
+          f"게다가 ρ=1.0 에서 {o[2]:.2f} 대 {o[3]:.2f} 로 **갈린 비율은 "
+          f"임의적**이다 — 초기값이 정했다",
+          "SHAP 도 같은 운명이다 — "
+          f"|SHAP| 가 {z[5]:.2f}/{z[6]:.2f} 에서 {o[5]:.2f}/{o[6]:.2f} 로 쪼개진다",
+          "**해법은 지표를 바꾸는 게 아니라 특성을 묶는 것**이다 — "
+          "상관 군집 단위로 중요도를 재야 한다"]:
+    print(f"  · {s}")
+```
+
+이제 더 불편한 실험을 한다. **같은 예측을 하는 두 모델이 정반대 설명을 낼 수 있는가.**
+
+```{python}
+#| label: rashomon
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+gg = np.random.default_rng(11)
+n = 4000
+Xa = gg.normal(0, 1, (n, d))
+Xa[:, 1] = Xa[:, 0]                       # 완전 중복
+ya = 2.0*Xa[:, 0] + 1.0*Xa[:, 2] + gg.normal(0, 0.3, n)
+Xb = gg.normal(0, 1, (2000, d))
+Xb[:, 1] = Xb[:, 0]
+yb = 2.0*Xb[:, 0] + 1.0*Xb[:, 2] + gg.normal(0, 0.3, 2000)
+
+print("x0 과 x1 이 완전히 같은 값일 때, 어느 쪽을 보게 하느냐로 갈라 학습한다")
+print()
+print(f"{'모델':<18} {'테스트 R²':>10} {'|SHAP| x0':>11} {'|SHAP| x1':>11} "
+      f"{'|SHAP| x2':>11}")
+print("-" * 64)
+RASH = []
+for nm, hide in [("A (x1 을 가림)", [1]), ("B (x0 을 가림)", [0]),
+                 ("C (둘 다 보임)", [])]:
+    Xa2, Xb2 = Xa.copy(), Xb.copy()
+    for c in hide:
+        Xa2[:, c] = 0.0
+        Xb2[:, c] = 0.0
+    m = nn.MLP([d, 48, 48, 1], seed=0)
+    nn.train(m, Xa2, ya[:, None], loss="mse",
+             opt=nn.Optimizer("adam", lr=0.005), steps=1500,
+             batch_size=256, seed=0)
+    pr = lambda X, m=m: m.predict(X).ravel()
+    R2b = 1 - ((pr(Xb2) - yb)**2).mean()/yb.var()
+    A = np.abs(np.array([exact_shap(pr, Xa2[:150], Xb2[i], d)
+                         for i in range(50)])).mean(0)
+    RASH.append((nm, R2b, A[0], A[1], A[2]))
+    print(f"{nm:<18} {R2b:>10.4f} {A[2-2]:>11.4f} {A[1]:>11.4f} {A[2]:>11.4f}")
+print()
+ra, rb = RASH[0], RASH[1]
+print("**세 모델의 테스트 R² 가 사실상 같다** "
+      f"({ra[1]:.4f} / {rb[1]:.4f} / {RASH[2][1]:.4f}).")
+print("**그런데 설명은 정반대다.**")
+print(f"  A: 'x0 이 전부입니다' ({ra[2]:.3f} vs {ra[3]:.3f})")
+print(f"  B: 'x1 이 전부입니다' ({rb[2]:.3f} vs {rb[3]:.3f})")
+print()
+for s in ["**어느 쪽도 틀리지 않았다.** 각 모델에 대해 정확한 설명이다",
+          "틀린 것은 **'그러므로 세계에서 x0 이 중요하다'** 라는 도약이다",
+          "이것이 **라쇼몽 효과** — 성능이 같은 여러 모델이 서로 다른 이야기를 한다",
+          "**SHAP 은 인과가 아니다.** '이 모델이 무엇을 썼나' 지 "
+          "'무엇을 바꾸면 결과가 달라지나' 가 아니다",
+          "정책 결정에 쓰려면 인과 추론이 필요하다 — 설명 도구로는 부족하다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-dup
+#| fig-cap: "G12.0.2 — 상관이 커질수록 개별 중요도가 녹는다. ρ=1.0에서 x0·x1 각각은 안 중요해 보이지만 둘을 함께 지우면 전체 성능이 무너진다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+rhos = [f"{r[0]:g}" for r in DUP]
+fig = go.Figure()
+fig.add_trace(go.Bar(x=rhos, y=[r[2] for r in DUP], name="x0 단독",
+                     marker_color=viz.ACCENT))
+fig.add_trace(go.Bar(x=rhos, y=[r[3] for r in DUP], name="x1 단독",
+                     marker_color=viz.WARM))
+fig.add_trace(go.Scatter(x=rhos, y=[r[4] for r in DUP], mode="lines+markers",
+                         name="x0·x1 함께",
+                         line=dict(color=viz.GREEN, width=3, dash="dot"),
+                         marker=dict(size=11)))
+viz.fig_defaults(
+    fig, "순열 중요도: 상관이 커지면 개별 몫이 사라진다", height=440,
+    xaxis_title="x0 과 x1 의 상관 ρ", yaxis_title="순열 중요도 (MSE 증가)",
+    barmode="group")
+fig
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G12.0.3 — PDP 가 감추는 것
 
-- 설명의 종류: 전역 vs 국소, 모델 특정 vs 모델 무관, 사후 vs 본질적
-- 선형 모델의 계수 해석과 그것이 성립하는 조건
-- 순열 중요도와 상관 특성 문제
-- 부분 의존도(PDP), ICE, 누적 국소 효과(ALE)
-- LIME: 국소 대리 모델의 아이디어와 불안정성
-- SHAP: 섀플리 값의 공리적 근거와 계산 근사(KernelSHAP, TreeSHAP)
-- SHAP 해석의 흔한 오해 — 기여도는 인과가 아니다
-- 그래디언트 기반 saliency, Integrated Gradients, Grad-CAM
-- 설명의 신뢰성 평가: 충실성(faithfulness), 안정성, 위생 검사
-- 적대적으로 조작 가능한 설명
-- 본질적으로 해석 가능한 모델(GAM, EBM, 규칙 목록)을 먼저 고려하기
+부분 의존도(PDP)는 특성 $x_j$ 를 격자값으로 **모두 바꿔 보고 평균**한다.
 
----
+$$
+\text{PDP}_j(z) = \frac{1}{n}\sum_{i=1}^{n} f\big(z,\; x^{(i)}_{-j}\big)
+$$
 
-## G12.0.1 — SHAP 값 분해
+ICE 는 같은 계산에서 **평균하기 전 곡선들**을 그대로 그린다.
+평균 하나와 곡선 전부 — 차이가 얼마나 클까.
 
-기준값에서 예측까지 각 특성 기여가 쌓이는 워터폴
+```{python}
+#| label: pdp
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 샘플 선택
-:::
+import numpy as np
+from src import nn
 
----
+g = np.random.default_rng(3)
+ni = 3000
+Xi = g.normal(0, 1, (ni, 3))
+yi = Xi[:, 0]*np.sign(Xi[:, 1])*2.0 + 0.3*Xi[:, 2] + g.normal(0, 0.2, ni)
+mi = nn.MLP([3, 64, 64, 1], seed=0)
+nn.train(mi, Xi, yi[:, None], loss="mse",
+         opt=nn.Optimizer("adam", lr=0.005), steps=2500, batch_size=256, seed=0)
+pri = lambda X: mi.predict(X).ravel()
+print(f"진짜 함수: y = 2·x0·sign(x1) + 0.3·x2   "
+      f"(R² {1-((pri(Xi)-yi)**2).mean()/yi.var():.4f})")
+print("  x0 의 효과가 x1 의 부호에 따라 **뒤집힌다**")
+print()
 
-## G12.0.2 — 상관 특성의 중요도 분산
+grid = np.linspace(-2, 2, 21)
+SUB = Xi[:300]
+ICE = np.zeros((len(SUB), len(grid)))
+for k, gv in enumerate(grid):
+    Z = SUB.copy()
+    Z[:, 0] = gv
+    ICE[:, k] = pri(Z)
+PDP = ICE.mean(0)
+slope_pdp = float(np.polyfit(grid, PDP, 1)[0])
+slopes = np.array([np.polyfit(grid, ICE[i], 1)[0] for i in range(len(SUB))])
+pos = SUB[:, 1] > 0
+print(f"  PDP 기울기            {slope_pdp:>+8.4f}   "
+      f"← '거의 효과 없음' 으로 읽힌다")
+print(f"  ICE 기울기 평균        {slopes.mean():>+8.4f}   (당연히 같다)")
+print(f"  ICE 기울기 표준편차     {slopes.std():>8.4f}   ← 개체별로 이만큼 흩어진다")
+print(f"  x1 > 0 집단           {slopes[pos].mean():>+8.4f}")
+print(f"  x1 < 0 집단           {slopes[~pos].mean():>+8.4f}")
+print(f"  |기울기| 평균          {np.abs(slopes).mean():>8.4f}")
+print()
+print(f"**PDP 는 실제 효과 크기의 "
+      f"{abs(slope_pdp)/np.abs(slopes).mean():.1%} 만 보여준다.**")
+print("  두 집단의 +1.93 과 −1.96 이 평균에서 서로를 지운 결과다.")
+print()
+for s in ["PDP 만 보고 'x0 은 중요하지 않다' 고 결론내면 **정확히 반대**다",
+          "x0 은 이 모델에서 가장 강한 특성이고, 다만 **방향이 조건부**일 뿐이다",
+          "**ICE 를 함께 그리면 즉시 보인다** — 곡선들이 부채처럼 갈라진다",
+          "PDP 의 두 번째 문제는 **비현실적 조합**이다 — "
+          "x0=2 이면서 x1 이 원래 값인 표본이 데이터에 없을 수 있다",
+          "**ALE**(누적 국소 효과)는 격자 구간 안의 국소 변화만 누적해 "
+          "이 문제를 피한다 — 상관이 강한 특성에는 ALE 가 낫다"]:
+    print(f"  · {s}")
+```
 
-상관된 두 특성이 중요도를 나눠 갖는 현상
+```{python}
+#| label: fig-pdp
+#| fig-cap: "G12.0.3 — PDP vs ICE. 검은 굵은 선(PDP)은 거의 평평해 '효과 없음'으로 읽히지만, 개별 ICE 곡선은 x1의 부호에 따라 정반대 방향으로 가파르게 간다."
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 상관 슬라이더
-:::
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
 
----
+fig = go.Figure()
+for i in range(0, 300, 3):
+    col = viz.WARM if SUB[i, 1] > 0 else viz.ACCENT
+    fig.add_trace(go.Scatter(x=grid, y=ICE[i], mode="lines", showlegend=False,
+                             hoverinfo="skip",
+                             line=dict(color=viz.hex_rgba(col, 0.18), width=1)))
+for lbl, mask, col in [("ICE 평균 (x1>0)", pos, viz.WARM),
+                       ("ICE 평균 (x1<0)", ~pos, viz.ACCENT)]:
+    fig.add_trace(go.Scatter(x=grid, y=ICE[mask].mean(0), mode="lines",
+                             name=lbl, line=dict(color=col, width=3)))
+fig.add_trace(go.Scatter(x=grid, y=PDP, mode="lines+markers",
+                         name=f"PDP (기울기 {slope_pdp:+.3f})",
+                         line=dict(color=viz.GREEN, width=5),
+                         marker=dict(size=8)))
+viz.fig_defaults(
+    fig, "부분 의존도는 개체별 이질성을 지운다", height=470,
+    xaxis_title="x0", yaxis_title="예측값")
+fig
+```
 
-## G12.0.3 — PDP vs ICE
+::: {.interaction-hint}
+범례에서 계열을 눌러 켜고 끄면 대비가 뚜렷하다.
 
-평균 곡선이 개체별 이질성을 감추는 사례
+**초록 PDP 선만 켜 보면 "x0 은 효과가 거의 없다"** 로 읽힌다.
+연한 곡선들을 켜면 정반대 — 개별 예측은 x0 에 매우 민감하다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 표시 전환
+이 그림이 PDP 를 쓸 때 **항상 ICE 를 겹쳐 그려야 하는 이유**다.
 :::
 
 ---
 
 ## G12.0.4 — saliency 위생 검사
 
-가중치를 무작위화해도 비슷한 맵이 나오는 실패 사례
+그래디언트 기반 saliency 는 $|\partial f / \partial x|$ 를 지도로 그린다.
+직관적이고, 예쁘고, 널리 쓰인다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 무작위화 토글
-:::
+그런데 Adebayo 등(2018)이 던진 질문이 있다 —
+**모델의 가중치를 무작위로 뒤엎어도 지도가 비슷하다면, 그 지도는 무엇을 설명한 것인가.**
+
+이 실험을 두 구조에 나란히 건다. 결과가 갈린다.
+
+```{python}
+#| label: saliency
+#| code-fold: false
+
+import copy
+import numpy as np
+from src import nn
+
+S = 12
+
+
+def imgs(n, seed):
+    """12x12 이미지. 밝은 4x4 사각형(1) vs 어두운 4x4 사각형(0)."""
+    g = np.random.default_rng(seed)
+    X = g.normal(0, 0.35, (n, S, S))
+    lab = g.integers(0, 2, n)
+    for i in range(n):
+        r, c = g.integers(2, S-5, 2)
+        X[i, r:r+4, c:c+4] += 2.0 if lab[i] == 1 else -2.0
+    return X.reshape(n, -1), lab
+
+
+Xim, yim = imgs(4000, 0)
+Xvl, yvl = imgs(1000, 1)
+
+
+def input_grad(m, X, k):
+    """출력 k 에 대한 입력 그래디언트 (nn.MLP 역전파를 입력까지 이어붙인다)."""
+    out, cache = m.forward(X, training=False)
+    _, dact = nn.ACTIVATIONS[m.act_name]
+    dn = np.zeros_like(out)
+    dn[:, k] = 1.0
+    for i in reversed(range(len(m.W))):
+        if i == 0:
+            return dn @ m.W[0].T
+        dn = (dn @ m.W[i].T) * dact(cache["z"][i-1], cache["a"][i-1])
+
+
+def spearman_rows(A, B):
+    ra = np.argsort(np.argsort(A, 1), 1).astype(float)
+    rb = np.argsort(np.argsort(B, 1), 1).astype(float)
+    ra -= ra.mean(1, keepdims=True)
+    rb -= rb.mean(1, keepdims=True)
+    return float(((ra*rb).sum(1) /
+                  (np.sqrt((ra**2).sum(1)*(rb**2).sum(1)) + 1e-12)).mean())
+
+
+def local_first_layer(seed=0, n_filt=64, ksz=3):
+    """각 1층 뉴런이 이미지의 3x3 창만 본다 — 합성곱의 '국소성'만 흉내낸 고정 층."""
+    g = np.random.default_rng(seed)
+    W = np.zeros((S*S, n_filt))
+    for f in range(n_filt):
+        r, c = g.integers(0, S-ksz+1, 2)
+        patch = np.zeros((S, S))
+        patch[r:r+ksz, c:c+ksz] = g.normal(0, 1, (ksz, ksz))
+        W[:, f] = patch.ravel()
+    return W
+
+
+accv = lambda m: float((m.predict(Xvl).argmax(1) == yvl).mean())
+SAL = {}
+for name, local in [("전결합 1층 (일반 MLP)", False),
+                    ("국소 1층 고정 (합성곱 흉내)", True)]:
+    m = nn.MLP([S*S, 64, 64, 2], out_activation="softmax", seed=0)
+    frozen = False
+    if local:
+        m.W[0] = local_first_layer(0)
+        m.b[0] = np.zeros(64)
+        frozen = True
+    opt = nn.Optimizer("adam", lr=0.003)
+    g = np.random.default_rng(0)
+    for _ in range(2000):
+        idx = g.integers(0, len(Xim), 128)
+        _, gr = m.loss_and_grads(Xim[idx], yim[idx], loss="softmax_ce")
+        if frozen:                       # 1층은 학습하지 않는다
+            gr["W0"] = np.zeros_like(gr["W0"])
+            gr["b0"] = np.zeros_like(gr["b0"])
+        opt.step(m.params(), gr)
+    base_sal = np.abs(input_grad(m, Xvl[:200], 1))
+    rows = []
+    for lbl, layers in [("없음 (원본)", []), ("마지막 층", [2]),
+                        ("위 2개 층", [1, 2]), ("전체 층", [0, 1, 2])]:
+        mr = copy.deepcopy(m)
+        gr_ = np.random.default_rng(9)
+        for L in layers:
+            mr.W[L] = gr_.normal(0, m.W[L].std() + 1e-12, m.W[L].shape)
+            mr.b[L] = np.zeros_like(mr.b[L])
+        sal = np.abs(input_grad(mr, Xvl[:200], 1))
+        rows.append((lbl, accv(mr), spearman_rows(base_sal, sal)))
+    SAL[name] = (accv(m), rows, base_sal)
+
+for name, (a0, rows, _) in SAL.items():
+    print(f"**{name}** — 학습 후 정확도 {a0:.4f}")
+    print(f"  {'무작위화 범위':<14} {'정확도':>9} {'saliency 순위상관':>18}")
+    print("  " + "-"*44)
+    for lbl, a, sp in rows:
+        print(f"  {lbl:<14} {a:>9.4f} {sp:>18.4f}")
+    print()
+
+fc = SAL["전결합 1층 (일반 MLP)"][1]
+lo = SAL["국소 1층 고정 (합성곱 흉내)"][1]
+print("**두 구조가 정반대로 반응한다.**")
+print(f"  전결합: 마지막 층만 뒤엎어도 상관이 {fc[1][2]:.3f} 로 무너진다 "
+      f"— **위생 검사 통과**")
+print(f"  국소 고정: 같은 조작에도 상관 {lo[1][2]:.3f} 를 유지한다 "
+      f"— **위생 검사 실패**")
+print(f"  더 심한 것은 다음 줄이다 — 위 2개 층을 뒤엎어 정확도가 "
+      f"{lo[2][1]:.4f} 로")
+print(f"  **무작위 추측(0.5)보다도 나빠졌는데** saliency 지도는 원본과 "
+      f"{lo[2][2]:.3f} 상관이다.")
+print()
+for s in ["원인은 학습이 아니라 **구조**다 — 고정된 1층이 "
+          "'어느 픽셀이 출력에 닿을 수 있는가' 를 이미 정해 버린다",
+          "위층을 아무리 뒤엎어도 그 통로는 그대로라 지도의 모양이 남는다",
+          "**실제 CNN 의 saliency 가 종종 윤곽선처럼 보이는 것**도 같은 이유다 — "
+          "학습된 내용이 아니라 합성곱의 국소성이 그린 그림일 수 있다",
+          "**그래서 saliency 를 쓸 때는 반드시 위생 검사를 먼저 돌려야 한다** — "
+          "가중치를 무작위화하고, 지도가 바뀌는지 본다",
+          "바뀌지 않으면 그 지도는 모델에 관해 아무것도 말하지 않는다"]:
+    print(f"  · {s}")
+print()
+mfc = SAL["전결합 1층 (일반 MLP)"][2]
+print(f"함께 볼 검사 — |saliency| 와 |입력| 의 순위상관: "
+      f"{spearman_rows(mfc, np.abs(Xvl[:200])):.4f}")
+print("  (높으면 '설명'이 아니라 입력 그림을 되비추고 있다는 뜻. "
+      "여기서는 낮아 통과.)")
+```
+
+```{python}
+#| label: fig-saliency
+#| fig-cap: "G12.0.4 — saliency 위생 검사. 전결합 모델은 가중치를 뒤엎으면 지도가 무너진다(통과). 1층이 국소로 고정된 모델은 정확도가 무작위 아래로 떨어져도 지도가 남는다(실패)."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+labels = [r[0] for r in SAL["전결합 1층 (일반 MLP)"][1]]
+for (name, (_, rows, _)), col in zip(SAL.items(), [viz.ACCENT, viz.WARM]):
+    fig.add_trace(go.Bar(x=labels, y=[r[2] for r in rows], name=name,
+                         marker_color=col,
+                         text=[f"{r[2]:.2f}" for r in rows],
+                         textposition="outside", textfont=dict(size=11)))
+    fig.add_trace(go.Scatter(x=labels, y=[r[1] for r in rows],
+                             mode="lines+markers", name=f"{name} 정확도",
+                             line=dict(color=col, width=2, dash="dot"),
+                             marker=dict(size=8), yaxis="y2"))
+fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.3)"))
+viz.fig_defaults(
+    fig, "가중치를 무작위화해도 지도가 남는가", height=470,
+    xaxis_title="무작위화 범위", yaxis_title="원본 saliency 와의 순위상관",
+    yaxis=dict(range=[-0.25, 1.15]), barmode="group",
+    yaxis2=dict(title="분류 정확도", overlaying="y", side="right",
+                range=[0, 1.1], showgrid=False))
+fig
+```
 
 ---
 
-## 핵심 용어
+## 설명이 옳은지 어떻게 아는가: 충실성
 
-| 용어 | 비고 |
-|------|------|
-| SHAP |  |
-| LIME |  |
-| 순열 중요도 |  |
-| 부분 의존도 (PDP) |  |
-| Grad-CAM |  |
-| 충실성 |  |
+위생 검사는 "설명이 **모델을 보고 있는가**"를 묻는다.
+그다음 질문은 "설명이 **맞는가**"다.
+
+가장 실용적인 답이 **삭제 검사**다 —
+중요하다고 지목된 특성을 지우고, 예측이 실제로 흔들리는지 본다.
+
+```{python}
+#| label: faithful
+#| code-fold: false
+
+import numpy as np
+
+Xq, yq = make(500, 7)
+NQ = 120
+BGM = BG.mean(0)
+base_pred = pred(Xq[:NQ])
+
+PHIq = np.array([shapley_exact(Xq[i])[0] for i in range(NQ)])
+GRD = np.zeros((NQ, D))
+for j in range(D):
+    e = np.zeros(D)
+    e[j] = 1e-3
+    GRD[:, j] = (pred(Xq[:NQ] + e) - pred(Xq[:NQ] - e))/2e-3
+GXI = GRD*(Xq[:NQ] - BGM)
+RND = np.random.default_rng(4).normal(0, 1, (NQ, D))
+
+print("삭제 검사 — 상위 k개 특성을 배경값으로 바꿨을 때 예측이 얼마나 흔들리나")
+print()
+print(f"{'k':>4} " + " ".join(f"{n:>12}" for n in
+                              ["SHAP", "gradient", "grad×input", "무작위"]))
+print("-" * 56)
+FAITH = []
+for k in [1, 2, 3, 4]:
+    row = []
+    for A in [PHIq, GRD, GXI, RND]:
+        order = np.argsort(-np.abs(A), 1)[:, :k]
+        Z = Xq[:NQ].copy()
+        for i in range(NQ):
+            Z[i, order[i]] = BGM[order[i]]
+        row.append(float(np.abs(pred(Z) - base_pred).mean()))
+    FAITH.append((k, *row))
+    print(f"{k:>4} " + " ".join(f"{v:>12.4f}" for v in row))
+print("  (클수록 좋다 — 지목한 것이 실제로 중요했다는 뜻)")
+print()
+f1 = FAITH[0]
+print(f"**k=1 에서 갈린다** — SHAP {f1[1]:.3f} vs 무작위 {f1[4]:.3f} "
+      f"({f1[1]/f1[4]:.1f}배).")
+print(f"  gradient 는 {f1[2]:.3f} 로 SHAP 보다 뚜렷이 낮다 — "
+      f"국소 기울기만 보아 **값의 크기를 무시**하기 때문이다.")
+print(f"  grad×input 은 {f1[3]:.3f} 로 SHAP 에 근접한다 — "
+      f"기울기에 값을 곱해 그 결함을 보완한다.")
+print()
+f4 = FAITH[-1]
+print(f"**그런데 k=4 에서는 무작위조차 {f4[4]:.3f} 로 SHAP {f4[1]:.3f} 에 "
+      f"근접한다.**")
+for s in ["8개 중 4개를 지우면 무엇을 지우든 예측이 망가지기 때문이다",
+          "**즉 삭제 검사는 k 가 작을 때만 판별력이 있다**",
+          "그리고 이 검사에도 함정이 있다 — 특성을 배경값으로 바꾼 입력은 "
+          "**학습 분포 밖**일 수 있다",
+          "그러면 예측이 흔들린 이유가 '중요해서' 가 아니라 "
+          "'처음 보는 입력이라서' 일 수 있다",
+          "**완벽한 검증은 없다.** 위생 검사·삭제 검사·안정성 검사를 "
+          "겹쳐 쓰는 것이 현실적인 최선이다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-**다음**: [12.1 기계적 해석가능성](01_mechanistic.qmd) — 회로·프로빙·희소 오토인코더 — 모델 내부를 역공학하기
+## LIME: 이웃의 크기가 답을 정한다
+
+LIME 은 질의점 주변에 표본을 뿌리고 **국소 선형 모델**을 적합한다.
+직관적이지만, 답이 하이퍼파라미터에 매달려 있다.
+
+```{python}
+#| label: lime
+#| code-fold: false
+
+import numpy as np
+
+
+def lime_coefs(m, x, sigma, n_samp, seed, dd):
+    g = np.random.default_rng(seed)
+    Z = x + g.normal(0, sigma, (n_samp, dd))
+    w = np.exp(-((Z - x)**2).sum(1)/(2*(sigma*np.sqrt(dd))**2))
+    A = np.hstack([np.ones((n_samp, 1)), Z - x])
+    W = np.diag(w)
+    coef = np.linalg.solve(A.T @ W @ A + 1e-6*np.eye(dd+1),
+                           A.T @ W @ m.predict(Z).ravel())
+    return coef[1:]
+
+
+xl = Xi[7]
+true_slope = 2.0*np.sign(xl[1])
+print("G12.0.3 의 모델(y = 2·x0·sign(x1))에서 한 점을 다섯 번 설명해 본다")
+print(f"  질의점 x = {np.round(xl, 3)}   → 참 국소 기울기(x0) = "
+      f"{true_slope:+.2f}")
+print()
+print(f"{'표본 수':>8} {'이웃 폭 σ':>10}  {'x0 계수 (시드 5개)':<42} "
+      f"{'상대 표준편차':>12} {'참값 오차':>10}")
+print("-" * 88)
+for ns in [50, 200, 1000]:
+    for sg in [0.25, 1.0]:
+        cs = np.array([lime_coefs(mi, xl, sg, ns, s, 3)[0] for s in range(5)])
+        rel = cs.std()/abs(cs.mean())
+        print(f"{ns:>8} {sg:>10.2f}  "
+              + " ".join(f"{c:+7.3f}" for c in cs)
+              + f" {rel:>12.1%} {abs(cs.mean()-true_slope):>10.3f}")
+print()
+print("**표본을 늘리면 흔들림은 잡힌다 — 그런데 답이 수렴하는 곳이 σ 마다 다르다.**")
+c_small = np.array([lime_coefs(mi, xl, 0.25, 1000, s, 3)[0] for s in range(5)])
+c_large = np.array([lime_coefs(mi, xl, 1.0, 1000, s, 3)[0] for s in range(5)])
+print(f"  σ=0.25, 표본 1000 → {c_small.mean():+.3f} "
+      f"(참값 {true_slope:+.2f} 에 근접)")
+print(f"  σ=1.00, 표본 1000 → {c_large.mean():+.3f} "
+      f"(참값의 {c_large.mean()/true_slope:.0%})")
+print()
+for s in ["넓은 이웃은 sign(x1) 이 뒤집히는 영역까지 삼켜 "
+          "**두 방향을 평균**해 버린다",
+          "**σ 는 '국소' 의 정의다.** 그런데 이것을 정하는 원리적 기준이 없다",
+          "즉 LIME 의 불안정성은 표본 잡음보다 "
+          f"**σ 선택이 훨씬 크게 지배한다** — 시드 간 편차는 "
+          f"{c_large.std()/abs(c_large.mean()):.1%} 인데 "
+          f"σ 를 바꾸면 답이 참값의 {abs(c_large.mean()/true_slope):.0%} 로 간다",
+          "SHAP 에도 같은 선택이 숨어 있다 — **배경 분포**를 무엇으로 두느냐다",
+          "**설명을 보고할 때는 그 하이퍼파라미터를 함께 보고해야 한다**"]:
+    print(f"  · {s}")
+```
+
+---
+
+## 정리: 어떤 도구가 어떤 질문에 답하나
+
+```{python}
+#| label: toolmap
+#| code-fold: false
+
+print(f"{'도구':<16} {'답하는 질문':<30} {'비용':<12} {'주의'}")
+print("-" * 92)
+for a, b, c, e in [
+    ("순열 중요도", "이것만 지우면 성능이 떨어지나", "O(d) 재평가", "**상관에 녹는다**"),
+    ("PDP", "이 특성의 평균 효과 곡선", "O(격자·n)", "**이질성을 지운다**"),
+    ("ICE", "개체별 효과 곡선", "PDP 와 동일", "겹치면 읽기 어렵다"),
+    ("ALE", "국소 변화만 누적한 효과", "O(격자·n)", "상관에 강하다"),
+    ("LIME", "이 점 주변의 선형 근사", "O(표본)", "**σ 가 답을 정한다**"),
+    ("SHAP", "이 예측에 각자의 공정한 몫", "O(2^d) → 근사", "**인과가 아니다**"),
+    ("gradient", "무한소 변화에 대한 민감도", "역전파 1회", "값 크기를 무시"),
+    ("grad×input", "기울기 × 기준 대비 편차", "역전파 1회", "부호가 상쇄될 수 있다"),
+    ("Integrated Grad", "기준선까지 경로 적분", "역전파 ~50회", "기준선 선택이 중요"),
+    ("Grad-CAM", "어느 공간 영역이 밀었나", "역전파 1회", "**해상도가 거칠다**"),
+]:
+    print(f"{a:<16} {b:<30} {c:<12} {e}")
+print()
+print("**설명을 조작할 수 있다는 점도 알아야 한다.**")
+for s in ["예측을 거의 안 바꾸면서 SHAP·LIME 설명만 바꾸는 모델을 "
+          "**의도적으로 만들 수 있다** (Slack 등, 2020)",
+          "핵심은 이 도구들이 **배경 분포에서 뽑은, 실제로는 없을 법한 입력**을 "
+          "많이 평가한다는 것",
+          "그 영역에서만 다르게 행동하는 모델을 심으면 설명이 속는다",
+          "즉 **설명은 감사(audit)의 증거가 되기에 약하다** — "
+          "적대적 상황을 가정해야 한다면 더욱"]:
+    print(f"  · {s}")
+print()
+print("**그래서 순서는 이렇다**")
+for i, s in enumerate([
+    "**본질적으로 읽히는 모델을 먼저 시도한다** — "
+    "선형/GAM/EBM/규칙 목록으로 충분한 경우가 생각보다 많다",
+    "그래도 복잡한 모델이 필요하면 사후 설명을 붙이되, "
+    "**위생 검사와 충실성 검사를 함께 돌린다**",
+    "상관 특성은 **군집으로 묶어** 중요도를 잰다",
+    "PDP 는 **항상 ICE 와 함께** 본다",
+    "설명의 하이퍼파라미터(배경 분포, σ, 기준선)를 **함께 보고한다**",
+    "그리고 **'그러므로 이걸 바꾸면 결과가 달라진다' 는 말을 하지 않는다** — "
+    "그건 인과의 영역이다",
+], 1):
+    print(f"  {i}. {s}")
+```
+
+---
+
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **섀플리 값** | 네 공리를 만족하는 유일한 배분 | 효율성 오차 $10^{-16}$ — 항등식 |
+| 비용 | $2^d$ 부분집합 | $d$=8이면 256, $d$=50이면 $10^{15}$ |
+| 개입형 vs 관측형 | 상관 0.95 대리 특성 φ = +0.028 | 다른 질문의 다른 답 |
+| **중복 특성** | ρ=1.0에서 x0 1.29, x1 3.14 | 함께 지우면 **7.77** |
+| 그 함의 | "중요한 특성이 없다"는 오독 | 갈린 비율은 초기값이 정했다 |
+| **라쇼몽** | R² 0.978 / 0.978 로 동일 | SHAP은 정반대 (x0 1.55 vs x1 1.56) |
+| 결론 | 설명은 **모델**의 것이지 세계의 것이 아니다 | SHAP ≠ 인과 |
+| **PDP** | 기울기 +0.178 → "효과 없음" | ICE는 +1.93 / −1.96 |
+| 그 함의 | PDP는 실제 크기의 **9.2%** | 항상 ICE를 겹쳐 본다 |
+| **saliency 위생** | 전결합: 상관 0.095 (통과) | 국소 고정: **0.644** (실패) |
+| 가장 나쁜 줄 | 정확도 **0.082** (무작위 0.5 이하) | 그런데 지도는 0.645 상관 |
+| 원인 | 학습이 아니라 **구조**가 그린 지도 | CNN saliency의 윤곽선도 같은 의심 |
+| **충실성** | k=1: SHAP 2.37 vs 무작위 0.77 (3.1배) | gradient 1.90으로 뒤진다 |
+| 검사의 한계 | k=4면 무작위도 1.98 | 작은 k에서만 판별력 |
+| **LIME** | σ=0.25 → +1.84 (참값 2.0) | σ=1.0 → +0.91 (참값의 45%) |
+| 진짜 불안정성 | 시드 편차 7.1% vs σ 편향 55% | **σ 선택이 지배한다** |
+| 조작 가능성 | 예측을 안 바꾸며 설명만 바꾸는 모델 | 감사 증거로는 약하다 |
+
+---
+
+**다음**: [12.1 기계적 해석가능성](01_mechanistic.qmd) — 회로·프로빙·희소 오토인코더
 
 **이전**: [11.6 모니터링과 운영](../11_systems/06_monitoring.qmd)
