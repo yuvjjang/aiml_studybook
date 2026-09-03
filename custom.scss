@@ -142,6 +142,24 @@ hr {
   color: var(--accent, #7ea8f7);
 }
 
+.rs-actions button.rs-primary {
+  border-color: var(--accent, #7ea8f7);
+  background: var(--accent-dim, rgba(126, 168, 247, 0.15));
+  font-weight: 600;
+}
+
+/* 저장 상태 안내 */
+.rs-status {
+  min-height: 1.4em;
+  margin: 0 0 1.2rem;
+  font-size: 0.92rem;
+  color: var(--reader-muted, #5b6672);
+}
+
+.rs-status.rs-pending { color: #e8a33d; }
+.rs-status.rs-saved { color: #2f9e44; }
+.rs-status.rs-bad { color: #e5484d; }
+
 .rs-contrast {
   border-collapse: collapse;
   margin: 1rem 0;

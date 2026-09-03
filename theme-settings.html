@@ -2,8 +2,10 @@
 <script>
 /* 읽기 설정을 모든 페이지에 적용한다.
  *
- * settings.qmd 에서 바꾼 값을 localStorage 에 저장하고,
- * 이 스크립트가 페이지마다 :root 의 CSS 변수로 덮어쓴다.
+ * settings.qmd 에서 저장한 값을 localStorage 에서 읽어,
+ * <html> 의 --reader-user-* 인라인 스타일로 넣는다.
+ * styles.css 의 body 규칙이 user 값이 있으면 그것을, 없으면
+ * 테마 기본값을 쓰도록 var() 로 합친다.
  * 값은 브라우저에만 저장되며 서버로 가지 않는다.
  *
  * <head> 에서 동기 실행되므로 본문이 그려지기 전에 적용된다
@@ -14,16 +16,16 @@
 
   var KEY = "aimlstudy.reader";
 
-  // settings.qmd 와 공유하는 스키마. CSS 변수명 -> 기본값(테마별)
+  // settings.qmd 와 공유하는 스키마. 저장 키 -> 실제로 쓸 CSS 변수
   var FIELDS = {
-    "--reader-text": null,        // null = 테마 기본값을 그대로 둔다
-    "--reader-bg": null,
-    "--reader-link": null,
-    "--reader-muted": null,
-    "--reader-font": null,
-    "--reader-font-size": null,
-    "--reader-line-height": null,
-    "--reader-measure": null
+    "--reader-text": "--reader-user-text",
+    "--reader-bg": "--reader-user-bg",
+    "--reader-link": "--reader-user-link",
+    "--reader-muted": "--reader-user-muted",
+    "--reader-font": "--reader-user-font",
+    "--reader-font-size": "--reader-user-font-size",
+    "--reader-line-height": "--reader-user-line-height",
+    "--reader-measure": "--reader-user-measure"
   };
 
   function read() {
@@ -39,9 +41,9 @@
     var root = document.documentElement;
     Object.keys(FIELDS).forEach(function (k) {
       if (cfg && typeof cfg[k] === "string" && cfg[k] !== "") {
-        root.style.setProperty(k, cfg[k]);
+        root.style.setProperty(FIELDS[k], cfg[k]);
       } else {
-        root.style.removeProperty(k);
+        root.style.removeProperty(FIELDS[k]);
       }
     });
   }
@@ -49,8 +51,9 @@
   function save(cfg) {
     try {
       window.localStorage.setItem(KEY, JSON.stringify(cfg || {}));
+      return true;
     } catch (e) {
-      /* 저장할 수 없으면 이번 세션에만 적용된다 */
+      return false;              // 저장할 수 없으면 이번 세션에만 적용된다
     }
   }
 
@@ -59,8 +62,12 @@
     key: KEY,
     fields: Object.keys(FIELDS),
     get: read,
-    apply: apply,
-    save: function (cfg) { save(cfg); apply(cfg); },
+    apply: apply,                          // 저장 없이 이 페이지에만 미리보기
+    save: function (cfg) {                 // 저장 + 모든 페이지에 적용
+      var ok = save(cfg);
+      apply(cfg);
+      return ok;
+    },
     reset: function () {
       try { window.localStorage.removeItem(KEY); } catch (e) { /* noop */ }
       apply({});
@@ -68,16 +75,5 @@
   };
 
   apply(read());
-
-  // 라이트/다크 토글 후에도 사용자 값이 유지되도록 다시 적용한다
-  document.addEventListener("DOMContentLoaded", function () {
-    apply(read());
-    var btn = document.querySelector(".quarto-color-scheme-toggle");
-    if (btn) {
-      btn.addEventListener("click", function () {
-        window.setTimeout(function () { apply(read()); }, 0);
-      });
-    }
-  });
 })();
 </script>

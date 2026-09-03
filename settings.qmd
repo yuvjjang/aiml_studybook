@@ -5,8 +5,9 @@ number-sections: false
 code-tools: false      # 소스 모달이 위젯 id 를 중복 생성하는 것을 막는다
 ---
 
-이 페이지에서 바꾼 값은 **이 브라우저에만** 저장되고 모든 장에 적용됩니다.
-서버로 전송되지 않으며, 언제든 초기값으로 되돌릴 수 있습니다.
+컨트롤을 움직이면 **이 페이지에서 바로 미리보기**가 되고, **[저장]** 을 눌러야
+모든 장에 적용됩니다. 값은 **이 브라우저에만** 저장되고 서버로 전송되지 않으며,
+언제든 초기값으로 되돌릴 수 있습니다.
 
 ::: {.callout-note appearance="simple"}
 색을 바꾸면 아래 **명도 대비**가 실시간으로 계산됩니다.
@@ -57,12 +58,15 @@ code-tools: false      # 소스 모달이 위젯 id 를 중복 생성하는 것�
 </div>
 
 <div class="rs-actions">
+  <button type="button" id="rs-save" class="rs-primary">저장</button>
   <button type="button" id="rs-preset-default">기본값</button>
   <button type="button" id="rs-preset-soft">눈이 편한 회색</button>
   <button type="button" id="rs-preset-high">고대비</button>
   <button type="button" id="rs-preset-sepia">세피아</button>
   <button type="button" id="rs-reset">저장한 설정 지우기</button>
 </div>
+
+<p class="rs-status" id="rs-status" role="status" aria-live="polite"></p>
 
 <table class="rs-contrast">
   <thead>
@@ -93,9 +97,10 @@ code-tools: false      # 소스 모달이 위젯 id 를 중복 생성하는 것�
     "--reader-measure": el("rs-measure")
   };
 
-  // 테마가 준 현재 값(사용자 설정이 없을 때의 기본값)을 읽어 온다
-  function themeValue(name) {
-    return getComputedStyle(document.body).getPropertyValue(name).trim();
+  // 사용자 값이 아니라 테마가 정한 기본값을 읽는다 (--reader-*-default)
+  function themeDefault(name) {
+    return getComputedStyle(document.body)
+      .getPropertyValue(name + "-default").trim();
   }
 
   function toHex(c) {
@@ -161,33 +166,66 @@ code-tools: false      # 소스 모달이 위젯 id 를 중복 생성하는 것�
     return cfg;
   }
 
-  function push() {
-    RS.save(collect());
+  function readouts() {
     el("rs-size-v").textContent = ctrls["--reader-font-size"].value + " rem";
     el("rs-lh-v").textContent = ctrls["--reader-line-height"].value;
     el("rs-measure-v").textContent = ctrls["--reader-measure"].value + " px";
-    updateContrast();
   }
 
-  // 저장값 -> 없으면 테마 기본값으로 컨트롤을 채운다
-  function load() {
-    var cfg = RS.get();
+  function status(msg, cls) {
+    var s = el("rs-status");
+    s.textContent = msg;
+    s.className = "rs-status" + (cls ? " " + cls : "");
+  }
+
+  function dirty() {
+    return JSON.stringify(collect()) !== JSON.stringify(RS.get());
+  }
+
+  // 컨트롤을 만지면 이 페이지에만 즉시 반영된다. 저장은 [저장] 버튼이 한다.
+  function preview() {
+    RS.apply(collect());
+    readouts();
+    updateContrast();
+    if (dirty()) {
+      status("저장하지 않은 변경이 있습니다 — 지금은 이 페이지에만 보입니다.",
+             "rs-pending");
+    } else {
+      status("저장된 설정과 같습니다.");
+    }
+  }
+
+  // 컨트롤에 값을 채운다. src(k) 가 그 칸에 넣을 문자열을 준다.
+  function fill(src) {
     Object.keys(ctrls).forEach(function (k) {
       var c = ctrls[k];
       if (!c) { return; }
-      var v = cfg[k] || themeValue(k);
-      if (c.type === "color") { c.value = toHex(v); }
-      else if (c.type === "range") { c.value = parseFloat(v) || c.value; }
-      else { c.value = cfg[k] || ""; }
+      var v = src(k);
+      if (c.type === "color") { c.value = toHex(v || themeDefault(k)); }
+      else if (c.type === "range") { c.value = parseFloat(v || themeDefault(k)) || c.value; }
+      else { c.value = v || ""; }
     });
-    el("rs-size-v").textContent = ctrls["--reader-font-size"].value + " rem";
-    el("rs-lh-v").textContent = ctrls["--reader-line-height"].value;
-    el("rs-measure-v").textContent = ctrls["--reader-measure"].value + " px";
+  }
+
+  // 저장값 -> 없으면 테마 기본값
+  function load() {
+    var cfg = RS.get();
+    fill(function (k) { return cfg[k]; });
+    readouts();
     updateContrast();
   }
 
   Object.keys(ctrls).forEach(function (k) {
-    if (ctrls[k]) { ctrls[k].addEventListener("input", push); }
+    if (ctrls[k]) { ctrls[k].addEventListener("input", preview); }
+  });
+
+  el("rs-save").addEventListener("click", function () {
+    if (RS.save(collect())) {
+      status("저장했습니다 — 모든 장에 적용됩니다.", "rs-saved");
+    } else {
+      status("이 브라우저에 저장할 수 없습니다(사생활 보호 모드 등). " +
+             "설정은 이번 방문에만 적용됩니다.", "rs-bad");
+    }
   });
 
   var PRESETS = {
@@ -207,20 +245,27 @@ code-tools: false      # 소스 모달이 위젯 id 를 중복 생성하는 것�
       Object.keys(p).forEach(function (k) {
         if (ctrls[k]) { ctrls[k].value = p[k]; }
       });
-      push();
+      preview();
     });
   });
 
+  // 테마 기본값으로 컨트롤을 되돌린다 (저장은 [저장] 을 눌러야 한다)
   el("rs-preset-default").addEventListener("click", function () {
-    RS.reset();
-    load();
+    fill(function () { return ""; });
+    preview();
   });
+
+  // 저장된 값을 지우고 테마 기본값으로 완전히 되돌린다
   el("rs-reset").addEventListener("click", function () {
     RS.reset();
     load();
+    status("저장한 설정을 지웠습니다 — 테마 기본값으로 돌아갑니다.", "rs-saved");
   });
 
   load();
+  status(Object.keys(RS.get()).length
+    ? "저장된 설정을 불러왔습니다."
+    : "아직 저장한 설정이 없습니다 — 테마 기본값입니다.");
 })();
 </script>
 ```

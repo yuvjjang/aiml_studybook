@@ -1,41 +1,62 @@
 /* Pretendard — 가변 폰트 + 동적 서브셋 (한글 웹폰트 용량을 크게 줄인다) */
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css');
 
-/* ══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════
    읽기 설정 변수
-   settings.qmd 에서 바꾼 값이 theme-settings.js 를 통해
-   :root 인라인 스타일로 덮어써진다. 여기 값은 기본값이다.
-   ══════════════════════════════════════════════════════════════════ */
+
+   3층 구조다.
+     1. --reader-*-default : 테마(라이트/다크) 기본값
+     2. --reader-user-*    : settings.qmd 에서 고른 값.
+                             theme-settings.js 가 <html> 인라인 스타일로 넣는다.
+     3. --reader-*         : 실제로 쓰이는 값 = user 이 있으면 user, 없으면 default
+
+   색 기본값이 body.quarto-dark 처럼 body 에 선언되기 때문에,
+   <html> 에 상속된 값은 body 자신의 선언을 이길 수 없다.
+   그래서 이름을 나누고 body 에서 var() 로 합친다.
+   ═════════════════════════════════════════════════════════════════ */
 :root {
   --accent: #7ea8f7;
   --accent-dim: rgba(126, 168, 247, 0.15);
 
-  --reader-font: "Pretendard Variable", Pretendard, "Noto Sans KR",
-                 system-ui, -apple-system, "Segoe UI", sans-serif;
-  --reader-font-size: 1rem;
-  --reader-line-height: 1.75;
-  --reader-measure: 1100px;
-}
+  --reader-font-default: "Pretendard Variable", Pretendard, "Noto Sans KR",
+                         system-ui, -apple-system, "Segoe UI", sans-serif;
+  --reader-font-size-default: 1rem;
+  --reader-line-height-default: 1.75;
+  --reader-measure-default: 1100px;
 
-/* 라이트 테마 기본 색 (WCAG 대비를 실제로 계산해 고른 값) */
-body.quarto-light {
-  --reader-text: #1b1f24;    /* 흰 배경 대비 16.6:1  AAA */
-  --reader-bg: #ffffff;
-  --reader-link: #1d4ed8;    /*                6.7:1  AA  */
-  --reader-muted: #5b6672;   /*                5.9:1  AA  */
-  --reader-rule: rgba(27, 31, 36, 0.14);
+  /* 라이트 테마 기본 색 (WCAG 대비를 실제로 계산해 고른 값) */
+  --reader-text-default: #1b1f24;    /* 흰 배경 대비 16.6:1  AAA */
+  --reader-bg-default: #ffffff;
+  --reader-link-default: #1d4ed8;    /*                6.7:1  AA  */
+  --reader-muted-default: #5b6672;   /*                5.9:1  AA  */
 }
 
 /* 다크 테마 기본 색 */
 body.quarto-dark {
-  --reader-text: #e8ecf1;    /* #1e2227 대비  13.5:1  AAA */
-  --reader-bg: #1e2227;
-  --reader-link: #8fb8ff;    /*                8.0:1  AAA */
-  --reader-muted: #a7b4c4;   /*                7.6:1  AAA */
-  --reader-rule: rgba(232, 236, 241, 0.16);
+  --reader-text-default: #e8ecf1;    /* #1e2227 대비  13.5:1  AAA */
+  --reader-bg-default: #1e2227;
+  --reader-link-default: #8fb8ff;    /*                8.0:1  AAA */
+  --reader-muted-default: #a7b4c4;   /*                7.6:1  AAA */
 }
 
-/* ── 본문에 적용 ─────────────────────────────────────────────── */
+/* 사용자 값과 테마 기본값을 합치는 곳 */
+body {
+  --reader-font: var(--reader-user-font, var(--reader-font-default));
+  --reader-font-size: var(--reader-user-font-size, var(--reader-font-size-default));
+  --reader-line-height: var(--reader-user-line-height, var(--reader-line-height-default));
+  --reader-measure: var(--reader-user-measure, var(--reader-measure-default));
+
+  --reader-text: var(--reader-user-text, var(--reader-text-default));
+  --reader-bg: var(--reader-user-bg, var(--reader-bg-default));
+  --reader-link: var(--reader-user-link, var(--reader-link-default));
+  --reader-muted: var(--reader-user-muted, var(--reader-muted-default));
+
+  /* 구분선은 본문 글자색에서 파생시켜, 색을 바꿔도 따라오게 한다 */
+  --reader-rule: rgba(128, 128, 128, 0.25);
+  --reader-rule: color-mix(in srgb, var(--reader-text) 15%, transparent);
+}
+
+/* ── 본문에 적용 ───────────────────────────────── */
 body {
   font-family: var(--reader-font);
   font-size: var(--reader-font-size);
