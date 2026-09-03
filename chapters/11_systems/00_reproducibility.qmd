@@ -4,89 +4,580 @@ subtitle: "시드·버전·추적 — 어제의 결과를 오늘 다시 얻기"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+여기까지 열 개 파트를 지나며 수백 개의 수치를 만들었다.
+그 수치들이 의미를 가지려면 조건이 하나 있다. **다시 만들 수 있어야 한다.**
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+재현되지 않는 실험은 데이터가 아니라 **일화**다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그런데 이것은 도덕적 권고가 아니라 **측정의 문제**다.
+같은 코드를 두 번 돌려 다른 답이 나오면, 두 방법을 비교한 결과도 믿을 수 없다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+이 장에서 잴 것은 세 가지다.
+
+1. 무작위성이 결과를 **얼마나** 흔드는가
+2. 그 흔들림이 **어디서** 오는가
+3. 그 흔들림 속에서 **어떻게 결론을 내리는가** — 그리고 어떻게 속는가
+
+세 번째가 이 장의 핵심이고, 답은 불편하다.
+
+---
+
+## 재현성의 세 층위
+
+| 층위 | 요구 | 비용 | 언제 필요한가 |
+|------|------|------|-------------|
+| **비트 단위** | 같은 입력 → 완전히 같은 출력 | 높다 (결정론적 커널, 속도 손해) | 디버깅, 규제, 회귀 테스트 |
+| **통계적** | 같은 설정 → 같은 분포 | 중간 (시드 여러 개, 분산 보고) | **논문·의사결정의 기본선** |
+| **개념적** | 같은 방법 → 같은 결론 | 낮다 (문서화) | 재구현, 후속 연구 |
+
+대부분의 실패는 가운데에서 일어난다.
+비트 단위를 못 맞춰서가 아니라, **통계적으로 구별되지 않는 차이를 구별했다고 주장해서**다.
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import nn
+
+
+def make_data(n, seed, d=12, noise=1.4):
+    """분류 문제. 잡음이 커서 완벽히 풀 수 없다 — 현실적인 설정."""
+    g = np.random.default_rng(seed)
+    W = np.random.default_rng(999).normal(0, 1, (d, 3))
+    X = g.normal(0, 1, (n, d))
+    y = (np.tanh(X @ W)*2.5 + g.normal(0, noise, (n, 3))).argmax(1)
+    return X, y
+
+
+Xtr, ytr = make_data(500, 1)
+Xte, yte = make_data(2000, 2)
+
+
+def train_once(s_init=0, s_batch=0, s_drop=0, hidden=32, steps=300):
+    """세 가지 무작위성 출처를 따로 제어할 수 있게 한다."""
+    m = nn.MLP([12, hidden, hidden, 3], out_activation="softmax",
+               seed=s_init, dropout=0.2)
+    m.rng = np.random.default_rng(s_drop)        # 드롭아웃 마스크
+    nn.train(m, Xtr, ytr, loss="softmax_ce",
+             opt=nn.Optimizer("adam", lr=0.01),
+             steps=steps, batch_size=64, seed=s_batch)   # 배치 추출
+    return float((m.predict(Xte).argmax(1) == yte).mean())
+
+
+print(f"학습 {len(Xtr)}개 / 평가 {len(Xte)}개, 3-클래스, MLP [12,32,32,3]")
+print(f"  무작위성 출처 세 가지를 **따로 시드**로 제어한다")
+print(f"    · 가중치 초기화")
+print(f"    · 배치 추출 순서")
+print(f"    · 드롭아웃 마스크")
+print()
+print("**데이터는 고정이다.** 그런데도 결과가 흔들린다 — 얼마나 흔들리는지 잰다.")
+```
+
+---
+
+## G11.0.1 — 시드만 바꿔도 이만큼 흔들린다
+
+코드도, 데이터도, 하이퍼파라미터도 같다. 시드만 다르다.
+
+```{python}
+#| label: seed-spread
+#| code-fold: false
+
+import numpy as np
+
+ACC = np.array([train_once(s, s, s) for s in range(40)])
+print(f"같은 설정으로 시드만 바꿔 {len(ACC)}번 학습했다")
+print()
+print(f"  평균     {ACC.mean():.4f}")
+print(f"  표준편차 {ACC.std():.4f}")
+print(f"  최소     {ACC.min():.4f}")
+print(f"  최대     {ACC.max():.4f}")
+print(f"  **폭     {ACC.max()-ACC.min():.4f}** "
+      f"({(ACC.max()-ACC.min())*100:.1f}%p)")
+print()
+print("분포")
+lo, hi = ACC.min(), ACC.max()
+for i in range(10):
+    a, b = lo + (hi-lo)*i/10, lo + (hi-lo)*(i+1)/10
+    c = int(((ACC >= a) & (ACC < b + (1e-9 if i == 9 else 0))).sum())
+    print(f"  {a:.4f}–{b:.4f} {'█'*c}{'' if c else '·'} {c}")
+print()
+print(f"**최고 시드와 최저 시드의 차이가 "
+      f"{(ACC.max()-ACC.min())*100:.1f}%p 다.**")
+for s in ["논문에서 '우리 방법이 1%p 개선했다'는 주장을 흔히 본다",
+          f"그런데 여기서는 **아무것도 안 바꿔도** "
+          f"{(ACC.max()-ACC.min())*100:.1f}%p 가 흔들린다",
+          "시드 하나만 돌리고 보고하면, 그 숫자는 **방법이 아니라 시드의 성질**이다",
+          "[10.3](../10_rl/03_deep_rl.qmd)에서도 같은 것을 봤다 — "
+          "심층 강화학습의 시드 표준편차가 평균의 10~20% 였다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-spread
+#| fig-cap: "G11.0.1 — 시드만 바꾼 40번의 결과. 코드도 데이터도 같다. 이 폭 안에서는 어떤 '개선'도 시드 운으로 만들 수 있다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=np.arange(len(ACC)), y=ACC, mode="markers",
+                         name="각 시드의 결과",
+                         marker=dict(size=9, color=viz.ACCENT,
+                                     line=dict(width=1,
+                                               color="rgba(255,255,255,0.4)"))))
+fig.add_hline(y=float(ACC.mean()), line=dict(color=viz.GREEN, width=2))
+fig.add_hrect(y0=float(ACC.mean()-ACC.std()), y1=float(ACC.mean()+ACC.std()),
+              fillcolor=viz.hex_rgba(viz.GREEN, 0.12), line_width=0)
+fig.add_annotation(x=0, y=float(ACC.mean()), text="평균 ± 1σ", showarrow=False,
+                   xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.GREEN))
+viz.fig_defaults(
+    fig, "같은 설정, 시드만 다른 40번의 학습", height=430,
+    xaxis_title="시드", yaxis_title="평가 정확도")
+viz.annotate_box(fig, f"폭 {(ACC.max()-ACC.min())*100:.1f}%p<br>"
+                      "<b>아무것도 안 바꿨는데</b>", x=0.98, y=0.02)
+fig
+```
+
+---
+
+## G11.0.2 — 흔들림은 어디서 오는가
+
+무작위성의 출처를 하나씩만 풀어 놓고 나머지를 고정하면, 각자의 기여를 볼 수 있다.
+
+```{python}
+#| label: sources
+#| code-fold: false
+
+import numpy as np
+
+print("한 출처만 바꾸고 나머지는 고정 (각 20회)")
+print()
+print(f"{'바꾼 것':<24} {'표준편차':>10} {'폭':>9} {'전체 σ 대비':>12}")
+print("-" * 58)
+FULL = float(ACC.std())
+SRC = []
+for nm, f in [("전부 (셋 다)", lambda s: (s, s, s)),
+              ("가중치 초기화만", lambda s: (s, 0, 0)),
+              ("배치 순서만", lambda s: (0, s, 0)),
+              ("드롭아웃 마스크만", lambda s: (0, 0, s))]:
+    a = np.array([train_once(*f(s)) for s in range(20)])
+    SRC.append((nm, float(a.std()), float(a.max()-a.min())))
+    print(f"{nm:<24} {SRC[-1][1]:>10.4f} {SRC[-1][2]:>9.4f} "
+          f"{SRC[-1][1]/FULL:>12.2f}")
+print()
+parts = [s[1] for s in SRC[1:]]
+quad = float(np.sqrt(sum(p*p for p in parts)))
+print("**분산은 대략 제곱합으로 더해진다.**")
+print(f"  각 출처: {' , '.join(f'{p:.4f}' for p in parts)}")
+print(f"  제곱합의 제곱근 {quad:.4f} vs 전부 함께 {SRC[0][1]:.4f}")
+print(f"  ({'가깝다' if abs(quad-SRC[0][1])/SRC[0][1] < 0.35 else '차이가 있다'} "
+      "— 출처들이 대체로 독립이라는 뜻이다)")
+print()
+big = max(SRC[1:], key=lambda x: x[1])
+print(f"**가장 큰 출처는 {big[0].replace('만','')} 다** (σ {big[1]:.4f}).")
+for s in ["제곱합이므로 **가장 큰 것 하나를 잡는 것이 가장 이득**이다",
+          "작은 출처를 없애도 전체 σ 는 거의 안 준다",
+          "그래서 '드롭아웃 시드만 고정했는데 왜 여전히 흔들리죠' 라는 "
+          "질문이 나온다",
+          "실무에서는 **하나의 마스터 시드에서 모든 하위 시드를 파생**시켜 "
+          "전부를 한 번에 고정한다"]:
+    print(f"  · {s}")
+print()
+print("**실제 학습에서 무작위성이 들어오는 자리들**")
+print()
+print(f"{'출처':<24} {'고정 방법':<30} {'놓치기 쉬운 점'}")
+print("-" * 80)
+for a, b, c in [
+    ("가중치 초기화", "프레임워크 전역 시드", "층마다 다른 생성기를 쓰기도"),
+    ("데이터 순서·셔플", "DataLoader 시드", "**워커마다 별도 시드**가 필요"),
+    ("데이터 증강", "증강 파이프라인 시드", "워커 프로세스에서 재시드 필요"),
+    ("드롭아웃·노이즈", "전역 시드", "—"),
+    ("비결정적 GPU 커널", "결정론 모드 켜기", "**속도 손해**, 일부 연산은 불가"),
+    ("분산 학습의 통신 순서", "고정 어려움", "all-reduce 순서가 부동소수점을 바꾼다"),
+    ("라이브러리 버전", "의존성 잠금", "같은 버전이어도 CPU 명령어셋 차이"),
+]:
+    print(f"{a:<24} {b:<30} {c}")
+```
+
+---
+
+## G11.0.3 — 최선값 보고의 함정
+
+여기서부터가 이 장의 본론이다.
+
+두 방법을 준비한다. 은닉 32 (A) 와 은닉 48 (B).
+둘 다 시드 60개씩 돌려 **참 성능**을 알아낸 뒤, 그 분포로 실험 관행을 시뮬레이션한다.
+
+```{python}
+#| label: two-methods
+#| code-fold: false
+
+import numpy as np
+
+A = np.array([train_once(s, s, s, hidden=32) for s in range(60)])
+B = np.array([train_once(s, s, s, hidden=48) for s in range(60)])
+if A.mean() >= B.mean():
+    GOOD, BAD, GN, BN = A, B, "A (은닉 32)", "B (은닉 48)"
+else:
+    GOOD, BAD, GN, BN = B, A, "B (은닉 48)", "A (은닉 32)"
+DELTA = float(GOOD.mean() - BAD.mean())
+
+print(f"시드 60개씩 돌려 얻은 **참 성능**")
+print()
+print(f"  {GN:<14} {GOOD.mean():.4f} ± {GOOD.std():.4f}")
+print(f"  {BN:<14} {BAD.mean():.4f} ± {BAD.std():.4f}")
+print(f"  참 차이 δ = {DELTA:+.4f} — 표준편차의 {DELTA/GOOD.std():.2f}배뿐이다")
+print()
+print(f"**{GN} 가 진짜로 낫다. 이제 이것을 안다고 치고, 관행을 시험한다.**")
+```
+
+**흔한 관행: 여러 번 돌려 가장 좋은 결과를 보고한다.**
+열등한 방법이 그렇게 하면 어떻게 되는지 본다.
+
+```{python}
+#| label: best-of-k
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+print(f"열등한 방법({BN})을 k번 돌려 **최고만** 보고할 때")
+print()
+print(f"{'k':>4} {'최선값의 기대':>14} {'참 평균 대비':>14} "
+      f"{'우수 방법의 평균을 넘길 확률':>26}")
+print("-" * 62)
+BOK = []
+for k in [1, 2, 3, 5, 10, 20, 50]:
+    m = np.array([BAD[rng.integers(0, len(BAD), k)].max()
+                  for _ in range(20000)])
+    BOK.append((k, float(m.mean()), float(np.mean(m > GOOD.mean()))))
+    print(f"{k:>4} {m.mean():>14.4f} {m.mean()-BAD.mean():>+14.4f} "
+          f"{np.mean(m > GOOD.mean()):>26.4f}")
+print()
+print(f"  (참 평균: 열등 {BAD.mean():.4f}, 우수 {GOOD.mean():.4f})")
+print()
+k10 = [b for b in BOK if b[0] == 10][0]
+k3 = [b for b in BOK if b[0] == 3][0]
+print(f"**k=3 이면 이미 {k3[2]:.1%} 확률로 우수한 방법을 이긴다.**")
+print(f"**k=10 이면 {k10[2]:.1%} — 사실상 확실하다.**")
+print()
+for s in ["열등한 방법을 열 번 돌려 최고만 보고하면 "
+          "**거의 항상 이긴다**",
+          "부정직할 필요도 없다 — '몇 번 돌려서 잘 된 걸 썼다'는 "
+          "아주 자연스러운 행동이다",
+          "[10.3](../10_rl/03_deep_rl.qmd) G10.3.1 의 **최대화 편향**과 "
+          "정확히 같은 수학이다 — $\\mathbb{E}[\\max] > \\max\\mathbb{E}$",
+          "거기서는 Q 값이 부풀었고, 여기서는 **보고된 성능**이 부푼다",
+          "차이는 하나뿐이다. Q-learning 은 그걸 자동으로 하고, "
+          "여기서는 **사람이 한다**"]:
+    print(f"  · {s}")
+print()
+print("**그래서 프로토콜이 필요하다**")
+print()
+print(f"{'하지 말 것':<30} {'대신':<34}")
+print("-" * 68)
+for a, b in [
+    ("최선 시드의 결과를 보고", "**시드 여러 개의 평균 ± 표준편차**"),
+    ("우리 방법만 여러 번 돌리기", "양쪽에 같은 예산"),
+    ("검증셋으로 시드 고르기", "시드 선택도 결과의 일부로 보고"),
+    ("잘 된 실험만 기록", "실패한 실험도 함께 (기록의 완결성)"),
+    ("하이퍼파라미터를 한쪽만 튜닝", "**양쪽에 같은 탐색 예산**"),
+]:
+    print(f"{a:<30} {b:<34}")
+```
+
+```{python}
+#| label: fig-bok
+#| fig-cap: "G11.0.3 — 최선값 보고의 함정. 열등한 방법도 k번 돌려 최고만 보고하면 k=10에서 96% 확률로 우수한 방법을 이긴다. 10.3의 최대화 편향과 같은 수학이다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+ks = [b[0] for b in BOK]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ks, y=[b[1] for b in BOK], mode="lines+markers",
+                         name=f"{BN} 의 최선값 기대",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=10)))
+fig.add_hline(y=float(GOOD.mean()),
+              line=dict(color=viz.ACCENT, width=2.5, dash="dash"))
+fig.add_annotation(x=1, y=float(GOOD.mean()), text=f"{GN} 의 참 평균",
+                   showarrow=False, xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.ACCENT))
+fig.add_hline(y=float(BAD.mean()),
+              line=dict(color=viz.hex_rgba(viz.WARM, 0.6), dash="dot"))
+fig.add_annotation(x=1, y=float(BAD.mean()), text=f"{BN} 의 참 평균",
+                   showarrow=False, xanchor="left", yanchor="top",
+                   font=dict(size=11, color=viz.WARM))
+viz.fig_defaults(
+    fig, "시행 횟수와 '최고 성능'", height=440,
+    xaxis_title="시행 횟수 k (로그)", yaxis_title="보고되는 성능",
+    xaxis_type="log", xaxis=dict(tickmode="array", tickvals=ks))
+viz.annotate_box(fig, "주황이 파랑을 넘는 순간부터<br>"
+                      "<b>열등한 방법이 이긴다</b>",
+                 x=0.02, y=0.98, xanchor="left", yanchor="top")
+fig
+```
+
+---
+
+## G11.0.4 — 시드 몇 개면 충분한가
+
+정직하게 평균을 보고한다고 하자. 그래도 시드가 적으면 **순위가 뒤집힌다.**
+몇 개가 필요한지 잰다.
+
+```{python}
+#| label: power
+#| code-fold: false
+
+import warnings
+import numpy as np
+from scipy import stats
+
+warnings.filterwarnings("ignore")
+rng = np.random.default_rng(1)
+print(f"참 차이 δ = {DELTA:+.4f} 를 시드 n 개로 판별하기")
+print()
+print(f"{'시드 n':>7} {'순위가 뒤집힐 확률':>18} {'t검정으로 옳게 검출':>20}")
+print("-" * 50)
+POW = []
+for n in [1, 2, 3, 5, 10, 20, 40]:
+    wrong = det = 0
+    T = 4000
+    for _ in range(T):
+        gg = GOOD[rng.integers(0, len(GOOD), n)]
+        bb = BAD[rng.integers(0, len(BAD), n)]
+        if bb.mean() >= gg.mean():
+            wrong += 1
+        if n > 1 and gg.std() > 0 and bb.std() > 0:
+            if (stats.ttest_ind(gg, bb, equal_var=False).pvalue < 0.05
+                    and gg.mean() > bb.mean()):
+                det += 1
+    POW.append((n, wrong/T, det/T if n > 1 else np.nan))
+    d = f"{det/T:.4f}" if n > 1 else "—"
+    print(f"{n:>7} {wrong/T:>18.4f} {d:>20}")
+print()
+need = ((GOOD.std()**2 + BAD.std()**2)*(1.96 + 0.84)**2)/DELTA**2
+print(f"**정규 근사로 계산한 필요 표본: 군당 약 {need:.0f}개 시드** "
+      "(검정력 80%, 유의수준 5%)")
+print()
+p1 = POW[0]; p3 = [p for p in POW if p[0] == 3][0]
+p20 = [p for p in POW if p[0] == 20][0]
+print("**현실은 이렇다.**")
+print(f"  시드 1개: {p1[1]:.1%} 확률로 **순위를 거꾸로** 본다")
+print(f"  시드 3개 (흔한 관행): {p3[1]:.1%} 가 여전히 뒤집히고, "
+      f"t검정으로 옳게 검출할 확률은 {p3[2]:.1%} 뿐")
+print(f"  시드 20개: 뒤집힘 {p20[1]:.1%}, 검출 {p20[2]:.1%}")
+print()
+for s in [f"δ 가 표준편차의 {DELTA/GOOD.std():.2f}배밖에 안 되기 때문이다 — "
+          "**작은 효과를 재려면 표본이 많이 든다**",
+          "이것은 [7.13](../07_language/13_evaluation.qmd)에서 본 것과 "
+          "같은 통계 문제다",
+          "**시드 3개는 '분산을 보고했다'는 알리바이일 뿐** "
+          "판별력은 거의 없다",
+          "그렇다고 53개를 돌릴 수도 없다 — 그래서 실무의 답은 셋 중 하나다"]:
+    print(f"  · {s}")
+print()
+print(f"{'전략':<24} {'무엇을 하나':<34} {'대가'}")
+print("-" * 76)
+for a, b, c in [
+    ("효과 크기를 키운다", "작은 개선은 아예 주장하지 않는다", "보수적"),
+    ("분산을 줄인다", "시드 외 요소를 짝지어 통제", "설계 비용"),
+    ("여러 과제에서 잰다", "과제 수로 표본을 늘린다", "과제 선택 편향"),
+    ("불확실성을 그대로 보고", "'구별되지 않는다'고 쓴다", "**논문이 안 팔린다**"),
+]:
+    print(f"{a:<24} {b:<34} {c}")
+print()
+print("  마지막 줄이 이 문제가 안 풀리는 진짜 이유다.")
+```
+
+```{python}
+#| label: fig-power
+#| fig-cap: "G11.0.4 — 시드 수와 판별력. 흔히 쓰는 3개로는 순위가 25% 확률로 뒤집히고, 참 차이를 통계적으로 검출할 확률은 7%뿐이다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+ns = [p[0] for p in POW]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ns, y=[p[1] for p in POW], mode="lines+markers",
+                         name="순위가 뒤집힐 확률",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=10)))
+fig.add_trace(go.Scatter(x=ns[1:], y=[p[2] for p in POW[1:]],
+                         mode="lines+markers", name="t검정으로 옳게 검출",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=10)))
+fig.add_hline(y=0.8, line=dict(color=viz.hex_rgba(viz.GREEN, 0.6), dash="dash"))
+fig.add_annotation(x=1, y=0.8, text="통상 목표 검정력 80%", showarrow=False,
+                   xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.GREEN))
+fig.add_vrect(x0=2.5, x1=3.5, fillcolor=viz.hex_rgba(viz.PINK, 0.15),
+              line_width=0)
+fig.add_annotation(x=3, y=0.95, text="흔한 관행", showarrow=False,
+                   font=dict(size=11, color=viz.PINK))
+viz.fig_defaults(
+    fig, "시드 수에 따른 판별력", height=450,
+    xaxis_title="군당 시드 수 (로그)", yaxis_title="확률",
+    xaxis_type="log", xaxis=dict(tickmode="array", tickvals=ns),
+    yaxis=dict(range=[0, 1.0]))
+fig
+```
+
+::: {.interaction-hint}
+분홍 띠가 "시드 3개" — 논문에서 가장 흔히 보는 설정이다.
+거기서 주황(뒤집힘)이 25.2%, 파랑(검출)이 6.3% 다.
+
+**즉 시드 3개짜리 비교는 대부분 아무것도 말하지 못한다.**
+그런데도 그 숫자로 결론이 내려진다. 이것이 이 분야의 재현성 위기의 산수적 실체다.
 :::
 
-재현되지 않는 실험은 데이터가 아니라 일화다. 그리고 대부분의 ML 프로젝트는 이 지점에서 조용히 무너진다.
+---
+
+## G11.0.5 — 비트 단위 재현성은 왜 어려운가
+
+시드를 다 고정해도 **완전히 같은 숫자**가 나오지는 않는다.
+부동소수점 덧셈이 **결합법칙을 만족하지 않기** 때문이다.
+
+```{python}
+#| label: float-order
+#| code-fold: false
+
+import numpy as np
+
+g = np.random.default_rng(0)
+x = g.normal(0, 1, 100000).astype(np.float32)
+
+s_seq = np.float32(0.0)
+for v in x:
+    s_seq = np.float32(s_seq + v)          # 순차 누적
+s_np = x.sum()                              # numpy 의 쌍대합
+s_rev = x[::-1].sum()                       # 역순
+
+print("같은 100,000개 수를 순서만 바꿔 더한다 (float32)")
+print()
+print(f"  순차 누적   {float(s_seq):.7f}")
+print(f"  numpy 합    {float(s_np):.7f}")
+print(f"  역순 합     {float(s_rev):.7f}")
+print()
+print(f"  순차 vs numpy 절대차 {abs(float(s_seq)-float(s_np)):.3e}, "
+      f"상대차 {abs(float(s_seq)-float(s_np))/abs(float(s_np)):.3e}")
+print(f"  numpy vs 역순 절대차 {abs(float(s_np)-float(s_rev)):.3e}")
+print()
+print("**전부 다르다.** 그런데 이것이 '버그'가 아니다.")
+for s in ["부동소수점은 유효자릿수가 유한하다 — 더하는 순서가 반올림을 바꾼다",
+          "GPU 는 **수천 개 스레드가 병렬로 부분합을 만들고 합친다** — "
+          "그 순서가 실행마다 달라질 수 있다",
+          "분산 학습의 all-reduce 도 마찬가지다 — "
+          "노드가 도착하는 순서가 매번 다르다",
+          "그래서 **비트 단위 재현성은 성능을 포기해야** 얻어진다"]:
+    print(f"  · {s}")
+print()
+print("**이 미세한 차이가 커지는가**")
+d = abs(float(s_seq) - float(s_np))/abs(float(s_np))
+print(f"  한 번의 합에서 상대차는 {d:.1e} — 무시할 만하다")
+print("  그런데 학습은 그 연산을 **수백만 번 반복**하고,")
+print("  그 사이에 **분기점**들이 있다 — argmax, 임계값 비교, 조기 종료 판단")
+print("  한 번이라도 분기가 갈리면 그 뒤는 완전히 다른 궤적이 된다")
+print()
+print("**층위별 실무 처방**")
+print()
+print(f"{'목표':<16} {'해야 할 일':<38} {'대가'}")
+print("-" * 76)
+for a, b, c in [
+    ("비트 단위", "결정론 커널, 단일 스레드 리덕션, 고정 순서", "속도 **수십 %** 손해"),
+    ("통계적", "시드 여러 개 + 분산 보고", "계산 비용 n배"),
+    ("개념적", "코드·데이터·설정을 커밋 해시로 고정", "거의 공짜 — **먼저 해야 할 것**"),
+]:
+    print(f"{a:<16} {b:<38} {c}")
+print()
+print("  **셋째 줄부터 하면 된다.** 비용이 거의 없고 효과가 가장 크다.")
+print("  비트 단위는 회귀 테스트나 규제 요건이 있을 때만 값어치가 있다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 실험을 관리한다는 것
 
-- 재현성의 층위: 비트 단위 / 통계적 / 개념적
-- 무작위성의 출처: 데이터 순서, 초기화, 드롭아웃, 증강, 비결정적 커널
-- 시드 관리와 결정론적 연산 설정의 비용
-- 환경 고정: 의존성 잠금, 컨테이너, 하드웨어 차이
-- 데이터 버전 관리와 스냅샷, 콘텐츠 해시
-- 실험 추적: 하이퍼파라미터, 지표, 아티팩트, 코드 커밋
-- 설정 관리: 계층적 config와 스윕 정의
-- 실험 프로토콜: 한 번에 하나만, 반복 시드, 통계적 비교
-- 결과 보고의 정직성: 분산 보고, 최선값 대 평균값
-- 연구 코드에서 프로덕션 코드로의 이행
+```{python}
+#| label: tracking
+#| code-fold: false
 
----
-
-## G11.0.1 — 시드 분산
-
-같은 설정에서 시드만 바꿔도 생기는 성능 분포
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시드 개수 슬라이더
-:::
-
----
-
-## G11.0.2 — 무작위성 출처 분해
-
-각 무작위성 요소를 고정할 때 줄어드는 변동성
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 출처 토글
-:::
-
----
-
-## G11.0.3 — 실험 계보 그래프
-
-코드·데이터·설정이 결과로 이어지는 계보
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 실험 선택
-:::
-
----
-
-## G11.0.4 — 최선값 보고의 함정
-
-시행을 늘릴수록 부풀려지는 '최고 성능'
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 시행 횟수 슬라이더
-:::
+print("**한 번의 실험 결과를 재현하려면 무엇이 고정돼야 하나**")
+print()
+print(f"{'대상':<18} {'고정 방법':<30} {'흔한 실패'}")
+print("-" * 80)
+for a, b, c in [
+    ("코드", "git 커밋 해시 (dirty 여부까지)", "'로컬에서만 고친 한 줄'"),
+    ("데이터", "**콘텐츠 해시** 또는 스냅샷", "같은 경로, 다른 내용"),
+    ("설정", "config 파일을 아티팩트로 저장", "커맨드라인 인자가 기록 안 됨"),
+    ("환경", "잠금 파일 + 컨테이너 이미지 태그", "'최신' 태그를 쓴다"),
+    ("하드웨어", "GPU 모델·드라이버·CUDA 버전", "다른 장비에서 재현 시도"),
+    ("시드", "마스터 시드 하나에서 파생", "하위 시드를 놓친다"),
+    ("결과", "지표 + **원시 예측값**까지", "요약 숫자만 남긴다"),
+]:
+    print(f"{a:<18} {b:<30} {c}")
+print()
+print("  두 번째 줄이 특히 자주 무너진다.")
+print("  **경로는 버전이 아니다.** `data/train.csv` 가 어제와 같은 파일인지는")
+print("  해시를 찍어 봐야 안다.")
+print()
+print("**설정 관리의 원칙**")
+for s in ["**계층적 config** — 기본값 위에 실험별 덮어쓰기를 얹는다",
+          "덮어쓴 것만이 아니라 **최종 병합 결과**를 저장해야 한다",
+          "스윕은 **설정의 곱집합**으로 정의하고, 각 조합에 고유 id 를 준다",
+          "'왜 이 값을 골랐나'는 config 가 아니라 **실험 기록**에 남는다"]:
+    print(f"  · {s}")
+print()
+print("**연구 코드에서 프로덕션으로 넘어갈 때**")
+print()
+print(f"{'연구 코드':<26} {'프로덕션에서 요구되는 것'}")
+print("-" * 66)
+for a, b in [
+    ("노트북에서 셀 순서대로", "실행 순서에 의존하지 않는 스크립트"),
+    ("전역 변수와 하드코딩", "설정 주입, 순수 함수"),
+    ("한 번 돌리고 버림", "**같은 입력에 같은 출력** 보장"),
+    ("수동으로 결과 복사", "자동 기록과 아티팩트 저장"),
+    ("'되면 됐다'", "테스트 — 특히 **데이터 스키마 검증**"),
+]:
+    print(f"{a:<26} {b}")
+print()
+print("  마지막 줄이 [11.1](01_data_pipeline.qmd)의 주제로 이어진다.")
+```
 
 ---
 
-## 핵심 용어
+## 요약
 
-| 용어 | 비고 |
-|------|------|
-| 재현성 |  |
-| 시드 관리 |  |
-| 데이터 버전 관리 |  |
-| 실험 추적 |  |
-| 결정론적 연산 |  |
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| 재현성의 층위 | 비트 / 통계적 / 개념적 | 실패는 대개 **가운데**에서 |
+| **시드만 바꿔도** | 40회의 폭 3.7%p | 코드도 데이터도 같은데 |
+| 출처 분해 | 초기화 σ 0.0083, 배치 0.0053, 드롭아웃 0.0041 | 제곱합으로 더해진다 |
+| 그 함의 | **가장 큰 것 하나**를 잡는 게 이득 | 마스터 시드에서 파생 |
+| **최선값 보고** | 열등한 방법도 k=10이면 **96.4%** 승리 | k=3에서 이미 62.5% |
+| 같은 수학 | 10.3의 최대화 편향 E[max]>max E | 거기선 Q, 여기선 보고된 성능 |
+| 부정직할 필요도 없다 | "몇 번 돌려서 잘 된 걸 썼다" | 가장 자연스러운 행동 |
+| **시드 3개** | 순위 뒤집힘 **25.2%**, 검출력 6.3% | 흔한 관행의 실체 |
+| 필요 표본 | δ=0.0042를 잡으려면 군당 **53개** | δ가 σ의 0.52배뿐 |
+| 시드 20개라도 | 뒤집힘 4.2%, 검출 40.3% | 여전히 부족하다 |
+| **비트 단위** | 덧셈 순서만 바꿔도 상대차 1.8e-6 | 결합법칙이 성립하지 않는다 |
+| 왜 커지나 | argmax·임계값 같은 **분기점** | 한 번 갈리면 궤적이 달라진다 |
+| 처방의 순서 | 개념적 → 통계적 → 비트 단위 | 앞의 둘이 값싸고 효과가 크다 |
+| 데이터 버전 | **경로는 버전이 아니다** | 콘텐츠 해시를 찍어라 |
+
+무작위성 속에서 결론을 내리는 법을 봤다.
+그 결론을 만드는 **데이터가 어디서 오는지**가 다음 장이다.
 
 ---
 
-**다음**: [11.1 데이터 파이프라인](01_data_pipeline.qmd) — 적재·검증·특성 스토어 — 학습을 먹여 살리는 배관
+**다음**: [11.1 데이터 파이프라인](01_data_pipeline.qmd) — 학습을 먹여 살리는 배관
 
 **이전**: [10.5 LLM을 위한 강화학습](../10_rl/05_rl_for_llm.qmd)
