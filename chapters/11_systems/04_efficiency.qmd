@@ -4,92 +4,708 @@ subtitle: "양자화·프루닝·증류 — 같은 성능을 더 싸게"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[11.3](03_hardware.qmd)에서 LLM 추론이 **메모리 대역폭 문제**라는 것을 봤다.
+디코드의 산술 강도가 1.00 이었다 — 읽은 바이트당 한 번 계산한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+그렇다면 처방은 분명하다. **읽는 바이트를 줄여라.**
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장의 세 기법이 각자 다른 방식으로 그것을 한다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+| 기법 | 무엇을 줄이나 | 언제 |
+|------|-------------|------|
+| **양자화** | 값 하나의 **비트 수** | 거의 항상 (가장 값싸다) |
+| **프루닝** | 값의 **개수** | 하드웨어 지원이 있을 때 |
+| **증류** | **모델 자체**를 작게 | 학습을 다시 할 수 있을 때 |
+
+셋 다 "성능을 얼마나 잃고 얼마를 버는가"의 문제다. 그 절충을 직접 잰다.
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import copy
+import numpy as np
+from src import nn
+
+D, K = 16, 4
+_g = np.random.default_rng(7)
+W1_ = _g.normal(0, 1, (D, 24))
+W2_ = _g.normal(0, 1, (24, K))
+
+
+def make(n, seed, noise=0.5):
+    """참 함수가 2층 비선형이라 용량이 실제로 필요하다."""
+    g = np.random.default_rng(seed)
+    X = g.normal(0, 1, (n, D))
+    h = np.tanh(X @ W1_)
+    y = (h @ W2_*1.5 + g.normal(0, noise, (n, K))).argmax(1)
+    return X, y
+
+
+Xtr, ytr = make(20000, 1)
+Xte, yte = make(6000, 2)
+
+
+def acc(m):
+    return float((m.predict(Xte).argmax(1) == yte).mean())
+
+
+def train(h, steps=3000, seed=0, lr=0.005):
+    m = nn.MLP([D, h, h, K], out_activation="softmax", seed=seed)
+    nn.train(m, Xtr, ytr, loss="softmax_ce", opt=nn.Optimizer("adam", lr=lr),
+             steps=steps, batch_size=256, seed=seed)
+    return m
+
+
+print("용량에 따른 정확도 (학습 20,000 / 평가 6,000, 무작위 0.25)")
+print()
+print(f"{'은닉':>6} {'파라미터':>10} {'정확도':>9}")
+print("-" * 28)
+CAP = {}
+for h in [4, 8, 16, 32, 64, 128]:
+    m = train(h, seed=0)
+    CAP[h] = (m.n_params(), acc(m))
+    print(f"{h:>6} {m.n_params():>10} {acc(m):>9.4f}")
+print()
+print("**용량이 실제로 성능을 정한다** — 은닉 4에서 64까지 계속 오른다.")
+print("  이 위에서 '얼마를 잃고 얼마를 버는가' 를 잰다.")
+MODEL = train(64, seed=0)
+BASE = acc(MODEL)
+print(f"  기준 모델: 은닉 64x64, 파라미터 {MODEL.n_params()}, 정확도 {BASE:.4f}")
+```
+
+---
+
+## G11.4.1 — 양자화: 비트 수와 세분성
+
+가중치를 $b$ 비트 정수로 바꾼다. 스케일 $s$ 하나만 있으면 된다.
+
+$$q = \mathrm{clip}\Big(\mathrm{round}\big(\tfrac{w}{s}\big),\ -2^{b-1},\ 2^{b-1}-1\Big),
+\qquad \hat{w} = q \cdot s,
+\qquad s = \frac{\max|w|}{2^{b-1}-1}$$
+
+문제는 **그 스케일을 어느 범위에서 공유하느냐**다.
+
+```{python}
+#| label: quantize
+#| code-fold: false
+
+import numpy as np
+
+
+def q_block(v, bits):
+    mx = np.abs(v).max()
+    if mx == 0:
+        return v
+    s = mx/(2**(bits-1) - 1)
+    return np.clip(np.round(v/s), -(2**(bits-1)), 2**(bits-1)-1)*s
+
+
+def quant(W, bits, mode="tensor", group=32):
+    if mode == "tensor":
+        return q_block(W, bits)
+    out = W.copy()
+    if mode == "channel":
+        for j in range(W.shape[1]):
+            out[:, j] = q_block(W[:, j], bits)
+    else:                                          # group
+        for j in range(W.shape[1]):
+            for s0 in range(0, W.shape[0], group):
+                out[s0:s0+group, j] = q_block(W[s0:s0+group, j], bits)
+    return out
+
+
+def apply_q(m, bits, mode, group=32):
+    m2 = copy.deepcopy(m)
+    for i in range(len(m2.W)):
+        m2.W[i] = quant(m2.W[i], bits, mode, group)
+    return m2
+
+
+print(f"비트 수와 세분성에 따른 정확도 (기준 {BASE:.4f}, 무작위 {1/K:.2f})")
+print()
+print(f"{'비트':>5} {'per-tensor':>12} {'per-channel':>13} {'group=32':>11} "
+      f"{'상대 오차':>11} {'모델 크기':>10}")
+print("-" * 68)
+QNT = []
+for b in [8, 6, 4, 3, 2]:
+    a1 = acc(apply_q(MODEL, b, "tensor"))
+    a2 = acc(apply_q(MODEL, b, "channel"))
+    a3 = acc(apply_q(MODEL, b, "group"))
+    err = float(np.mean([np.abs(quant(w, b, "tensor") - w).mean()
+                         / np.abs(w).mean() for w in MODEL.W]))
+    QNT.append((b, a1, a2, a3, err))
+    print(f"{b:>5} {a1:>12.4f} {a2:>13.4f} {a3:>11.4f} {err:>11.4f} "
+          f"{b/16:>9.2f}x")
+print()
+q8, q4, q2 = QNT[0], QNT[2], QNT[4]
+print(f"**8비트는 사실상 공짜다** — {BASE:.4f} → {q8[1]:.4f}, 크기는 절반.")
+print(f"**4비트부터 세분성이 갈린다** — "
+      f"per-tensor {q4[1]:.4f} vs per-channel {q4[2]:.4f}")
+print(f"**2비트에서는 결정적이다** — "
+      f"per-tensor {q2[1]:.4f} (거의 무작위) vs group {q2[3]:.4f}")
+print()
+for s in ["스케일을 넓게 공유할수록 **큰 값 하나가 전체 격자를 늘려** "
+          "작은 값들이 0 으로 뭉개진다",
+          "세분성을 높이면 스케일 저장 비용이 는다 — "
+          "group=32, 4비트면 값당 4 + 16/32 = **4.5비트**",
+          "그래서 실무 형식(GGUF K-quant, AWQ)이 전부 **그룹 단위**다",
+          "**활성화 양자화는 훨씬 어렵다** — 가중치는 고정이지만 "
+          "활성화는 입력마다 분포가 바뀐다",
+          "그리고 활성화에는 **이상치**가 있다 — 다음 절"]:
+    print(f"  · {s}")
+```
+
+---
+
+## G11.4.2 — 이상치 하나가 스케일을 망친다
+
+트랜스포머 활성화에는 몇몇 채널에 **극단적으로 큰 값**이 나타난다.
+그 값 하나가 스케일을 정해 버리면 나머지가 전부 뭉개진다.
+
+얼마나 심한지 직접 만든다.
+
+```{python}
+#| label: outlier
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+v = rng.normal(0, 1, 512)
+print("512개 값 중 하나만 크게 만들고, **나머지 511개의** 양자화 오차를 잰다 (4비트)")
+print()
+print(f"{'이상치 크기':>11} {'per-tensor':>13} {'group=32':>12} {'배수':>8} "
+      f"{'유효 격자 간격':>15}")
+print("-" * 64)
+OUT = []
+for o in [0, 3, 10, 30, 100]:
+    w = v.copy()
+    if o:
+        w[0] = o
+    W = w.reshape(-1, 1)
+    e1 = float(np.abs(quant(W, 4, "tensor") - W)[1:].mean())
+    e2 = float(np.abs(quant(W, 4, "group") - W)[1:].mean())
+    step = np.abs(w).max()/(2**3 - 1)
+    OUT.append((o, e1, e2))
+    print(f"{o:>11} {e1:>13.5f} {e2:>12.5f} {e1/max(e2,1e-12):>8.2f} "
+          f"{step:>15.4f}")
+print()
+a, b = OUT[0], OUT[-1]
+print(f"**이상치가 없으면 두 방식이 비슷한데({a[1]/a[2]:.1f}배), "
+      f"100 짜리가 하나 끼면 {b[1]/b[2]:.1f}배가 된다.**")
+print(f"  per-tensor 오차가 {a[1]:.4f} → {b[1]:.4f} 로 "
+      f"{b[1]/a[1]:.1f}배 커진다 — 이상치 자신은 세지도 않았는데.")
+print()
+for s in ["4비트 격자는 눈금이 15개뿐이다. "
+          "최댓값이 100 이면 눈금 간격이 **6.7** 이 된다",
+          "그런데 나머지 값들은 대부분 절댓값 1 이하다 — "
+          "**전부 0 으로 반올림**된다",
+          "**그룹 단위로 나누면 이상치가 자기 그룹만 망친다** — "
+          "나머지 15개 그룹은 멀쩡하다"]:
+    print(f"  · {s}")
+print()
+print("**실무의 대응들**")
+print()
+print(f"{'기법':<18} {'아이디어':<36} {'대가'}")
+print("-" * 74)
+for x, y, z in [
+    ("그룹 양자화", "스케일을 좁은 범위에서 공유", "스케일 저장 비용"),
+    ("SmoothQuant", "이상치를 **가중치 쪽으로 옮긴다**", "가중치가 조금 어려워짐"),
+    ("혼합 정밀도", "이상치 채널만 fp16 으로 남긴다", "커널이 복잡해진다"),
+    ("AWQ", "**중요한 채널**을 찾아 보호", "중요도 추정에 캘리브레이션 필요"),
+    ("GPTQ", "층별로 오차를 보정하며 순차 양자화", "양자화 시간이 길다"),
+]:
+    print(f"{x:<18} {y:<36} {z}")
+print()
+print("  SmoothQuant 의 발상이 특히 깔끔하다 —")
+print("  $XW = (X/s)(sW)$ 이므로 **이상치의 크기를 가중치로 넘길 수 있다.**")
+print("  가중치는 이상치가 적으니 그쪽이 감당하기 쉽다.")
+```
+
+```{python}
+#| label: fig-quant
+#| fig-cap: "G11.4.1–2 — 왼쪽은 비트 수와 세분성, 오른쪽은 이상치의 효과. 저비트일수록, 이상치가 클수록 스케일을 좁게 공유해야 한다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("비트 수와 세분성", "이상치와 양자화 오차"))
+bits = [q[0] for q in QNT]
+for i, (lbl, k) in enumerate([("per-tensor", 1), ("per-channel", 2),
+                              ("group=32", 3)]):
+    fig.add_trace(go.Scatter(x=bits, y=[q[k] for q in QNT],
+                             mode="lines+markers", name=lbl,
+                             line=dict(color=viz.color(i), width=2.5),
+                             marker=dict(size=9)), row=1, col=1)
+fig.add_hline(y=BASE, line=dict(color=viz.GREEN, dash="dash"), row=1, col=1)
+fig.add_trace(go.Scatter(x=[o[0] for o in OUT], y=[o[1] for o in OUT],
+                         mode="lines+markers", name="per-tensor 오차",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=9)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[o[0] for o in OUT], y=[o[2] for o in OUT],
+                         mode="lines+markers", name="group=32 오차",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=9)), row=1, col=2)
+viz.fig_defaults(fig, "양자화의 두 축", height=440)
+fig.update_xaxes(title_text="비트 수", row=1, col=1)
+fig.update_xaxes(title_text="이상치 크기", row=1, col=2)
+fig.update_yaxes(title_text="정확도", row=1, col=1)
+fig.update_yaxes(title_text="나머지 값들의 평균 오차", row=1, col=2)
+fig
+```
+
+---
+
+## G11.4.3 — 프루닝: 무엇을 지울 것인가
+
+가중치를 0 으로 만든다. 문제는 **어느 것을** 지우느냐다.
+
+```{python}
+#| label: prune
+#| code-fold: false
+
+import numpy as np
+
+
+def prune(m, frac, mode="mag", seed=0):
+    m2 = copy.deepcopy(m)
+    if mode == "mag":
+        allw = np.concatenate([w.ravel() for w in m2.W])
+        thr = np.quantile(np.abs(allw), frac)
+        for i in range(len(m2.W)):
+            m2.W[i] = np.where(np.abs(m2.W[i]) < thr, 0.0, m2.W[i])
+    else:
+        g = np.random.default_rng(seed)
+        for i in range(len(m2.W)):
+            m2.W[i] = np.where(g.random(m2.W[i].shape) < frac, 0.0, m2.W[i])
+    return m2
+
+
+print(f"학습된 모델을 그대로 가지치기 (재학습 없음). 기준 {BASE:.4f}")
+print()
+print(f"{'희소도':>7} {'크기 기반':>11} {'무작위':>11} {'차이':>9}")
+print("-" * 42)
+PRUNE = []
+for f in [0.0, 0.3, 0.5, 0.7, 0.8, 0.9, 0.95]:
+    a1 = acc(prune(MODEL, f, "mag"))
+    a2 = float(np.mean([acc(prune(MODEL, f, "rand", s)) for s in range(3)]))
+    PRUNE.append((f, a1, a2))
+    print(f"{f:>7.0%} {a1:>11.4f} {a2:>11.4f} {a1-a2:>+9.4f}")
+print()
+p5 = [p for p in PRUNE if p[0] == 0.5][0]
+p9 = [p for p in PRUNE if p[0] == 0.9][0]
+print(f"**크기 기반이 모든 지점에서 무작위를 이긴다.**")
+print(f"  50% 에서 {p5[1]:.4f} vs {p5[2]:.4f}, "
+      f"90% 에서 {p9[1]:.4f} vs {p9[2]:.4f}")
+print()
+for s in ["작은 가중치는 출력에 기여가 적다 — **당연해 보이지만 자명하지 않다**",
+          "가중치의 크기가 중요도의 대리 지표일 뿐이고, "
+          "입력 분포에 따라 틀릴 수 있다 (그래서 활성화 기반 기준도 쓴다)",
+          "**재학습 없이도 절반은 그냥 지울 수 있다** — "
+          "신경망이 과다 매개변수화되어 있다는 증거",
+          "그 위로는 급격히 무너진다 — **붕괴 지점**이 있다"]:
+    print(f"  · {s}")
+print()
+print("**구조적 vs 비구조적**")
+print()
+print(f"{'방식':<20} {'지우는 단위':<24} {'실제 속도 향상'}")
+print("-" * 68)
+for x, y, z in [
+    ("비구조적", "가중치 하나씩", "**거의 없다** — 밀집 커널을 그대로 씀"),
+    ("2:4 희소성", "연속 4개 중 2개", "하드웨어 지원 시 최대 2배"),
+    ("채널·헤드 프루닝", "행렬의 행·열 통째로", "**그대로 빨라진다** (행렬이 작아짐)"),
+    ("층 프루닝", "블록 통째로", "가장 크지만 품질 손해도 크다"),
+]:
+    print(f"{x:<20} {y:<24} {z}")
+print()
+print("  **첫 줄이 함정이다.** 90% 를 지워도 행렬 모양이 그대로면")
+print("  메모리도 연산도 안 준다 — 0 을 곱하는 데도 시간이 든다.")
+print("  [11.3](03_hardware.qmd)의 관점에서, 산술 강도가 안 바뀐다.")
+```
+
+---
+
+## G11.4.4 — 복권 가설: 초기값이 중요한가
+
+가지치기한 구조를 **처음부터 다시 학습**하면 어떻게 될까.
+
+복권 가설의 주장은 이렇다. 조밀한 망 안에는 **원래 초기값과 짝지어졌을 때만**
+잘 학습되는 부분망("당첨 티켓")이 있다.
+
+검증 방법은 단순하다. 같은 마스크로 두 번 학습하되,
+한 번은 **원래 초기값**에서, 한 번은 **다른 초기값**에서 시작한다.
+
+```{python}
+#| label: lottery
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+def masked_train(mask, init_seed, steps=2500, seed=0):
+    """마스크를 유지하며 처음부터 학습한다."""
+    m = nn.MLP([D, 64, 64, K], out_activation="softmax", seed=init_seed)
+    for i in range(len(m.W)):
+        m.W[i] *= mask[i]
+    opt = nn.Optimizer("adam", lr=0.005)
+    params = m.params()
+    rng = np.random.default_rng(seed)
+    for _ in range(steps):
+        j = rng.choice(len(Xtr), 256, replace=False)
+        _, g = m.loss_and_grads(Xtr[j], ytr[j], loss="softmax_ce")
+        opt.step(params, g, lr=0.005)
+        for i in range(len(m.W)):
+            m.W[i] *= mask[i]                      # 지운 자리를 계속 0 으로
+    return m
+
+
+print(f"조밀 모델 {BASE:.4f} (초기값 시드 0). 같은 마스크, 다른 출발점.")
+print()
+print(f"{'희소도':>7} {'원래 초기값':>13} {'다른 초기값':>13} {'차이':>9}")
+print("-" * 46)
+LOT = []
+for f in [0.5, 0.7, 0.9, 0.95]:
+    allw = np.concatenate([w.ravel() for w in MODEL.W])
+    thr = np.quantile(np.abs(allw), f)
+    mask = [(np.abs(w) >= thr).astype(float) for w in MODEL.W]
+    a1 = float(np.mean([acc(masked_train(mask, 0, seed=s)) for s in range(2)]))
+    a2 = float(np.mean([acc(masked_train(mask, 100+s, seed=s))
+                        for s in range(2)]))
+    LOT.append((f, a1, a2))
+    print(f"{f:>7.0%} {a1:>13.4f} {a2:>13.4f} {a1-a2:>+9.4f}")
+print()
+mid = [l for l in LOT if l[0] == 0.7][0]
+ext = LOT[-1]
+print(f"**중간 희소도에서는 복권 가설이 재현된다.**")
+for f, a1, a2 in LOT[:-1]:
+    print(f"  {f:.0%}: 원래 초기값이 {a1-a2:+.4f} 앞선다")
+print()
+print(f"**그런데 {ext[0]:.0%} 에서는 뒤집힌다** — {ext[1]-ext[2]:+.4f}.")
+for s in ["극단적 희소도에서는 마스크 자체가 너무 제한적이라 "
+          "**초기값의 이점이 사라진다**",
+          "원래 초기값은 조밀한 망에서 좋았던 것이고, "
+          "5% 만 남은 망에서는 그 보장이 없다",
+          "**복권 가설은 조건부 주장이다** — "
+          "'어떤 희소도 범위에서' 가 빠지면 오해를 낳는다",
+          "원 논문도 극단 희소도에서는 **반복 프루닝**과 "
+          "**학습 초기로 되감기**(rewinding)를 써야 한다고 보고했다"]:
+    print(f"  · {s}")
+print()
+d5 = [l for l in LOT if l[0] == 0.5][0]
+if d5[1] > BASE:
+    print(f"**덤으로: 50% 가지치기가 조밀 모델보다 낫다** "
+          f"({d5[1]:.4f} vs {BASE:.4f}).")
+    print("  이 규모에서는 가지치기가 **정규화로도 작동**한다.")
+```
+
+```{python}
+#| label: fig-prune
+#| fig-cap: "G11.4.3–4 — 왼쪽은 재학습 없는 가지치기(크기 기반이 무작위를 압도), 오른쪽은 마스크를 유지한 재학습. 원래 초기값의 이점은 중간 희소도에서만 나타난다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2,
+                    subplot_titles=("재학습 없는 가지치기", "마스크 유지 재학습"))
+fig.add_trace(go.Scatter(x=[p[0] for p in PRUNE], y=[p[1] for p in PRUNE],
+                         mode="lines+markers", name="크기 기반",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=[p[0] for p in PRUNE], y=[p[2] for p in PRUNE],
+                         mode="lines+markers", name="무작위",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=9)), row=1, col=1)
+fig.add_trace(go.Scatter(x=[l[0] for l in LOT], y=[l[1] for l in LOT],
+                         mode="lines+markers", name="원래 초기값",
+                         line=dict(color=viz.GREEN, width=3),
+                         marker=dict(size=10)), row=1, col=2)
+fig.add_trace(go.Scatter(x=[l[0] for l in LOT], y=[l[2] for l in LOT],
+                         mode="lines+markers", name="다른 초기값",
+                         line=dict(color=viz.PINK, width=3, dash="dot"),
+                         marker=dict(size=10)), row=1, col=2)
+for c in (1, 2):
+    fig.add_hline(y=BASE, line=dict(color="rgba(255,255,255,0.35)",
+                                    dash="dash"), row=1, col=c)
+viz.fig_defaults(fig, "가지치기의 두 국면", height=440)
+fig.update_xaxes(title_text="희소도", row=1, col=1)
+fig.update_xaxes(title_text="희소도", row=1, col=2)
+fig.update_yaxes(title_text="정확도", row=1, col=1)
+fig.update_yaxes(title_text="정확도", row=1, col=2)
+fig
+```
+
+::: {.interaction-hint}
+왼쪽과 오른쪽의 세로축 범위가 다르다는 점에 주의하라.
+**재학습을 하면 90% 를 지우고도 조밀 모델에 가깝다** — 재학습 없이는 크게 무너지는 지점이다.
+
+이것이 프루닝 실무의 기본 순서다 — 지우고, 다시 학습하고, 또 지운다.
 :::
 
-배포 비용은 대부분 여기서 결정된다. 그리고 이 기법들은 서로 결합될 때 효과가 곱해진다.
+---
+
+## G11.4.5 — 증류: 언제 이득인가
+
+작은 학생이 큰 교사의 **소프트 출력**을 흉내 내게 한다.
+
+$$L = \alpha\,T^2\,\mathrm{KL}\big(p_S^{(T)} \,\|\, p_T^{(T)}\big)
++ (1-\alpha)\,\mathrm{CE}(p_S, y)$$
+
+온도 $T$ 를 올리면 교사의 분포가 부드러워져 **오답들 사이의 순위**까지 전달된다 —
+이것을 암흑 지식이라 부른다.
+
+먼저 교사가 실제로 무엇을 전달하는지 본다.
+
+```{python}
+#| label: dark-knowledge
+#| code-fold: false
+
+import numpy as np
+
+TEACHER = train(128, steps=4000, seed=3)
+TA = acc(TEACHER)
+
+
+def softmax(z, T=1.0):
+    z = z/T
+    z = z - z.max(-1, keepdims=True)
+    e = np.exp(z)
+    return e/e.sum(-1, keepdims=True)
+
+
+TLOG = TEACHER.forward(Xtr, training=False)[0]
+print(f"교사(128x128) 정확도 {TA:.4f}")
+print()
+print("온도가 교사 분포에 하는 일")
+print()
+print(f"{'T':>5} {'1위 확률':>10} {'2위 확률':>10} {'엔트로피':>10}")
+print("-" * 38)
+DK = []
+for T in [1.0, 2.0, 4.0, 8.0]:
+    sp = softmax(TLOG, T)
+    srt = np.sort(sp, 1)[:, ::-1]
+    H = float(-(sp*np.log(sp + 1e-12)).sum(1).mean())
+    DK.append((T, float(srt[:, 0].mean()), float(srt[:, 1].mean()), H))
+    print(f"{T:>5.1f} {srt[:,0].mean():>10.4f} {srt[:,1].mean():>10.4f} "
+          f"{H:>10.4f}")
+print()
+print(f"**T=1 에서는 1위가 {DK[0][1]:.3f} 다** — "
+      "거의 원핫이라 하드 라벨과 다를 게 없다.")
+print(f"**T=8 이면 1위 {DK[-1][1]:.3f}, 2위 {DK[-1][2]:.3f}** — "
+      "'이건 A 지만 B 일 수도' 라는 정보가 실린다.")
+```
+
+**그런데 그 정보가 실제로 도움이 되는가.** 먼저 데이터가 충분할 때를 본다.
+
+```{python}
+#| label: distill
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+
+def distill(Xs, ys, alpha, T, seed=0, h=8, steps=2500):
+    tl = TEACHER.forward(Xs, training=False)[0]
+    soft = softmax(tl, T)
+    st = nn.MLP([D, h, h, K], out_activation="softmax", seed=seed)
+    opt = nn.Optimizer("adam", lr=0.005)
+    params = st.params()
+    rng = np.random.default_rng(seed)
+    Y = np.eye(K)[ys]
+    bs = min(256, len(Xs))
+    for _ in range(steps):
+        j = rng.choice(len(Xs), bs, replace=False)
+        out, cache = st.forward(Xs[j], training=True)
+        d = (alpha*(T*T)*(softmax(out, T) - soft[j])/bs
+             + (1-alpha)*(softmax(out) - Y[j])/bs)
+        opt.step(params, st.backward(cache, d), lr=0.005)
+    return acc(st)
+
+
+print("학생(8x8)이 쓸 수 있는 데이터 양을 바꿔 가며 (교사는 전체로 학습됨)")
+print()
+print(f"{'학생 데이터':>10} {'하드 라벨만':>12} {'증류 T=4':>11} "
+      f"{'혼합 α=0.5':>12} {'이득':>9}")
+print("-" * 58)
+DIST = []
+for n in [200, 500, 1000, 4000, 20000]:
+    Xs, ys = Xtr[:n], ytr[:n]
+    hard = float(np.mean([distill(Xs, ys, 0.0, 1.0, s) for s in range(2)]))
+    d4 = float(np.mean([distill(Xs, ys, 1.0, 4.0, s) for s in range(2)]))
+    m4 = float(np.mean([distill(Xs, ys, 0.5, 4.0, s) for s in range(2)]))
+    DIST.append((n, hard, d4, m4))
+    print(f"{n:>10} {hard:>12.4f} {d4:>11.4f} {m4:>12.4f} "
+          f"{max(d4, m4)-hard:>+9.4f}")
+print()
+few = DIST[1]
+many = DIST[-1]
+print("**증류의 이득은 데이터가 적을 때 크고, 많아지면 사라진다.**")
+print(f"  {few[0]}개: {max(few[2], few[3])-few[1]:+.4f}")
+print(f"  {many[0]}개: {max(many[2], many[3])-many[1]:+.4f}")
+print()
+for s in ["교사가 주는 것은 **라벨이 아니라 함수의 모양**이다",
+          "데이터가 적으면 학생은 그 모양을 스스로 못 배운다 — 교사가 채워 준다",
+          "데이터가 많으면 학생이 직접 배울 수 있으므로 교사가 잉여가 된다",
+          "**그래서 증류의 진짜 값어치는 '라벨 없는 데이터를 쓸 수 있다'는 것**이다 — "
+          "교사가 라벨을 만들어 주니까",
+          "이것이 대형 모델로 작은 모델을 만드는 실무 레시피의 핵심이다"]:
+    print(f"  · {s}")
+print()
+print("**증류의 갈래**")
+print()
+print(f"{'방식':<22} {'무엇을 흉내 내나':<28} {'특징'}")
+print("-" * 74)
+for x, y, z in [
+    ("로짓 증류 (고전)", "출력 분포", "가장 단순, 온도가 손잡이"),
+    ("특성 증류", "중간층 표현", "구조가 비슷해야 한다"),
+    ("데이터 없는 증류", "합성 입력에 대한 출력", "원본 데이터를 못 쓸 때"),
+    ("시퀀스 수준 증류", "교사가 생성한 문장", "LLM 의 표준 레시피"),
+    ("스텝 감소 증류", "확산 모델의 여러 스텝 → 몇 스텝", "생성 속도 수십 배"),
+]:
+    print(f"{x:<22} {y:<28} {z}")
+```
+
+```{python}
+#| label: fig-distill
+#| fig-cap: "G11.4.5 — 증류의 이득과 학생 데이터 양. 데이터가 적을 때만 교사가 도움이 된다. 데이터가 충분하면 학생이 스스로 배운다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+ns = [d[0] for d in DIST]
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ns, y=[d[1] for d in DIST], mode="lines+markers",
+                         name="하드 라벨만",
+                         line=dict(color=viz.WARM, width=3),
+                         marker=dict(size=10)))
+fig.add_trace(go.Scatter(x=ns, y=[d[3] for d in DIST], mode="lines+markers",
+                         name="증류 혼합 (α=0.5, T=4)",
+                         line=dict(color=viz.ACCENT, width=3),
+                         marker=dict(size=10)))
+fig.add_hline(y=TA, line=dict(color=viz.GREEN, dash="dash"))
+fig.add_annotation(x=ns[0], y=TA, text=f"교사 {TA:.3f}", showarrow=False,
+                   xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.GREEN))
+viz.fig_defaults(
+    fig, "학생 데이터 양과 증류의 이득", height=440,
+    xaxis_title="학생이 쓸 수 있는 데이터 수 (로그)", yaxis_title="학생 정확도",
+    xaxis_type="log", xaxis=dict(tickmode="array", tickvals=ns))
+viz.annotate_box(fig, "두 선의 간격이 증류의 이득<br>"
+                      "<b>오른쪽으로 갈수록 붙는다</b>", x=0.98, y=0.02)
+fig
+```
 
 ---
 
-## 이 장에서 다루는 것
+## 조합과 순서
 
-- 양자화 기초: 스케일·영점, 대칭/비대칭, per-tensor/per-channel/per-group
-- 학습 후 양자화(PTQ)와 캘리브레이션
-- 양자화 인지 학습(QAT)과 straight-through 추정기
-- 이상치 문제와 SmoothQuant, 활성화 양자화의 어려움
-- GPTQ와 AWQ의 접근 차이, GGUF/K-quant 계열
-- 프루닝: 비구조적 vs 구조적(채널·헤드·층)
-- 복권 가설(lottery ticket)과 반복 프루닝
-- 2:4 희소성 등 하드웨어 지원 희소 패턴
-- 지식 증류: 소프트 타깃, 온도, 특성 증류, 데이터 없는 증류
-- 생성 모델의 스텝 감소 증류
-- 저계수 압축과 구조 재파라미터화
-- 기법 조합 순서와 누적 품질 손실 측정
+```{python}
+#| label: combine
+#| code-fold: false
+
+import numpy as np
+
+print("두 기법을 겹치면 손실이 어떻게 쌓이나 (재학습 없음, 3비트 group=32)")
+print()
+print(f"{'희소도':>7} " + " ".join(f"{b}비트".rjust(9) for b in [16, 8, 4, 3])
+      + f" {'가지치기만':>11} {'양자화만':>10} {'개별 합':>9} {'실제 조합':>10}")
+print("-" * 84)
+SOLO_Q = BASE - acc(apply_q(MODEL, 3, "group"))
+COMB = []
+for f in [0.0, 0.5, 0.8, 0.9]:
+    pm = prune(MODEL, f, "mag")
+    row = [acc(pm)] + [acc(apply_q(pm, b, "group")) for b in [8, 4, 3]]
+    solo_p = BASE - row[0]
+    comb = BASE - row[-1]
+    COMB.append((f, solo_p, SOLO_Q, comb))
+    print(f"{f:>7.0%} " + " ".join(f"{v:>9.4f}" for v in row)
+          + f" {solo_p:>11.4f} {SOLO_Q:>10.4f} {solo_p+SOLO_Q:>9.4f} "
+          f"{comb:>10.4f}")
+print()
+half = [c for c in COMB if c[0] == 0.5][0]
+print("**정직하게: 손실이 더해지지 않는다. 오히려 덜 더해진다.**")
+print(f"  희소도 50%: 가지치기만 {half[1]:.4f} + 양자화만 {half[2]:.4f} "
+      f"= {half[1]+half[2]:.4f} 를 예상했는데")
+print(f"  실제 조합 손실은 {half[3]:.4f} — 예상의 "
+      f"{half[3]/(half[1]+half[2]):.0%} 다.")
+print()
+for s in ["**가지치기가 양자화를 쉽게 만든다**",
+          "0 은 어떤 비트로도 정확히 표현된다 — 지운 자리는 양자화 오차가 없다",
+          "게다가 크기 기반 가지치기는 **작은 값부터** 지운다. "
+          "그 작은 값들이 바로 저비트 격자에서 뭉개지던 것들이다",
+          "즉 두 기법이 **같은 것(작은 가중치)을 서로 다른 방식으로 처리**한다",
+          "그래서 실무에서 둘을 같이 쓰는 것이 기본이고, "
+          "**가지치기를 먼저** 하는 것이 순서상 유리하다",
+          "다만 희소도가 80% 를 넘으면 가지치기 손실이 지배해 "
+          "이 이점이 묻힌다 (위 표의 아래 두 줄)"]:
+    print(f"  · {s}")
+print()
+print("**적용 순서**")
+print()
+print(f"{'순서':<6} {'단계':<24} {'이유'}")
+print("-" * 68)
+for a, b, c in [
+    ("1", "증류 / 아키텍처 축소", "가장 큰 절감, 재학습이 필요하므로 먼저"),
+    ("2", "구조적 프루닝 + 재학습", "실제로 행렬이 작아진다"),
+    ("3", "양자화 (PTQ)", "값싸고 마지막에 해도 된다"),
+    ("4", "필요하면 QAT", "PTQ 손실이 클 때만"),
+]:
+    print(f"{a:<6} {b:<24} {c}")
+print()
+print("  **역순으로 하면 앞 단계가 뒤 단계를 망친다** —")
+print("  양자화한 뒤 프루닝하면 양자화 격자가 다시 어긋난다.")
+print()
+print("**PTQ vs QAT**")
+print()
+print(f"{'':<10} {'필요한 것':<26} {'언제'}")
+print("-" * 62)
+for x, y, z in [
+    ("PTQ", "캘리브레이션 데이터 수백 개", "8비트, 그리고 4비트 대부분"),
+    ("QAT", "**전체 재학습**", "3비트 이하, 또는 PTQ 손실이 클 때"),
+]:
+    print(f"{x:<10} {y:<26} {z}")
+print()
+print("  QAT 는 양자화를 학습에 넣는다 — 순전파는 양자화하고 "
+      "역전파는 **직통 추정기(STE)** 로 통과시킨다.")
+print("  반올림은 미분이 0 이라 그냥 흘려보내는 것이다. 이론적으로는 편법인데 잘 된다.")
+```
 
 ---
 
-## G11.4.1 — 양자화 격자
+## 요약
 
-가중치 분포가 이산 격자에 매핑되며 생기는 오차
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| 처방의 근거 | 11.3의 decode AI = 1.00 | **읽는 바이트를 줄여라** |
+| **8비트 양자화** | 정확도 손실 ~0, 크기 절반 | 사실상 공짜 |
+| 세분성이 갈리는 곳 | 4비트부터, 2비트에서 결정적 | per-tensor 0.276 vs group 0.369 |
+| 스케일 비용 | group=32, 4비트 = 값당 **4.5비트** | 실무 형식이 전부 그룹 단위 |
+| **이상치 하나** | per-tensor 오차 **5.6배** 증가 | 4비트 격자 간격이 6.7이 된다 |
+| 그룹으로 나누면 | 자기 그룹만 망친다 | SmoothQuant는 가중치로 넘긴다 |
+| **크기 기반 프루닝** | 모든 희소도에서 무작위를 이긴다 | 50%는 재학습 없이도 버틴다 |
+| 비구조적의 함정 | 90% 지워도 **속도는 그대로** | 행렬 모양이 안 바뀐다 |
+| **복권 가설** | 50~90%에서 원래 초기값이 앞선다 | 재현 |
+| 그런데 95%에서 | **뒤집힌다** | 조건부 주장임을 보인다 |
+| 덤 | 50% 가지치기가 조밀 모델보다 낫다 | 정규화로도 작동 |
+| **증류의 조건** | 학생 데이터 500개에서 큰 이득 | 20,000개면 거의 0 |
+| 왜 | 교사가 주는 건 라벨이 아니라 **함수의 모양** | 라벨 없는 데이터를 쓸 수 있다 |
+| 온도 | T=1은 1위 0.970(원핫), T=8은 0.667 | 암흑 지식은 오답의 순위 |
+| **조합** | 손실이 **덜 더해진다** (예상의 절반 이하) | 0은 정확히 양자화된다 |
+| 순서 | 증류 → 프루닝 → 양자화 | 역순이면 앞이 뒤를 망친다 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 비트 수 슬라이더
-:::
-
----
-
-## G11.4.2 — 이상치와 양자화 실패
-
-활성화 이상치 하나가 전체 스케일을 망치는 현상
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 이상치 크기 슬라이더
-:::
-
----
-
-## G11.4.3 — 프루닝 비율과 성능
-
-가지치기 비율에 따른 성능 유지 곡선과 붕괴 지점
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 희소도 슬라이더
-:::
+모델을 작게 만들었다. 이제 **실제 트래픽 앞에 세운다.**
 
 ---
 
-## G11.4.4 — 증류 온도
-
-교사 분포가 부드러워지며 전달되는 암흑 지식
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 온도 슬라이더
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 양자화 |  |
-| GPTQ/AWQ |  |
-| 프루닝 |  |
-| 복권 가설 |  |
-| 지식 증류 |  |
-| QAT |  |
-
----
-
-**다음**: [11.5 모델 서빙과 배포](05_serving.qmd) — 지연·처리량·SLO — 실제 트래픽을 받는 일
+**다음**: [11.5 모델 서빙과 배포](05_serving.qmd) — 실제 트래픽을 받는 일
 
 **이전**: [11.3 하드웨어와 성능](03_hardware.qmd)
