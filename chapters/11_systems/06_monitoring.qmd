@@ -4,90 +4,605 @@ subtitle: "드리프트·품질 저하·피드백 — 배포는 시작일 뿐"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+모델은 배포 순간부터 낡기 시작한다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+[11.1](01_data_pipeline.qmd)에서 학습/서빙 왜곡이 **서서히 나빠지다 어느 순간 무너진다**는 것을 봤다.
+그 진행을 볼 수 없으면 언제 손을 써야 할지도 알 수 없다.
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+그런데 여기에 함정이 하나 있다. **성능을 직접 볼 수 없다는 것**이다.
+정답 라벨은 며칠 뒤에 오거나, 영영 안 온다.
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
-:::
+그래서 실무의 모니터링은 **대리 지표**로 돌아간다 —
+입력 분포, 예측 분포, 모델의 확신.
 
-모델은 배포 순간부터 낡기 시작한다. 무엇이 나빠지고 있는지 볼 수 없다면 언제 다시 학습할지도 알 수 없다.
+이 장의 질문은 그 대리 지표들이 **실제로 무엇을 잡고 무엇을 놓치는가**다.
+답은 불편하고, 이 장의 핵심이다.
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from scipy import stats
+from src import nn
+
+D, K = 12, 3
+_g = np.random.default_rng(7)
+WT = _g.normal(0, 1, (D, K))
+ROT = _g.normal(0, 1, (D, K))
+
+
+def gen(n, seed, shift=0.0, concept=0.0, noise=0.8):
+    """shift: 입력 분포가 이동 (공변량 이동)
+       concept: 참 함수가 회전 (개념 드리프트)"""
+    g = np.random.default_rng(seed)
+    X = g.normal(0, 1, (n, D))
+    X[:, :4] += shift
+    W = WT*np.cos(concept) + ROT*np.sin(concept)
+    y = (np.tanh(X @ W)*2.0 + g.normal(0, noise, (n, K))).argmax(1)
+    return X, y
+
+
+Xtr, ytr = gen(8000, 1)
+MODEL = nn.MLP([D, 48, 48, K], out_activation="softmax", seed=0)
+nn.train(MODEL, Xtr, ytr, loss="softmax_ce",
+         opt=nn.Optimizer("adam", lr=0.005), steps=2500, batch_size=256, seed=0)
+
+
+def acc(X, y, m=None):
+    m = m or MODEL
+    return float((m.predict(X).argmax(1) == y).mean())
+
+
+def psi(ref, cur, bins=10):
+    """Population Stability Index — 기준 분포의 분위 구간으로 현재를 센다."""
+    q = np.quantile(ref, np.linspace(0, 1, bins+1))
+    q[0], q[-1] = -np.inf, np.inf
+    a = np.clip(np.histogram(ref, q)[0]/len(ref), 1e-6, None)
+    b = np.clip(np.histogram(cur, q)[0]/len(cur), 1e-6, None)
+    return float(((b - a)*np.log(b/a)).sum())
+
+
+X0, y0 = gen(4000, 2)
+P0 = MODEL.predict(X0)
+BASE_CONF = float(P0.max(1).mean())
+BASE_DIST = np.bincount(P0.argmax(1), minlength=K)/len(P0)
+print(f"배포 시점: 정확도 {acc(X0, y0):.4f}, 평균 확신 {BASE_CONF:.4f}")
+print(f"  (무작위 추측 {1/K:.4f})")
+print()
+print("**두 종류의 드리프트를 따로 만든다**")
+print("  · **공변량 이동** — 입력 분포 P(x) 가 움직인다. P(y|x) 는 그대로")
+print("  · **개념 드리프트** — P(y|x) 가 바뀐다. 입력은 그대로일 수도 있다")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G11.6.1 — 입력 모니터링이 놓치는 것
 
-- 관측 가능성 세 축(로그·지표·트레이스)과 ML 특유의 추가 축
-- 입력 모니터링: 데이터 드리프트, 스키마 위반, 결측 급증
-- 출력 모니터링: 예측 분포 이동, 신뢰도 변화, 거부율
-- 성능 모니터링: 지연 레이블 문제와 대리 지표
-- 드리프트 탐지: PSI, KS 검정, MMD, 도메인 분류기
-- LLM 특유 모니터링: 환각률, 도구 실패, 안전 필터 발동, 비용
-- 사용자 피드백 수집과 그 편향
-- 온라인 평가와 지속적 A/B 실험
-- 재학습 트리거와 자동화 파이프라인
-- 사고 대응: 롤백, 킬 스위치, 사후 분석
-- 모델 거버넌스: 모델 카드, 감사 로그, 규제 대응
+먼저 흔히 쓰는 지표들을 나란히 놓는다.
 
----
+| 지표 | 무엇을 보나 | 라벨이 필요한가 |
+|------|-----------|---------------|
+| **PSI** | 입력 특성의 분포 이동 | 불필요 |
+| **KS 검정** | 같은 것, 통계적 검정으로 | 불필요 |
+| **평균 확신** | 모델이 얼마나 자신 있나 | 불필요 |
+| **예측 분포 KL** | 출력 클래스 비율의 이동 | 불필요 |
+| **정확도** | 실제 성능 | **필요 — 그래서 늦게 온다** |
 
-## G11.6.1 — 드리프트 지표 시계열
+두 종류의 드리프트에 이 지표들이 어떻게 반응하는지 본다.
 
-입력 분포가 서서히 이동할 때 PSI가 경보를 울리는 시점
+```{python}
+#| label: drift
+#| code-fold: false
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 드리프트 강도 슬라이더
+import numpy as np
+
+
+def monitor(Xc, yc):
+    a = acc(Xc, yc)
+    ps = max(psi(Xtr[:, j], Xc[:, j]) for j in range(D))
+    pc = MODEL.predict(Xc)
+    conf = float(pc.max(1).mean())
+    dist = np.bincount(pc.argmax(1), minlength=K)/len(pc)
+    kl = float((dist*np.log((dist + 1e-9)/(BASE_DIST + 1e-9))).sum())
+    return a, ps, conf, kl
+
+
+print("공변량 이동 — 입력 분포 P(x) 가 움직인다")
+print()
+print(f"{'강도':>6} {'정확도':>9} {'입력 PSI':>10} {'평균 확신':>10} "
+      f"{'예측분포 KL':>12}")
+print("-" * 52)
+COV = []
+for sh in [0.0, 0.2, 0.5, 1.0, 1.5]:
+    r = monitor(*gen(4000, 3, shift=sh))
+    COV.append((sh, *r))
+    print(f"{sh:>6.1f} {r[0]:>9.4f} {r[1]:>10.4f} {r[2]:>10.4f} {r[3]:>12.5f}")
+print()
+print("개념 드리프트 — 참 함수가 회전한다 (입력 X 는 **완전히 동일**)")
+print()
+print(f"{'강도':>6} {'정확도':>9} {'입력 PSI':>10} {'평균 확신':>10} "
+      f"{'예측분포 KL':>12}")
+print("-" * 52)
+CON = []
+for co in [0.0, 0.1, 0.2, 0.4, 0.8]:
+    r = monitor(*gen(4000, 4, concept=co))
+    CON.append((co, *r))
+    print(f"{co:>6.1f} {r[0]:>9.4f} {r[1]:>10.4f} {r[2]:>10.4f} {r[3]:>12.5f}")
+print()
+c0, c8 = CON[0], CON[-1]
+print("**이것이 이 장의 핵심이다.**")
+print(f"  개념 드리프트로 정확도가 {c0[1]:.4f} → {c8[1]:.4f} "
+      f"({c0[1]-c8[1]:.3f} 하락, 무작위 {1/K:.3f} 에 근접)")
+print(f"  그런데 입력 PSI 는 {c0[2]:.4f} → {c8[2]:.4f} — **미동도 안 한다.**")
+print(f"  평균 확신도 {c0[3]:.4f} → {c8[3]:.4f} 로 그대로다.")
+print()
+for s in ["당연하다 — 개념 드리프트는 정의상 **입력을 안 건드린다**",
+          "P(y|x) 가 바뀌었을 뿐이니 P(x) 를 보는 지표는 아무것도 못 본다",
+          "**라벨 없이 볼 수 있는 지표만으로는 개념 드리프트를 원리적으로 못 잡는다**",
+          "그래서 '드리프트 모니터링을 붙였으니 안심'은 위험한 착각이다",
+          "실제 사고의 상당수가 개념 드리프트다 — "
+          "사용자 행동이 바뀌고, 사기 수법이 바뀌고, 경쟁 서비스가 생긴다"]:
+    print(f"  · {s}")
+print()
+cv0, cv15 = COV[0], COV[-1]
+print("**공변량 이동 쪽도 조심할 게 있다.**")
+print(f"  여기서는 PSI 가 {cv0[2]:.3f} → {cv15[2]:.3f} 로 크게 울리는데, "
+      f"정확도는 오히려 {cv0[1]:.4f} → {cv15[1]:.4f} 로 **올랐다**.")
+for s in ["입력이 이동한 방향이 우연히 **더 쉬운 영역**이었기 때문이다",
+          "즉 **PSI 경보 = 성능 저하가 아니다** — 상관은 있지만 인과가 아니다",
+          "드리프트 지표는 '무언가 달라졌다' 는 신호지 "
+          "'나빠졌다' 는 신호가 아니다",
+          "그래서 경보가 울리면 **성능을 확인할 방법**이 따로 있어야 한다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-drift
+#| fig-cap: "G11.6.1 — 두 종류의 드리프트. 왼쪽(공변량 이동)에서는 PSI가 크게 울리지만 정확도는 오히려 올랐고, 오른쪽(개념 드리프트)에서는 정확도가 무너지는데 PSI가 미동도 없다."
+
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from src import viz
+
+fig = make_subplots(rows=1, cols=2, specs=[[{"secondary_y": True}]*2],
+                    subplot_titles=("공변량 이동", "개념 드리프트 (입력은 동일)"))
+for c, rows, xl in [(1, COV, "입력 이동 강도"), (2, CON, "개념 회전 강도")]:
+    xs = [r[0] for r in rows]
+    fig.add_trace(go.Scatter(x=xs, y=[r[1] for r in rows], mode="lines+markers",
+                             name="정확도" if c == 1 else None,
+                             showlegend=(c == 1),
+                             line=dict(color=viz.ACCENT, width=3),
+                             marker=dict(size=10)), row=1, col=c,
+                  secondary_y=False)
+    fig.add_trace(go.Scatter(x=xs, y=[r[2] for r in rows], mode="lines+markers",
+                             name="입력 PSI" if c == 1 else None,
+                             showlegend=(c == 1),
+                             line=dict(color=viz.WARM, width=3, dash="dot"),
+                             marker=dict(size=10)), row=1, col=c,
+                  secondary_y=True)
+    fig.add_hline(y=1/K, line=dict(color="rgba(255,255,255,0.3)", dash="dash"),
+                  row=1, col=c, secondary_y=False)
+    fig.update_xaxes(title_text=xl, row=1, col=c)
+viz.fig_defaults(fig, "드리프트 지표는 무엇을 보는가", height=440)
+fig.update_yaxes(title_text="정확도", secondary_y=False, row=1, col=1)
+fig.update_yaxes(title_text="PSI", secondary_y=True, row=1, col=2)
+fig
+```
+
+::: {.interaction-hint}
+두 그림의 **점선(PSI)과 실선(정확도)의 관계가 정반대**다.
+
+왼쪽에서는 PSI 가 오르는데 정확도도 오르고,
+오른쪽에서는 PSI 가 평평한데 정확도가 무너진다.
+
+**드리프트 지표와 성능 사이에는 신뢰할 만한 관계가 없다.**
+그것이 이 장이 라벨 확보 이야기로 이어지는 이유다.
 :::
 
 ---
 
 ## G11.6.2 — 지연 레이블 문제
 
-실제 성능을 알기까지 걸리는 시간과 대리 지표의 상관
+실제 성능을 알려면 정답이 필요하다. 그런데 정답은 늦게 온다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 레이블 지연 슬라이더
-:::
+| 도메인 | 라벨이 오는 시점 | 지연 |
+|--------|---------------|------|
+| 광고 클릭 | 몇 초~몇 분 | 짧다 |
+| 사기 탐지 | 이의 제기 후 | 수 주 |
+| 대출 부도 | 만기까지 | **수 년** |
+| LLM 답변 품질 | 대개 **안 온다** | ∞ |
+
+지연이 길수록 대리 지표에 기대야 하는데, 앞 절에서 그 대리 지표가
+개념 드리프트를 못 본다는 걸 확인했다. 상관을 직접 재 본다.
+
+```{python}
+#| label: proxy
+#| code-fold: false
+
+import numpy as np
+
+print("대리 지표와 실제 정확도의 상관 (드리프트 종류별)")
+print()
+print(f"{'드리프트 종류':<14} {'지표':<14} {'상관':>10} {'지표의 변동폭':>14}")
+print("-" * 56)
+for nm, rows in [("공변량 이동", COV), ("개념 드리프트", CON)]:
+    A = np.array([r[1] for r in rows])
+    for lbl, i in [("입력 PSI", 2), ("평균 확신", 3), ("예측분포 KL", 4)]:
+        v = np.array([r[i] for r in rows])
+        rng_v = float(v.max() - v.min())
+        if v.std() < 1e-9:
+            print(f"{nm if lbl == '입력 PSI' else '':<14} {lbl:<14} "
+                  f"{'계산 불가':>10} {rng_v:>14.6f}")
+        else:
+            c = float(np.corrcoef(v, A)[0, 1])
+            print(f"{nm if lbl == '입력 PSI' else '':<14} {lbl:<14} "
+                  f"{c:>+10.4f} {rng_v:>14.6f}")
+print()
+print("**개념 드리프트에서는 상관을 계산할 수조차 없다** — "
+      "지표가 전혀 안 움직여서 분산이 0 이다.")
+print()
+print("**그래서 라벨을 확보하는 방법이 필요하다**")
+print()
+print(f"{'방법':<20} {'무엇':<32} {'주의'}")
+print("-" * 74)
+for a, b, c in [
+    ("지연 라벨 대기", "결국 오는 정답을 기다린다", "**늦다** — 그동안 손실"),
+    ("표본 라벨링", "일부만 사람이 매긴다", "비용, 표본 편향"),
+    ("탐색 트래픽", "일부를 무작위 정책으로", "단기 손실을 감수"),
+    ("사용자 피드백", "좋아요/신고 버튼", "**편향이 심하다** (아래)"),
+    ("대리 결과", "재문의율, 이탈률, 전환율", "간접적이지만 즉시"),
+    ("검증 가능한 부분", "코드 실행, 수식 검산", "가능한 도메인이 한정"),
+]:
+    print(f"{a:<20} {b:<32} {c}")
+print()
+print("**사용자 피드백의 편향**")
+for s in ["피드백을 남기는 사람은 **전체의 몇 %** 이고 그들은 대표성이 없다",
+          "불만은 남기고 만족은 조용하다 — 부정 쪽으로 치우친다",
+          "그런데 **명백한 실패는 오히려 신고를 안 한다** — 그냥 떠난다",
+          "즉 피드백은 '중간 정도로 아쉬운' 사례에 몰린다",
+          "이것을 성능 지표로 쓰면 **개선 방향이 왜곡**된다 — "
+          "[10.5](../10_rl/05_rl_for_llm.qmd)의 보상 해킹과 같은 구조"]:
+    print(f"  · {s}")
+```
 
 ---
 
-## G11.6.3 — 재학습 주기
+## G11.6.3 — 알림 피로: 문턱을 어디에 둘 것인가
 
-재학습 빈도와 성능 유지·비용의 균형
+경보를 민감하게 잡으면 매일 울리고, 결국 아무도 안 본다.
+둔감하게 잡으면 진짜 사고를 놓친다.
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 주기 슬라이더
-:::
+일별 표본이 작을 때 정상 구간의 지표가 얼마나 흔들리는지부터 잰다.
+
+```{python}
+#| label: alerts
+#| code-fold: false
+
+import numpy as np
+
+NDAY = 300          # 하루에 관측되는 요청 수
+psi_null, psi_drift = [], []
+for d in range(400):
+    Xn, _ = gen(NDAY, 5000 + d)
+    psi_null.append(max(psi(Xtr[:, j], Xn[:, j]) for j in range(D)))
+    Xd, _ = gen(NDAY, 6000 + d, shift=0.3)
+    psi_drift.append(max(psi(Xtr[:, j], Xd[:, j]) for j in range(D)))
+psi_null = np.array(psi_null)
+psi_drift = np.array(psi_drift)
+
+print(f"하루 {NDAY}건씩 관측할 때의 PSI 분포 (특성 {D}개 중 최댓값)")
+print()
+print(f"  정상 구간   : 중앙값 {np.median(psi_null):.4f}, "
+      f"p95 {np.percentile(psi_null, 95):.4f}, "
+      f"최대 {psi_null.max():.4f}")
+print(f"  드리프트 0.3 : 중앙값 {np.median(psi_drift):.4f}")
+print()
+print("  **정상인데도 PSI 가 0 이 아니다** — 표본이 작아 생기는 잡음이다.")
+print("  통상 쓰는 '0.1 이면 주의' 같은 고정 기준이 위험한 이유다.")
+print()
+print(f"{'문턱':>7} {'오경보율':>10} {'탐지율':>9} {'연간 오경보':>13} "
+      f"{'평가'}")
+print("-" * 60)
+ALERT = []
+for thr in [0.05, 0.08, 0.10, 0.15, 0.20, 0.30]:
+    fp = float((psi_null > thr).mean())
+    tp = float((psi_drift > thr).mean())
+    ALERT.append((thr, fp, tp))
+    verdict = ("**알림 피로**" if fp*365 > 20 else
+               "쓸 만하다" if tp > 0.9 else
+               "**놓친다**")
+    print(f"{thr:>7.2f} {fp:>10.1%} {tp:>9.1%} {fp*365:>11.0f}회 {verdict}")
+print()
+best = [a for a in ALERT if a[1]*365 <= 20 and a[2] > 0.9]
+if best:
+    b = best[0]
+    print(f"**이 설정에서 쓸 만한 구간은 문턱 {b[0]:.2f} 근처다** — "
+          f"연 {b[1]*365:.0f}회 오경보에 탐지율 {b[2]:.1%}.")
+print()
+f_lo = [a for a in ALERT if a[0] == 0.05][0]
+f_hi = [a for a in ALERT if a[0] == 0.10][0]
+for s in [f"문턱을 0.10 에서 0.05 로 낮추면 오경보가 "
+          f"{f_hi[1]:.1%} → {f_lo[1]:.1%} 로 **{f_lo[1]/f_hi[1]:.0f}배** 된다 — "
+          "정상 분포의 꼬리에 걸리기 때문",
+          "**해법은 문턱을 잘 고르는 것보다 표본을 키우는 것**이다 — "
+          "잡음이 줄면 두 분포가 잘 갈린다",
+          "그래서 실무에서는 **롤링 윈도우**로 며칠을 합쳐 본다 "
+          "(대신 탐지가 늦어진다)",
+          "그리고 경보를 **등급으로 나눈다** — "
+          "'기록만', '검토 대기', '즉시 호출'",
+          "특성 12개의 최댓값을 썼다는 점도 중요하다 — "
+          "**여러 지표를 동시에 보면 다중 비교로 오경보가 는다** "
+          "([11.0](00_reproducibility.qmd)의 최선값 함정과 같은 수학)"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-alerts
+#| fig-cap: "G11.6.3 — 경보 문턱의 절충. 정상 구간의 PSI도 표본 잡음 때문에 0이 아니다. 문턱을 조금 낮추면 오경보가 수십 배로 는다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+fig.add_trace(go.Histogram(x=psi_null, name="정상 구간", nbinsx=50,
+                           marker_color=viz.hex_rgba(viz.ACCENT, 0.65)))
+fig.add_trace(go.Histogram(x=psi_drift, name="드리프트 (0.3)", nbinsx=50,
+                           marker_color=viz.hex_rgba(viz.WARM, 0.65)))
+for thr in [0.08, 0.10, 0.15]:
+    fig.add_vline(x=thr, line=dict(color=viz.GREEN, dash="dot"))
+    fig.add_annotation(x=thr, y=1, yref="paper", text=f"{thr}",
+                       showarrow=False, yanchor="bottom",
+                       font=dict(size=10, color=viz.GREEN))
+viz.fig_defaults(
+    fig, f"일별 PSI 분포 (하루 {NDAY}건, 400일)", height=430,
+    xaxis_title="특성별 PSI 의 최댓값", yaxis_title="일수",
+    barmode="overlay")
+fig
+```
 
 ---
 
-## G11.6.4 — 알림 피로
+## G11.6.4 — 재학습 주기
 
-민감한 임계값이 만드는 거짓 경보와 놓친 사고의 균형
+드리프트가 계속되면 결국 다시 학습해야 한다. 얼마나 자주?
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 임계값 슬라이더
-:::
+개념이 서서히 도는 180일을 모사하고, $k$ 일마다 최근 데이터로 재학습해 본다.
+
+```{python}
+#| label: retrain
+#| code-fold: false
+
+import numpy as np
+from src import nn
+
+DAYS = 180
+RATE = 0.8/DAYS            # 180일에 걸쳐 개념이 0.8 라디안 회전
+
+
+def fresh_model(day, n=4000, steps=1200, seed=0):
+    """day 시점의 개념으로 최근 데이터를 모아 재학습."""
+    X, y = gen(n, 9000 + day, concept=RATE*day)
+    m = nn.MLP([D, 48, 48, K], out_activation="softmax", seed=seed)
+    nn.train(m, X, y, loss="softmax_ce", opt=nn.Optimizer("adam", lr=0.005),
+             steps=steps, batch_size=256, seed=seed)
+    return m
+
+
+EVAL = {d: gen(2500, 7000 + d, concept=RATE*d) for d in range(0, DAYS, 10)}
+print(f"개념이 {DAYS}일에 걸쳐 서서히 회전한다 (총 0.8 라디안)")
+print()
+print(f"{'재학습 주기':>11} {'재학습 횟수':>11} {'평균 정확도':>12} "
+      f"{'최저 정확도':>12} {'마지막 날':>11}")
+print("-" * 60)
+RETRAIN = []
+for period in [0, 30, 60, 90, 10**9]:
+    m = MODEL
+    last = 0
+    accs = []
+    n_re = 0
+    for d in sorted(EVAL):
+        if period and period < 10**8 and d > 0 and d - last >= period:
+            m = fresh_model(d)
+            last = d
+            n_re += 1
+        elif period == 0 and d > 0:
+            m = fresh_model(d)
+            n_re += 1
+        accs.append(acc(*EVAL[d], m=m))
+    lbl = ("매 평가마다" if period == 0 else
+           "안 함" if period > 10**8 else f"{period}일")
+    RETRAIN.append((lbl, n_re, float(np.mean(accs)), float(np.min(accs)),
+                    accs[-1]))
+    print(f"{lbl:>11} {n_re:>11} {np.mean(accs):>12.4f} {np.min(accs):>12.4f} "
+          f"{accs[-1]:>11.4f}")
+print()
+never = [r for r in RETRAIN if r[0] == "안 함"][0]
+always = RETRAIN[0]
+p60 = [r for r in RETRAIN if r[0] == "60일"][0]
+print(f"**재학습을 안 하면 마지막 날 정확도가 {never[4]:.4f} 다** "
+      f"(배포 시점 {acc(X0, y0):.4f} 에서 {acc(X0, y0)-never[4]:.3f} 하락).")
+print(f"**매번 재학습하면 {always[2]:.4f} 를 유지하지만 "
+      f"{always[1]}번 학습해야 한다.**")
+print(f"**60일마다면 {p60[1]}번으로 평균 {p60[2]:.4f}** — "
+      f"매번의 {p60[2]/always[2]:.1%} 를 "
+      f"{p60[1]/max(always[1],1):.0%} 의 비용으로.")
+print()
+for s in ["**주기는 드리프트 속도가 정한다** — 고정된 정답이 없다",
+          "그래서 실무는 주기가 아니라 **트리거**로 간다 — "
+          "'성능이 임계 아래로 떨어지면' 또는 '드리프트 지표가 울리면'",
+          "그런데 G11.6.1 에서 봤듯 드리프트 지표는 성능을 대변하지 못한다",
+          "**그래서 라벨 확보(G11.6.2)가 재학습 자동화의 전제**가 된다",
+          "재학습 자체도 위험하다 — 새 모델이 더 나쁠 수 있으므로 "
+          "[11.5](05_serving.qmd)의 섀도·카나리를 거쳐야 한다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-retrain
+#| fig-cap: "G11.6.4 — 재학습 주기와 성능. 재학습을 안 하면 개념이 도는 만큼 성능이 무너진다. 주기를 짧게 할수록 유지되지만 비용이 는다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+fig = go.Figure()
+labels = [r[0] for r in RETRAIN]
+fig.add_trace(go.Bar(x=labels, y=[r[2] for r in RETRAIN], name="평균 정확도",
+                     marker_color=viz.ACCENT))
+fig.add_trace(go.Bar(x=labels, y=[r[4] for r in RETRAIN], name="마지막 날",
+                     marker_color=viz.WARM))
+fig.add_trace(go.Scatter(x=labels, y=[r[1] for r in RETRAIN],
+                         mode="lines+markers", name="재학습 횟수",
+                         line=dict(color=viz.GREEN, width=3),
+                         marker=dict(size=10), yaxis="y2"))
+fig.add_hline(y=1/K, line=dict(color="rgba(255,255,255,0.35)", dash="dash"))
+viz.fig_defaults(
+    fig, "재학습 주기의 절충", height=440,
+    xaxis_title="", yaxis_title="정확도", barmode="group",
+    yaxis=dict(range=[0, 0.75]),
+    yaxis2=dict(title="재학습 횟수", overlaying="y", side="right",
+                showgrid=False))
+fig
+```
 
 ---
 
-## 핵심 용어
+## 운영의 나머지
 
-| 용어 | 비고 |
-|------|------|
-| 데이터 드리프트 |  |
-| PSI |  |
-| 지연 레이블 |  |
-| 재학습 트리거 |  |
-| 모델 카드 |  |
+```{python}
+#| label: ops
+#| code-fold: false
+
+print("**관측 가능성: ML 에는 축이 하나 더 있다**")
+print()
+print(f"{'축':<14} {'일반 소프트웨어':<28} {'ML 시스템이 추가로'}")
+print("-" * 76)
+for a, b, c in [
+    ("로그", "요청·에러·스택 트레이스", "**입력과 예측을 남긴다** (재현용)"),
+    ("지표", "지연·처리량·에러율", "드리프트·확신·거부율·비용"),
+    ("트레이스", "서비스 간 호출 경로", "**특성 계보** ([11.1](01_data_pipeline.qmd))"),
+    ("(추가)", "—", "**모델 버전과 데이터 버전**"),
+]:
+    print(f"{a:<14} {b:<28} {c}")
+print()
+print("  두 번째 줄의 '입력과 예측을 남긴다' 가 특히 중요하다 —")
+print("  나중에 라벨이 오면 **그때 성능을 소급 계산**할 수 있다.")
+print("  남겨 두지 않으면 지연 라벨이 와도 쓸 수가 없다.")
+print()
+print("**LLM 특유의 모니터링 축**")
+print()
+print(f"{'지표':<20} {'어떻게 재나':<32} {'주의'}")
+print("-" * 76)
+for a, b, c in [
+    ("환각률", "검증 가능한 주장을 표본 검사", "검증 자체가 비싸다"),
+    ("도구 호출 실패", "API 에러·파싱 실패 비율", "가장 값싸고 유용한 신호"),
+    ("안전 필터 발동", "차단·거부 비율", "**갑작스런 변화가 신호**"),
+    ("거부율", "'답할 수 없습니다' 비율", "과도한 거부도 품질 저하"),
+    ("토큰 비용", "요청당 입출력 토큰", "품질 저하 없이도 비용이 샌다"),
+    ("응답 길이 분포", "출력 토큰 수의 분포", "[11.5](05_serving.qmd)의 꼬리와 직결"),
+]:
+    print(f"{a:<20} {b:<32} {c}")
+print()
+print("  **두 번째 줄이 실무에서 가장 값어치가 있다** —")
+print("  라벨이 필요 없고, 즉시 관측되며, 모델 품질과 상관이 높다.")
+print()
+print("**사고 대응**")
+print()
+print(f"{'단계':<16} {'준비해 둘 것'}")
+print("-" * 62)
+for a, b in [
+    ("탐지", "경보 등급과 담당자, 대시보드"),
+    ("완화", "**킬 스위치** — 이전 모델로 즉시 전환"),
+    ("격리", "영향 범위 산정 (계보가 있으면 빠르다)"),
+    ("복구", "롤백 또는 핫픽스, 재학습"),
+    ("사후 분석", "**비난 없는** 원인 분석과 재발 방지"),
+]:
+    print(f"{a:<16} {b}")
+print()
+print("  **킬 스위치를 미리 시험해 봐야 한다.** 사고 중에 처음 눌러 보면 안 된다.")
+print()
+print("**거버넌스**")
+for s in ["**모델 카드** — 용도, 학습 데이터, 성능, 한계, 알려진 편향을 문서화",
+          "**감사 로그** — 누가 언제 어떤 모델을 배포했고 무엇을 승인했는가",
+          "규제 대응 — 설명 요구([12.0](../12_trust/00_interpretability.qmd)), "
+          "삭제 요구, 자동 결정에 대한 이의 제기",
+          "이 문서들은 사고가 난 뒤에 만들 수 없다 — "
+          "**배포 파이프라인의 일부**여야 한다"]:
+    print(f"  · {s}")
+```
 
 ---
 
-**다음**: [12.0 설명 가능성](../12_trust/00_interpretability.qmd) — 특성 중요도·SHAP·LIME·saliency — 왜 그렇게 예측했는가
+## 요약
+
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| **개념 드리프트** | 정확도 0.636 → 0.490 | 입력 PSI는 **0.0104 → 0.0104** |
+| 왜 | 정의상 입력을 안 건드린다 | 라벨 없는 지표로는 **원리적으로 불가** |
+| **공변량 이동** | PSI 0.008 → 2.10 | 그런데 정확도는 **올랐다** |
+| 그 함의 | PSI 경보 ≠ 성능 저하 | '달라졌다'지 '나빠졌다'가 아니다 |
+| 상관 계산 | 개념 드리프트에서는 **계산 불가** | 지표의 분산이 0 |
+| **지연 라벨** | 광고 몇 분, 대출 수 년, LLM 대개 ∞ | 대리 지표에 기댈 수밖에 |
+| 사용자 피드백 | 명백한 실패는 신고 안 하고 떠난다 | '중간 정도 아쉬운' 것에 몰린다 |
+| **정상 구간 PSI** | 하루 300건이면 중앙값 0.059 | 0이 아니다 — 표본 잡음 |
+| 알림 피로 | 문턱 0.05면 연 293회 오경보 | 0.10이면 연 3회에 탐지율 99.8% |
+| 해법 | 문턱 조정보다 **표본 키우기** | 롤링 윈도우, 경보 등급 |
+| 다중 비교 | 특성 12개의 최댓값을 보면 오경보 증가 | 11.0의 최선값 함정과 같은 수학 |
+| **재학습 주기** | 안 하면 180일 뒤 0.641 → 0.497 | 개념이 돈 만큼 무너진다 |
+| 절충 | 60일 2번이면 매번(17번)의 98.7% | 주기는 드리프트 속도가 정한다 |
+| 트리거의 문제 | 드리프트 지표가 성능을 대변 못 한다 | **라벨 확보가 자동화의 전제** |
+| 로그의 진짜 용도 | 입력·예측을 남겨야 소급 계산 가능 | 안 남기면 지연 라벨도 무용 |
+
+---
+
+## Part 11을 닫으며
+
+```{python}
+#| label: part11
+#| code-fold: false
+
+print("**한 숫자를 위한 여섯 장** — Part 11 의 줄기")
+print()
+print(f"{'장':<7} {'무엇을 쟀나':<32} {'무엇을 위한 것이었나'}")
+print("-" * 78)
+for a, b, c in [
+    ("11.0", "시드만 바꿔도 3.7%p 흔들린다", "**결과를 믿을 수 있는가**"),
+    ("11.1", "워커 1개면 가속기가 2/3를 논다", "학습을 먹여 살리는 배관"),
+    ("11.2", "7B 학습에 104GB, 활성화는 128GB", "여러 장치로 쪼개기"),
+    ("11.3", "decode 산술 강도 1.00 (메모리 제한)", "**MFU** — 앞 세 장이 이 숫자로"),
+    ("11.4", "8비트는 공짜, 이상치가 5.6배 오차", "같은 성능을 더 싸게"),
+    ("11.5", "연속 배칭이 슬롯 활용률 4.1배", "실제 트래픽을 받는 일"),
+    ("11.6", "개념 드리프트에 PSI가 미동 없음", "배포는 시작일 뿐"),
+]:
+    print(f"{a:<7} {b:<32} {c}")
+print()
+print("**반복해서 나온 교훈이 둘 있다.**")
+print()
+print("① **평균은 거의 쓸모없다.**")
+for s in ["11.0 — 시드 평균만 보면 3.7%p 폭을 못 본다",
+          "11.5 — 평균 지연은 멀쩡한데 p99 가 무너진다",
+          "11.6 — 평균 정확도는 라벨이 와야 알고, 그땐 늦다",
+          "**분포를 봐야 한다.** 꼬리와 분산이 사고를 만든다"]:
+    print(f"   · {s}")
+print()
+print("② **측정하지 않으면 처방이 반대가 된다.**")
+for s in ["11.1 — 워커를 늘려야 하나 형식을 바꿔야 하나",
+          "11.3 — 연산 제한인가 메모리 제한인가",
+          "11.4 — 양자화를 먼저 하나 프루닝을 먼저 하나",
+          "11.6 — PSI 가 울렸는데 정말 나빠진 건가",
+          "**네 경우 모두 재 보기 전에는 답이 정해지지 않는다**"]:
+    print(f"   · {s}")
+print()
+print("  Part 9·10 에서 '지표가 벌하지 않는 것은 개선되지 않는다' 를 봤다.")
+print("  Part 11 은 그 앞 단계다 — **재지 않는 것은 지표조차 없다.**")
+```
+
+---
+
+**다음**: [12.0 설명 가능성](../12_trust/00_interpretability.qmd) — Part 12 해석가능성과 신뢰
 
 **이전**: [11.5 모델 서빙과 배포](05_serving.qmd)
