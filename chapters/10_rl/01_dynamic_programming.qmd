@@ -4,87 +4,533 @@ subtitle: "가치 반복·정책 반복 — 모델을 알 때의 정답"
 jupyter: ai-ml-study
 ---
 
-<!-- STUB: scripts/gen_scaffold.py 가 생성한 뼈대입니다. 본문을 채우면 이 줄을 지우세요. -->
+[10.0](00_mdp.qmd)에서 벨만 방정식을 세웠다.
 
-::: {.callout-important appearance="simple"}
-## 아직 집필 전인 장입니다
+$$V^*(s) = \max_a \Big[R(s,a) + \gamma\sum_{s'}P(s'\mid s,a)V^*(s')\Big]$$
 
-이 페이지는 **계획만 있는 상태**입니다. 아래는 다룰 이론 항목과 준비 중인 그래픽 목록이며,
-본문과 실행 가능한 시각화는 아직 없습니다.
+이 장의 전제는 하나다. **$P$ 와 $R$ 을 다 안다고 하자.**
 
-다른 장에서 이 페이지로 연결된 링크를 따라오셨다면, 그 개념은 여기서 다룰 예정이라는 뜻입니다.
-전체 집필 현황은 [PLAN.md](https://github.com/yuvjjang/aiml_studybook/blob/main/PLAN.md) 를 참고하세요.
+현실적이지 않은 가정이다. 로봇은 자기 물리를 모르고, LLM 은 사람이 어떤 응답을 좋아할지 모른다.
+그런데도 이 경우를 먼저 보는 이유가 있다.
+
+> 이후 등장하는 **모든 모델프리 알고리즘은 이 계산을 샘플로 근사한 것**이다.
+
+몬테카를로는 기댓값을 표본 평균으로, TD 는 벨만 백업을 한 전이로,
+DQN 은 그 백업을 신경망으로. 원본을 먼저 봐 두면 나머지가 전부 변주로 읽힌다.
+
+---
+
+## 두 개의 연산자
+
+동적계획법은 벨만 방정식을 **반복 대입**으로 푼다.
+연산자 두 개를 정의하면 전부 정리된다.
+
+$$(T^\pi V)(s) = \sum_a \pi(a|s)\Big[R(s,a)+\gamma\sum_{s'}P(s'|s,a)V(s')\Big]
+\qquad \text{(정책 평가 연산자)}$$
+
+$$(T^* V)(s) = \max_a \Big[R(s,a)+\gamma\sum_{s'}P(s'|s,a)V(s')\Big]
+\qquad \text{(벨만 최적 연산자)}$$
+
+핵심 성질은 **둘 다 $\gamma$-수축**이라는 것이다. 최대 노름에 대해
+
+$$\|TV_1 - TV_2\|_\infty \le \gamma\,\|V_1 - V_2\|_\infty$$
+
+바나흐 고정점 정리에 의해 유일한 고정점이 있고, 아무 데서 시작해도 거기로 수렴한다.
+$V^\pi$ 와 $V^*$ 가 각각 그 고정점이다.
+
+그리고 **정책 개선 정리**가 나머지를 잇는다.
+$V^\pi$ 에 대해 탐욕적인 정책 $\pi'$ 는 $V^{\pi'} \ge V^\pi$ 를 만족한다 —
+그래서 평가와 개선을 번갈아 하면 최적으로 간다.
+
+말은 다 했으니 이제 재 본다.
+
+```{python}
+#| label: setup
+#| code-fold: false
+
+import sys; sys.path.append("../..")
+import numpy as np
+from src import rl
+
+WALLS = [(1, 1), (1, 2), (2, 4), (3, 1)]
+TERM = {(0, 6): 1.0, (3, 3): -1.0}
+gw = rl.GridWorld(rows=5, cols=7, walls=WALLS, terminals=TERM,
+                  step_cost=-0.04, slip=0.2)
+GAMMA = 0.95
+V_star, PI_star, it_star = rl.value_iteration(gw.P, gw.R, GAMMA)
+
+print(f"[10.0](00_mdp.qmd)의 그리드월드를 그대로 쓴다 — "
+      f"상태 {gw.nS}, 행동 {gw.nA}, 미끄러짐 {gw.slip:.0%}")
+print(f"  γ={GAMMA} 최적해: 가치 반복 {it_star}회, "
+      f"V 범위 [{V_star.min():.3f}, {V_star.max():.3f}]")
+```
+
+---
+
+## G10.1.1 — 수축률이 정확히 γ 인가
+
+이론이 말하는 것은 부등식 $\le \gamma$ 다.
+실제로 그 상한에 **닿는지**를 무작위 $V$ 쌍으로 확인한다.
+
+```{python}
+#| label: contraction
+#| code-fold: false
+
+import numpy as np
+from src import rl
+
+rng = np.random.default_rng(0)
+
+
+def T_star(V, g):
+    return rl.q_from_v(gw.P, gw.R, V, g).max(1)
+
+
+print("무작위 V 쌍 300개로 수축률 측정")
+print()
+print(f"{'γ':>6} {'측정 최대':>12} {'측정 평균':>12} {'이론 상한':>10}")
+print("-" * 44)
+CON = []
+for g_ in [0.5, 0.9, 0.95, 0.99]:
+    rs = []
+    for _ in range(300):
+        V1, V2 = rng.normal(0, 3, gw.nS), rng.normal(0, 3, gw.nS)
+        rs.append(np.max(np.abs(T_star(V1, g_) - T_star(V2, g_)))
+                  / np.max(np.abs(V1 - V2)))
+    CON.append((g_, float(max(rs)), float(np.mean(rs))))
+    print(f"{g_:>6.2f} {CON[-1][1]:>12.6f} {CON[-1][2]:>12.6f} {g_:>10.2f}")
+print()
+print("**최대값이 정확히 γ 다.** 상한이 빡빡하다는 뜻이다.")
+for s in ["최악의 경우($V_1$ 과 $V_2$ 가 모든 상태에서 같은 방향으로 어긋날 때)에 "
+          "정확히 γ 배가 된다",
+          "평균은 그보다 작다 — 상태마다 어긋남이 상쇄되기 때문",
+          "**그래서 실제 수렴은 이론 상한보다 빠르다** — 다음 절에서 확인",
+          "γ→1 이면 수축이 약해진다. 이것이 장기 문제가 어려운 수학적 이유다"]:
+    print(f"  · {s}")
+print()
+print("**수렴 궤적을 직접 보자** (γ=0.95, V0=0 에서 시작)")
+print()
+V, PI, it, hist = rl.value_iteration(gw.P, gw.R, GAMMA, track=True)
+errs = [float(np.max(np.abs(h - V_star))) for h in hist]
+print(f"{'반복':>5} {'‖V_k − V*‖∞':>15} {'직전 대비 비율':>15}")
+print("-" * 40)
+for k in [0, 1, 2, 5, 10, 20, 30, 40, len(errs)-1]:
+    ratio = errs[k]/errs[k-1] if k > 0 and errs[k-1] > 0 else np.nan
+    print(f"{k:>5} {errs[k]:>15.3e} {ratio:>15.4f}")
+print()
+tail = float(np.mean([errs[k]/errs[k-1] for k in range(20, 35)]))
+print(f"**후반부 감소 비율이 {tail:.4f} 로 안정된다 — 기하 수렴이다.**")
+print(f"  그런데 이 값은 γ={GAMMA} 가 **아니다.** {tail/GAMMA:.2f}배 더 빠르다.")
+print()
+print("여러 γ 에서 실제 수렴률을 재 보면")
+print()
+print(f"{'γ':>6} {'실측 수렴률':>12} {'γ 대비':>9}")
+print("-" * 30)
+RATE = []
+for g_ in [0.8, 0.9, 0.95, 0.99]:
+    Vg, _, _, hg = rl.value_iteration(gw.P, gw.R, g_, track=True)
+    e = [float(np.max(np.abs(h - Vg))) for h in hg]
+    lo = max(5, len(e)//2)
+    r = float(np.mean([e[k]/e[k-1] for k in range(lo, min(lo+15, len(e)-1))
+                       if e[k-1] > 1e-12]))
+    RATE.append((g_, r))
+    print(f"{g_:>6.2f} {r:>12.4f} {r/g_:>9.2f}")
+print()
+print("**전부 γ 보다 작다.** 이유가 있다.")
+for s in ["γ 는 **최악의 경우** 수축률이다 (G10.1.1 의 최대값)",
+          "실제 수렴률은 $\gamma P_{\pi^*}$ 의 스펙트럼 반지름에 딸려 있다",
+          "이 환경은 **에피소드가 끝난다** — 종단 상태가 흡수 상태라 "
+          "전이 행렬이 부분확률적이 되고, 그만큼 반지름이 작아진다",
+          "**끝나지 않는 문제라면 γ 에 더 가까워진다** — "
+          "그래서 연속 과제(continuing task)가 더 느리게 수렴한다",
+          "실무 함의: 이론 상한으로 반복 예산을 잡으면 크게 과대 추정한다"]:
+    print(f"  · {s}")
+```
+
+```{python}
+#| label: fig-contraction
+#| fig-cap: "G10.1.1 — 가치 반복의 오차 감소. 로그 축에서 직선이라는 것이 매 반복 일정 비율로 줄어든다는 뜻이다. 다만 그 비율은 γ가 아니라 그보다 작다 — 종단이 있는 환경이라서다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz, rl
+
+fig = go.Figure()
+for i, g_ in enumerate([0.8, 0.9, 0.95, 0.99]):
+    Vg, _, _, hg = rl.value_iteration(gw.P, gw.R, g_, track=True)
+    e = [float(np.max(np.abs(h - Vg))) for h in hg]
+    fig.add_trace(go.Scatter(x=list(range(len(e))), y=np.maximum(e, 1e-12),
+                             mode="lines", name=f"γ = {g_}",
+                             line=dict(color=viz.color(i), width=2.5)))
+viz.fig_defaults(
+    fig, "가치 반복의 오차 ‖V_k − V*‖∞", height=450,
+    xaxis_title="반복 횟수", yaxis_title="최대 노름 오차 (로그)",
+    yaxis_type="log")
+viz.annotate_box(fig, "직선의 기울기 = 실측 수렴률<br>"
+                      "<b>γ가 1에 가까울수록 완만하다</b>",
+                 x=0.98, y=0.98, yanchor="top")
+fig
+```
+
+---
+
+## G10.1.2 — 정책은 가치보다 훨씬 먼저 확정된다
+
+가치 반복을 언제 멈춰야 할까.
+보통 $\|V_{k+1}-V_k\|_\infty < \epsilon$ 을 쓰지만, 우리가 원하는 것은 **가치가 아니라 정책**이다.
+
+두 시점이 얼마나 차이 나는지 잰다.
+
+```{python}
+#| label: early-stop
+#| code-fold: false
+
+import numpy as np
+from src import rl
+
+print("가치가 수렴하는 시점 vs 정책이 최적이 되는 시점")
+print()
+print(f"{'γ':>6} {'가치 수렴':>10} {'정책 확정':>10} {'비율':>8} "
+      f"{'이론 상한':>10} {'상한/실제':>10}")
+print("-" * 60)
+EARLY = []
+Rmax = float(np.abs(gw.R).max())
+for g_ in [0.5, 0.8, 0.9, 0.95, 0.99]:
+    Vg, PIg, itg, hg = rl.value_iteration(gw.P, gw.R, g_, track=True)
+    k_pi = next(k for k, h in enumerate(hg)
+                if np.array_equal(rl.greedy(rl.q_from_v(gw.P, gw.R, h, g_)),
+                                  PIg))
+    bound = np.log(1e-10*(1 - g_)/Rmax)/np.log(g_)
+    EARLY.append((g_, itg, k_pi, bound))
+    print(f"{g_:>6.2f} {itg:>10} {k_pi:>10} {k_pi/itg:>8.2f} "
+          f"{bound:>10.0f} {bound/itg:>10.1f}")
+print()
+mid = [e for e in EARLY if e[0] == 0.95][0]
+print(f"**γ=0.95 에서 가치는 {mid[1]}번 걸리는데 정책은 {mid[2]}번에 굳는다.**")
+print(f"  {mid[2]/mid[1]:.0%} 지점에서 이미 답을 알고 있었던 셈이다.")
+print()
+print("**왜 이런 일이 생기나**")
+for s in ["정책은 Q 의 **순위**만 보면 된다 — 절대값이 정확할 필요가 없다",
+          "가치는 마지막 소수점까지 맞추느라 오래 걸린다",
+          "일단 어떤 행동이 확실히 1등이 되면, 그 뒤 갱신은 순위를 안 바꾼다",
+          "**그래서 실무에서는 정책 변화를 멈춤 조건으로 쓰는 것이 낫다**",
+          "다만 '정책이 안 바뀜'이 최적을 보장하지는 않는다 — "
+          "잠시 멈췄다 다시 바뀔 수 있다 (다음 절에서 실제로 본다)"]:
+    print(f"  · {s}")
+print()
+print("**이론 상한은 훨씬 느슨하다.**")
+for g_, it, kp, bd in EARLY:
+    print(f"  γ={g_}: 상한 {bd:.0f}회 vs 실제 {it}회 — {bd/it:.1f}배 보수적")
+print()
+print("  G10.1.1 에서 본 이유다 — 수축률의 **최악 경우**가 γ 지만,")
+print("  실제 궤적은 그보다 빨리 줄어든다.")
+```
+
+---
+
+## G10.1.3 — 일반화 정책 반복: 평가를 얼마나 할 것인가
+
+정책 반복과 가치 반복은 별개의 알고리즘처럼 보이지만, 사실 **같은 도식의 양 끝**이다.
+
+- **정책 반복**: $V^\pi$ 를 **끝까지** 구한 뒤 개선
+- **가치 반복**: 평가를 **한 번만** 하고 바로 개선
+
+그 사이는 전부 유효한 알고리즘이다. 이것이 **일반화 정책 반복(GPI)** 이고,
+강화학습 전체를 관통하는 도식이다.
+
+평가 스윕 수 $k$ 를 바꿔 가며 비용을 재 본다.
+
+```{python}
+#| label: gpi
+#| code-fold: false
+
+import numpy as np
+from src import rl
+
+
+def modified_pi(P, R, gamma, k, max_iter=2000):
+    """평가를 k 스윕만 하고 개선. k=None 이면 선형 방정식으로 정확히 푼다."""
+    nS, nA = R.shape
+    pi = np.zeros(nS, int)
+    V = np.zeros(nS)
+    sweeps = 0
+    for i in range(max_iter):
+        Pi = np.eye(nA)[pi]
+        Ppi = np.einsum('sa,sat->st', Pi, P)
+        Rpi = (Pi*R).sum(1)
+        if k is None:
+            V = np.linalg.solve(np.eye(nS) - gamma*Ppi, Rpi)
+            sweeps += nS                       # 선형 해의 비용을 스윕으로 환산
+        else:
+            for _ in range(k):
+                V = Rpi + gamma*(Ppi @ V)
+                sweeps += 1
+        pi_new = rl.greedy(rl.q_from_v(P, R, V, gamma))
+        if np.array_equal(pi_new, pi) and i > 0:
+            return V, pi, i + 1, sweeps
+        pi = pi_new
+    return V, pi, max_iter, sweeps
+
+
+print(f"평가 스윕 k 를 바꿔 가며 (γ={GAMMA})")
+print()
+print(f"{'k':>12} {'외부 반복':>9} {'총 백업':>10} {'정책 최적?':>10} {'V 오차':>11}")
+print("-" * 58)
+GPI = []
+for k in [1, 2, 3, 5, 10, 20, None]:
+    V, pi, it, sw = modified_pi(gw.P, gw.R, GAMMA, k)
+    total = sw*gw.nS + it*gw.nS*gw.nA
+    opt = bool(np.array_equal(pi, PI_star))
+    GPI.append((k, it, total, opt, float(np.max(np.abs(V - V_star)))))
+    lab = "끝까지 (PI)" if k is None else str(k)
+    print(f"{lab:>12} {it:>9} {total:>10,} {str(opt):>10} {GPI[-1][4]:>11.2e}")
+vi_backups = it_star*gw.nS*gw.nA
+print(f"{'가치 반복':>12} {it_star:>9} {vi_backups:>10,} {'True':>10} "
+      f"{0.0:>11.2e}")
+print()
+best = min((g for g in GPI if g[3]), key=lambda g: g[2])
+print(f"**최적 정책을 가장 싸게 얻는 것은 k={best[0]} 다** — "
+      f"백업 {best[2]:,}회.")
+print(f"  가치 반복({vi_backups:,})의 {best[2]/vi_backups:.2f}배, "
+      f"정책 반복({GPI[-1][2]:,})의 {best[2]/GPI[-1][2]:.2f}배.")
+print()
+print("**양 끝은 둘 다 낭비다.**")
+for s in [f"k=1 (가치 반복 쪽): 개선이 잦지만 평가가 부정확해 "
+          f"외부 반복이 는다",
+          f"k=끝까지 (정책 반복): 외부 반복은 {GPI[-1][1]}번뿐인데 "
+          f"평가 한 번이 너무 비싸다",
+          "**중간이 이긴다.** 대충 평가하고 자주 개선하는 것이 효율적이다",
+          "이것이 GPI 가 '도식'인 이유다 — 특정 알고리즘이 아니라 "
+          "평가와 개선의 **비율을 고르는 자유도**를 말한다"]:
+    print(f"  · {s}")
+print()
+bad = [g for g in GPI if not g[3]]
+if bad:
+    print("**그런데 작은 k 에서는 정책이 최적이 아닌 채로 멈췄다.**")
+    for k, it, tot, opt, err in bad:
+        print(f"  k={k}: 정책이 안 바뀌어 멈췄지만 V 오차가 {err:.2e} 남았다")
+    print("  '정책이 안 바뀜'을 멈춤 조건으로 쓴 결과다 —")
+    print("  **가치가 부정확하면 그 조건이 일찍 발동할 수 있다.**")
+    print("  G10.1.2 에서 예고한 함정이 여기서 실제로 나타났다.")
+```
+
+```{python}
+#| label: fig-gpi
+#| fig-cap: "G10.1.3 — GPI 스펙트럼. 가로축이 평가 스윕 수, 세로축이 총 백업이다. 양 끝(가치 반복·정책 반복)보다 중간이 싸다."
+
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+xs = [g[0] if g[0] else 40 for g in GPI]
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=xs, y=[g[2] for g in GPI], mode="lines+markers",
+    name="수정 정책 반복",
+    line=dict(color=viz.ACCENT, width=2.5),
+    marker=dict(size=[16 if g[3] else 9 for g in GPI],
+                symbol=["circle" if g[3] else "x" for g in GPI],
+                color=[viz.GREEN if g[3] else viz.WARM for g in GPI],
+                line=dict(width=1.5, color="rgba(255,255,255,0.5)"))))
+fig.add_hline(y=vi_backups,
+              line=dict(color=viz.hex_rgba(viz.WARM, 0.7), dash="dash"))
+fig.add_annotation(x=1, y=vi_backups, text=f"가치 반복 {vi_backups:,}",
+                   showarrow=False, xanchor="left", yanchor="bottom",
+                   font=dict(size=11, color=viz.WARM))
+viz.fig_defaults(
+    fig, "평가 스윕 수와 총 백업 비용", height=450,
+    xaxis_title="평가 스윕 k (오른쪽 끝 = 끝까지 풀기)",
+    yaxis_title="총 벨만 백업 수", xaxis_type="log",
+    xaxis=dict(tickmode="array", tickvals=xs,
+               ticktext=[str(g[0]) if g[0] else "끝까지" for g in GPI]))
+viz.annotate_box(fig, "● 정책이 최적 &nbsp;&nbsp; ✕ 아직 아님",
+                 x=0.98, y=0.98, yanchor="top")
+fig
+```
+
+::: {.interaction-hint}
+초록 원이 최적 정책을 얻은 설정이고, 그중 가장 낮은 점이 이 문제의 최선이다.
+가치 반복(점선)은 그보다 몇 배 비싸다.
+
+**이 그림이 Part 10 의 나머지를 미리 보여 준다.**
+모델프리 알고리즘들은 전부 이 스펙트럼의 어딘가에 있다 —
+SARSA·Q-learning 은 k=1 쪽, 액터-크리틱은 크리틱을 얼마나 학습시킬지로 k 를 조절한다.
+[10.4](04_policy_gradient.qmd)의 PPO 에서 "에폭 수"가 바로 그 손잡이다.
 :::
 
-환경 모델을 아는 이상적 상황의 해법을 먼저 보면, 이후 모든 모델프리 알고리즘이 '그 계산을 샘플로 근사하는 것'으로 읽힌다.
+---
+
+## G10.1.4 — 갱신 순서가 반복 수를 바꾼다
+
+지금까지는 **동기** 갱신이었다 — 모든 상태의 새 값을 계산한 뒤 한꺼번에 바꿨다.
+
+**제자리(in-place)** 로 바꾸면 갱신한 값을 같은 스윕 안에서 바로 쓴다.
+그러면 **순서가 중요해진다.**
+
+```{python}
+#| label: async
+#| code-fold: false
+
+import numpy as np
+from src import rl
+
+
+def vi_inplace(P, R, gamma, order, tol=1e-10, max_iter=5000):
+    """제자리 가치 반복. order 순서대로 상태를 갱신한다."""
+    V = np.zeros(R.shape[0])
+    for i in range(max_iter):
+        delta = 0.0
+        for s in order:
+            nv = float((R[s] + gamma*(P[s] @ V)).max())
+            delta = max(delta, abs(nv - V[s]))
+            V[s] = nv
+        if delta < tol:
+            return V, i + 1
+    return V, max_iter
+
+
+dist_goal = np.array([abs(gw.rc(s)[0] - 0) + abs(gw.rc(s)[1] - 6)
+                      for s in range(gw.nS)])
+print("갱신 방식과 순서에 따른 스윕 수 (γ=0.95, 같은 정확도까지)")
+print()
+print(f"{'방식':<26} {'스윕':>7} {'상태 갱신':>10} {'기준 대비':>10} {'V 오차':>11}")
+print("-" * 68)
+ASY = [("동기 (기준)", None),
+       ("제자리 · 인덱스 순", np.arange(gw.nS)),
+       ("제자리 · 목표에서 가까운 순", np.argsort(dist_goal)),
+       ("제자리 · 목표에서 먼 순", np.argsort(-dist_goal))]
+base = it_star*gw.nS
+for nm, od in ASY:
+    if od is None:
+        print(f"{nm:<26} {it_star:>7} {base:>10,} {1.0:>10.2f} {0.0:>11.2e}")
+    else:
+        V, it = vi_inplace(gw.P, gw.R, GAMMA, od)
+        print(f"{nm:<26} {it:>7} {it*gw.nS:>10,} {it*gw.nS/base:>10.2f} "
+              f"{np.max(np.abs(V - V_star)):>11.2e}")
+print()
+print("**제자리 갱신만으로도 3분의 2로 준다.**")
+print("  같은 스윕 안에서 갱신된 값을 바로 쓰니 정보가 더 빨리 퍼진다.")
+print()
+print("**그리고 순서가 또 한 번 차이를 만든다.**")
+for s in ["목표에서 **가까운 순**으로 갱신하면 가장 빠르다 — "
+          "보상 정보가 물결처럼 뒤로 퍼진다",
+          "**먼 순**은 반대다 — 아직 0 인 이웃을 보고 갱신하니 헛수고가 는다",
+          "이것을 일반화한 것이 **우선순위 스위핑**이다 — "
+          "TD 오차가 큰 상태부터 갱신한다",
+          "실무의 대응물: [10.3](03_deep_rl.qmd)의 **우선순위 경험 재생(PER)**",
+          "**갱신할 가치가 있는 곳부터 갱신하라** — DP 부터 심층 RL 까지 같은 원칙"]:
+    print(f"  · {s}")
+print()
+print("**비동기 DP 의 수렴 조건**")
+print("  모든 상태를 **무한히 자주** 갱신하기만 하면 순서와 무관하게 수렴한다.")
+print("  순서는 속도에만 영향을 준다 — 이것이 실용적으로 큰 자유를 준다.")
+```
 
 ---
 
-## 이 장에서 다루는 것
+## G10.1.5 — DP 가 무너지는 지점
 
-- 정책 평가: 반복 적용으로 V^π 구하기, 수축 사상과 수렴
-- 정책 개선 정리
-- 정책 반복(policy iteration)의 수렴
-- 가치 반복(value iteration)과 벨만 최적 연산자
-- 비동기 DP와 우선순위 스위핑
-- 일반화 정책 반복(GPI) — 강화학습 전체를 관통하는 도식
-- DP의 한계: 모델 필요, 상태 폭발, 차원의 저주
-- 근사 동적계획법으로의 확장
+동적계획법은 정확하고 수렴이 보장된다. 그런데 두 가지를 요구한다.
+
+1. 모델 $P$, $R$ 을 안다
+2. 모든 상태를 **표로 들고 있을 수 있다**
+
+두 번째가 먼저 무너진다.
+
+```{python}
+#| label: curse
+#| code-fold: false
+
+import time
+import numpy as np
+from src import rl
+
+print("격자 크기에 따른 비용 (γ=0.95, 미끄러짐 20%)")
+print()
+print(f"{'격자':>9} {'상태':>7} {'P 원소 수':>14} {'P 메모리':>11} "
+      f"{'가치 반복 시간':>13}")
+print("-" * 60)
+CURSE = []
+for n in [5, 10, 20, 40, 60]:
+    env = rl.GridWorld(n, n, [], {(0, n-1): 1.0}, step_cost=-0.04, slip=0.2)
+    t0 = time.time()
+    rl.value_iteration(env.P, env.R, 0.95)
+    dt = time.time() - t0
+    CURSE.append((n, env.nS, env.P.size, env.P.nbytes/1e6, dt))
+    print(f"{f'{n}x{n}':>9} {env.nS:>7} {env.P.size:>14,} "
+          f"{env.P.nbytes/1e6:>10.1f}MB {dt:>12.3f}s")
+print()
+a, b = CURSE[0], CURSE[-1]
+print(f"**격자 변이 {b[0]/a[0]:.0f}배가 되면 P 는 {b[2]/a[2]:,.0f}배가 된다.**")
+print(f"  상태가 $n^2$, 전이 표가 $|S|^2|A|$ 이므로 **$n^4$** 로 자란다.")
+print()
+print("**현실의 문제들은 이 표를 만들 수조차 없다**")
+print()
+print(f"{'문제':<22} {'상태 공간':<30} {'표로 가능?'}")
+print("-" * 66)
+for x, y, z in [
+    ("그리드월드 60x60", f"{60*60:,}", "가능 (위 표)"),
+    ("백개먼", "약 10^20", "불가능"),
+    ("바둑", "약 10^170", "불가능"),
+    ("Atari 화면", "256^(84·84·4)", "불가능"),
+    ("로봇 관절 각도", "연속 — 무한", "불가능"),
+    ("LLM 문맥", "|어휘|^문맥길이", "불가능"),
+]:
+    print(f"{x:<22} {y:<30} {z}")
+print()
+print("**그래서 두 방향으로 갈라진다**")
+for s in ["**모델을 모르는 경우** → 샘플로 기댓값을 근사한다 "
+          "([10.2](02_model_free.qmd))",
+          "**표가 너무 큰 경우** → 가치 함수를 근사한다 "
+          "([10.3](03_deep_rl.qmd)) 또는 정책을 직접 파라미터화한다 "
+          "([10.4](04_policy_gradient.qmd))",
+          "대부분의 실제 문제는 **둘 다** 해당한다",
+          "그러나 이 장의 도식(GPI)은 그대로 살아남는다 — "
+          "무엇을 근사하든 평가와 개선을 번갈아 한다"]:
+    print(f"  · {s}")
+print()
+print("**근사 동적계획법 관점**")
+print("  이후 알고리즘들을 '벨만 백업을 어떻게 근사했나'로 읽으면 정리된다.")
+print()
+print(f"{'알고리즘':<18} {'기댓값을':<20} {'가치 표를'}")
+print("-" * 60)
+for x, y, z in [
+    ("동적계획법", "정확히 계산", "그대로 (표)"),
+    ("몬테카를로", "에피소드 표본 평균", "그대로 (표)"),
+    ("TD / Q-learning", "한 전이로 근사", "그대로 (표)"),
+    ("DQN", "한 전이로 근사", "**신경망으로 근사**"),
+    ("정책 경사", "궤적 표본으로 근사", "정책을 직접 파라미터화"),
+]:
+    print(f"{x:<18} {y:<20} {z}")
+```
 
 ---
 
-## G10.1.1 — 가치 반복 수렴
+## 요약
 
-가치 함수가 반복마다 갱신되며 최적으로 수렴하는 히트맵
+| 개념 | 수치·핵심 | |
+|------|----------|--|
+| 이 장의 전제 | $P, R$ 을 안다 | 이후 알고리즘은 전부 이것의 샘플 근사 |
+| 두 연산자 | $T^\pi$ (평가), $T^*$ (최적) | 둘 다 γ-수축 |
+| **수축률** | 측정 최대가 **정확히 γ** | 상한이 빡빡하다 |
+| 그러나 평균은 | γ=0.95에서 0.745 | 상태별 어긋남이 상쇄된다 |
+| 수렴 속도 | 실측 수렴률이 **γ보다 작다** (0.505 vs 0.95) | 종단이 있어 부분확률적 |
+| **정책이 먼저 굳는다** | γ=0.95: 가치 45회, 정책 **10회** | 22% 지점에서 답을 안다 |
+| 왜 | 정책은 Q의 **순위**만 보면 된다 | 절대값은 필요 없다 |
+| 이론 상한 | 실제의 11배 보수적 (γ=0.95) | 최악 경우 기준이라 |
+| **GPI 스펙트럼** | k=5에서 백업 **1,575** | 가치 반복 6,300의 0.25배 |
+| 양 끝은 낭비 | k=1은 반복이 늘고, PI는 평가가 비싸다 | 중간이 이긴다 |
+| 함정 | k≤3에서 **최적이 아닌 채로 멈춤** | '정책 불변'은 최적 보장이 아니다 |
+| **제자리 갱신** | 동기 대비 **0.67배** | 갱신값을 바로 쓴다 |
+| 순서의 힘 | 목표에 가까운 순 **0.56배** | 우선순위 스위핑 / PER의 원리 |
+| 비동기 수렴 조건 | 모든 상태를 무한히 자주만 갱신하면 된다 | 순서는 속도만 바꾼다 |
+| **차원의 저주** | 격자 변 12배 → P 원소 **20,736배** | $n^4$ |
+| 그래서 갈라진다 | 모델을 모름 → 10.2, 표가 큼 → 10.3·10.4 | GPI 도식은 살아남는다 |
 
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 반복 횟수 슬라이더
-:::
-
----
-
-## G10.1.2 — 정책 반복 vs 가치 반복
-
-두 방식의 반복 횟수와 계산량 비교
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 알고리즘 전환
-:::
-
----
-
-## G10.1.3 — 최적 정책 화살표
-
-각 상태의 최적 행동이 화살표로 드러나는 그리드
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 환경 설정 슬라이더
-:::
+정답을 봤다. 이제 **모델을 모르는 채로** 같은 것을 해야 한다.
 
 ---
 
-## G10.1.4 — GPI 도식
-
-평가와 개선이 번갈아 최적점으로 수렴하는 개념도
-
-::: {.callout-note appearance="minimal"}
-**계획된 그래픽** · 인터랙션: 단계 재생
-:::
-
----
-
-## 핵심 용어
-
-| 용어 | 비고 |
-|------|------|
-| 정책 평가 |  |
-| 정책 반복 |  |
-| 가치 반복 |  |
-| 수축 사상 |  |
-| 일반화 정책 반복 (GPI) |  |
-
----
-
-**다음**: [10.2 모델프리 학습](02_model_free.qmd) — 몬테카를로·TD·Q-learning — 경험에서 직접 배우기
+**다음**: [10.2 모델프리 학습](02_model_free.qmd) — 경험에서 직접 배우기
 
 **이전**: [10.0 마르코프 결정 과정](00_mdp.qmd)
