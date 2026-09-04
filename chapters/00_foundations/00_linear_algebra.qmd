@@ -47,9 +47,9 @@ $$\cos\theta = \frac{\mathbf{u}\cdot\mathbf{v}}{\|\mathbf{u}\|\|\mathbf{v}\|}$$
 "토큰 $i$ 가 토큰 $j$ 에 얼마나 주목하는가"는 결국 두 벡터가 얼마나 같은 방향을 보는가다.
 :::
 
-### 노름: 크기를 재는 여러 방법
+### norm: 크기를 재는 여러 방법
 
-크기에도 선택지가 있다. $p$-노름은
+크기에도 선택지가 있다. $p$-norm은
 
 $$\|\mathbf{x}\|_p = \left(\sum_i |x_i|^p\right)^{1/p}$$
 
@@ -60,14 +60,14 @@ $p\to\infty$ 는 가장 큰 성분의 절댓값이다.
 
 ---
 
-## G0.0.1 — 노름 단위구: 왜 L1이 희소해를 만드는가
+## G0.0.1 — norm 단위구: 왜 L1이 희소해를 만드는가
 
-"크기가 1인 점들의 집합"이 노름마다 다른 모양을 갖는다.
+"크기가 1인 점들의 집합"이 norm마다 다른 모양을 갖는다.
 이 모양 차이 하나가 [2.3 정규화](../02_classical_ml/03_regularization.qmd)에서 Lasso와 Ridge의 성질을 가른다.
 
 ```{python}
 #| label: fig-norm-balls
-#| fig-cap: "p-노름 단위구. p를 바꾸면 모양이 마름모(p=1)에서 원(p=2), 정사각형(p→∞)으로 변합니다."
+#| fig-cap: "p-norm 단위구. p를 바꾸면 모양이 마름모(p=1)에서 원(p=2), 정사각형(p→∞)으로 변합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -117,12 +117,223 @@ fig.update_layout(
     yaxis=dict(range=[-1.9, 1.9], title="x₂", zeroline=False),
     legend=dict(x=0.02, y=0.98),
 )
-viz.fig_defaults(fig, title="p-노름 단위구", height=480)
+viz.fig_defaults(fig, title="p-norm 단위구", height=480)
 fig.show()
 ```
 
 ::: {.interaction-hint}
 $p=1$ 로 내려보세요. 마름모의 **꼭짓점이 축 위에** 있습니다. 손실 등고선(주황)이 이 제약 영역과 처음 만나는 지점은 대개 꼭짓점이고, 거기서는 한 좌표가 정확히 0입니다 — 이것이 Lasso가 특성을 골라내는 기하학적 이유입니다. $p=2$ 의 원에는 튀어나온 꼭짓점이 없어 정확히 0이 되는 일이 거의 없습니다.
+:::
+
+---
+
+## 제약과 벌점은 왜 같은 것인가 — 라그랑주 쌍대성과 KKT
+
+위 그림은 Lasso와 Ridge를 **제약 문제**로 그렸다. "크기가 $t$ 이하"라는 영역을 그려놓고
+손실 등고선이 거기에 처음 닿는 점을 해라고 했다. 그런데 실제 코드가 푸는 것은 **벌점 문제**다.
+
+$$\underbrace{\min_{\beta}\ \tfrac{1}{2}\|\mathbf{y}-X\beta\|_2^2 \ \ \text{s.t.}\ \ \|\beta\|_q^q \le t}_{\text{제약형 — 그림이 보여주는 것}}
+\qquad\Longleftrightarrow\qquad
+\underbrace{\min_{\beta}\ \tfrac{1}{2}\|\mathbf{y}-X\beta\|_2^2 + \lambda\|\beta\|_q^q}_{\text{벌점형 — 코드가 푸는 것}}$$
+
+$q=1$ 이면 Lasso, $q=2$ 이면 Ridge다. 두 형태가 같은 해를 준다는 것은 전혀 당연하지 않다.
+그것을 보장하는 도구가 **라그랑주 쌍대성**, 언제 보장되는지 말해주는 것이 **슬레이터 조건**,
+최적해가 만족해야 할 등식을 적은 것이 **KKT 조건**이다.
+
+### 라그랑주 함수: 제약을 목적함수 안으로 밀어넣기
+
+일반형부터 적는다.
+
+$$\min_{\mathbf{x}}\ f_0(\mathbf{x}) \quad \text{s.t.}\quad f_i(\mathbf{x}) \le 0\ \ (i=1,\dots,m), \qquad h_j(\mathbf{x}) = 0\ \ (j=1,\dots,r)$$
+
+라그랑주 함수는 제약마다 **곱수(multiplier)** 를 붙여 목적함수에 더한 것이다.
+
+$$L(\mathbf{x},\boldsymbol{\lambda},\boldsymbol{\nu}) = f_0(\mathbf{x}) + \sum_{i=1}^{m}\lambda_i f_i(\mathbf{x}) + \sum_{j=1}^{r}\nu_j h_j(\mathbf{x}), \qquad \lambda_i \ge 0$$
+
+$\lambda_i \ge 0$ 이라는 부호 제약이 전체 장치의 핵심이다. 이것 덕분에 $\boldsymbol{\lambda}$ 에 대한
+상한이 **제약 위반 감지기**로 작동한다.
+
+$$\sup_{\boldsymbol{\lambda}\ge 0,\ \boldsymbol{\nu}} L(\mathbf{x},\boldsymbol{\lambda},\boldsymbol{\nu}) =
+\begin{cases}
+f_0(\mathbf{x}) & \mathbf{x} \text{ 가 실현가능할 때}\\[4pt]
++\infty & \text{제약을 하나라도 어길 때}
+\end{cases}$$
+
+어긴 제약이 있으면($f_i(\mathbf{x})>0$) 그 $\lambda_i$ 를 무한히 키워 $+\infty$ 로 보낼 수 있기 때문이다.
+그러므로 원래 문제는 **min-max** 로 다시 쓸 수 있다.
+
+$$p^\star = \inf_{\mathbf{x}}\ \sup_{\boldsymbol{\lambda}\ge0,\ \boldsymbol{\nu}} L(\mathbf{x},\boldsymbol{\lambda},\boldsymbol{\nu})$$
+
+### 쌍대 문제: 순서를 뒤집는다
+
+inf와 sup의 순서를 뒤집은 것이 **쌍대 문제**다. 안쪽 하한을 먼저 취한 것이 **쌍대 함수**다.
+
+$$g(\boldsymbol{\lambda},\boldsymbol{\nu}) = \inf_{\mathbf{x}} L(\mathbf{x},\boldsymbol{\lambda},\boldsymbol{\nu}),
+\qquad d^\star = \sup_{\boldsymbol{\lambda}\ge0,\ \boldsymbol{\nu}} g(\boldsymbol{\lambda},\boldsymbol{\nu})$$
+
+$g$ 는 **원래 문제가 볼록이든 아니든 항상 오목(concave)** 하다.
+$\boldsymbol{\lambda},\boldsymbol{\nu}$ 에 대해 아핀인 함수들의 점별 하한이기 때문이다.
+쌍대 문제가 언제나 볼록 최적화라는 이 사실이 쌍대성을 쓸모 있게 만든다.
+
+**약한 쌍대성**은 세 줄로 증명된다. 실현가능한 임의의 $\mathbf{x}$ 와 임의의 $\boldsymbol{\lambda}\ge0$ 에 대해
+
+$$g(\boldsymbol{\lambda},\boldsymbol{\nu}) \le L(\mathbf{x},\boldsymbol{\lambda},\boldsymbol{\nu})
+= f_0(\mathbf{x}) + \underbrace{\sum_i \lambda_i f_i(\mathbf{x})}_{\le\,0} + \underbrace{\sum_j \nu_j h_j(\mathbf{x})}_{=\,0}
+\ \le\ f_0(\mathbf{x})$$
+
+왼쪽에 sup, 오른쪽에 inf를 취하면 $d^\star \le p^\star$ 다.
+차이 $p^\star - d^\star \ge 0$ 를 **쌍대 간극(duality gap)** 이라 부른다.
+쌍대 문제는 언제나 원래 문제의 **하한**을 준다 — 이것만으로도 분기한정법이나 완화 기법의 근거가 된다.
+
+### 슬레이터 조건: 간극이 0이 되는 때
+
+간극이 0, 즉 $p^\star = d^\star$ 이면 **강한 쌍대성**이다. 이때 비로소 벌점형과 제약형이 같은 해를 준다.
+
+::: {.key-concept}
+**슬레이터 조건** — $f_0, f_i$ 가 볼록이고 등식 제약이 아핀($h_j(\mathbf{x}) = \mathbf{a}_j^\top\mathbf{x}-b_j$)인 문제에서,
+**부등식 제약을 엄격하게 만족하는 점**이 정의역의 상대적 내부에 하나라도 존재하면
+
+$$\exists\,\tilde{\mathbf{x}} : \quad f_i(\tilde{\mathbf{x}}) < 0 \ \ \forall i, \qquad A\tilde{\mathbf{x}} = \mathbf{b}$$
+
+강한 쌍대성 $p^\star = d^\star$ 가 성립하고, 쌍대 최적해 $\boldsymbol{\lambda}^\star$ 가 실제로 **달성**된다.
+:::
+
+Lasso와 Ridge에 적용하면 바로 확인된다. 목적함수 $\tfrac12\|\mathbf{y}-X\beta\|_2^2$ 는 볼록,
+제약 $f_1(\beta)=\|\beta\|_q^q - t$ 도 볼록이고, $\beta=\mathbf{0}$ 을 넣으면 $f_1(\mathbf{0}) = -t < 0$ 이다($t>0$).
+**엄격 실현가능점이 존재하므로 강한 쌍대성이 성립한다** — 그림의 제약형과 코드의 벌점형이 같은 해를 주는 근거가 이것이다.
+
+주의할 점 네 가지.
+
+- 슬레이터는 **충분조건**이지 필요조건이 아니다. 조건이 깨져도 강한 쌍대성이 성립할 수 있다.
+- 부등식 제약이 전부 **아핀**이면 엄격성 없이 실현가능하기만 해도 된다(선형계획이 항상 강한 쌍대성을 갖는 이유).
+- **볼록이 아니면 일반적으로 간극이 남는다.** 신경망 학습에 라그랑주 완화를 걸어도 하한밖에 얻지 못하는 이유다.
+- $t \leftrightarrow \lambda$ 의 대응은 **존재하지만 데이터에 의존**하며 닫힌 형태가 없다.
+  $t$ 를 키우면 $\lambda^\star$ 가 줄어드는 단조 관계만 보장된다.
+  교차검증으로 고르는 것이 $t$ 가 아니라 $\lambda$ 인 것은 이 때문이다.
+
+### KKT 조건: 최적해가 만족하는 등식
+
+강한 쌍대성이 성립하고 함수들이 미분가능하면, $(\mathbf{x}^\star,\boldsymbol{\lambda}^\star,\boldsymbol{\nu}^\star)$ 가
+최적이라는 것은 다음 네 조건과 **동치**다.
+
+$$\begin{aligned}
+&\text{① 원시 실현가능} && f_i(\mathbf{x}^\star)\le 0, \quad h_j(\mathbf{x}^\star)=0\\[2pt]
+&\text{② 쌍대 실현가능} && \lambda_i^\star \ge 0\\[2pt]
+&\text{③ 상보 여유} && \lambda_i^\star\, f_i(\mathbf{x}^\star) = 0\\[2pt]
+&\text{④ 정상성} && \nabla f_0(\mathbf{x}^\star) + \sum_i \lambda_i^\star \nabla f_i(\mathbf{x}^\star) + \sum_j \nu_j^\star \nabla h_j(\mathbf{x}^\star) = \mathbf{0}
+\end{aligned}$$
+
+가장 많은 것을 말해주는 것은 ③이다. 곱이 0이므로 **둘 중 적어도 하나는 0**이어야 한다.
+
+- $\lambda_i^\star > 0 \Rightarrow f_i(\mathbf{x}^\star)=0$ — 제약이 **경계에서 활성**이다.
+  위 그림에서 손실 등고선이 단위구에 **닿은** 상황이다.
+- $f_i(\mathbf{x}^\star) < 0 \Rightarrow \lambda_i^\star = 0$ — 제약이 **놀고 있다**.
+  최소제곱 해가 이미 공 안에 들어 있으면 정규화는 아무 일도 하지 않는다.
+
+즉 곱수 $\lambda_i^\star$ 는 **그 제약을 한 단위 느슨하게 했을 때 최적값이 얼마나 좋아지는가**를 재는 그림자 가격이다.
+
+#### Ridge: 정상성이 닫힌 해를 준다
+
+$q=2$ 로 두면 모든 것이 미분가능하다. 라그랑주 함수는(½은 $\lambda$ 재척도일 뿐이다)
+
+$$L(\beta,\lambda) = \tfrac{1}{2}\|\mathbf{y}-X\beta\|_2^2 + \tfrac{\lambda}{2}\left(\|\beta\|_2^2 - t\right)$$
+
+$-\lambda t/2$ 는 $\beta$ 에 대해 상수라 정상성에 영향을 주지 않는다. 그래서 ④는 벌점형과 완전히 같은 식이 된다.
+
+$$\nabla_\beta L = -X^\top(\mathbf{y}-X\beta) + \lambda\beta = \mathbf{0}
+\quad\Longrightarrow\quad
+\boxed{\ \beta^\star = (X^\top X + \lambda I)^{-1}X^\top\mathbf{y}\ }$$
+
+$X^\top X$ 는 대칭 준양정치이므로 고유값이 모두 $\ge 0$ 이고, 거기에 $\lambda>0$ 을 더하면 **항상 가역**이다.
+$X$ 의 열이 완전히 상관되어도 해가 존재한다. 정규화가 통계적 효과와 별개로
+**수치적 안정성**을 주는 이유가 여기 있고, 아래 조건수 절에서 이를 정량화한다.
+
+#### Lasso: 미분 불가능한 곳은 열등미분으로
+
+$q=1$ 이면 $\|\beta\|_1$ 이 $\beta_j=0$ 에서 미분 불가능하다. 기울기 대신 **열등미분(subdifferential)** 을 쓴다.
+
+$$\partial|\beta_j| =
+\begin{cases}
+\{\operatorname{sign}(\beta_j)\} & \beta_j \ne 0\\[2pt]
+[-1,\ 1] & \beta_j = 0
+\end{cases}$$
+
+정상성 ④는 등식이 아니라 **포함 관계**가 된다.
+
+$$\mathbf{0} \in -X^\top(\mathbf{y}-X\beta^\star) + \lambda\,\partial\|\beta^\star\|_1$$
+
+$c_j = \mathbf{x}_j^\top(\mathbf{y}-X\beta^\star)$ (특성 $j$ 와 잔차의 내적)로 두고 성분별로 풀면
+
+$$\beta_j^\star \ne 0 \ \Longrightarrow\ c_j = \lambda\,\operatorname{sign}(\beta_j^\star),
+\qquad
+\beta_j^\star = 0 \ \Longrightarrow\ |c_j| \le \lambda$$
+
+::: {.key-concept}
+**희소성의 대수적 이유.** 위 그림이 "마름모의 꼭짓점"이라는 기하로 보여준 것을 KKT는 이렇게 말한다.
+
+Lasso에서 $\beta_j^\star=0$ 이 성립하려면 $|c_j|\le\lambda$ 라는 **구간** 하나만 만족하면 된다.
+반면 Ridge의 정상성은 $c_j = \lambda\beta_j$ 이므로 $\beta_j^\star=0$ 이려면 $c_j$ 가 **정확히 0**이어야 한다.
+구간은 양의 확률로 일어나지만 한 점은 그렇지 않다 — 그래서 Lasso만 정확한 0을 만든다.
+:::
+
+여기서 곧바로 따라 나오는 결과가 하나 있다. $\beta^\star=\mathbf{0}$ 이 해가 되려면
+모든 $j$ 에 대해 $|\mathbf{x}_j^\top\mathbf{y}| \le \lambda$ 여야 하므로
+
+$$\lambda \ \ge\ \lambda_{\max} = \max_j \left|\mathbf{x}_j^\top\mathbf{y}\right|
+\quad\Longrightarrow\quad \beta^\star = \mathbf{0}$$
+
+**$\lambda$ 를 이보다 키우면 모든 계수가 죽는다.** 정규화 경로를 그리는 라이브러리들이
+$\lambda_{\max}$ 에서 시작해 아래로 내려가는 것은 이 값이 경로의 자연스러운 시작점이기 때문이다.
+
+#### KKT 조건을 수치로 확인하기
+
+말이 맞는지 직접 풀어서 확인한다. 근접 경사법(ISTA)으로 Lasso를 풀고,
+각 좌표에서 $c_j$ 가 위 두 조건 중 어느 쪽을 만족하는지 본다.
+
+```{python}
+#| label: kkt-lasso
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+n, p, lam = 60, 8, 12.0
+X = rng.normal(size=(n, p))
+beta_true = np.array([3.0, -2.0, 0.0, 0.0, 1.5, 0.0, 0.0, 0.0])
+y = X @ beta_true + 0.5 * rng.normal(size=n)
+
+# ISTA: 경사 한 걸음 + 소프트 임계값(L1 근접 연산자)
+L = np.linalg.norm(X, 2) ** 2            # 그래디언트의 립시츠 상수
+beta = np.zeros(p)
+for _ in range(20000):
+    z = beta - (X.T @ (X @ beta - y)) / L
+    beta = np.sign(z) * np.maximum(np.abs(z) - lam / L, 0.0)
+
+c = X.T @ (y - X @ beta)                 # KKT 의 c_j = xⱼᵀ(y - Xβ)
+
+print(f"λ = {lam}\n")
+for j in range(p):
+    b = 0.0 if beta[j] == 0 else beta[j]
+    if b == 0.0:
+        print(f"  β{j} = {b:>7.3f}  [0]      |c{j}| = {abs(c[j]):>7.3f} ≤ λ")
+    else:
+        print(f"  β{j} = {b:>7.3f}  [0 아님]  c{j} = {c[j]:>+8.3f} = λ·sign(β{j})")
+
+print(f"\nλ_max = max_j |xⱼᵀy| = {np.max(np.abs(X.T @ y)):.3f}"
+      f"  → λ 가 이 값을 넘으면 β* = 0")
+```
+
+살아남은 좌표에서는 $|c_j|$ 가 **정확히** $\lambda$ 이고, 죽은 좌표에서는 $\lambda$ 보다 작다.
+KKT가 예측한 그대로다. 살아남은 좌표들이 잔차와의 내적을 정확히 $\lambda$ 로 맞춰 서로 균형을 이루는 이 구조가
+Lasso 정규화 경로가 조각별 선형이 되는 이유이기도 하다.
+
+::: {.key-concept}
+쌍대성과 KKT는 여기서 끝나지 않는다.
+[2.5 SVM과 커널](../02_classical_ml/05_svm_kernels.qmd)의 커널 트릭은 **쌍대 문제에서만** 모습을 드러내고
+(원시 문제에는 데이터의 내적이 등장하지 않는다), 서포트 벡터는 정확히 $\lambda_i^\star>0$ 인 점들 —
+상보 여유가 "이 제약은 활성"이라고 말하는 점들이다.
+볼록성과 최적성 조건 자체는 [0.1 최적화](01_calculus_optimization.qmd)에서 이어서 다룬다.
 :::
 
 ---
@@ -524,6 +735,87 @@ print(f"mask    {mask.shape} → 브로드캐스트 → {masked.shape}")
 | `(2,4,6,6)` | `(6, 6)` | `(2,4,6,6)` | 마스크 적용 |
 | `(5, 3)` | `(5,)` | **오류** | 뒤 축이 3 vs 5 |
 
+### 브로드캐스팅은 복사가 아니다
+
+규칙을 단계로 쪼개면 세 줄이다.
+
+1. 두 배열의 **차원 수가 다르면, 적은 쪽의 앞(왼쪽)에 크기 1인 축을 채운다.** `(3,)` → `(1, 3)`
+2. 각 축마다 **크기가 같거나, 한쪽이 1**이어야 한다. 둘 다 아니면 오류.
+3. 결과의 각 축 크기는 둘 중 큰 값.
+
+1번이 "뒤에서부터 맞춘다"의 정확한 의미다. 관례상 **뒤쪽 축이 가장 안쪽 데이터**(특성·채널 차원)이고
+앞쪽으로 갈수록 배치에 가까우므로, 새로 생기는 축은 배치 쪽에 붙는 것이 자연스럽다.
+
+여기서 진짜 중요한 것은 **크기 1인 축을 늘릴 때 메모리를 복제하지 않는다**는 점이다.
+NumPy는 그 축의 **stride를 0으로 만든다** — 인덱스를 아무리 옮겨도 읽는 메모리 주소가 그대로다.
+
+```{python}
+#| label: broadcast-stride
+#| code-fold: false
+
+import numpy as np
+
+x = np.zeros((4, 1, 3))
+b = np.broadcast_to(x, (4, 5, 3))
+
+print(f"원본  {x.shape}  {x.nbytes:>3}바이트  strides {x.strides}")
+print(f"확장  {b.shape}  같은 메모리   strides {b.strides}   ← 가운데가 0")
+```
+
+가운데 stride가 0이라는 것이 브로드캐스팅의 전부다.
+앞의 `(N, N)` 마스크 하나가 `(2, 4, 6, 6)` 배치·헤드 전체에 공짜로 적용되는 것도,
+`x + 1` 이 1을 배열 크기만큼 복제하지 않는 것도 같은 이유다.
+연산량은 결과 크기만큼 들지만 **메모리는 원본만큼만** 쓴다.
+
+::: {.callout-warning}
+## 브로드캐스팅이 조용히 틀린 답을 주는 경우
+
+브로드캐스팅이 위험한 것은 에러를 낼 때가 아니라 **에러 대신 그럴듯한 shape를 만들어낼 때**다.
+가장 흔한 사고는 `(n,)` 과 `(n, 1)` 을 섞는 것이다.
+
+```{python}
+#| label: broadcast-trap
+#| code-fold: false
+
+import numpy as np
+
+pred = np.array([1.0, 2.0, 3.0, 4.0])                  # (4,)
+target = np.array([[1.5], [2.5], [2.0], [3.0]])        # (4, 1) ← 열벡터로 들어왔다
+
+print(f"pred {pred.shape} - target {target.shape} = {(pred - target).shape}   ← (4,)가 아니다")
+print(f"MSE (의도하지 않은 4×4) : {np.mean((pred - target) ** 2):.3f}")
+print(f"MSE (올바른 계산)       : {np.mean((pred - target.ravel()) ** 2):.3f}")
+```
+
+에러는 나지 않고 손실 값만 틀린다. `(4,)` 가 규칙 1번에 따라 `(1, 4)` 로 정렬되고,
+`(4, 1)` 과 만나 **모든 쌍의 차** $4\times4$ 행렬이 만들어졌기 때문이다.
+데이터로더가 레이블을 열벡터로 주는 것만으로 이 일이 벌어진다.
+손실 함수 앞에서 `assert pred.shape == target.shape` 한 줄이 이 부류의 버그를 대부분 잡는다.
+:::
+
+그런데 방금 사고를 낸 바로 그 연산이, **의도하고 쓰면** 가장 유용한 관용구다.
+
+```{python}
+#| label: broadcast-pairwise
+#| code-fold: false
+
+import numpy as np
+
+a = np.array([0.0, 1.0, 2.0])
+print(a[:, None] - a[None, :])          # 모든 쌍의 차 → (3, 3)
+```
+
+`a[:, None] - a[None, :]` 는 **쌍별(pairwise) 연산의 표준형**이다.
+거리 행렬, 상대 위치 인코딩, 인과 마스크가 전부 이 형태로 만들어진다.
+`None`(= `np.newaxis`)을 명시하면 "여기에 축을 하나 만들겠다"는 의도가 코드에 남아,
+암묵적 정렬에 기대는 것보다 훨씬 안전하다.
+
+다만 브로드캐스팅이 언제나 공짜인 것은 아니다.
+`(N, 1, D)` 와 `(1, N, D)` 를 빼면 결과 `(N, N, D)` 는 **실체화된다** — stride 0으로 넘어갈 수 없다.
+$N$ 이 커지면 이것이 곧 메모리 폭발이고,
+어텐션이 쌍별 차 대신 $QK^\top$ 이라는 **행렬곱**을 쓰는 이유,
+[5.7 효율적 어텐션](../05_transformer/07_efficient_attention.qmd)이 없애려는 중간 텐서가 정확히 이것이다.
+
 ---
 
 ## 조건수: 왜 어떤 계산은 불안정한가
@@ -551,6 +843,112 @@ for rho in [0.0, 0.9, 0.99, 0.9999]:
 이것이 [다중공선성](../02_classical_ml/02_linear_regression.qmd)이 회귀 계수를 요동치게 만드는 메커니즘이고,
 Ridge 정규화가 $X^\top X + \lambda I$ 로 대각을 부풀려 이를 완화하는 이유다.
 
+### 왜 하필 최대/최소 특이값의 비인가
+
+$A\mathbf{x}=\mathbf{b}$ 를 푸는 상황을 보자. 입력 $\mathbf{b}$ 가 $\delta\mathbf{b}$ 만큼 흔들리면
+해는 $\delta\mathbf{x} = A^{-1}\delta\mathbf{b}$ 만큼 움직인다. SVD를 쓰면 부등식 두 개가 바로 나온다.
+$A^{-1}$ 의 가장 큰 특이값이 $1/\sigma_{\min}$ 이고, $A$ 의 가장 큰 특이값이 $\sigma_{\max}$ 이므로
+
+$$\|\delta\mathbf{x}\| = \|A^{-1}\delta\mathbf{b}\| \le \frac{\|\delta\mathbf{b}\|}{\sigma_{\min}},
+\qquad
+\|\mathbf{b}\| = \|A\mathbf{x}\| \le \sigma_{\max}\|\mathbf{x}\|$$
+
+두 번째 식은 $\dfrac{1}{\|\mathbf{x}\|} \le \dfrac{\sigma_{\max}}{\|\mathbf{b}\|}$ 로 바꿔 쓸 수 있다. 둘을 곱하면
+
+$$\frac{\|\delta\mathbf{x}\|}{\|\mathbf{x}\|} \ \le\ \frac{\sigma_{\max}}{\sigma_{\min}}\cdot\frac{\|\delta\mathbf{b}\|}{\|\mathbf{b}\|} \ =\ \kappa(A)\,\frac{\|\delta\mathbf{b}\|}{\|\mathbf{b}\|}$$
+
+**조건수는 상대오차의 증폭 상한**이다. 그리고 이 상한은 헐겁지 않다 —
+$\mathbf{x}$ 를 $\mathbf{v}_{\max}$ 방향으로, 교란 $\delta\mathbf{b}$ 를 $\mathbf{u}_{\min}$ 방향으로 주면 등호가 달성된다.
+최악의 경우가 실제로 존재한다는 뜻이다.
+
+실무에서는 **자릿수**로 읽는 것이 편하다. $\log_{10}\kappa$ 만큼 유효숫자를 잃는다고 보면 된다.
+float64의 유효숫자가 약 16자리이므로 $\kappa \approx 10^{8}$ 이면 절반이 날아가고,
+$\kappa \approx 10^{16}$ 이면 남는 것이 없다.
+
+### 정규방정식은 조건수를 제곱한다
+
+이 사실은 최소제곱을 푸는 방식에 곧바로 영향을 준다. $X = U\Sigma V^\top$ 이면
+
+$$X^\top X = V\Sigma^2 V^\top \quad\Longrightarrow\quad \kappa(X^\top X) = \kappa(X)^2$$
+
+즉 정규방정식 $X^\top X\beta = X^\top\mathbf{y}$ 를 세우는 순간,
+**문제를 풀기도 전에 조건수를 제곱**해 버린다. $\kappa(X)=10^7$ 이면 $\kappa(X^\top X)=10^{14}$ 이고,
+float64로도 유효숫자가 두 자리밖에 남지 않는다.
+
+```{python}
+#| label: normal-equations
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# 특이값을 1 → 1e-7 로 지정해 κ(X) = 1e7 인 행렬을 만든다
+n, p = 200, 6
+U, _ = np.linalg.qr(rng.normal(size=(n, p)))
+V, _ = np.linalg.qr(rng.normal(size=(p, p)))
+X = U @ np.diag(np.logspace(0, -7, p)) @ V.T
+
+beta_true = np.ones(p)
+y = X @ beta_true                       # 잡음 없음 — 정확한 해가 존재한다
+
+beta_ne = np.linalg.solve(X.T @ X, X.T @ y)      # ① 정규방정식
+beta_ls = np.linalg.lstsq(X, y, rcond=None)[0]   # ② QR/SVD 로 직접
+
+print(f"κ(X)    = {np.linalg.cond(X):.3e}")
+print(f"κ(XᵀX)  = {np.linalg.cond(X.T @ X):.3e}   ← κ(X)²")
+print(f"정규방정식 오차 ‖β̂ - β‖ = {np.linalg.norm(beta_ne - beta_true):.3e}")
+print(f"lstsq      오차 ‖β̂ - β‖ = {np.linalg.norm(beta_ls - beta_true):.3e}")
+```
+
+같은 데이터, 같은 정답, 수학적으로 같은 해다. 그런데 오차가 **여덟 자리** 차이 난다.
+그래서 실무 규칙은 하나다 — **$X^\top X$ 를 만들지 말고 $X$ 를 직접 분해하라.**
+`np.linalg.lstsq` 와 `scipy.linalg.lstsq` 는 QR 또는 SVD로 푼다.
+
+### Ridge가 조건수에 하는 일
+
+[앞 절의 KKT](#ridge-정상성이-닫힌-해를-준다)에서 Ridge 해는 $\beta^\star = (X^\top X + \lambda I)^{-1}X^\top\mathbf{y}$ 였다.
+$X^\top X$ 의 고유값이 $\sigma_i^2$ 이므로 $X^\top X + \lambda I$ 의 고유값은 $\sigma_i^2 + \lambda$ 이고
+
+$$\kappa(X^\top X + \lambda I) = \frac{\sigma_{\max}^2 + \lambda}{\sigma_{\min}^2 + \lambda}$$
+
+$\lambda \to \infty$ 면 이 값은 **1로 간다.** 데이터가 정보를 거의 주지 않는 방향($\sigma_i \approx 0$)에서는
+분모가 $\lambda$ 에 지배되어 증폭이 멈춘다.
+
+```{python}
+#| label: ridge-conditioning
+#| code-fold: false
+
+import numpy as np
+
+s = np.logspace(0, -7, 6)               # 위와 같은 특이값
+for lam in [0.0, 1e-10, 1e-8, 1e-4]:
+    k = (s[0] ** 2 + lam) / (s[-1] ** 2 + lam)
+    print(f"λ = {lam:<8g} → κ(XᵀX + λI) = {k:.3e}")
+```
+
+$\lambda=10^{-8}$ 만 넣어도 조건수가 $10^{14}$ 에서 $10^{8}$ 로 떨어진다.
+"계수를 줄여 과적합을 막는다"는 통계적 설명 뒤에 있는 수치적 실체가 이것이다 —
+그리고 그 대가로 편향이 생긴다. 작은 특이값 방향의 신호를 함께 눌러버리기 때문이다.
+
+### 신경망에서의 조건수
+
+조건수는 선형계 풀이만의 이야기가 아니다. 2차 근사한 손실 표면에서
+경사하강의 오차는 매 걸음 다음 비율로 줄어든다.
+
+$$\left(\frac{\kappa - 1}{\kappa + 1}\right)^k, \qquad \kappa = \kappa(\nabla^2 \mathcal{L})$$
+
+$\kappa=1$ 이면 한 걸음에 끝나고, $\kappa=10^4$ 이면 비율이 $0.9998$ 로 사실상 기어간다.
+"손실 표면이 길쭉한 골짜기라 학습이 느리다"는 직관을 정확히 이 수 하나로 말할 수 있다.
+
+딥러닝의 여러 장치가 사실상 조건수를 낮추는 도구다.
+
+- **입력 표준화와 [배치·층 정규화](../03_deep_learning/05_normalization.qmd)** — 축마다 척도를 맞춰 헤시안을 구형에 가깝게 만든다
+- **Adam 류의 적응 학습률** — 좌표별로 스케일을 나누는 대각 전처리(preconditioning)에 해당한다
+- **잔차 연결** — 층 야코비안을 항등에 가깝게 유지해 곱해질 때 $\kappa$ 가 폭발하는 것을 막는다
+
+수렴 속도로서의 정량화는 [0.1 최적화](01_calculus_optimization.qmd)에서 이어간다.
+
 ---
 
 ## 요약
@@ -558,13 +956,15 @@ Ridge 정규화가 $X^\top X + \lambda I$ 로 대각을 부풀려 이를 완화�
 | 개념 | 수식 | 기하학적 의미 | 이 책에서 다시 나오는 곳 |
 |------|------|---------------|--------------------------|
 | 내적 | $\mathbf{u}\cdot\mathbf{v} = \|u\|\|v\|\cos\theta$ | 방향 일치도 × 크기 | 어텐션 점수, 코사인 유사도 |
-| $p$-노름 | $(\sum|x_i|^p)^{1/p}$ | 단위구의 모양 | L1 희소성, 그래디언트 클리핑 |
+| $p$-norm | $(\sum|x_i|^p)^{1/p}$ | 단위구의 모양 | L1 희소성, 그래디언트 클리핑 |
 | 행렬 | $A\mathbf{x}$ | 격자를 늘리고 기울이는 변환 | 모든 신경망 층 |
 | 행렬식 | $\det A$ | 부피 배율 | 정규화 흐름의 야코비안 |
 | 고유값 | $A\mathbf{v}=\lambda\mathbf{v}$ | 변환이 회전시키지 않는 축 | RNN 그래디언트 소실, PCA |
 | 대칭행렬 | $A=Q\Lambda Q^\top$ | 직교 축으로 분해 | 공분산, 헤시안, 커널 |
 | SVD | $A=\sum\sigma_i\mathbf{u}_i\mathbf{v}_i^\top$ | rank-1 조각의 가중합 | PCA, LoRA, 저계수 근사 |
 | 조건수 | $\sigma_{\max}/\sigma_{\min}$ | 증폭 배율 | 다중공선성, 수치 불안정 |
+| 라그랑주 쌍대성 | $d^\star \le p^\star$ | 제약을 벌점으로 바꾸는 환율 | Lasso·Ridge 동치, SVM 쌍대형 |
+| KKT | $\lambda^\star f(\mathbf{x}^\star)=0$ | 활성 제약만 값을 갖는다 | Lasso 희소성, 서포트 벡터 |
 
 이 장은 "공간이 어떻게 변형되는가"를 다뤘다.
 다음 장은 그 위에서 **어느 방향으로 움직여야 손실이 줄어드는가**를 묻는다 — 학습이 일어나는 곳이다.
