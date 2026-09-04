@@ -92,8 +92,10 @@ fig.add_hline(y=p, line=dict(color=viz.YELLOW, dash="dash"),
 
 steps = []
 for i, l in enumerate(lams):
+    # 막대(trace 0)의 카테고리 라벨도 매번 그대로 다시 준다.
+    # None 을 주면 Plotly 가 x 를 지우고 축이 σ1..σp 대신 0,1,2… 로 바뀐다.
     steps.append((f"{l:.1e}", {"y": [shrink[l], dof, [dof[i]]],
-                               "x": [None, lams, [l]]}))
+                               "x": [[f"σ{k+1}" for k in range(p)], lams, [l]]}))
 fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ", active=12, pad_t=55)])
 fig.update_yaxes(title_text="축소 계수 σ²/(σ²+λ)", range=[0, 1.05], row=1, col=1)
 fig.update_xaxes(title_text="λ", type="log", row=1, col=2)

@@ -426,7 +426,10 @@ fig.add_trace(go.Scatter(x=depths, y=[results[n][4] for n in names],
                          line=dict(color=viz.GREEN, width=2.5, dash="dash"),
                          marker=dict(size=10)), row=1, col=2)
 
-steps = [(f"{len(c[1])-1}층", {"y": [y_t, results[c[0]][0], None]}) for c in configs]
+# 오른쪽 패널의 평균 곡선(trace 2)은 고정이지만 y 를 그대로 다시 준다.
+steps = [(f"{len(c[1])-1}층",
+          {"y": [y_t, results[c[0]][0], [results[n][2] for n in names]]})
+         for c in configs]
 fig.update_layout(sliders=[viz.slider(steps, prefix="구조 = ", active=0, pad_t=55)])
 fig.update_xaxes(title_text="x", row=1, col=1)
 fig.update_yaxes(title_text="f(x)", row=1, col=1)

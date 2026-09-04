@@ -267,8 +267,10 @@ fig.add_trace(go.Scatter(x=t0[:, 0], y=t0[:, 1], mode="lines+markers", name="궤
 fig.add_trace(go.Scatter(x=mus, y=finals, mode="lines+markers", name="최종 손실",
                          line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
 
-steps = [(f"{mu:g}", {"x": [None, trajs[mu][:, 0], None],
-                      "y": [None, trajs[mu][:, 1], None]}) for mu in mus]
+# 슬라이더가 움직이는 것은 궤적(trace 1)뿐이다. 등고선과 오른쪽 손실 곡선도
+# 좌표를 매번 그대로 다시 준다 — None 을 주면 Plotly 가 그 데이터를 지운다.
+steps = [(f"{mu:g}", {"x": [gx, trajs[mu][:, 0], mus],
+                      "y": [gy, trajs[mu][:, 1], finals]}) for mu in mus]
 fig.update_layout(sliders=[viz.slider(steps, prefix="모멘텀 μ = ",
                                       active=mus.index(mu0), pad_t=52)])
 fig.update_yaxes(type="log", title_text="최종 손실", row=1, col=2)

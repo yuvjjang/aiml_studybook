@@ -316,7 +316,10 @@ fig.add_trace(go.Bar(x=curves[lam0][0], y=curves[lam0][1],
 gz = np.linspace(-4, 4, 200)
 fig.add_trace(go.Scatter(x=gz, y=np.exp(-gz**2/2)/np.sqrt(2*np.pi), mode="lines",
                          name="표준정규", line=dict(color=viz.YELLOW, width=3)))
-steps = [(f"{lam:g}", {"x": [curves[lam][0], None], "y": [curves[lam][1], None]})
+# 표준정규 곡선(trace 1)의 좌표도 매번 그대로 다시 준다.
+normal_pdf = np.exp(-gz**2/2)/np.sqrt(2*np.pi)
+steps = [(f"{lam:g}", {"x": [curves[lam][0], gz],
+                       "y": [curves[lam][1], normal_pdf]})
          for lam in LAMS]
 fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ",
                                       active=LAMS.index(lam0), pad_t=52)])

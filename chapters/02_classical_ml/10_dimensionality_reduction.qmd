@@ -155,7 +155,8 @@ for k in ks:
 fig = make_subplots(rows=1, cols=3, column_widths=[0.27, 0.27, 0.46],
                     subplot_titles=("원본", "재구성", "설명 분산"))
 k0 = 5
-fig.add_trace(go.Heatmap(z=np.round(D[0].reshape(size,size),3), colorscale="gray",
+orig_z = np.round(D[0].reshape(size,size), 3)      # 슬라이더에서 다시 넘겨야 한다
+fig.add_trace(go.Heatmap(z=orig_z, colorscale="gray",
                          showscale=False), row=1, col=1)
 fig.add_trace(go.Heatmap(z=recon[k0], colorscale="gray", showscale=False),
               row=1, col=2)
@@ -167,7 +168,9 @@ fig.add_trace(go.Scatter(x=np.arange(1, 31), y=cum[:30], mode="lines+markers",
 fig.add_hline(y=0.95, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="95%", row=1, col=3)
 
-steps = [(str(k), {"z": [None, recon[k], None, None]}) for k in ks]
+# 원본 이미지(trace 0)는 고정이지만 z 를 그대로 다시 준다.
+# None 을 주면 Plotly 가 그 데이터를 지워 원본이 사라진다.
+steps = [(str(k), {"z": [orig_z, recon[k], None, None]}) for k in ks]
 fig.update_layout(sliders=[viz.slider(steps, prefix="성분 수 k = ",
                                       active=ks.index(k0), pad_t=55)])
 for c in (1, 2):

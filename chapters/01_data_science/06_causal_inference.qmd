@@ -528,7 +528,8 @@ fig.add_trace(go.Scatter(x=tt, y=series[v0][1], mode="lines+markers", name="대�
                          line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
 fig.add_vline(x=TT//2 - 0.5, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="처치 시작", row=1, col=1)
-steps = [(f"{v:g}", {"y": [series[v][0], series[v][1], None, None]})
+# 오른쪽 패널의 DiD 곡선(trace 2)은 고정이지만 y 를 그대로 다시 준다.
+steps = [(f"{v:g}", {"y": [series[v][0], series[v][1], did_vals]})
          for v in VIOLS]
 fig.add_trace(go.Scatter(x=VIOLS, y=did_vals, mode="lines+markers", showlegend=False,
                          line=dict(color=viz.GREEN, width=2.5),

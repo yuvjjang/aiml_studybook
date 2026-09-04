@@ -108,8 +108,10 @@ fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
 k0 = 10
 fig.add_trace(go.Heatmap(x=gx, y=gy, z=surf[k0], colorscale="RdBu", zmid=0.5,
                          showscale=False, opacity=0.8), row=1, col=1)
+pts = []
 for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
     m = y[tr] == c
+    pts.append((X[tr][m,0], X[tr][m,1]))      # 슬라이더에서 다시 넘겨야 한다
     fig.add_trace(go.Scatter(x=X[tr][m,0], y=X[tr][m,1], mode="markers",
                              name=f"클래스 {c}",
                              marker=dict(size=5, color=col,
@@ -121,9 +123,10 @@ fig.add_trace(go.Scatter(x=ks, y=accs, mode="lines+markers", showlegend=False,
 fig.add_trace(go.Scatter(x=[k0], y=[acc[k0]], mode="markers", showlegend=False,
                          marker=dict(size=12, color=viz.YELLOW)), row=1, col=2)
 
+# 산점도(trace 1, 2)는 고정이지만 좌표를 매번 그대로 다시 준다.
 steps = [(str(k), {"z": [surf[k], None, None, None, None],
-                   "x": [gx, None, None, ks, [k]],
-                   "y": [gy, None, None, accs, [acc[k]]]}) for k in ks]
+                   "x": [gx, pts[0][0], pts[1][0], ks, [k]],
+                   "y": [gy, pts[0][1], pts[1][1], accs, [acc[k]]]}) for k in ks]
 fig.update_layout(sliders=[viz.slider(steps, prefix="트리 수 = ",
                                       active=ks.index(k0), pad_t=55)])
 fig.update_xaxes(title_text="x₁", row=1, col=1)

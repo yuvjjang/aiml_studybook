@@ -311,7 +311,7 @@ steps = []
 for n in ns:
     ys = []
     for sname in sources:
-        ys += [data[(sname, n)], None]
+        ys += [data[(sname, n)], zz]      # zz = 표준정규 곡선의 x, 지우면 안 된다
     steps.append((f"{n}", {"x": ys}))
 
 fig.update_layout(sliders=[viz.slider(steps, prefix="표본 크기 n = ",

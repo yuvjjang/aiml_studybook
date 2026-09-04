@@ -287,8 +287,10 @@ fig.add_trace(go.Scatter(x=[beta_star[0]], y=[beta_star[1]], mode="markers",
 steps_sl = []
 for lr in lrs:
     p = paths[lr]
-    steps_sl.append((f"{lr:g}", {"x": [None, p[:, 0], [beta_star[0]]],
-                                 "y": [None, p[:, 1], [beta_star[1]]]}))
+    # 등고선(trace 0)의 좌표도 매번 그대로 다시 준다.
+    # None 을 주면 Plotly 가 x/y 를 지우고 인덱스로 다시 그려 등고선이 사라진다.
+    steps_sl.append((f"{lr:g}", {"x": [b_g, p[:, 0], [beta_star[0]]],
+                                 "y": [w_g, p[:, 1], [beta_star[1]]]}))
 
 fig.update_layout(sliders=[viz.slider(steps_sl, prefix="학습률 = ",
                                       active=lrs.index(lr0), pad_t=55)],

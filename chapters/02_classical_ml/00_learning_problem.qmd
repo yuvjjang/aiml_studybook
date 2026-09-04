@@ -166,16 +166,19 @@ for i, L in enumerate(losses):
                              line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
 
 r = np.linspace(-4, 4, 400)
-for i, (L, yv) in enumerate([("MSE", r**2),
-                             ("MAE", np.abs(r) * 2),
-                             ("Huber", np.where(np.abs(r) <= 1.5, r**2,
-                                                1.5 * (2*np.abs(r) - 1.5)))]):
+loss_curves = [("MSE", r**2),
+               ("MAE", np.abs(r) * 2),
+               ("Huber", np.where(np.abs(r) <= 1.5, r**2,
+                                  1.5 * (2*np.abs(r) - 1.5)))]
+for i, (L, yv) in enumerate(loss_curves):
     fig.add_trace(go.Scatter(x=r, y=yv, mode="lines", showlegend=False,
                              line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
 
 steps = []
 for oy in outlier_ys:
-    ys = [resid[oy]] + [fits[(oy, L)] for L in losses] + [None, None, None]
+    # 오른쪽 패널의 손실 곡선들은 고정이지만 y 를 그대로 다시 준다.
+    ys = ([resid[oy]] + [fits[(oy, L)] for L in losses]
+          + [yv for _, yv in loss_curves])
     steps.append((f"{oy:g}", {"y": ys}))
 
 fig.update_layout(sliders=[viz.slider(steps, prefix="이상치 y값 = ",

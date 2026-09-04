@@ -250,8 +250,13 @@ fig.add_trace(go.Scatter(x=[mixed[l0][0]], y=[mixed[l0][1]], mode="markers",
 fig.add_trace(go.Scatter(x=alphas, y=[models[a][1] for a in alphas], mode="lines+markers",
                          name="검증 정확도",
                          line=dict(color=viz.YELLOW, width=2.5)), row=1, col=2)
-steps = [(f"{l:g}", {"x": [None, None, [mixed[l][0]], None],
-                     "y": [None, None, [mixed[l][1]], None]}) for l in lams]
+# 슬라이더가 움직이는 것은 혼합 결과(trace 2)뿐이지만, 나머지 트레이스도
+# 좌표를 매번 그대로 다시 줘야 한다 — None 을 주면 Plotly 가 데이터를 지운다.
+keep_x = [X[tr][:, 0], [X[tr][i0, 0], X[tr][j0, 0]], alphas]
+keep_y = [X[tr][:, 1], [X[tr][i0, 1], X[tr][j0, 1]], [models[a][1] for a in alphas]]
+steps = [(f"{l:g}", {"x": [keep_x[0], keep_x[1], [mixed[l][0]], keep_x[2]],
+                     "y": [keep_y[0], keep_y[1], [mixed[l][1]], keep_y[2]]})
+         for l in lams]
 fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ",
                                       active=lams.index(l0), pad_t=52)])
 fig.update_xaxes(title_text="x₁", row=1, col=1)
