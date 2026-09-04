@@ -129,16 +129,105 @@ $$\theta_{t+1} = \theta_t - \eta \, \nabla L(\theta_t)$$
 
 $\eta$ 가 **학습률(learning rate)** 이다. 딥러닝에서 가장 중요한 하이퍼파라미터다.
 
-왜 이 식이 나오는지는 1차 테일러 근사로 보면 명확하다.
-$\theta$ 근처에서
+이 식은 하늘에서 떨어진 것이 아니다. **"어느 방향으로 얼마나"** 라는 두 질문에 각각 답하면 그대로 나온다.
+
+**① 방향: 왜 하필 $-\nabla L$ 인가.**
+단위벡터 $\mathbf{u}$ 방향으로 조금 움직일 때 손실이 변하는 속도는 방향도함수다.
+
+$$D_{\mathbf{u}}L(\theta) = \lim_{h\to 0}\frac{L(\theta + h\mathbf{u}) - L(\theta)}{h} = \nabla L(\theta)^\top \mathbf{u}$$
+
+$\|\mathbf{u}\|=1$ 인 $\mathbf{u}$ 중에서 이 값을 가장 작게(= 가장 가파른 내리막) 만드는 것을 찾는 문제인데,
+코시-슈바르츠 부등식이 답을 바로 준다.
+
+$$\left|\nabla L^\top \mathbf{u}\right| \le \|\nabla L\|\,\|\mathbf{u}\| = \|\nabla L\|$$
+
+등호는 $\mathbf{u}$ 가 $\nabla L$ 과 평행할 때만 성립하므로, 최솟값 $-\|\nabla L\|$ 은
+
+$$\mathbf{u}^\star = -\frac{\nabla L}{\|\nabla L\|}$$
+
+에서만 달성된다. **최급강하 방향은 유일하다** — 이것이 그래디언트의 반대 방향을 쓰는 이유다.
+
+**② 보폭: 왜 $\eta$ 를 곱하는가.**
+방향만으로는 얼마나 갈지 정해지지 않는다. 1차 테일러 근사
 
 $$L(\theta + \Delta) \approx L(\theta) + \nabla L(\theta)^\top \Delta$$
 
-$\|\Delta\|$ 를 고정한 채 이 값을 최소화하는 $\Delta$ 는 $-\nabla L$ 방향이다 (내적이 최소가 되는 방향).
-즉 경사하강은 **국소 선형 근사를 신뢰하고 그 안에서 최선을 택하는** 것이다.
+를 그대로 최소화하면 $\Delta \to -\infty\cdot\nabla L$ 로 발산한다. 선형함수에는 최솟값이 없기 때문이다.
+근사는 $\theta$ 근처에서만 유효하므로, **멀리 가는 것에 벌점**을 붙여야 문제가 닫힌다.
 
-여기서 $\eta$ 의 의미도 나온다. **선형 근사를 얼마나 멀리까지 믿을 것인가.**
-너무 크게 믿으면 근사가 깨진 곳까지 가서 발산한다.
+$$\Delta^\star = \arg\min_{\Delta}\ \left\{ L(\theta) + \nabla L(\theta)^\top\Delta + \frac{1}{2\eta}\|\Delta\|^2 \right\}$$
+
+이제 볼록 이차함수라 미분해서 0으로 놓으면 끝이다.
+
+$$\nabla L(\theta) + \frac{1}{\eta}\Delta = \mathbf{0}
+\quad\Longrightarrow\quad
+\boxed{\ \Delta^\star = -\eta\,\nabla L(\theta)\ }$$
+
+경사하강법 한 스텝이 그대로 나왔다. 이 유도가 알려주는 것은 $\eta$ 의 정체다.
+$\frac{1}{2\eta}\|\Delta\|^2$ 는 **"근사를 얼마나 멀리까지 믿을 것인가"** 를 값으로 매긴 항이고,
+$\eta$ 가 클수록 벌점이 약해져 더 멀리 간다. 경사하강은
+**국소 선형 근사를 신뢰영역 안에서 최적화하는 절차**다.
+
+**③ 그래서 정말 줄어드는가.**
+스텝을 대입하면 근사 수준에서는 감소가 보장된다.
+
+$$L(\theta - \eta\nabla L) \approx L(\theta) - \eta\|\nabla L\|^2 \ \le\ L(\theta)$$
+
+하지만 이것은 근사가 성립하는 범위에서만 참이다. 엄밀하게 말하려면 곡률에 상한이 필요하다.
+그래디언트가 $\beta$-립시츠, 즉 $\|\nabla L(\mathbf{a})-\nabla L(\mathbf{b})\| \le \beta\|\mathbf{a}-\mathbf{b}\|$ 이면
+(이를 $\beta$-평활이라 한다) 다음 부등식이 성립한다.
+
+$$L(\theta + \Delta) \le L(\theta) + \nabla L(\theta)^\top\Delta + \frac{\beta}{2}\|\Delta\|^2$$
+
+$\Delta = -\eta\nabla L$ 을 넣고 정리하면
+
+$$L(\theta_{t+1}) \le L(\theta_t) - \eta\left(1 - \frac{\beta\eta}{2}\right)\|\nabla L(\theta_t)\|^2$$
+
+괄호 안이 양수여야, 즉 $\eta < 2/\beta$ 여야 손실이 실제로 줄어든다.
+**학습률의 상한이 곡률에서 나온다**는 것이 여기서 처음 보인다 —
+$\eta$ 를 그보다 키우면 위 부등식이 감소를 보장하지 못하고, 실제로 발산한다.
+바로 아래 그림이 그 경계를 보여주고, 이어지는 노트에서 이차함수에 대해 정확한 값을 계산한다.
+
+::: {.callout-note}
+## 테일러 근사는 어디서 오는가
+
+경사하강(1차)과 뉴턴법(2차)이 모두 테일러 전개에서 나오므로, 그 전개 자체를 한 번 유도해 둔다.
+
+**1변수.** $a$ 근처에서 $f$ 를 $n$ 차 다항식 $p_n(x)=\sum_{k=0}^{n} c_k (x-a)^k$ 로 흉내 내고 싶다.
+"가장 잘 흉내 낸다"를 **$a$ 에서 $n$ 계 도함수까지 전부 일치시킨다**로 정의하면 계수가 유일하게 결정된다.
+$p_n$ 을 $k$ 번 미분하고 $x=a$ 를 넣으면 $c_k$ 항만 남고 $p_n^{(k)}(a) = k!\,c_k$ 이므로
+
+$$c_k = \frac{f^{(k)}(a)}{k!}
+\quad\Longrightarrow\quad
+f(x) \approx \sum_{k=0}^{n} \frac{f^{(k)}(a)}{k!}(x-a)^k$$
+
+버린 부분의 크기도 알 수 있다(라그랑주 나머지항). 어떤 $\xi$ 가 $a$ 와 $x$ 사이에 존재해
+
+$$R_n(x) = \frac{f^{(n+1)}(\xi)}{(n+1)!}(x-a)^{n+1}$$
+
+$n=1$ 이면 오차가 $(x-a)^2$ 에 비례하고 계수가 **2계 도함수 = 곡률**이다.
+"곡률이 크면 선형 근사가 빨리 깨진다"는 직관이 여기서 정량화된다.
+
+**다변수.** 벡터 입력이라고 새로 유도할 필요가 없다. 직선 하나로 잘라 1변수로 환원하면 된다.
+$\theta$ 에서 $\Delta$ 방향으로 난 직선 위에서만 $f$ 를 보는 함수를 정의한다.
+
+$$g(t) = f(\theta + t\Delta), \qquad t \in \mathbb{R}$$
+
+연쇄법칙으로 미분하면
+
+$$g'(t) = \nabla f(\theta + t\Delta)^\top \Delta,
+\qquad
+g''(t) = \Delta^\top \nabla^2 f(\theta + t\Delta)\,\Delta$$
+
+$g$ 는 평범한 1변수 함수이므로 위에서 유도한 전개를 $a=0$, $x=1$ 에 그대로 적용한다.
+$g(1)=f(\theta+\Delta)$, $g(0)=f(\theta)$ 이므로
+
+$$f(\theta + \Delta) = f(\theta) + \nabla f(\theta)^\top\Delta + \tfrac{1}{2}\Delta^\top H \Delta + O(\|\Delta\|^3)$$
+
+1차에서 끊으면 경사하강, 2차까지 쓰면 뉴턴법이다.
+$\nabla f$ 와 $H$ 가 각각 $g'(0)$ 과 $g''(0)$ 의 자리를 차지한다는 것이
+**그래디언트는 기울기, 헤시안은 곡률**이라는 말의 정확한 의미다.
+:::
 
 ---
 
@@ -195,7 +284,10 @@ steps = []
 for lr in lrs:
     px, py = paths[lr]
     conv = "발산" if len(px) < 61 or abs(px[-1]) > 3 else f"{len(px)-1}스텝"
-    steps.append((f"{lr:g}", {"x": [None, px, [0]], "y": [None, py, [0]]}))
+    # 등고선(trace 0)의 좌표도 매번 그대로 다시 준다.
+    # None 을 주면 Plotly 가 x/y 를 지우고 인덱스(0..119)로 다시 그려
+    # 등고선이 축 범위 밖으로 밀려나 사라진다.
+    steps.append((f"{lr:g}", {"x": [g, px, [0]], "y": [gy, py, [0]]}))
 
 fig.update_layout(
     sliders=[viz.slider(steps, prefix="학습률 η = ", active=lrs.index(lr0), pad_t=55)],
@@ -279,11 +371,118 @@ $$\frac{\partial L}{\partial \mathbf{x}} =
 \left(\frac{\partial \mathbf{y}}{\partial \mathbf{x}}\right)^\top
 \frac{\partial L}{\partial \mathbf{y}}$$
 
-여기서 역전파의 계산 전략이 나온다.
-손실은 **스칼라 하나**이므로, 뒤에서부터 곱해오면 항상 벡터-행렬 곱만 하면 된다.
-앞에서부터 곱하면 거대한 행렬-행렬 곱이 필요하다.
-이것이 forward-mode가 아니라 reverse-mode를 쓰는 이유이고,
-[3.1 역전파](../03_deep_learning/01_backpropagation.qmd)에서 자세히 다룬다.
+**모양부터 고정하자.** $\mathbf{x}\in\mathbb{R}^n$ 이 들어가 $\mathbf{y}\in\mathbb{R}^m$ 이 나오면
+$J \in \mathbb{R}^{m\times n}$ 이다. **행이 출력, 열이 입력**이다.
+
+$$J = \begin{bmatrix}
+\dfrac{\partial y_1}{\partial x_1} & \cdots & \dfrac{\partial y_1}{\partial x_n}\\
+\vdots & \ddots & \vdots\\
+\dfrac{\partial y_m}{\partial x_1} & \cdots & \dfrac{\partial y_m}{\partial x_n}
+\end{bmatrix}$$
+
+$i$ 번째 **행**은 출력 하나 $y_i$ 의 그래디언트이고, $j$ 번째 **열**은 입력 하나 $x_j$ 를 흔들었을 때
+출력 전체가 움직이는 방향이다. $m=1$ 이면 행이 하나뿐이라 $J = \nabla y^\top$ — 그래디언트는 야코비안의 특수한 경우다.
+
+기하학적으로 야코비안은 **그 점에서 함수를 가장 잘 흉내 내는 선형변환**이다.
+$\mathbf{y}(\mathbf{x}+\Delta) \approx \mathbf{y}(\mathbf{x}) + J\Delta$ — [0.0의 선형변환](00_linear_algebra.qmd)이
+비선형 함수의 한 점에 국소적으로 붙어 있는 셈이다.
+
+신경망에서 자주 만나는 두 층의 야코비안은 계산해 두면 계속 쓴다.
+
+| 층 | 함수 | 야코비안 | 크기 |
+|----|------|----------|------|
+| 선형 | $\mathbf{y} = W\mathbf{x}+\mathbf{b}$ | $J = W$ | $m\times n$ 밀집 |
+| 원소별 활성화 | $\mathbf{y} = \sigma(\mathbf{x})$ | $J = \operatorname{diag}(\sigma'(x_1),\dots,\sigma'(x_n))$ | $n\times n$ **대각** |
+| 소프트맥스 | $\mathbf{y} = \operatorname{softmax}(\mathbf{x})$ | $J = \operatorname{diag}(\mathbf{y}) - \mathbf{y}\mathbf{y}^\top$ | $n\times n$ 밀집 |
+
+두 번째가 중요하다. 활성화의 야코비안은 **대각행렬**이므로 실제로 행렬을 만들 이유가 없다.
+$J\mathbf{v}$ 는 그냥 원소별 곱 $\sigma'(\mathbf{x}) \odot \mathbf{v}$ 다.
+프레임워크가 ReLU의 역전파를 "마스크 곱하기" 한 줄로 처리하는 근거가 이것이다.
+
+#### 왜 전치가 붙는가
+
+위 연쇄법칙 식에 $J^\top$ 이 등장하는 이유는 성분으로 쓰면 한 줄이다.
+$\mathbf{v} = \partial L/\partial\mathbf{y}$ 라 두면
+
+$$\frac{\partial L}{\partial x_j} = \sum_{i} \frac{\partial L}{\partial y_i}\frac{\partial y_i}{\partial x_j}
+= \sum_i v_i J_{ij} = (J^\top \mathbf{v})_j$$
+
+합이 **출력 인덱스 $i$ 에 대해** 일어나는데 $J$ 에서 $i$ 는 행 인덱스다.
+행 방향으로 합하려면 전치가 필요하다 — 그게 전부다.
+
+$J^\top\mathbf{v}$ 를 **벡터-야코비안 곱(VJP)** 이라 부르고, 역전파는 처음부터 끝까지 이것만 한다.
+
+::: {.key-concept}
+**야코비안은 만들지 않는다.** 층 $L$ 개를 통과한 전체 야코비안은 곱이다.
+
+$$J_{\text{전체}} = J_L J_{L-1}\cdots J_1$$
+
+이 곱을 **앞에서부터**(forward-mode) 계산하면 행렬-행렬 곱이 쌓여
+중간 결과가 $\mathbb{R}^{m\times n}$ 크기로 실체화된다.
+**뒤에서부터**(reverse-mode) 스칼라 손실의 그래디언트 $\mathbf{v}$ 를 왼쪽에 붙여
+
+$$\mathbf{v}^\top J_L J_{L-1}\cdots J_1$$
+
+로 계산하면 매 단계가 **벡터-행렬 곱**이라 중간 결과가 항상 벡터다.
+$n$ 이 수십억인 파라미터 공간에서 $m=1$(손실은 스칼라)이라는 사실이
+reverse-mode를 유일하게 실행 가능한 선택지로 만든다.
+[3.1 역전파](../03_deep_learning/01_backpropagation.qmd)에서 구현으로 다룬다.
+:::
+
+수치로 확인해 보면 확실해진다. 야코비안을 통째로 만들어 $J^\top\mathbf{v}$ 를 계산한 것과,
+행렬을 한 번도 만들지 않고 뒤에서부터 VJP만 흘린 것이 같은 값을 준다.
+
+```{python}
+#| label: vjp-check
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+n, h, m = 5, 4, 3
+W1, W2 = rng.normal(size=(h, n)), rng.normal(size=(m, h))
+x = rng.normal(size=n)
+v = rng.normal(size=m)                      # 위에서 내려온 ∂L/∂y
+
+f = lambda x: W2 @ np.tanh(W1 @ x)
+
+# ① 야코비안을 통째로 만들어 Jᵀv  (수치미분, m×n 행렬을 실체화)
+eps = 1e-6
+J = np.stack([(f(x + eps * e) - f(x - eps * e)) / (2 * eps)
+              for e in np.eye(n)], axis=1)   # (m, n)
+jt_v = J.T @ v
+
+# ② VJP 만으로: 행렬은 한 번도 만들지 않는다
+a = np.tanh(W1 @ x)
+v1 = W2.T @ v                                # 선형층의 VJP
+v2 = (1 - a ** 2) * v1                       # 활성화의 VJP = 대각 원소별 곱
+vjp = W1.T @ v2
+
+print(f"J 모양            {J.shape}   ← 실체화한 행렬")
+print(f"Jᵀv               {np.round(jt_v, 6)}")
+print(f"VJP (행렬 없음)    {np.round(vjp, 6)}")
+print(f"최대 오차          {np.abs(jt_v - vjp).max():.2e}")
+```
+
+두 번째 방식은 $(m,n)$ 행렬을 만들지 않고도 같은 답을 얻는다.
+활성화 층에서 대각 야코비안이 `(1 - a**2) * v1` 이라는 원소별 곱 한 줄로 끝나는 것도 확인된다.
+
+::: {.callout-note}
+## 야코비안의 특이값이 학습 안정성을 정한다
+
+$J_{\text{전체}}$ 가 야코비안들의 **곱**이라는 사실에는 대가가 따른다.
+[0.0의 SVD](00_linear_algebra.qmd) 관점에서 보면 곱해질 때 특이값도 대체로 곱해진다.
+층마다 특이값이 평균적으로 $s$ 라면 $L$ 층 뒤에는 $s^L$ 이다.
+
+- $s < 1$ → 지수적으로 0 → **그래디언트 소실**
+- $s > 1$ → 지수적으로 폭발 → **그래디언트 폭발**
+
+$s \approx 1$, 즉 야코비안을 직교행렬에 가깝게 유지하는 것이 목표가 된다.
+직교 초기화, 잔차 연결($J = I + \cdots$ 라 특이값이 1 근처에서 시작한다),
+[정규화 층](../03_deep_learning/05_normalization.qmd)이 모두 이 곱을 1 근처로 붙들어 두려는 장치다.
+[4.2 RNN](../04_architectures/02_rnn.qmd)에서는 같은 야코비안이 시간축으로 반복 곱해져 문제가 더 날카롭게 나타난다.
+:::
 
 ---
 
@@ -291,14 +490,105 @@ $$\frac{\partial L}{\partial \mathbf{x}} =
 
 그래디언트가 1차 정보라면, 2차 정보는 **곡률**이다.
 
-$$H_{ij} = \frac{\partial^2 f}{\partial x_i \partial x_j}$$
+**헤시안은 그래디언트의 야코비안이다.** 방금 본 야코비안을 $\nabla f$ 에 적용한 것,
+그뿐이다. $\nabla f : \mathbb{R}^n \to \mathbb{R}^n$ 이므로 그 야코비안은 $n\times n$ 행렬이 된다.
 
-2차 테일러 전개는
+$$H = \frac{\partial(\nabla f)}{\partial \theta}, \qquad
+H_{ij} = \frac{\partial^2 f}{\partial \theta_i \partial \theta_j}$$
+
+말로 풀면 $H_{ij}$ 는 **"$\theta_j$ 를 흔들었을 때 $\theta_i$ 방향의 기울기가 얼마나 변하는가"** 다.
+그래디언트가 "지금 어느 쪽이 내리막인가"를 말한다면,
+헤시안은 **"한 걸음 옮기면 그 내리막이 얼마나 달라지는가"** 를 말한다.
+값이 아니라 값의 변화율, 즉 **곡률**이다.
+
+$$H = \begin{bmatrix}
+\dfrac{\partial^2 f}{\partial \theta_1^2} & \cdots & \dfrac{\partial^2 f}{\partial \theta_1 \partial \theta_n}\\
+\vdots & \ddots & \vdots\\
+\dfrac{\partial^2 f}{\partial \theta_n \partial \theta_1} & \cdots & \dfrac{\partial^2 f}{\partial \theta_n^2}
+\end{bmatrix}$$
+
+대각 원소는 축 하나의 곡률이고, **비대각 원소는 축들의 얽힘**이다.
+$H_{12}\ne 0$ 이면 $\theta_1$ 을 바꾸는 것이 $\theta_2$ 의 최적값까지 바꾼다는 뜻이라,
+한 번에 한 축씩 고치는 전략이 통하지 않는다.
+
+$H$ 가 **대칭**인 것은 우연이 아니다. 2계 편도함수가 연속이면 미분 순서를 바꿔도 같다는
+슈바르츠 정리 때문이다($\partial_i\partial_j f = \partial_j\partial_i f$).
+그래서 [0.0에서 본 스펙트럼 정리](00_linear_algebra.qmd)가 적용되고,
+고유값은 실수, 고유벡터는 직교 기저가 된다.
+
+### 방향 하나의 곡률 읽기
+
+임의의 단위벡터 $\mathbf{u}$ 방향으로 잘라 본 1차원 함수 $g(t)=f(\theta+t\mathbf{u})$ 의 곡률은
+앞 절 테일러 노트에서 이미 계산했다.
+
+$$g''(0) = \mathbf{u}^\top H \mathbf{u}$$
+
+이 값이 **그 방향의 곡률**이다. $\mathbf{u}$ 를 모든 방향으로 돌려보면
+최댓값과 최솟값은 각각 $\lambda_{\max}$, $\lambda_{\min}$ 이고 그때의 $\mathbf{u}$ 는 대응하는 고유벡터다
+(레일리 몫의 성질). 정리하면
+
+- 고유벡터 = 곡률의 **주축**
+- 고유값 = 그 축의 **곡률 크기**
+- 등고선이 그리는 타원의 축 = 고유벡터, 축 길이 비 = $\sqrt{\lambda_{\max}/\lambda_{\min}}$
+
+이 장의 협곡 함수로 직접 확인하면 앞의 그림과 정확히 맞물린다.
+
+```{python}
+#| label: hessian-canyon
+#| code-fold: false
+
+import numpy as np
+
+# G0.1.2 와 같은 함수: f = 0.5x² + 10y²
+#   ∇f = (x, 20y)  →  H = [[1, 0], [0, 20]]  (상수 헤시안)
+H = np.array([[1.0, 0.0],
+              [0.0, 20.0]])
+
+w, V = np.linalg.eigh(H)
+print(f"고유값        {w}          ← 각 축의 곡률")
+print(f"고유벡터(열)\n{V}")
+print(f"조건수 κ      {w.max() / w.min():.1f}")
+print(f"학습률 상한   η < 2/λmax = {2 / w.max():.3f}")
+
+# 방향을 돌려가며 uᵀHu 가 정말 두 고유값 사이에 갇히는지 본다
+th = np.linspace(0, np.pi, 7)
+for t in th:
+    u = np.array([np.cos(t), np.sin(t)])
+    print(f"  θ={np.degrees(t):5.1f}°  uᵀHu = {u @ H @ u:6.2f}")
+```
+
+$\eta < 2/20 = 0.1$ 이라는 발산 경계가 헤시안의 최대 고유값에서 그대로 나온다.
+위 그림에서 $\eta \ge 0.1$ 일 때 발산하던 것이 이 수다.
+그리고 조건수 $\kappa = 20$ 이 지그재그의 원인이다 —
+가장 가파른 축이 학습률의 상한을 정하는데, 수렴 속도는 가장 완만한 축이 결정하기 때문이다.
+
+::: {.callout-note}
+## 헤시안은 왜 코드에 잘 안 보이는가
+
+파라미터가 $n$ 개면 헤시안은 $n^2$ 개다.
+$n=10^9$ 인 모델에서 $H$ 는 $10^{18}$ 개 원소 — 저장도 계산도 불가능하다.
+그래서 실무에서 $H$ 를 통째로 만드는 일은 없다.
+
+대신 **헤시안-벡터 곱(HVP)** 은 행렬 없이 계산할 수 있다.
+
+$$H\mathbf{v} = \nabla\!\left(\nabla f(\theta)^\top \mathbf{v}\right)$$
+
+$\nabla f^\top\mathbf{v}$ 는 스칼라이므로, 그것을 한 번 더 미분하면 된다.
+비용은 그래디언트 한 번의 몇 배 수준이고 메모리는 $O(n)$ 이다.
+곡률 정보가 필요한 실무 기법 — 켤레기울기법, 손실 지형의 $\lambda_{\max}$ 추정,
+샤프니스 측정 — 이 전부 HVP 위에 서 있다.
+
+왜 2차 방법을 그대로 쓰지 않는지는 [아래 절](#왜-딥러닝은-2차-방법을-안-쓰는가)에서 이어서 다룬다.
+:::
+
+### 고유값의 부호가 임계점의 정체를 알려준다
+
+2차 테일러 전개
 
 $$f(\theta + \Delta) \approx f(\theta) + \nabla f^\top \Delta + \tfrac{1}{2}\Delta^\top H \Delta$$
 
-$H$ 는 대칭행렬이므로 [0.0에서 본 스펙트럼 정리](00_linear_algebra.qmd)가 적용된다.
-고유값의 부호가 임계점($\nabla f = 0$)의 정체를 알려준다.
+에서 임계점($\nabla f = 0$)이면 1차 항이 사라지고 $\tfrac12\Delta^\top H\Delta$ 만 남는다.
+그러니 그 점의 정체는 온전히 $H$ 가 정한다.
 
 | 헤시안 고유값 | 임계점 | 고차원에서 |
 |---------------|--------|------------|
@@ -370,7 +660,77 @@ fig.show()
 - 실제로 도달하는 국소 최소들은 손실값이 서로 비슷하다는 실증 결과가 많다.
 - 문제는 "갇히는 것"보다 **평평한 영역(plateau)에서 느려지는 것**이다.
 
-그래서 실무의 관심은 국소 최소 탈출이 아니라 학습률 스케줄과 모멘텀에 있다.
+세 줄 각각에 근거가 있다. 아래에서 하나씩 푼다.
+:::
+
+**① 왜 안장점이 압도적인가.**
+임계점에서 헤시안 고유값 $n$ 개의 부호를 생각해 보자.
+국소 최소이려면 $n$ 개가 **전부** 양수여야 한다. 부호가 독립적으로 반반이라고 거칠게 가정하면
+그 확률은 $2^{-n}$ 이다. $n$ 이 백만만 되어도 사실상 0이다.
+반대로 **하나라도** 음수면 그 방향으로 내리막이 열려 있다 — 안장점이다.
+차원이 높아질수록 "모든 방향에서 동시에 올라간다"는 조건이 가혹해진다는 것이 요점이다.
+
+::: {.callout-warning}
+## 이 논증이 증명은 아니다
+
+$2^{-n}$ 은 **직관을 주는 휴리스틱이지 정리가 아니다.**
+실제 손실 헤시안의 고유값은 서로 독립도 아니고 0을 중심으로 대칭이지도 않다 —
+0 근처에 거대한 덩어리가 있고 양수 쪽 꼬리가 길다는 것이 반복해서 관찰된다.
+엄밀한 형태의 결과들은 랜덤 행렬 이론이나 스핀글래스 모형이라는
+**강한 가정 아래**에서 나온 것이라 실제 신경망에 그대로 옮길 수 없다.
+"안장점이 훨씬 흔하다"는 결론 자체는 여러 실증 연구와 일치하지만,
+근거는 증명이 아니라 정황이라는 점은 알고 있어야 한다.
+:::
+
+**② 왜 나쁜 국소 최소를 잘 만나지 않는가.**
+랜덤 지형 이론이 주는 그림 하나가 특히 쓸모 있다.
+임계점의 **인덱스**(전체 고유값 중 음수의 비율)와 그 지점의 손실값 사이에 강한 상관이 있다는 것이다.
+
+| 인덱스 (음의 고유값 비율) | 임계점의 성격 | 손실값 |
+|---------------------------|---------------|--------|
+| 높다 | 탈출구가 많은 안장점 | 높다 |
+| 중간 | 안장점 | 중간 |
+| 0에 가깝다 | 국소 최소에 가깝다 | **낮다** |
+
+즉 **손실이 높은 곳의 임계점은 거의 다 안장점**이고, 진짜 국소 최소는 손실이 낮은 층에 몰려 있다.
+경사하강이 손실을 낮추며 내려가는 동안 마주치는 임계점은 대부분 통과 가능한 안장점이고,
+마침내 멈추는 곳은 이미 손실이 충분히 낮은 지점이라는 뜻이다.
+"도달한 국소 최소들의 손실이 서로 비슷하다"는 관찰과 앞뒤가 맞는다.
+
+**③ 안장점은 어떻게 빠져나가는가.**
+음의 곡률 방향 $\mathbf{u}$ (고유값 $\lambda < 0$)를 보자.
+그 방향의 성분에 대해 경사하강 한 스텝은 곱셈으로 작용한다.
+
+$$u_{t+1} = (1 - \eta\lambda)\,u_t, \qquad \lambda < 0 \ \Rightarrow\ 1 - \eta\lambda > 1$$
+
+배율이 1보다 크므로 **이탈이 지수적으로 빨라진다.**
+조건은 하나뿐이다 — 그 방향으로 성분이 조금이라도 있어야 한다.
+
+여기서 미니배치 잡음의 역할이 분명해진다.
+완전한 배치 경사하강은 이론적으로 안장점에 정확히 수렴할 수 있지만,
+그런 일이 벌어지는 초기값의 집합은 측도 0이다.
+확률적 잡음은 그 집합에서 벗어나게 해 "조금이라도 성분이 있는" 상태를 사실상 보장한다.
+
+**④ 그래서 진짜 문제는 평평함이다.**
+위 배율 $(1-\eta\lambda)$ 는 $\lambda$ 가 0에 가까우면 1에 가깝다.
+음의 곡률이 **엄격하게** 음수인 안장점(strict saddle)에서는 금방 빠져나오지만,
+고유값이 0 근처에 몰린 영역에서는 밀어내는 힘 자체가 없다.
+실제 신경망 헤시안의 고유값 대부분이 0 근처라는 관찰이 정확히 이 상황이고,
+학습이 정체될 때 벌어지는 일이 "갇힘"이 아니라 **"표류"** 인 이유다.
+
+::: {.key-concept}
+그래서 실무의 관심은 국소 최소 탈출이 아니라 **평평한 구간을 빠르게 통과하는 것**에 있다.
+모멘텀은 같은 방향의 작은 힘을 누적하고, 적응적 학습률은 작아진 그래디언트를 되키운다
+([3.4 옵티마이저](../03_deep_learning/04_optimizers.qmd)).
+
+다만 "어느 최소에 도달하든 상관없다"는 뜻은 아니다.
+손실값이 비슷해도 **최소의 평평한 정도**는 다를 수 있고,
+그것이 일반화 성능과 연결된다는 논의가 이어진다
+([3.9 학습 실전](../03_deep_learning/09_training_practice.qmd)).
+
+특수한 경우에는 확실한 보장도 있다 —
+깊은 **선형** 신경망은 모든 국소 최소가 전역 최소임이 증명되어 있다.
+다만 이 결과가 비선형망으로 일반화되지는 않는다.
 :::
 
 ---
