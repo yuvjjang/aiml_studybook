@@ -227,68 +227,62 @@ $$\text{plain:}\quad h_{l+1} = F(h_l)
 잔차 블록은 $F$ 에게 **출력 전체가 아니라 "얼마나 바꿀지"** 를 학습시킨다.
 아무것도 바꾸지 않는 것이 최선이면 $F \to 0$ 이면 되고,
 $F=0$ 은 가중치를 0으로 보내면 되므로 **쉽다.**
-
 plain 망에서 항등을 만들려면 $F$ 가 정확히 항등 함수여야 하는데, 그건 어렵다.
 
+### 역전파 쪽에서는 고속도로가 생긴다
+
+표현력 이야기만으로는 절반이다. 나머지 절반은 **그래디언트**다.
+블록의 야코비안을 보면 항등행렬이 통째로 남는다.
+
+$$\frac{\partial h_{l+1}}{\partial h_l} = I + \frac{\partial F}{\partial h_l}$$
+
+$L$ 개 블록을 거슬러 오르면 이 항들이 곱해지는데, 전개하면 **항등 경로가 살아남는다.**
+
+$$\frac{\partial h_L}{\partial h_0} = \prod_{l}\Big(I + F'_l\Big)
+= \underbrace{I}_{\text{직통}} + \sum_l F'_l + \sum_{l<m}F'_m F'_l + \cdots$$
+
+첫 항이 결정적이다. $F'_l$ 이 전부 0에 가까워도 **$I$ 는 남는다** —
+[3.2 에서 본 $0.25^L$ 식의 붕괴](../03_deep_learning/02_activations.qmd)가 원천적으로 막힌다.
+plain 망에서는 이 자리에 $\prod F'_l$ 만 있어 하나라도 작으면 전부 죽는다.
+
 ```{python}
-#| label: identity-difficulty
+#| label: residual-highway
 #| code-fold: false
 
-import sys; sys.path.append("../..")
 import numpy as np
-from src import nn
 
 rng = np.random.default_rng(0)
-D = 32
-X_probe = rng.normal(0, 1, (256, D))
-X_probe = np.maximum(X_probe, 0)                  # ReLU 출력처럼 비음수
 
-def fit_identity(residual, steps=3000, lr=0.01, seed=0):
-    """블록 하나가 '입력을 그대로 내보내기'를 얼마나 잘 배우는가."""
-    r = np.random.default_rng(seed)
-    W = nn.init_weights(D, D, "he", r)
-    b = np.zeros(D)
-    opt = nn.Optimizer("adam", lr=lr)
-    P = {"W": W, "b": b}
-    for _ in range(steps):
-        z = X_probe @ W + b
-        a = np.maximum(z, 0)
-        out = X_probe + a if residual else a
-        diff = out - X_probe
-        da = 2*diff/X_probe.size
-        dz = da * (z > 0)
-        opt.step(P, {"W": X_probe.T @ dz, "b": dz.sum(0)})
-    z = X_probe @ W + b
-    a = np.maximum(z, 0)
-    out = X_probe + a if residual else a
-    return float(np.mean((out - X_probe)**2)), float(np.linalg.norm(W))
+n, depth = 64, 50
 
-for residual, name in [(False, "plain  F(x) = x 를 배워야 함"),
-                       (True,  "residual  F(x) = 0 을 배워야 함")]:
-    mse, wn = fit_identity(residual)
-    print(f"{name:<32} 최종 MSE {mse:.3e}   ‖W‖ {wn:.3f}")
+def grad_norm(residual, scale):
+    # 깊이 depth 를 거슬러 온 그래디언트의 크기
+    g = rng.normal(0, 1, (128, n))
+    for _ in range(depth):
+        Fp = rng.normal(0, scale, (n, n))          # 블록의 야코비안 F'
+        g = g @ (np.eye(n) + Fp).T if residual else g @ Fp.T
+    return float(np.abs(g).mean())
+
+print(f"{'F′ 스케일':>10}{'plain':>14}{'residual':>14}")
+for scale in [0.05, 0.1, 0.2]:
+    s = scale / np.sqrt(n)
+    print(f"{scale:>10.2f}{grad_norm(False, s):>14.3e}{grad_norm(True, s):>14.3e}")
+
 print()
-print("입력이 비음수라 plain 도 ReLU 로 항등을 표현할 수는 있다.")
-print("그런데 **찾아가는 난이도가 다르다.** residual 은 W→0 으로 가면 끝이고,")
-print("plain 은 W 가 정확히 단위행렬이어야 한다 — 32×32 = 1,024 개를 정확히 맞춰야 한다.")
-print()
-print("층이 하나면 둘 다 되지만, 이것이 수십 층 곱해지면 차이가 벌어진다.")
-print("위 성능 저하 실험이 바로 그 누적 효과다.")
+print("plain 은 F′ 이 조금만 작아도 50층에서 완전히 사라진다.")
+print("residual 은 I 경로 덕분에 같은 조건에서 크기가 유지된다.")
 ```
 
 ::: {.key-concept}
-**잔차 연결의 두 가지 효과**
+전개식의 둘째 항 이후를 보면 다른 해석도 나온다.
+$\prod(I+F'_l)$ 을 펼치면 **길이가 서로 다른 $2^L$ 개의 경로**의 합이다.
+잔차망을 "깊이 $L$ 의 단일 망"이 아니라 **얕은 망들의 앙상블**로 읽는 관점이
+여기서 나오고, 블록 하나를 제거해도 성능이 크게 떨어지지 않는다는
+실험 결과와 맞아떨어진다.
 
-1. **최적화** — 항등이 기본값이 되어 "안 하는 것"이 쉬워진다
-2. **그래디언트 흐름** — $\partial h_{l+1}/\partial h_l = I + \partial F/\partial h_l$
-   에서 $I$ 가 항상 살아 있다 ([3.7](../03_deep_learning/07_initialization.qmd))
-
-[3.7](../03_deep_learning/07_initialization.qmd)에서 측정했듯,
-**He 초기화만 잘 해도 그래디언트 소실은 거의 해결된다.**
-그러니 2번만으로는 ResNet의 성공을 설명할 수 없다.
-
-현재의 이해는 1번과, 그리고 **앙상블 관점** — 잔차 망은 서로 다른 길이의
-경로 $2^L$ 개의 암묵적 앙상블처럼 동작한다(Veit et al., 2016) — 쪽에 무게가 있다.
+그리고 이 구조가 [0.1 에서 본 야코비안 곱](../00_foundations/01_calculus_optimization.qmd)의
+특이값을 1 근처로 붙들어 둔다 — $I$ 를 더하면 특이값이 1 주변에서 시작한다.
+Transformer 가 100층을 넘길 수 있는 것도 같은 장치 덕분이다.
 :::
 
 ---
