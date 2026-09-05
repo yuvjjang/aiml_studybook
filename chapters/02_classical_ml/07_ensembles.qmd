@@ -21,13 +21,23 @@ jupyter: ai-ml-study
 ## 왜 평균이 통하는가
 
 [0.2 확률](../00_foundations/02_probability.qmd)의 분산 공식이 전부 설명한다.
+같은 분산 $\sigma^2$ 을 갖고 서로의 상관이 $\rho$ 인 추정기 $M$ 개를 평균 내면,
+[0.2 에서 유도한 $\operatorname{Var}(X+Y)=\operatorname{Var}X+\operatorname{Var}Y+2\operatorname{Cov}$](../00_foundations/02_probability.qmd)를
+$M$ 개로 확장해 그대로 쓸 수 있다.
 
-같은 분산 $\sigma^2$ 을 갖는 추정기 $M$ 개를 평균 내면
-
-$$\mathrm{Var}\left(\frac{1}{M}\sum_i \hat{f}_i\right)
+$$\operatorname{Var}\!\left(\frac{1}{M}\sum_i \hat{f}_i\right)
+= \frac{1}{M^2}\Big(\underbrace{M\sigma^2}_{\text{대각}} + \underbrace{M(M-1)\rho\sigma^2}_{\text{비대각}}\Big)
 = \frac{\sigma^2}{M} + \frac{M-1}{M}\rho\sigma^2$$
 
-$\rho$ 는 모델 간 상관이다. 두 항이 각각 말해주는 것이 있다.
+$M\times M$ 공분산 행렬에서 대각 원소가 $M$ 개, 비대각이 $M(M-1)$ 개라는 것이 전부다.
+$M\to\infty$ 로 보내면 남는 것이 분명해진다.
+
+$$\lim_{M\to\infty}\operatorname{Var} = \rho\,\sigma^2$$
+
+**모델을 아무리 늘려도 $\rho\sigma^2$ 아래로는 내려가지 않는다.**
+첫 항은 공짜로 줄지만 둘째 항은 상관을 낮춰야만 줄어든다.
+
+두 항이 각각 말해주는 것이 있다.
 
 ::: {.key-concept}
 - **$\rho = 0$ (완전 무상관)**: 분산이 $\sigma^2/M$ 로 줄어든다 — 모델을 늘린 만큼 이득.
@@ -52,6 +62,62 @@ $\rho$ 는 모델 간 상관이다. 두 항이 각각 말해주는 것이 있다
 3. $M$ 번 반복해 평균(회귀) 또는 투표(분류)
 
 복원추출이라 각 부트스트랩 표본은 원 데이터의 약 63%만 포함한다.
+
+### 63% 는 어디서 나오는가
+
+복원추출로 $n$ 개를 뽑을 때, 특정 샘플 하나가 **한 번도 뽑히지 않을** 확률은
+
+$$\left(1-\frac{1}{n}\right)^n \;\xrightarrow[\;n\to\infty\;]{}\; e^{-1} \approx 0.368$$
+
+($\lim_{n\to\infty}(1-1/n)^n = e^{-1}$ 은 지수함수의 정의다.)
+따라서 포함될 확률이 $1-e^{-1} \approx 0.632$ — **약 63%** 다.
+$n$ 이 20만 넘어도 이 값에 거의 도달한다.
+
+남는 37%가 그냥 버려지는 것이 아니다. 각 트리마다 **그 트리가 보지 못한 샘플**이
+있으므로, 그것으로 성능을 재면 별도의 검증셋 없이 일반화 오차를 추정할 수 있다 —
+**OOB(out-of-bag) 추정**이다.
+
+$$\hat{R}_{\text{OOB}} = \frac{1}{n}\sum_{i=1}^{n} \ell\Big(y_i,\;
+\operatorname{agg}\big\{\hat{f}_m(\mathbf{x}_i) : i \notin \text{표본}_m\big\}\Big)$$
+
+각 샘플은 평균적으로 트리의 37%에서 OOB 이므로, 트리가 충분히 많으면
+샘플마다 수십 개의 예측을 모아 평균 낼 수 있다.
+교차검증과 비슷한 추정을 **추가 학습 없이** 얻는 셈이다.
+
+```{python}
+#| label: oob-fraction
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+print(f"{'n':>8}{'이론 포함률':>14}{'실측 포함률':>14}{'OOB 비율':>12}")
+for n in [10, 50, 200, 1000, 10000]:
+    idx = rng.integers(0, n, size=(400, n))          # 400번의 부트스트랩
+    incl = np.mean([len(np.unique(r)) / n for r in idx])
+    theory = 1 - (1 - 1/n) ** n
+    print(f"{n:>8}{theory:>14.4f}{incl:>14.4f}{1-incl:>12.4f}")
+
+print(f"\n극한값 1 - 1/e = {1 - np.exp(-1):.4f}")
+print("n=50 만 되어도 이론값에 거의 붙는다.")
+```
+
+::: {.callout-warning}
+## OOB 추정을 믿을 수 있는 조건
+
+OOB 는 편리하지만 교차검증의 완전한 대체물은 아니다.
+
+- **트리 수가 적으면 낙관적이지 않고 오히려 비관적**이다.
+  샘플마다 소수의 트리로만 예측하므로 실제 앙상블보다 약한 모델을 평가하게 된다.
+- **샘플이 독립이어야 한다.** 같은 사용자·시계열처럼 그룹 구조가 있으면
+  부트스트랩이 그룹을 쪼개므로 OOB 가 낙관적으로 나온다
+  ([2.0 의 i.i.d. 가정](00_learning_problem.qmd)이 여기서도 조건이다).
+- **하이퍼파라미터 선택에 반복 사용하면 낙관적이 된다** — 검증셋과 같은 문제다.
+
+부스팅에는 애초에 적용되지 않는다. 부트스트랩을 쓰지 않기 때문이다
+(확률적 부스팅에서 부분표집을 쓰면 유사한 추정이 가능하지만 성질이 다르다).
+:::
 
 ```{python}
 #| label: oob-math
