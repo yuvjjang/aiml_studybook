@@ -156,14 +156,80 @@ viz.fig_defaults(fig, height=390,
 fig.show()
 ```
 
+### 오목성이 이득을 보장한다
+
+불순도 함수 $I$ 가 **엄격히 오목**하면 어떤 분할이든 이득이 음수가 되지 않는다.
+이유는 [0.4 에서 쓴 젠슨 부등식](../00_foundations/04_information_theory.qmd)이다.
+
+부모의 클래스 분포 $\mathbf{p}$ 는 자식들의 분포를 크기로 가중평균한 것이다.
+
+$$\mathbf{p} = \frac{n_L}{n}\mathbf{p}_L + \frac{n_R}{n}\mathbf{p}_R$$
+
+$I$ 가 오목이므로 "가중평균의 함수값 $\ge$ 함수값의 가중평균"이 성립한다.
+
+$$I(\mathbf{p}) \;\ge\; \frac{n_L}{n}I(\mathbf{p}_L) + \frac{n_R}{n}I(\mathbf{p}_R)
+\quad\Longrightarrow\quad
+\text{Gain} \ge 0$$
+
+**엄격히** 오목이면 등호는 $\mathbf{p}_L = \mathbf{p}_R$ 일 때만 — 즉 분할이 분포를 전혀 바꾸지 못할 때만 —
+성립한다. 그래서 지니와 엔트로피는 조금이라도 분포를 가르는 분할이면 **반드시 양의 이득**을 준다.
+
 ::: {.callout-note}
 ## 왜 오분류율을 분할 기준으로 쓰지 않는가
 
-오분류율(초록)은 **직선 두 개**라 볼록성이 약하다.
-그래서 분할해도 이득이 0으로 계산되는 경우가 생겨, 유용한 분할을 놓친다.
+오분류율 $I = 1-\max_k p_k$ 는 오목이지만 **엄격하지 않다** — 조각별 선형이다.
+그래서 분포가 확실히 갈리는 분할인데도 이득이 정확히 0으로 계산되는 경우가 생긴다.
 
-지니와 엔트로피는 **엄격히 오목**해서 불균등한 분할에도 항상 이득을 준다.
-실무에서 둘의 차이는 거의 없고, 지니가 로그 계산이 없어 조금 빠르다.
+```{python}
+#| label: impurity-comparison
+#| code-fold: false
+
+import numpy as np
+
+def gini(c):
+    p = np.array(c, float); p = p / p.sum()
+    return 1 - np.sum(p ** 2)
+
+def entropy(c):
+    p = np.array(c, float); p = p / p.sum()
+    p = p[p > 0]
+    return -np.sum(p * np.log2(p))
+
+def misclass(c):
+    p = np.array(c, float); p = p / p.sum()
+    return 1 - p.max()
+
+def gain(parent, left, right, I):
+    n = sum(parent)
+    return I(parent) - sum(left)/n * I(left) - sum(right)/n * I(right)
+
+parent = (400, 400)                      # 클래스 A 400, B 400
+splits = {
+    "분할 ①  (300,100) | (100,300)": ((300, 100), (100, 300)),
+    "분할 ②  (200,400) | (200,  0)": ((200, 400), (200, 0)),
+}
+
+print(f"부모: A {parent[0]}, B {parent[1]}\n")
+print(f"{'':<32}{'오분류율 이득':>14}{'지니 이득':>12}{'엔트로피 이득':>15}")
+for name, (L, R) in splits.items():
+    print(f"{name:<32}{gain(parent, L, R, misclass):>14.4f}"
+          f"{gain(parent, L, R, gini):>12.4f}"
+          f"{gain(parent, L, R, entropy):>15.4f}")
+
+print("\n오분류율은 두 분할을 '동점'으로 본다 — 둘 다 이득 0.25.")
+print("그런데 분할 ② 는 오른쪽 자식을 완전히 순수하게 만든다(B 가 0개).")
+print("지니와 엔트로피는 ② 를 더 높게 평가한다 — 순수한 잎을 만드는 쪽이")
+print("이후 분할에서 유리하기 때문이고, 이것이 엄격 오목성의 효과다.")
+```
+
+실무에서 지니와 엔트로피의 차이는 거의 없고, 지니가 로그 계산이 없어 조금 빠르다.
+:::
+
+::: {.key-concept}
+**회귀 트리의 잎이 평균인 것도 같은 이야기다.**
+분산을 불순도로 쓴다는 것은 제곱손실을 쓴다는 뜻이고,
+[2.0 에서 유도했듯](00_learning_problem.qmd) 제곱손실을 최소화하는 상수는 평균이다.
+불순도를 MAE 로 바꾸면 잎의 예측값이 **중앙값**이 된다 — 이상치에 강건한 트리가 된다.
 :::
 
 ---
