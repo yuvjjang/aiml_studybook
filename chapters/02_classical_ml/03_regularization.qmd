@@ -47,6 +47,89 @@ $$\hat{\mathbf{y}}_{\text{OLS}} = \sum_j \mathbf{u}_j\mathbf{u}_j^\top\mathbf{y}
 모든 계수를 균일하게 줄이는 게 아니다.
 :::
 
+### 왜 편향을 받아들이는 것이 이득인가
+
+[2.2 의 가우스-마르코프](02_linear_regression.qmd)는 OLS 가 **불편 추정량 중** 최선이라고 했다.
+정규화는 그 조건을 깨고 들어온다 — 편향을 조금 받고 분산을 많이 줄인다.
+이 거래가 **언제나 이득이 되는 구간이 존재한다**는 것을 직교 설계에서 정확히 보일 수 있다.
+
+$X^\top X = I$ 로 두면 Ridge 해가 OLS 해의 단순 축소가 된다.
+
+$$\hat{\boldsymbol\beta}_{\text{ridge}} = \frac{1}{1+\lambda}\,\hat{\boldsymbol\beta}_{\text{OLS}}$$
+
+$\hat{\boldsymbol\beta}_{\text{OLS}}$ 는 평균 $\boldsymbol\beta$, 공분산 $\sigma^2 I$ 이므로
+[2.1 의 분해](01_bias_variance.qmd)를 그대로 적용하면 두 항이 나온다.
+
+$$\underbrace{\left\|\mathbb{E}[\hat{\boldsymbol\beta}_{\text{ridge}}]-\boldsymbol\beta\right\|^2}_{\text{편향}^2}
+= \left(\frac{\lambda}{1+\lambda}\right)^2\|\boldsymbol\beta\|^2,
+\qquad
+\underbrace{\operatorname{tr}\operatorname{Var}(\hat{\boldsymbol\beta}_{\text{ridge}})}_{\text{분산}}
+= \frac{\sigma^2 p}{(1+\lambda)^2}$$
+
+$\lambda$ 가 커지면 앞은 늘고 뒤는 준다. 합이 총 MSE 다.
+
+$$\text{MSE}(\lambda) = \frac{\lambda^2\|\boldsymbol\beta\|^2 + \sigma^2 p}{(1+\lambda)^2}$$
+
+미분하면 결정적인 사실이 나온다.
+
+$$\frac{d\,\text{MSE}}{d\lambda} = \frac{2\big(\lambda\|\boldsymbol\beta\|^2 - \sigma^2 p\big)}{(1+\lambda)^3}
+\qquad\Longrightarrow\qquad
+\left.\frac{d\,\text{MSE}}{d\lambda}\right|_{\lambda=0} = -2\sigma^2 p \;<\; 0$$
+
+**$\lambda=0$(즉 OLS)에서 기울기가 항상 음수다.**
+$\boldsymbol\beta$ 가 무엇이든, $\sigma^2>0$ 이기만 하면
+$\lambda$ 를 0에서 조금 키우는 것이 **반드시** MSE 를 낮춘다.
+최적값은 미분을 0으로 놓아 바로 나온다.
+
+$$\boxed{\ \lambda^\star = \frac{\sigma^2 p}{\|\boldsymbol\beta\|^2}\ }$$
+
+식이 말하는 바가 직관과 맞는다 — **잡음이 크거나($\sigma^2$), 파라미터가 많거나($p$),
+참 신호가 약할수록($\|\boldsymbol\beta\|$ 작을수록) 더 강하게 정규화해야 한다.**
+
+```{python}
+#| label: ridge-beats-ols
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+p, sigma, reps = 20, 1.0, 4000
+beta = rng.normal(0, 1, p)
+beta = beta / np.linalg.norm(beta) * 3.0          # ‖β‖ = 3 으로 고정
+
+lam_star = sigma**2 * p / np.linalg.norm(beta)**2
+print(f"‖β‖ = {np.linalg.norm(beta):.1f},  σ² = {sigma**2}, p = {p}")
+print(f"이론 최적 λ* = σ²p/‖β‖² = {lam_star:.4f}\n")
+
+print(f"{'λ':>8}{'편향²':>10}{'분산':>10}{'MSE 실측':>11}{'MSE 이론':>11}")
+for lam in [0.0, 0.5, lam_star, 4.0, 20.0]:
+    est = np.array([(rng.normal(0, sigma, p) + beta) / (1 + lam)
+                    for _ in range(reps)])          # β̂_OLS ~ N(β, σ²I)
+    bias2 = float(np.sum((est.mean(0) - beta) ** 2))
+    var = float(np.sum(est.var(0)))
+    mse_th = (lam**2 * np.linalg.norm(beta)**2 + sigma**2 * p) / (1 + lam)**2
+    tag = "  ← λ*" if abs(lam - lam_star) < 1e-9 else ""
+    print(f"{lam:>8.3f}{bias2:>10.3f}{var:>10.3f}{bias2+var:>11.3f}"
+          f"{mse_th:>11.3f}{tag}")
+
+print("\nλ=0 (OLS) 의 MSE 가 최소가 아니다 — λ* 에서 더 낮다.")
+print("편향을 받아들인 대가로 분산이 그보다 크게 줄었기 때문이다.")
+```
+
+::: {.callout-warning}
+## "언제나 이득"의 범위
+
+이 정리는 **MSE 라는 특정 기준**에 대한 진술이고, 직교 설계에서 유도했다.
+일반 $X$ 에서는 $\lambda^\star$ 가 저렇게 깔끔하지 않고 $\sigma^2$ 와 $\|\boldsymbol\beta\|$ 를
+모르므로 실무에서는 **교차검증으로 고른다**(아래 절).
+
+그리고 이득은 어디까지나 **추정 정확도**의 이야기다.
+$\hat{\boldsymbol\beta}$ 가 편향되었으므로 **계수 해석과 가설검정은 더 이상 유효하지 않다.**
+Ridge 계수에 대한 통상적인 $t$ 검정과 신뢰구간은 의미가 없다 —
+예측이 목적이면 쓰고, 계수 자체를 주장하려면 다른 도구가 필요하다.
+:::
+
 ---
 
 ## G2.3.1 — Ridge의 축소 효과
@@ -119,7 +202,7 @@ $$J = \|\mathbf{y}-X\boldsymbol\beta\|^2 + \lambda\|\boldsymbol\beta\|_1$$
 Ridge는 계수를 0에 가깝게 만들 뿐 0으로 만들지는 않는다.
 Lasso는 실제로 0으로 만들어 **특성 선택을 수행한다.**
 
-왜인가? [0.0의 노름 단위구](../00_foundations/00_linear_algebra.qmd)에서 봤듯이
+왜인가? [0.0의 norm 단위구](../00_foundations/00_linear_algebra.qmd)에서 봤듯이
 **L1 공의 꼭짓점이 축 위에 있기** 때문이다.
 
 ```{python}
@@ -413,7 +496,7 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-라플라스(주황)는 0에서 **뾰족한 꼭짓점**을 갖습니다 — 미분 불가능한 그 점이 계수를 0에 붙잡아둡니다. 가우스는 0에서 매끄러워 그런 힘이 없습니다. 오른쪽 벌점 그림이 정확히 L1·L2 노름입니다.
+라플라스(주황)는 0에서 **뾰족한 꼭짓점**을 갖습니다 — 미분 불가능한 그 점이 계수를 0에 붙잡아둡니다. 가우스는 0에서 매끄러워 그런 힘이 없습니다. 오른쪽 벌점 그림이 정확히 L1·L2 norm입니다.
 :::
 
 ---
