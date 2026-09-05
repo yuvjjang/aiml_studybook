@@ -98,6 +98,44 @@ $$\text{학습:}\ a \leftarrow \frac{a \odot \text{Bernoulli}(1-p)}{1-p}
 
 $1-p$ 로 나누는 **역스케일링**이 핵심이다. 이래야 기댓값이 보존된다.
 
+확인은 한 줄이다. 마스크 $M \sim \text{Bernoulli}(1-p)$ 에 대해
+
+$$\mathbb{E}\!\left[\frac{a\,M}{1-p}\right] = \frac{a}{1-p}\,\mathbb{E}[M] = \frac{a(1-p)}{1-p} = a$$
+
+추론 시 마스크를 끄는 것이 정당한 이유가 이것이다 — 평균적으로 같은 값을 낸다.
+
+그런데 **분산은 보존되지 않는다.** 같은 계산을 2차 모멘트로 하면
+
+$$\operatorname{Var}\!\left[\frac{a\,M}{1-p}\right]
+= \frac{a^2}{(1-p)^2}\operatorname{Var}[M]
+= \frac{a^2}{(1-p)^2}\,p(1-p)
+= a^2\,\frac{p}{1-p}$$
+
+드롭아웃이 주입하는 잡음의 크기가 $\frac{p}{1-p}$ 로 **$p$ 에 대해 급격히 커진다.**
+
+```{python}
+#| label: dropout-variance
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+a = 1.0
+
+print(f"{'드롭 확률 p':>12}{'p/(1-p)':>11}{'실측 분산':>12}{'평균(=a여야)':>14}")
+for p in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]:
+    if p == 0:
+        print(f"{p:>12.1f}{0.0:>11.3f}{0.0:>12.4f}{a:>14.4f}")
+        continue
+    M = (rng.random(2_000_000) > p).astype(float) / (1 - p)
+    print(f"{p:>12.1f}{p/(1-p):>11.3f}{(a*M).var():>12.4f}{(a*M).mean():>14.4f}")
+
+print()
+print("평균은 어느 p 에서나 a 로 보존되지만 분산은 p/(1-p) 로 폭증한다.")
+print("p=0.9 면 잡음 분산이 신호의 9배다 — 학습이 불안정해지는 이유이고,")
+print("실무에서 p 를 0.1~0.5 로 쓰는 이유이기도 하다.")
+```
+
 ```{python}
 #| label: fig-dropout
 #| fig-cap: "드롭 확률에 따른 마스크와 학습 결과"
