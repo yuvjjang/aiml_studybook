@@ -61,10 +61,60 @@ $$\operatorname{Var}[z_j] = n_{\text{in}}\,\sigma_w^2\,\operatorname{Var}[h]$$
 
 활성화가 들어가면 이야기가 달라진다.
 
+### 계수 2는 어디서 오는가
+
+"ReLU 가 절반을 죽이니 분산이 절반"이라는 말은 정확히 계산된다.
+$z$ 가 0을 중심으로 **대칭**이면(평균 0인 가중치가 만든 분포가 그렇다),
+$\max(0,z)$ 의 2차 모멘트는 정확히 절반이다.
+
+$$\mathbb{E}\big[\max(0,z)^2\big]
+= \int_0^\infty z^2 p(z)\,dz
+= \tfrac{1}{2}\int_{-\infty}^{\infty} z^2 p(z)\,dz
+= \tfrac{1}{2}\mathbb{E}[z^2]$$
+
+가운데 등호가 대칭성이다 — 음수 쪽 적분이 양수 쪽과 같으므로 반쪽이 전체의 절반이다.
+따라서 층을 지날 때마다 신호의 2차 모멘트가 $\tfrac12$ 배로 줄고,
+이를 상쇄하려면 가중치 분산을 **2배**로 키워야 한다.
+
+$$n_{\text{in}}\,\sigma_w^2 \cdot \tfrac{1}{2} = 1
+\quad\Longrightarrow\quad
+\sigma_w^2 = \frac{2}{n_{\text{in}}}$$
+
 - **tanh** (원점 근처에서 $\approx$ 항등) → 그대로 $\sigma_w^2 = 1/n_{\text{in}}$
-- **ReLU** (절반을 0으로 죽임 → 분산 절반) → $\sigma_w^2 = 2/n_{\text{in}}$
+- **ReLU** (2차 모멘트가 절반) → $\sigma_w^2 = 2/n_{\text{in}}$
 
 이것이 각각 **LeCun/Xavier**와 **He** 초기화다.
+계수 2를 빼먹으면 층마다 신호가 $1/\sqrt{2}$ 배로 줄어,
+깊이 30이면 $2^{-15} \approx 3\times10^{-5}$ 배가 된다.
+
+```{python}
+#| label: he-factor
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+z = rng.normal(0, 1.5, 2_000_000)
+print(f"E[z²]           = {np.mean(z**2):.4f}")
+print(f"E[max(0,z)²]    = {np.mean(np.maximum(0, z)**2):.4f}   ← 정확히 절반")
+print(f"비율            = {np.mean(np.maximum(0,z)**2)/np.mean(z**2):.4f}\n")
+
+# 깊은 망에서 계수를 빼먹으면 어떻게 되는가
+n_in, depth = 256, 30
+print(f"{'초기화':<22}{'깊이 30 후 표준편차':>22}{'첫 층 대비':>14}")
+for name, scale in [("He  (2/n_in)", np.sqrt(2.0 / n_in)),
+                    ("Xavier (1/n_in)", np.sqrt(1.0 / n_in))]:
+    h = rng.normal(0, 1, (2000, n_in))
+    s0 = h.std()
+    for _ in range(depth):
+        W = rng.normal(0, scale, (n_in, n_in))
+        h = np.maximum(0, h @ W)
+    print(f"{name:<22}{h.std():>22.3e}{h.std()/s0:>14.2e}")
+
+print(f"\n이론 예측: 계수를 1 로 쓰면 층마다 1/√2 배 → 2^(-{depth}/2) "
+      f"= {2.0**(-depth/2):.2e}")
+```
 
 ```{python}
 #| label: init-formulas

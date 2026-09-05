@@ -571,7 +571,86 @@ Llama 계열이 전부 pre-LN이다.
 ## 정규화의 숨은 효과: 가중치 스케일 불변성
 
 정규화 뒤에서는 **가중치의 크기가 출력에 영향을 주지 않는다.**
-$W \to cW$ 해도 $\hat z$ 는 그대로다.
+$W \to cW$ 해도 $\hat z$ 는 그대로다. 평균과 표준편차가 함께 $c$ 배 되어 약분되기 때문이다.
+
+$$\widehat{cWx} = \frac{cWx - c\mu}{\sqrt{c^2\sigma^2+\epsilon}} \approx \frac{Wx-\mu}{\sqrt{\sigma^2+\epsilon}} = \widehat{Wx}$$
+
+### 귀결: 유효 학습률이 스스로 조절된다
+
+출력이 같다면 손실도 같다. 그런데 **그래디언트는 같지 않다.**
+$L(cW) = L(W)$ 의 양변을 $W$ 로 미분하면 연쇄법칙에서 $c$ 가 하나 나온다.
+
+$$c\,\nabla_{W}L\big|_{cW} = \nabla_W L\big|_{W}
+\quad\Longrightarrow\quad
+\nabla L(cW) = \frac{1}{c}\,\nabla L(W)$$
+
+**가중치가 커지면 그래디언트가 반비례해 작아진다.** 스텝의 상대적 크기를 보면
+
+$$\frac{\|\eta\,\nabla L(cW)\|}{\|cW\|}
+= \frac{1}{c^2}\cdot\frac{\|\eta\,\nabla L(W)\|}{\|W\|}$$
+
+즉 **유효 학습률이 $1/\|W\|^2$ 에 비례한다.**
+학습이 진행되며 가중치 norm 이 자라면 유효 학습률이 저절로 줄어든다 —
+스케줄러를 쓰지 않아도 일종의 자동 감쇠가 걸리는 셈이다.
+
+```{python}
+#| label: scale-invariance-grad
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+def bn(z, eps=1e-5):
+    return (z - z.mean(0)) / np.sqrt(z.var(0) + eps)
+
+x = rng.normal(0, 1, (512, 32))
+W = rng.normal(0, 0.3, (32, 16))
+G = rng.normal(0, 1, (512, 16))            # 위에서 내려온 그래디언트
+
+def loss_and_grad(W):
+    z = x @ W
+    mu, var = z.mean(0), z.var(0)
+    zh = (z - mu) / np.sqrt(var + 1e-5)
+    loss = float((zh * G).sum())
+    # 수치 미분으로 ∇_W L
+    g = np.zeros_like(W)
+    eps = 1e-6
+    for i in range(W.shape[0]):
+        for j in range(W.shape[1]):
+            Wp = W.copy(); Wp[i, j] += eps
+            zp = x @ Wp
+            zhp = (zp - zp.mean(0)) / np.sqrt(zp.var(0) + 1e-5)
+            g[i, j] = (float((zhp * G).sum()) - loss) / eps
+    return loss, g
+
+print(f"{'배율 c':>8}{'손실':>14}{'‖∇L‖':>12}{'c·‖∇L‖':>12}")
+_, g1 = loss_and_grad(W)
+base = np.linalg.norm(g1)
+for c in [0.5, 1.0, 2.0, 4.0]:
+    L, g = loss_and_grad(c * W)
+    print(f"{c:>8.1f}{L:>14.4f}{np.linalg.norm(g):>12.5f}"
+          f"{c*np.linalg.norm(g):>12.5f}")
+
+print("\n손실은 c 와 무관하고, ‖∇L‖ 은 정확히 1/c 로 줄어든다")
+print("(마지막 열 c·‖∇L‖ 이 일정한 것이 그 증거다).")
+```
+
+::: {.callout-warning}
+## weight decay 와의 상호작용
+
+스케일 불변성 때문에 **정규화 층 앞의 가중치에 대한 weight decay 는
+원래 의도와 다르게 작동한다.** 가중치를 줄여도 출력이 변하지 않으므로
+"모델을 단순하게 만든다"는 효과는 없다.
+
+대신 다른 일을 한다 — $\|W\|$ 를 작게 유지해 **유효 학습률을 높게 유지**한다.
+정규화를 쓰는 망에서 weight decay 가 여전히 성능을 올리는 이유가
+정규화 효과가 아니라 학습률 조절 효과라는 분석이 여기서 나온다.
+
+실무적 함의도 있다. **정규화 층의 $\gamma,\beta$ 와 편향에는 weight decay 를 걸지 않는다** —
+이들은 스케일 불변성의 보호를 받지 않아 실제로 표현력을 깎는다.
+대부분의 프레임워크와 레시피가 이 파라미터들을 decay 대상에서 제외하는 이유다.
+:::
 
 ```{python}
 #| label: scale-invariance

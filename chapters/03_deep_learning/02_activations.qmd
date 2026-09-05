@@ -119,6 +119,65 @@ $$\sigma'(z) = \sigma(z)(1-\sigma(z)) \le 0.25$$
 최댓값이 $z=0$ 에서 0.25이고, $|z|$ 가 조금만 커져도 급격히 0으로 간다.
 이것을 **포화(saturation)** 라 한다.
 
+### 0.25 가 층마다 곱해진다
+
+한 층에서 0.25 는 큰 문제가 아니다. 문제는 **깊이만큼 곱해진다**는 것이다.
+[3.1 의 연쇄법칙](01_backpropagation.qmd)에 따라 $L$ 층을 거슬러 오르는 그래디언트에는
+각 층의 활성화 도함수가 하나씩 곱해진다.
+
+$$\left\|\frac{\partial L}{\partial h_0}\right\|
+\;\sim\; \prod_{\ell=1}^{L} \underbrace{|\sigma'(z_\ell)|}_{\le\,0.25}\cdot\|W_\ell\|
+\;\le\; \left(0.25\,\|W\|\right)^{L}$$
+
+가중치가 신호 크기를 정확히 유지하도록($\|W\|\approx1$) 초기화하더라도
+**층마다 최소 4배씩 줄어든다.** 그것도 가장 좋은 경우인 $z=0$ 근처에서의 이야기다.
+
+$$\text{깊이 } 10 \Rightarrow 0.25^{10} \approx 10^{-6},
+\qquad
+\text{깊이 } 20 \Rightarrow 0.25^{20} \approx 10^{-12}$$
+
+ReLU 는 활성 영역에서 도함수가 **정확히 1**이라 이 곱셈이 신호를 죽이지 않는다.
+"단순함의 승리"의 실질적 내용이 이것이다.
+
+```{python}
+#| label: saturation-depth
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+def grad_scale(act, dact, depth, n=128, trials=20):
+    """깊이별로 입력까지 도달한 그래디언트의 크기"""
+    out = []
+    for _ in range(trials):
+        h = rng.normal(0, 1, (256, n))
+        zs = []
+        for _ in range(depth):
+            W = rng.normal(0, np.sqrt(1.0 / n), (n, n))   # 신호 보존 초기화
+            z = h @ W
+            zs.append(z)
+            h = act(z)
+        g = rng.normal(0, 1, h.shape)                      # 출력단 그래디언트
+        for z in reversed(zs):
+            g = (g * dact(z)) @ rng.normal(0, np.sqrt(1.0 / n), (n, n)).T
+        out.append(np.abs(g).mean())
+    return float(np.mean(out))
+
+sig = lambda z: 1 / (1 + np.exp(-z))
+dsig = lambda z: sig(z) * (1 - sig(z))
+relu = lambda z: np.maximum(0, z)
+drelu = lambda z: (z > 0).astype(float)
+
+print(f"{'깊이':>6}{'sigmoid':>14}{'ReLU':>14}{'0.25^L':>14}")
+for d in [1, 5, 10, 20]:
+    print(f"{d:>6}{grad_scale(sig, dsig, d):>14.3e}"
+          f"{grad_scale(relu, drelu, d):>14.3e}{0.25**d:>14.3e}")
+
+print("\nsigmoid 는 깊이에 따라 0.25^L 에 가까운 속도로 사라진다.")
+print("ReLU 는 활성 영역의 도함수가 1 이라 같은 초기화에서 훨씬 오래 버틴다.")
+```
+
 ```{python}
 #| label: fig-saturation
 #| fig-cap: "입력 분포가 넓어지면 대부분의 유닛이 포화 영역에 들어갑니다."
