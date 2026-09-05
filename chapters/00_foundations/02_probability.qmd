@@ -137,6 +137,14 @@ $$\mathbb{E}[X] = \sum_x x\,P(x) \quad\text{또는}\quad \int x\,p(x)\,dx$$
 
 $$\mathrm{Var}(X) = \mathbb{E}[(X-\mathbb{E}[X])^2] = \mathbb{E}[X^2] - (\mathbb{E}[X])^2$$
 
+두 번째 식의 등호는 선형성만으로 나온다. $\mu = \mathbb{E}[X]$ 라 두면
+
+$$\mathbb{E}[(X-\mu)^2] = \mathbb{E}[X^2 - 2\mu X + \mu^2]
+= \mathbb{E}[X^2] - 2\mu\,\mathbb{E}[X] + \mu^2 = \mathbb{E}[X^2] - \mu^2$$
+
+$\mu$ 는 상수라 기댓값 밖으로 나온다는 것이 전부다.
+계산할 때 거의 항상 오른쪽 형태를 쓴다 — 데이터를 한 번만 훑으면 되기 때문이다.
+
 실무에서 계속 쓰는 성질 두 가지.
 
 | 성질 | 식 | 조건 |
@@ -156,6 +164,50 @@ $$\mathrm{Var}(X+Y) = \mathrm{Var}(X) + \mathrm{Var}(Y) + 2\,\mathrm{Cov}(X,Y)$$
 그래서 배깅은 일부러 모델을 서로 다르게 만든다.
 :::
 
+### 왜 분산만 독립을 요구하는가
+
+전개해 보면 조건이 어디서 붙는지 바로 보인다.
+$\mu_X, \mu_Y$ 를 각각의 평균이라 두고 제곱을 펼치면
+
+$$\mathrm{Var}(X+Y) = \mathbb{E}\big[((X-\mu_X)+(Y-\mu_Y))^2\big]
+= \mathrm{Var}(X) + \mathrm{Var}(Y) + 2\underbrace{\mathbb{E}[(X-\mu_X)(Y-\mu_Y)]}_{\mathrm{Cov}(X,Y)}$$
+
+교차항이 남는다. 독립이면 $\mathbb{E}[XY]=\mathbb{E}[X]\mathbb{E}[Y]$ 이므로 이 항이 0이 되어 사라진다.
+기댓값에는 애초에 제곱이 없어 교차항이 생기지 않는다 — 그래서 선형성은 조건이 없다.
+
+::: {.callout-warning}
+## 공분산 0은 독립이 아니다
+
+방향이 한쪽으로만 성립한다. **독립 ⟹ 공분산 0**이지만 **역은 거짓**이다.
+
+$X \sim \mathcal{U}(-1,1)$ 이고 $Y = X^2$ 이라 하자. $Y$ 는 $X$ 로 완전히 결정되므로
+이보다 강하게 의존할 수 없는데, 대칭성 때문에 $\mathbb{E}[XY]=\mathbb{E}[X^3]=0=\mathbb{E}[X]\mathbb{E}[Y]$ 라
+공분산은 정확히 0이다.
+
+공분산은 **선형** 의존만 잡아낸다. 상관계수가 0인 두 특성을 보고
+"관계가 없다"고 결론 내리는 것이 흔한 실수다.
+비선형 의존까지 보려면 상호정보량이 필요하다([0.4 정보이론](04_information_theory.qmd)).
+
+예외가 하나 있다. **결합분포가 다변량 정규이면** 공분산 0이 독립과 동치다.
+정규분포를 다룰 때 생기는 편한 습관이 일반 분포로 잘못 옮겨가는 경우가 많다.
+:::
+
+### 표본평균의 분산: $\sqrt{n}$ 은 여기서 나온다
+
+$X_1,\dots,X_n$ 이 독립이고 분산이 모두 $\sigma^2$ 이면, 위 성질을 표본평균에 적용해
+
+$$\mathrm{Var}(\bar{X}_n) = \mathrm{Var}\!\left(\frac{1}{n}\sum_i X_i\right)
+= \frac{1}{n^2}\sum_i \mathrm{Var}(X_i) = \frac{n\sigma^2}{n^2} = \frac{\sigma^2}{n}$$
+
+($\mathrm{Var}(aX)=a^2\mathrm{Var}(X)$ 를 썼다. 상수가 제곱으로 나온다.)
+표준편차로 바꾸면 $\sigma/\sqrt{n}$ 다.
+
+$$\boxed{\ \text{추정 오차} \propto \frac{1}{\sqrt{n}}\ }$$
+
+이 한 줄이 실무에서 계속 돌아온다. **데이터를 4배 모아야 오차가 절반**이 되고,
+A/B 테스트의 필요 표본 수가 효과 크기의 제곱에 반비례하며([1.5 실험 설계](../01_data_science/05_experiment_design.qmd)),
+아래 중심극한정리에 $\sqrt{n}$ 이 등장하는 것도 전부 이 식이다.
+
 ---
 
 ## 베이즈 정리: 믿음을 갱신하기
@@ -163,6 +215,61 @@ $$\mathrm{Var}(X+Y) = \mathrm{Var}(X) + \mathrm{Var}(Y) + 2\,\mathrm{Cov}(X,Y)$$
 $$\underbrace{p(\theta \mid D)}_{\text{사후}} = \frac{\overbrace{p(D \mid \theta)}^{\text{우도}} \; \overbrace{p(\theta)}^{\text{사전}}}{\underbrace{p(D)}_{\text{증거}}}$$
 
 읽는 법: **관측 전의 믿음(사전)에 데이터가 말해주는 것(우도)을 곱하면 관측 후의 믿음(사후)이 된다.**
+
+### 유도는 두 줄이다
+
+결합확률을 두 방향으로 분해하면 끝난다. 곱 규칙에 따라
+
+$$p(\theta, D) = p(D \mid \theta)\,p(\theta), \qquad p(\theta, D) = p(\theta \mid D)\,p(D)$$
+
+같은 것을 두 가지로 쓴 것이므로 두 식을 등호로 놓고 $p(D)$ 로 나누면 베이즈 정리다.
+**새로운 공리가 필요 없다** — 조건부확률의 정의에서 곧바로 나온다.
+정리 자체는 사소하고, 어려운 것은 항상 $p(D)$ 다.
+
+### 증거 $p(D)$ 는 주변화다
+
+분모는 $\theta$ 를 모두 훑어 없앤 것이다.
+
+$$p(D) = \int p(D \mid \theta)\,p(\theta)\,d\theta$$
+
+$\theta$ 에 의존하지 않으므로 사후분포의 **모양**에는 관여하지 않는다. 그래서 실무에서는
+
+$$p(\theta \mid D) \;\propto\; p(D \mid \theta)\,p(\theta)$$
+
+로 쓰고, 정규화는 마지막에 한 번 맞춘다.
+
+문제는 $\theta$ 가 고차원일 때다. 이 적분은 대개 닫힌 형태가 없고 수치적으로도 감당이 안 된다.
+**베이즈 추론의 실질적 어려움 전부가 이 적분 하나에 있다.**
+그래서 우회로가 발달했다 — 표본으로 근사하거나(MCMC), 다루기 쉬운 분포로 갈아끼우거나(변분추론).
+[6.2 VAE](../06_generative/02_vae.qmd)의 ELBO가 바로 두 번째 길이고,
+거기서 최대화하는 하한이 이 $\log p(D)$ 다.
+
+### 켤레사전분포: 사후가 사전과 같은 족으로 남는 경우
+
+특별한 궁합에서는 적분을 피할 수 있다. 아래 그림이 쓰는 동전 문제가 그 예다.
+
+사전을 베타분포로 두고 $n$ 번 중 $k$ 번 앞면이 나왔다고 하자.
+
+$$p(\theta) \propto \theta^{a-1}(1-\theta)^{b-1}, \qquad
+p(D \mid \theta) \propto \theta^{k}(1-\theta)^{n-k}$$
+
+곱하면 지수가 그냥 더해진다.
+
+$$p(\theta \mid D) \;\propto\; \theta^{a+k-1}(1-\theta)^{b+n-k-1}
+\;=\; \mathrm{Beta}(a+k,\; b+n-k)$$
+
+**적분 없이 파라미터 덧셈으로 갱신이 끝난다.** 이런 관계를 켤레(conjugate)라 한다.
+
+여기서 사전분포를 읽는 직관도 나온다. $\mathrm{Beta}(a,b)$ 는
+**앞면 $a-1$ 번, 뒷면 $b-1$ 번을 미리 본 것**과 같은 효과다.
+사후평균을 정리하면 그 구조가 드러난다.
+
+$$\mathbb{E}[\theta \mid D] = \frac{a+k}{a+b+n}
+\;\xrightarrow[\;n \to \infty\;]{}\; \frac{k}{n}$$
+
+데이터가 쌓이면 분자·분모 모두 $n$ 이 지배해 **사전의 영향이 씻겨 나간다.**
+아래 그림에서 서로 다른 사전으로 시작해도 관측이 늘면 같은 곳으로 모이는 것이 이 식이다.
+반대로 $n$ 이 작을 때는 사전이 결과를 좌우한다 — 데이터가 적을수록 사전 선택이 정직하게 드러난다.
 
 ---
 
@@ -257,6 +364,88 @@ $$\frac{\bar{X}_n - \mu}{\sigma/\sqrt{n}} \to \mathcal{N}(0,1)$$
 
 두 번째가 놀랍다. **원 분포의 모양과 무관하다.**
 
+### LLN은 체비쇼프 부등식 세 줄이면 나온다
+
+약한 형태는 앞에서 구한 $\mathrm{Var}(\bar{X}_n)=\sigma^2/n$ 만 있으면 증명된다.
+출발점은 마르코프 부등식이다. 음이 아닌 확률변수 $Z$ 와 $t>0$ 에 대해
+
+$$P(Z \ge t) \le \frac{\mathbb{E}[Z]}{t}$$
+
+($Z$ 가 $t$ 이상인 부분만으로도 기댓값이 $t\,P(Z\ge t)$ 이상이기 때문이다.)
+$Z=(X-\mu)^2$, $t=\varepsilon^2$ 을 넣으면 **체비쇼프 부등식**이 된다.
+
+$$P(|X-\mu| \ge \varepsilon) \le \frac{\mathrm{Var}(X)}{\varepsilon^2}$$
+
+이제 $X$ 자리에 $\bar{X}_n$ 을 넣기만 하면 된다.
+
+$$P(|\bar{X}_n - \mu| \ge \varepsilon) \le \frac{\sigma^2}{n\varepsilon^2} \;\xrightarrow[\;n\to\infty\;]{}\; 0$$
+
+임의의 $\varepsilon$ 에 대해 확률이 0으로 간다 — 이것이 **약한 큰 수의 법칙**이다.
+필요한 가정은 유한한 분산뿐이고, 분포의 모양은 전혀 쓰지 않았다.
+
+::: {.callout-note}
+## 약한 법칙과 강한 법칙
+
+두 형태가 말하는 것이 다르다.
+
+| | 진술 | 뜻 |
+|---|---|---|
+| **약한 LLN** | 각 $n$ 마다 $P(\lvert\bar{X}_n-\mu\rvert\ge\varepsilon)\to 0$ | 확률수렴. "특정 시점에 빗나갈 확률이 작다" |
+| **강한 LLN** | $P(\lim_{n\to\infty}\bar{X}_n = \mu)=1$ | 거의 확실한 수렴. "수열 자체가 수렴한다" |
+
+강한 법칙은 분산 없이 **평균만 존재하면** 성립한다(콜모고로프).
+차이가 실감 나는 경우는 드물지만, 약한 법칙은 "언젠가 다시 크게 빗나갈" 가능성을
+배제하지 않는 반면 강한 법칙은 배제한다는 점이 다르다.
+:::
+
+체비쇼프 상한은 분포를 전혀 쓰지 않은 대가로 매우 헐겁다. 직접 비교해 보면 드러난다.
+
+```{python}
+#| label: chebyshev
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+eps = 0.5
+
+# 표준정규(σ=1)의 표본평균은 정확히 N(0, 1/n) 이라 꼬리확률을 정확히 계산할 수 있다.
+print(f"표본평균이 μ 로부터 {eps} 이상 벗어날 확률 (σ = 1)")
+print()
+print(f"{'n':>6}  {'정확한 값':>13}  {'체비쇼프 상한':>14}  {'헐거운 정도':>12}")
+for n in [10, 30, 100, 300, 1000]:
+    exact = 2 * stats.norm.sf(eps * np.sqrt(n))     # P(|X̄| ≥ ε)
+    bound = min(1.0 / (n * eps ** 2), 1.0)          # σ²/(n ε²)
+    print(f"{n:>6}  {exact:>13.3e}  {bound:>14.5f}  {bound/exact:>11.1e}배")
+
+print()
+print("상한은 1/n 로 천천히 줄지만 실제 확률은 지수적으로 줄어든다.")
+print("체비쇼프는 '분산만 아는' 최악의 분포를 상정하기 때문이다 —")
+print("느슨한 대신 어떤 분포에도 성립한다. 정규분포라는 정보를 쓰면 훨씬 날카로워진다.")
+```
+
+### CLT는 "얼마나 빨리"까지 말한다
+
+LLN은 $\bar{X}_n$ 이 $\mu$ 로 간다고만 한다. CLT는 **어떤 속도로, 어떤 모양으로** 가는지 말한다.
+분모의 $\sigma/\sqrt{n}$ 이 정확히 앞에서 구한 표본평균의 표준편차다.
+그래서 CLT는 이렇게 읽는 편이 실용적이다.
+
+$$\bar{X}_n \;\approx\; \mathcal{N}\!\left(\mu,\; \frac{\sigma^2}{n}\right) \quad (n \text{ 이 충분히 클 때})$$
+
+신뢰구간이 $\bar{x} \pm 1.96\,s/\sqrt{n}$ 인 것도, 표준오차라는 말이 $\sigma/\sqrt{n}$ 을 가리키는 것도
+전부 이 식에서 나온다([0.3 통계](03_statistics.qmd)).
+
+::: {.callout-warning}
+## CLT가 말하지 않는 것
+
+- **중심에 대한 진술이지 꼬리에 대한 진술이 아니다.** 정규 근사는 분포의 가운데에서 좋고
+  극단으로 갈수록 나빠진다. $p$ 값이 $10^{-8}$ 처럼 아주 작은 영역에서 정규 근사를 믿는 것은
+  위험하다 — 그쪽은 대편차 이론의 영역이다.
+- **$n \ge 30$ 은 규칙이 아니라 어림이다.** 필요한 $n$ 은 원 분포의 치우침에 따라 달라진다.
+  대칭이면 $n$ 이 10이어도 충분하고, 극단적으로 치우쳐 있으면 수천도 모자랄 수 있다.
+- **표본평균에 대한 진술이지 개별 관측에 대한 진술이 아니다.** 원 데이터가 정규분포가 되는 것이 아니다.
+:::
+
 ---
 
 ## G0.2.3 — 중심극한정리 직접 확인
@@ -350,6 +539,75 @@ $$p(\mathbf{x}) = \frac{1}{\sqrt{(2\pi)^d|\Sigma|}}\exp\!\left(-\tfrac{1}{2}(\ma
 그리고 $\Sigma$ 는 대칭 양정치이므로 [0.0의 스펙트럼 정리](00_linear_algebra.qmd)가 적용된다.
 **고유벡터가 등고선 타원의 축, 고유값의 제곱근이 축의 길이**다.
 
+### 모든 다변량 정규는 표준정규를 아핀 변환한 것이다
+
+밀도식을 외우는 것보다 이 관점이 훨씬 많은 것을 설명한다.
+$\Sigma$ 를 $\Sigma = LL^\top$ 로 분해하고($L$ 은 촐레스키 인자) 표준정규 $\mathbf{z}\sim\mathcal{N}(\mathbf{0},I)$ 에서 출발하면
+
+$$\mathbf{x} = \boldsymbol\mu + L\mathbf{z} \;\sim\; \mathcal{N}(\boldsymbol\mu, \Sigma)$$
+
+공분산이 맞는지는 한 줄로 확인된다. 선형변환의 공분산은 $\mathrm{Cov}(A\mathbf{z}) = A\,\mathrm{Cov}(\mathbf{z})\,A^\top$ 이므로
+
+$$\mathrm{Cov}(L\mathbf{z}) = L\,I\,L^\top = LL^\top = \Sigma$$
+
+이 관점이 밀도식의 두 부분을 각각 설명한다.
+
+**① 정규화 상수의 $|\Sigma|^{1/2}$ 은 변수변환의 야코비안이다.**
+$\mathbf{x}=\boldsymbol\mu+L\mathbf{z}$ 는 부피를 $|\det L|$ 배 늘리고,
+$\det\Sigma = \det(LL^\top) = (\det L)^2$ 이므로 $|\det L| = |\Sigma|^{1/2}$ 다.
+[0.0에서 본 "행렬식은 부피 배율"](00_linear_algebra.qmd)이 여기서 바로 쓰인다 —
+공간을 늘린 만큼 밀도를 나눠 줘야 적분이 1로 유지된다.
+
+**② 지수 안의 이차형식은 되돌린 뒤의 유클리드 거리다.**
+관계를 뒤집으면 $\mathbf{z} = L^{-1}(\mathbf{x}-\boldsymbol\mu)$ 이고
+
+$$\|\mathbf{z}\|^2 = (\mathbf{x}-\boldsymbol\mu)^\top L^{-\top}L^{-1}(\mathbf{x}-\boldsymbol\mu)
+= (\mathbf{x}-\boldsymbol\mu)^\top \Sigma^{-1}(\mathbf{x}-\boldsymbol\mu)$$
+
+즉 **마할라노비스 거리는 백색화(whitening)한 좌표에서 잰 보통 거리**다.
+"공분산을 고려한 거리"라는 말의 정확한 뜻이 이것이다.
+
+```{python}
+#| label: mvn-affine
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+mu = np.array([1.0, -2.0])
+Sigma = np.array([[4.0, 2.4],
+                  [2.4, 9.0]])
+
+L = np.linalg.cholesky(Sigma)              # Σ = L Lᵀ
+Z = rng.normal(size=(200_000, 2))          # 표준정규
+X = mu + Z @ L.T                           # 아핀 변환 한 번
+
+print(f"L Lᵀ = Σ ?           {np.allclose(L @ L.T, Sigma)}")
+print(f"표본 평균            {np.round(X.mean(0), 3)}   목표 {mu}")
+print(f"표본 공분산          {np.round(np.cov(X.T), 2).tolist()}")
+print(f"목표                 {Sigma.tolist()}")
+print()
+print(f"|Σ|^(1/2) = {np.sqrt(np.linalg.det(Sigma)):.4f}"
+      f"   det(L) = {np.prod(np.diag(L)):.4f}   ← 같다 (부피 배율)")
+
+# 백색화: 되돌리면 공분산이 항등행렬이 된다
+W = np.linalg.solve(L, (X - mu).T).T
+print(f"백색화 후 공분산     {np.round(np.cov(W.T), 3).tolist()}   ← I")
+```
+
+::: {.key-concept}
+"단순한 분포에서 뽑아 변환한다"는 이 구조가 생성 모델의 원형이다.
+$L$ 이라는 선형변환을 **신경망**으로 바꾸고 야코비안 항을 제대로 추적하면
+[6.4 정규화 흐름](../06_generative/04_normalizing_flows.qmd)이 되고,
+변환을 잡음 제거 과정으로 바꾸면 [6.5 확산 모델](../06_generative/05_diffusion.qmd)이 된다.
+VAE가 $\mathbf{z}\sim\mathcal{N}(0,I)$ 에서 출발하는 것도 같은 이유다.
+
+한편 정규분포에서만 성립하는 편의도 있다. 다변량 정규에서는
+**공분산이 0이면 독립**이고(앞의 경고에서 본 예외), 주변분포와 조건부분포가 모두 다시 정규분포다.
+이 성질들이 가우스 과정과 칼만 필터를 닫힌 형태로 풀리게 만든다.
+:::
+
 ```{python}
 #| label: fig-mvn
 #| fig-cap: "상관계수가 타원을 기울입니다. 화살표는 공분산 행렬의 고유벡터입니다."
@@ -430,6 +688,69 @@ $$\hat{\theta}_{\text{MLE}} = \arg\max_\theta \prod_i p(x_i|\theta)
 MSE를 쓴다는 것은 "잡음이 가우스이고 등분산"이라고 주장하는 것이다.
 이상치가 많은 데이터에서 MSE가 무너지는 이유가 여기 있다 —
 가우스는 꼬리가 얇아서 이상치를 "거의 불가능한 사건"으로 보고 크게 벌한다.
+:::
+
+### MSE가 가우스 가정에서 나오는 과정
+
+위 표의 첫 줄을 실제로 유도해 보면 무엇이 가정되고 있는지가 분명해진다.
+$y_i = \hat{y}_i + \epsilon_i$, $\epsilon_i \sim \mathcal{N}(0,\sigma^2)$ 이라 하면 한 점의 로그우도는
+
+$$\log p(y_i \mid \hat{y}_i) = -\frac{(y_i-\hat{y}_i)^2}{2\sigma^2} - \log\sigma - \tfrac{1}{2}\log 2\pi$$
+
+부호를 뒤집어 전부 더하면 음의 로그우도가 된다.
+
+$$-\log p(\mathbf{y}) = \underbrace{\frac{1}{2\sigma^2}\sum_i (y_i-\hat{y}_i)^2}_{\text{MSE}}
++ \underbrace{n\log\sigma + \tfrac{n}{2}\log 2\pi}_{\hat{y} \text{ 와 무관}}$$
+
+$\sigma$ 가 **상수로 고정**되어 있으면 뒤의 두 항은 $\hat{y}$ 에 대해 상수이고,
+앞의 항도 $1/2\sigma^2$ 이라는 양의 배수만 붙으므로 **argmin이 MSE와 완전히 같다.**
+
+가정이 어디에 쓰였는지 보이는 것이 이 유도의 목적이다.
+
+- $\sigma$ 가 모든 점에서 같다고 했다 — **등분산 가정**. 점마다 잡음 크기가 다르면
+  각 항에 $1/\sigma_i^2$ 라는 서로 다른 가중치가 붙어야 하고, 그것이 가중최소제곱이다.
+- $\sigma$ 를 함께 추정하려면 $n\log\sigma$ 항이 살아나 MSE와 갈라진다.
+  모델이 분산까지 출력하는 경우(이분산 회귀, 확률적 예측)에 실제로 이 항을 써야 한다.
+- 잡음이 독립이라고 했다 — 그래서 로그우도가 단순한 합이 되었다.
+
+### MLE는 왜 분산을 과소추정하는가
+
+아래 코드가 보여주는 편향에는 짧은 이유가 있다.
+정규분포의 MLE는 $\hat{\mu}=\bar{x}$, $\hat{\sigma}^2 = \frac{1}{n}\sum_i (x_i-\bar{x})^2$ 인데,
+제곱합을 참 평균 $\mu$ 기준으로 다시 쓰면 항이 하나 빠진다.
+
+$$\sum_i (x_i-\bar{x})^2 = \sum_i (x_i-\mu)^2 - n(\bar{x}-\mu)^2$$
+
+양변에 기댓값을 취하고 $\mathbb{E}[(x_i-\mu)^2]=\sigma^2$, $\mathbb{E}[(\bar{x}-\mu)^2]=\sigma^2/n$ 을 넣으면
+
+$$\mathbb{E}\Big[\sum_i (x_i-\bar{x})^2\Big] = n\sigma^2 - \sigma^2 = (n-1)\sigma^2
+\quad\Longrightarrow\quad
+\mathbb{E}[\hat{\sigma}^2_{\text{MLE}}] = \frac{n-1}{n}\sigma^2$$
+
+$\bar{x}$ 는 **데이터에서 추정한** 값이라 데이터에 이미 맞춰져 있고,
+그만큼 편차가 실제보다 작게 나온다. 잃어버린 자유도 하나가 정확히 $\sigma^2$ 만큼이다.
+$n-1$ 로 나누는 보정(베셀 보정)이 여기서 나온다.
+
+::: {.callout-note}
+## MLE의 성질과 그 대가
+
+MLE가 널리 쓰이는 것은 큰 표본에서의 보장 때문이다. 다만 **점근적** 보장이라는 점이 중요하다.
+
+| 성질 | 내용 | 조건 |
+|---|---|---|
+| 일치성 | $n\to\infty$ 에서 참값으로 수렴 | 모형이 옳고, 식별 가능해야 |
+| 점근 정규성 | $\hat\theta \approx \mathcal{N}(\theta, I(\theta)^{-1}/n)$ | 정칙 조건 |
+| 점근 효율성 | 분산이 크라메르-라오 하한에 도달 | 위와 같음 |
+| 불변성 | $\widehat{g(\theta)} = g(\hat\theta)$ | 없음 (유한 표본에서도 성립) |
+
+대가는 두 가지다. **유한 표본에서는 편향될 수 있고**(방금 본 $\sigma^2$ 가 그 예다),
+**모형이 틀리면 보장이 모두 무너진다.** 위의 표가 말하는 것도 결국 같은 이야기다 —
+MSE를 쓰는 순간 "잡음이 가우스"라는 모형을 세운 것이고,
+그 모형이 틀리면 MLE의 좋은 성질은 근거를 잃는다.
+
+사전분포를 곱해 사후를 최대화하면 MAP가 되고, 이는 벌점항이 붙은 MLE와 같다 —
+가우스 사전이 L2 정규화, 라플라스 사전이 L1 정규화다
+([2.3 정규화](../02_classical_ml/03_regularization.qmd)).
 :::
 
 ```{python}
