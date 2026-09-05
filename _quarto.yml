@@ -178,6 +178,10 @@ format:
       light: [flatly, custom.scss]
     css: styles.css
     include-in-header: theme-settings.html
+    grid:
+      sidebar-width: 290px
+      body-width: 2000px
+      margin-width: 250px
     toc: true
     toc-depth: 3
     toc-title: "이 페이지"

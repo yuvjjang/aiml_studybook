@@ -22,7 +22,7 @@
                          system-ui, -apple-system, "Segoe UI", sans-serif;
   --reader-font-size-default: 1rem;
   --reader-line-height-default: 1.75;
-  --reader-measure-default: 1100px;
+  --reader-measure-default: 1600px;   /* 본문 열의 상한. 그 아래로는 화면 폭을 따라간다 */
 
   /* 라이트 테마 기본 색 (WCAG 대비를 실제로 계산해 고른 값) */
   --reader-text-default: #1b1f24;    /* 흰 배경 대비 16.6:1  AAA */
@@ -92,8 +92,15 @@ h1, h2, h3, h4, h5, h6 {
 a, a:visited { color: var(--reader-link); }
 a:hover { color: var(--reader-link); }
 
-/* 전체 페이지 최대 너비 */
-.quarto-container { max-width: var(--reader-measure); }
+/* 레이아웃 폭
+   바깥 격자(사이드바 + 본문 + 목차)는 창을 그대로 채운다.
+   읽기 폭 제한은 본문 열에만 걸어, 넓은 화면에서 양옆이 남지 않게 한다. */
+.quarto-container { max-width: none; }
+
+main.content {
+  max-width: var(--reader-measure);
+  margin-inline: auto;
+}
 
 /* 인라인 수식 크기 */
 .math.inline { font-size: 1.05em; }

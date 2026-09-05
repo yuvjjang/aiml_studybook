@@ -53,7 +53,7 @@ code-tools: false      # 소스 모달이 위젯 id 를 중복 생성하는 것�
   </div>
   <div class="rs-field">
     <label for="rs-measure">본문 최대 너비 <span class="rs-value" id="rs-measure-v"></span></label>
-    <input type="range" id="rs-measure" min="720" max="1500" step="20">
+    <input type="range" id="rs-measure" min="760" max="2200" step="20">
   </div>
 </div>
 

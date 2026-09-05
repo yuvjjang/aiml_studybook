@@ -99,6 +99,13 @@ def build_quarto_yml():
         "      light: [flatly, custom.scss]",
         "    css: styles.css",
         "    include-in-header: theme-settings.html",
+        # Quarto 기본 본문 열은 850px 라 넓은 화면에서 양옆이 크게 남는다.
+        # 여기를 넉넉히 잡아 두고, 실제 상한은 styles.css 의 --reader-measure
+        # (설정 페이지의 '본문 최대 너비')가 정하게 한다.
+        "    grid:",
+        "      sidebar-width: 290px",
+        "      body-width: 2000px",
+        "      margin-width: 250px",
         "    toc: true",
         "    toc-depth: 3",
         '    toc-title: "이 페이지"',
