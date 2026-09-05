@@ -339,6 +339,51 @@ for n in n_list:
 닫힌 해는 쓸 수 없다. 그래서 실무에서는 대개 반복법을 쓴다.
 :::
 
+### 왜 하필 최소제곱인가: 가우스-마르코프
+
+제곱을 쓰는 이유가 "미분이 쉬워서"만은 아니다. 네 가정 아래에서 OLS 는
+**선형 불편 추정량 중 분산이 가장 작다**는 정리가 있다(BLUE).
+
+| 가정 | 형식 | 깨지면 |
+|---|---|---|
+| 선형성 | $\mathbf{y} = X\boldsymbol\beta + \boldsymbol\varepsilon$ | 모형 오설정 — 편향 |
+| **외생성** | $\mathbb{E}[\boldsymbol\varepsilon \mid X] = 0$ | **편향** — 교란·누락변수 |
+| 등분산 | $\operatorname{Var}(\varepsilon_i) = \sigma^2$ | 불편이지만 비효율. 표준오차가 틀림 |
+| 무상관 | $\operatorname{Cov}(\varepsilon_i,\varepsilon_j)=0$ | 위와 같음 (시계열·군집에서 흔함) |
+
+주의할 점이 표에 있다. **뒤의 두 가정이 깨져도 $\hat{\boldsymbol\beta}$ 는 여전히 불편**이다.
+망가지는 것은 효율성과 **표준오차**다. 그래서 이분산·자기상관이 의심되면
+계수는 그대로 두고 강건 표준오차(HC, 클러스터)를 쓴다.
+
+반면 **외생성이 깨지면 계수 자체가 편향된다.** 불편성을 확인해 보면 어디가 문제인지 보인다.
+
+$$\hat{\boldsymbol\beta} = (X^\top X)^{-1}X^\top(X\boldsymbol\beta + \boldsymbol\varepsilon)
+= \boldsymbol\beta + (X^\top X)^{-1}X^\top\boldsymbol\varepsilon$$
+
+$$\mathbb{E}[\hat{\boldsymbol\beta}\mid X] = \boldsymbol\beta + (X^\top X)^{-1}X^\top\,\underbrace{\mathbb{E}[\boldsymbol\varepsilon\mid X]}_{=\,0}
+= \boldsymbol\beta$$
+
+$\mathbb{E}[\boldsymbol\varepsilon\mid X]=0$ 하나에 불편성 전체가 걸려 있다.
+누락된 교란변수가 $X$ 와 상관되어 있으면 그것이 $\boldsymbol\varepsilon$ 에 들어가
+이 항이 0이 아니게 되고, 계수가 통째로 오염된다 —
+[1.6 인과추론](../01_data_science/06_causal_inference.qmd)이 필요한 이유가 이 한 줄이다.
+
+::: {.callout-note}
+## BLUE 라는 말의 범위
+
+"가장 좋다"는 주장의 범위가 좁다는 점을 알아둘 필요가 있다.
+
+- **선형(Linear)** 추정량 중에서만. $\mathbf{y}$ 의 비선형 함수는 후보에 없다.
+- **불편(Unbiased)** 추정량 중에서만. **편향을 허용하면 더 나은 것이 있다** —
+  Ridge 가 정확히 그것이다([2.3](03_regularization.qmd)).
+  약간의 편향을 받아들이고 분산을 크게 줄이면 MSE 가 작아진다.
+- 잡음이 **가우스일 필요는 없다.** 가우스까지 가정하면 더 강한 결론(모든 불편
+  추정량 중 최소분산, 그리고 OLS = MLE)이 나오지만, BLUE 자체는 분포 가정 없이 성립한다.
+
+정규성 가정이 실제로 필요한 곳은 추정이 아니라 **추론**이다 —
+$t$ 검정과 신뢰구간이 정확하려면 필요하고, 표본이 크면 CLT 로 근사된다.
+:::
+
 ---
 
 ## 계수 해석과 그 조건
@@ -382,6 +427,82 @@ print("  '무엇을 통제했는가'를 밝히지 않은 계수는 해석할 수
 
 특성 두 개가 거의 같으면 $X^\top X$ 가 거의 특이해진다.
 [0.0의 조건수](../00_foundations/00_linear_algebra.qmd)가 폭발하고, 계수 추정이 불안정해진다.
+
+### 얼마나 불안정해지는지 계산할 수 있다
+
+계수의 분산이 닫힌 형태로 나온다. 앞의 $\hat{\boldsymbol\beta} = \boldsymbol\beta + (X^\top X)^{-1}X^\top\boldsymbol\varepsilon$ 에
+분산을 취하면(등분산·무상관 가정 아래)
+
+$$\operatorname{Var}(\hat{\boldsymbol\beta}\mid X) = \sigma^2 (X^\top X)^{-1}$$
+
+$j$ 번째 대각 원소를 풀어 쓰면 **다중공선성이 정확히 어디로 들어오는지** 보인다.
+
+$$\operatorname{Var}(\hat\beta_j) = \frac{\sigma^2}{n\,s_j^2}\cdot
+\underbrace{\frac{1}{1-R_j^2}}_{\text{VIF}_j}$$
+
+- $s_j^2$ — 특성 $j$ 자체의 분산. 변동이 없는 특성은 계수를 정할 수 없다.
+- $R_j^2$ — **특성 $j$ 를 나머지 특성들로 회귀했을 때의 결정계수.**
+  다른 특성으로 $x_j$ 를 얼마나 잘 예측할 수 있는가.
+
+두 번째 인자가 **분산팽창인자(VIF)** 다. $x_j$ 가 다른 특성들의 선형결합에 가까워지면
+$R_j^2 \to 1$ 이고 VIF 가 발산한다.
+
+$$R_j^2 = 0.9 \Rightarrow \text{VIF}=10, \qquad
+R_j^2 = 0.99 \Rightarrow \text{VIF}=100, \qquad
+R_j^2 = 0.999 \Rightarrow \text{VIF}=1000$$
+
+표준오차는 그 제곱근이므로 각각 3.2배, 10배, 31.6배로 부푼다.
+
+```{python}
+#| label: vif-variance
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, reps = 400, 3000
+
+print(f"{'ρ':>7}{'R²_j':>8}{'VIF':>9}{'√VIF':>8}"
+      f"{'β̂₁ 표준편차':>13}{'ρ=0 대비':>10}{'β̂₁ 평균':>10}")
+base = None
+for rho in [0.0, 0.5, 0.9, 0.99, 0.999]:
+    est = []
+    for _ in range(reps):
+        x1 = rng.normal(0, 1, n)
+        x2 = rho * x1 + np.sqrt(max(1 - rho**2, 1e-12)) * rng.normal(0, 1, n)
+        X = np.c_[np.ones(n), x1, x2]
+        y = 1.0 + 2.0 * x1 + 3.0 * x2 + rng.normal(0, 1, n)   # 참 β₁ = 2
+        est.append(np.linalg.lstsq(X, y, rcond=None)[0][1])
+    sd, mu = float(np.std(est)), float(np.mean(est))
+    if base is None:
+        base = sd
+    vif = 1 / max(1 - rho**2, 1e-12)
+    print(f"{rho:>7.3f}{rho**2:>8.3f}{vif:>9.1f}{np.sqrt(vif):>8.1f}"
+          f"{sd:>13.4f}{sd/base:>9.1f}배{mu:>10.3f}")
+
+print()
+print("마지막 두 열이 요점이다. 표준편차 증가 배율이 √VIF 와 거의 같고,")
+print("그러면서도 β̂₁ 의 평균은 어느 ρ 에서나 참값 2.0 에 붙어 있다 —")
+print("다중공선성은 편향이 아니라 분산 문제다.")
+```
+
+::: {.key-concept}
+**다중공선성은 편향이 아니라 분산 문제다.** 계수는 여전히 불편이고,
+$\hat{\mathbf{y}}$ 의 **예측 성능도 멀쩡하다.** 망가지는 것은 개별 계수의 해석뿐이다.
+
+그래서 대응이 목적에 따라 갈린다.
+
+| 목적 | 다중공선성이 문제인가 | 대응 |
+|---|---|---|
+| 예측 | **대개 아니다** | 그대로 두거나 Ridge |
+| 계수 해석 | **그렇다** | 변수 제거·병합, 도메인 지식으로 하나 선택 |
+| 인과 추정 | 그렇다 | 애초에 [1.6](../01_data_science/06_causal_inference.qmd)의 설계 문제 |
+
+Ridge 가 이 상황의 표준 처방인 이유도 위 식에 있다.
+$(X^\top X + \lambda I)^{-1}$ 은 작은 고유값을 들어 올려 VIF 의 발산을 막는다 —
+편향을 조금 받아들이고 분산을 크게 줄이는 거래이고,
+가우스-마르코프가 "불편 추정량 중에서만" 최적이라고 한 그 문틈으로 들어온다.
+:::
 
 ```{python}
 #| label: fig-multicollinearity
