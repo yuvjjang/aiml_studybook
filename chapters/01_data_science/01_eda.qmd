@@ -243,6 +243,61 @@ print("  **p 값은 '차이가 큰가'가 아니라 '차이가 0 이 아니라�
 print("  실제 크기는 D 를 봐야 하고, 표본이 충분히 크면 어떤 실제 데이터도 기각된다.")
 ```
 
+### bin 폭을 고르는 규칙에는 근거가 있다
+
+"여러 폭으로 그려 보라"는 조언은 옳지만, 출발점을 정하는 이론도 있다.
+히스토그램은 밀도추정량이고, 폭 $h$ 는 전형적인 **편향-분산 트레이드오프**를 만든다.
+
+- $h$ 가 **크면** 한 칸 안의 실제 밀도 변화가 뭉개진다 → **편향** 증가.
+  칸 안에서 밀도를 상수로 근사하므로 편향은 대략 $h$ 에 비례한다.
+- $h$ 가 **작으면** 칸마다 들어가는 표본이 적어진다. 한 칸의 기대 개수가 $nh$ 정도이고
+  개수는 포아송처럼 흔들리므로, 밀도 추정의 **분산**은 대략 $1/(nh)$ 에 비례한다.
+
+평균제곱오차를 합쳐 최소화하면 최적 폭의 차수가 나온다.
+
+$$\text{MSE}(h) \;\approx\; \underbrace{c_1 h^2}_{\text{편향}^2} + \underbrace{\frac{c_2}{nh}}_{\text{분산}}
+\quad\Longrightarrow\quad
+\frac{d}{dh}: \; 2c_1 h - \frac{c_2}{nh^2} = 0
+\quad\Longrightarrow\quad
+h^\star \propto n^{-1/3}$$
+
+**표본이 8배 늘어야 최적 폭이 절반**이 된다는 뜻이다. 실무 규칙들이 전부 이 차수를 갖는다.
+
+| 규칙 | 폭 $h$ | 성격 |
+|---|---|---|
+| **Freedman-Diaconis** | $2\,\mathrm{IQR}\cdot n^{-1/3}$ | 산포를 IQR 로 재 **이상치에 강건**. 기본값으로 권장 |
+| **Scott** | $3.49\,\sigma\, n^{-1/3}$ | 정규분포에서 최적. 꼬리가 두꺼우면 과하게 넓어진다 |
+| Sturges | $\text{범위}/(\log_2 n + 1)$ | 칸 수가 $\log n$ 으로만 늘어 **큰 $n$ 에서 심하게 부족** |
+
+```{python}
+#| label: bin-rules
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+print(f"{'n':>7}{'FD 폭':>10}{'칸수':>6}{'Scott 폭':>11}{'칸수':>6}"
+      f"{'Sturges 폭':>12}{'칸수':>6}")
+for n in [100, 600, 5_000, 50_000]:
+    x = rng.normal(0, 1, n)
+    span = x.max() - x.min()
+    iqr = np.subtract(*np.percentile(x, [75, 25]))
+    fd = 2 * iqr * n ** (-1/3)
+    scott = 3.49 * x.std(ddof=1) * n ** (-1/3)
+    sturges = span / (np.log2(n) + 1)
+    print(f"{n:>7}{fd:>10.4f}{span/fd:>6.0f}{scott:>11.4f}{span/scott:>6.0f}"
+          f"{sturges:>12.4f}{span/sturges:>6.0f}")
+
+print("\nn 이 500배 늘어도 Sturges 는 칸을 8개에서 17개로만 늘린다.")
+print("FD 와 Scott 은 n^(1/3) 에 비례해 126개, 97개까지 늘어난다.")
+print("Sturges 는 작은 표본을 위해 만들어진 규칙이라 큰 데이터에서 구조를 뭉갠다.")
+```
+
+NumPy 의 `np.histogram_bin_edges(x, bins="fd")` 나 `bins="auto"`(FD 와 Sturges 중 큰 칸 수)가
+이 규칙들을 구현해 두었다. **다만 어떤 규칙도 다봉성을 보장하지는 않는다** —
+위 그림에서 봤듯 최종 확인은 여러 폭으로 직접 그려 보는 것이다.
+
 ---
 
 ## G1.1.2 — 앤스컴 4중주: 요약통계의 한계
@@ -535,6 +590,107 @@ print("**그리고 가장 중요한 질문은 통계가 답할 수 없다** — 
 print("측정 오류라면 버려야 하고, 드물지만 진짜인 현상이라면 버리면 안 된다.")
 print("그 판단은 도메인 지식의 몫이다.")
 ```
+
+### 붕괴점: 얼마나 오염되면 무너지는가
+
+"이상치에 강건하다"는 말을 숫자로 정의할 수 있다.
+**붕괴점(breakdown point)** 은 추정량을 완전히 망가뜨리는 데 필요한
+오염 표본의 최소 비율이다.
+
+| 추정량 | 붕괴점 | 뜻 |
+|---|---|---|
+| 평균, 표준편차 | **0%** | 점 **하나**를 무한대로 보내면 추정값도 무한대 |
+| $\alpha$ 절사평균 | $\alpha$ | 양끝 $\alpha$ 씩 버리므로 그만큼 견딘다 |
+| 중앙값, MAD | **50%** | 이론적 최댓값. 절반 미만이면 버틴다 |
+
+평균의 붕괴점이 0이라는 것은 은유가 아니다.
+$\bar{x} = \frac{1}{n}\sum x_i$ 에서 $x_1 \to \infty$ 로 보내면 $\bar{x} \to \infty$ 다.
+$n$ 이 아무리 커도 마찬가지다 — 표본을 늘려도 해결되지 않는다.
+
+```{python}
+#| label: breakdown
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(1)
+base = rng.normal(10, 2, 100)          # 참 평균 10
+
+print(f"{'오염 비율':>10}{'평균':>14}{'중앙값':>12}{'10% 절사평균':>16}")
+for frac in [0.0, 0.05, 0.10, 0.20, 0.45, 0.55]:
+    x = base.copy()
+    k = int(len(x) * frac)
+    if k:
+        x[:k] = 1e6                    # 오염: 극단값으로 대체
+    print(f"{frac:>10.0%}{np.mean(x):>14,.1f}{np.median(x):>12.2f}"
+          f"{stats.trim_mean(x, 0.10):>16,.2f}")
+
+print("\n평균은 5% 오염에서 이미 5만배 틀린다 (붕괴점 0%).")
+print("10% 절사평균은 10%까지 버티다가 20%에서 무너진다 (붕괴점 10%).")
+print("중앙값은 45%에서도 10.06 → 11.77 로만 움직이고, 55%에서 무너진다.")
+```
+
+### MAD 와 1.4826 이라는 상수
+
+표준편차의 강건한 대체물이 **중앙값 절대편차(MAD)** 다.
+
+$$\mathrm{MAD} = \mathrm{med}\big(|x_i - \mathrm{med}(x)|\big)$$
+
+그런데 이 값은 표준편차와 **눈금이 다르다.** 정규분포에서 MAD 의 기댓값은 $\sigma$ 가 아니라
+$\sigma \cdot \Phi^{-1}(0.75) \approx 0.6745\,\sigma$ 다.
+$|X-\mu|$ 가 $\sigma$ 이하일 확률이 정확히 50%가 되는 지점이 그 분위수이기 때문이다.
+
+그래서 $\sigma$ 와 비교 가능하게 만들려면 되돌려 곱해야 한다.
+
+$$\hat{\sigma}_{\text{robust}} = \frac{\mathrm{MAD}}{\Phi^{-1}(0.75)} = 1.4826 \cdot \mathrm{MAD}$$
+
+**1.4826 은 마법의 수가 아니라 $1/\Phi^{-1}(0.75)$ 다.**
+정규분포를 기준으로 눈금을 맞춘 값이므로, 분포가 정규에서 크게 벗어나면
+이 상수도 의미를 잃는다.
+
+```{python}
+#| label: mad-scale
+#| code-fold: false
+
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(2)
+
+c = 1 / stats.norm.ppf(0.75)
+print(f"1/Φ⁻¹(0.75) = {c:.6f}\n")
+
+print(f"{'참 σ':>6}{'MAD':>10}{'1.4826·MAD':>14}")
+for sigma in [1.0, 3.0, 7.5]:
+    x = rng.normal(0, sigma, 500_000)
+    mad = np.median(np.abs(x - np.median(x)))
+    print(f"{sigma:>6.1f}{mad:>10.4f}{c * mad:>14.4f}")
+
+# 오염이 있을 때 두 추정량의 차이
+x = rng.normal(0, 2.0, 1000)
+x[:20] = 500.0                                   # 2% 만 오염
+print(f"\n참 σ = 2.0 인데 2%(20개)가 500 으로 오염된 경우")
+print(f"  표본표준편차      {x.std(ddof=1):>8.2f}   ← 35배 틀림")
+print(f"  1.4826·MAD        {c * np.median(np.abs(x - np.median(x))):>8.2f}   ← 거의 정확")
+```
+
+::: {.key-concept}
+강건 추정량은 공짜가 아니다. **오염이 없을 때는 효율이 떨어진다.**
+
+정규분포에서 중앙값의 분산은 평균의 약 $\pi/2 \approx 1.57$ 배다 —
+같은 정밀도를 얻으려면 표본이 57% 더 필요하다는 뜻이다.
+그래서 선택은 상황에 달려 있다.
+
+- **탐색 단계, 데이터 품질을 모를 때** → 강건 추정량. 잘못된 결론을 막는 것이 우선이다.
+- **데이터가 깨끗하고 정밀도가 중요할 때** → 평균과 표준편차.
+- 가장 좋은 것은 **둘을 나란히 보는 것**이다. 크게 다르면 그 차이 자체가
+  "꼬리가 두껍거나 오염이 있다"는 신호다.
+
+위 그림의 세 이상치 탐지법이 서로 다른 점을 지목한 이유도 같다 —
+각자 다른 산포 척도(표준편차, IQR, 마할라노비스 거리)에 기대고 있고,
+그 척도들의 붕괴점이 다르기 때문이다.
+:::
 
 ---
 
