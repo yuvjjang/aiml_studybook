@@ -358,7 +358,7 @@ $L$ 개의 행렬을 곱한다. 각 항의 크기가 평균적으로 $c$ 라면 
 
 ```{python}
 #| label: fig-vanishing-exploding
-#| fig-cap: "층을 거슬러 갈수록 그래디언트 노름이 지수적으로 변합니다."
+#| fig-cap: "층을 거슬러 갈수록 그래디언트 norm이 지수적으로 변합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -394,7 +394,7 @@ fig.update_layout(xaxis_title="층 (1 = 입력에 가장 가까움)",
                   yaxis_title="‖∂L/∂W‖", yaxis_type="log",
                   legend=dict(x=0.02, y=0.02))
 viz.fig_defaults(fig, height=430,
-                 title=f"{depth}층 망의 층별 그래디언트 노름")
+                 title=f"{depth}층 망의 층별 그래디언트 norm")
 fig.show()
 ```
 
@@ -485,7 +485,7 @@ fig.add_trace(go.Scatter(x=np.arange(depth+1), y=res, mode="lines",
 fig.add_hline(y=plain[0], line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="출력층 그래디언트 크기")
 fig.update_layout(xaxis_title="거슬러 올라간 층 수",
-                  yaxis_title="그래디언트 노름 (평균 20회)", yaxis_type="log",
+                  yaxis_title="그래디언트 norm (평균 20회)", yaxis_type="log",
                   legend=dict(x=0.02, y=0.15))
 viz.fig_defaults(fig, height=410,
                  title="잔차 연결은 그래디언트 고속도로를 만든다")

@@ -250,7 +250,7 @@ K_NEG = 5
 W_SG, C_SG = train_sgns(WI, CI, d=D, k=K_NEG, seed=0)
 
 print(f"SGNS 학습 완료 (차원 {D}, 음성 샘플 {K_NEG}개)")
-print(f"  단어 벡터 평균 노름 {np.linalg.norm(W_SG, axis=1).mean():.3f}")
+print(f"  단어 벡터 평균 norm {np.linalg.norm(W_SG, axis=1).mean():.3f}")
 print()
 print("최근접 이웃 (SGNS)")
 for w in ["왕_남", "왕_여", "의사_남"]:

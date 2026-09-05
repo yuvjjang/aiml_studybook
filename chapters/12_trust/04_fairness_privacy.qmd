@@ -357,10 +357,10 @@ $$
 **나 한 사람 때문에 드러날 것이 거의 없다**는 뜻이다.
 
 **DP-SGD** 는 이것을 두 단계로 만든다 —
-표본별 그래디언트를 노름 $C$ 로 **자르고**, 합에 **가우시안 잡음**을 더한다.
+표본별 그래디언트를 norm $C$ 로 **자르고**, 합에 **가우시안 잡음**을 더한다.
 
 여기서는 소프트맥스 회귀를 쓴다. 표본 $i$ 의 그래디언트가
-$x_i \otimes (p_i - y_i)$ 이라 **노름이 닫힌 형태**여서 정확한 클리핑이 가능하다.
+$x_i \otimes (p_i - y_i)$ 이라 **norm이 닫힌 형태**여서 정확한 클리핑이 가능하다.
 
 ```{python}
 #| label: dp
@@ -382,7 +382,7 @@ def dp_fit(X, y, sigma, C=1.0, steps=600, lr=0.5, bs=256, seed=0):
         i = g.integers(0, len(Xa), bs)
         x, yy = Xa[i], Y[i]
         r = softmax(x @ W) - yy
-        nrm = np.linalg.norm(x, axis=1)*np.linalg.norm(r, axis=1)   # 표본별 노름
+        nrm = np.linalg.norm(x, axis=1)*np.linalg.norm(r, axis=1)   # 표본별 norm
         G = (x*np.minimum(1.0, C/np.maximum(nrm, 1e-12))[:, None]).T @ r
         if sigma:
             G = G + g.normal(0, sigma*C, G.shape)                   # 잡음

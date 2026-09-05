@@ -606,13 +606,13 @@ import numpy as np
 from src import nn
 
 rng = np.random.default_rng(0)
-# 대부분 정상이고 가끔 폭발하는 그래디언트 노름 분포 (실제 학습에서 흔한 모양)
+# 대부분 정상이고 가끔 폭발하는 그래디언트 norm 분포 (실제 학습에서 흔한 모양)
 norms = np.abs(rng.normal(0, 1, 5000)) * np.where(rng.random(5000) < 0.01, 40, 1)
 
-print(f"그래디언트 노름 — 중앙값 {np.median(norms):.3f}, "
+print(f"그래디언트 norm — 중앙값 {np.median(norms):.3f}, "
       f"99분위 {np.percentile(norms, 99):.2f}, 최댓값 {norms.max():.2f}")
 print()
-print(f"{'클립 임계값':>11} {'클리핑되는 비율':>15} {'적용 후 최대 노름':>18}")
+print(f"{'클립 임계값':>11} {'클리핑되는 비율':>15} {'적용 후 최대 norm':>18}")
 print("-" * 48)
 for c in [0.5, 1.0, 2.0, 5.0, 10.0]:
     hit = float((norms > c).mean())
@@ -622,7 +622,7 @@ print()
 g = {"W": rng.normal(0, 3, (8, 8)), "b": rng.normal(0, 3, 8)}
 before, scale = nn.clip_grads(g, 1.0)
 after = np.sqrt(sum(float((v**2).sum()) for v in g.values()))
-print(f"clip_grads: 노름 {before:.3f} → {after:.3f} (배율 {scale:.4f})")
+print(f"clip_grads: norm {before:.3f} → {after:.3f} (배율 {scale:.4f})")
 print("방향은 그대로 두고 크기만 줄인다. 임계값 1.0 이 트랜스포머 학습의 관례.")
 ```
 
@@ -670,7 +670,7 @@ for B in batch_sizes:
     cos_sim.append(float(np.mean(cs)))
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("전체 그래디언트와의 오차 노름",
+                    subplot_titles=("전체 그래디언트와의 오차 norm",
                                     "전체 그래디언트와의 코사인 유사도"))
 fig.add_trace(go.Scatter(x=batch_sizes, y=noise_std, mode="lines+markers", name="실측",
                          line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
@@ -698,7 +698,7 @@ logB = np.log(batch_sizes)
 slope = float(np.polyfit(logB, np.log(noise_std), 1)[0])
 print(f"log‖오차‖ = {slope:.3f} · logB + c    (이론값 −0.5)")
 print()
-print(f"{'배치 B':>8} {'오차 노름':>12} {'코사인 유사도':>14}")
+print(f"{'배치 B':>8} {'오차 norm':>12} {'코사인 유사도':>14}")
 print("-" * 38)
 for B, e, c in zip(batch_sizes, noise_std, cos_sim):
     print(f"{B:>8} {e:>12.4f} {c:>14.4f}")
@@ -856,7 +856,7 @@ no_decay = ["bias", "LayerNorm.weight", "embedding"]
 | warmup | 초기 스텝이 구조적으로 가장 큼 (측정: 정상 구간의 6.7배) |
 | AdamW | decay를 $\sqrt{\hat v}$ 로 나누지 않음 |
 | 스케줄 | cosine 기본, 총 스텝 모르면 WSD |
-| 클리핑 | 노름 1.0, 방향 유지·크기만 축소 |
+| 클리핑 | norm 1.0, 방향 유지·크기만 축소 |
 | 배치 잡음 | $\propto B^{-0.45}$ 로 실측 (이론 $-0.5$) |
 | 메모리 | AdamW 상태가 파라미터당 8바이트 |
 

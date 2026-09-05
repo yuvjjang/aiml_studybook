@@ -429,7 +429,7 @@ post-LN에서는 매 블록마다 LN을 통과한다.
 
 ```{python}
 #| label: fig-pre-post-ln
-#| fig-cap: "잔차 스트림의 스케일과 층별 그래디언트 노름"
+#| fig-cap: "잔차 스트림의 스케일과 층별 그래디언트 norm"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -448,7 +448,7 @@ def ln_bwd(dy, zhat, std):
             - zhat * (dy*zhat).mean(-1, keepdims=True)) / std
 
 def run_stack(kind, depth, d=64, n=32, seed=0):
-    """잔차 블록 depth 개. 층별 활성화 스케일과 역전파 그래디언트 노름을 기록."""
+    """잔차 블록 depth 개. 층별 활성화 스케일과 역전파 그래디언트 norm을 기록."""
     rng = np.random.default_rng(seed)
     Ws = [rng.normal(0, 1/np.sqrt(d), (d, d)) for _ in range(depth)]
     x = rng.normal(0, 1, (n, d))
@@ -483,7 +483,7 @@ data = {(k, dep): run_stack(k, dep) for k in ["pre", "post"] for dep in depths}
 
 fig = make_subplots(rows=1, cols=2,
                     subplot_titles=("잔차 스트림의 표준편차 (깊이 64)",
-                                    "층별 그래디언트 노름 (깊이 64)"))
+                                    "층별 그래디언트 norm (깊이 64)"))
 for i, (k, lbl) in enumerate([("pre", "pre-LN"), ("post", "post-LN")]):
     stds, nrm = data[(k, 64)]
     fig.add_trace(go.Scatter(x=np.arange(len(stds)), y=stds, mode="lines", name=lbl,
@@ -518,7 +518,7 @@ print()
 print("pre-LN 은 √깊이 에 비례해 자란다 (계수가 깊어질수록 0.64 로 수렴).")
 print("post-LN 은 매 블록 끝에서 다시 정규화하므로 깊이와 무관하게 1 이다.")
 print()
-print("② 층별 그래디언트 노름 — 입력층 / 출력층 비")
+print("② 층별 그래디언트 norm — 입력층 / 출력층 비")
 print(f"{'깊이':>6} {'pre-LN':>10} {'post-LN':>10}")
 print("-" * 30)
 for dep in depths:

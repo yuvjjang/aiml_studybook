@@ -507,7 +507,7 @@ fig.show()
 실무 지침:
 
 1. **각 손실을 초기값으로 나눠 정규화**하고 시작한다
-2. 또는 그래디언트 노름을 맞춘다 (GradNorm)
+2. 또는 그래디언트 norm을 맞춘다 (GradNorm)
 3. 또는 불확실성 기반 가중치를 **학습**한다 (Kendall et al.)
 4. 가장 단순하고 자주 통하는 것: **로그 스케일로 몇 개만 시도**
 :::
@@ -655,7 +655,7 @@ for bs, label in [(8, "작은 배치 (8)"), (256, "큰 배치 (256)")]:
     nn.train(m, X[tr], y[tr], loss="softmax_ce",
              opt=nn.Optimizer("sgd", lr=0.08), steps=1200, batch_size=bs)
     base = {k: v.copy() for k, v in m.params().items()}
-    # 무작위 방향 (층별 노름으로 정규화)
+    # 무작위 방향 (층별 norm으로 정규화)
     d = {}
     r = np.random.default_rng(7)
     for k, v in base.items():

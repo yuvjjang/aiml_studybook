@@ -195,7 +195,7 @@ ReLU의 1/2 손실을 고려하지 않았으므로 **ReLU 망에서는 신호가
 
 ```{python}
 #| label: fig-backward-variance
-#| fig-cap: "층별 그래디언트 노름 — 초기화가 역전파에 미치는 영향"
+#| fig-cap: "층별 그래디언트 norm — 초기화가 역전파에 미치는 영향"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -205,7 +205,7 @@ from src import nn, viz
 DEPTH_B, WIDTH_B, N_B = 24, 96, 256
 
 def grad_profile(scheme, gain=1.0, residual=False, alpha=1.0):
-    """순전파 후 역전파하며 층별 그래디언트 노름을 기록."""
+    """순전파 후 역전파하며 층별 그래디언트 norm을 기록."""
     r = np.random.default_rng(1)
     Ws = [nn.init_weights(WIDTH_B, WIDTH_B, scheme, r, gain=gain) for _ in range(DEPTH_B)]
     x = np.random.default_rng(0).normal(0, 1, (N_B, WIDTH_B))
@@ -239,7 +239,7 @@ for i, (k, v) in enumerate(profiles.items()):
                              name=k, line=dict(color=viz.color(i), width=2.5)))
 fig.update_layout(xaxis_title="층 번호 (0 = 입력 쪽)", yaxis_title="‖g‖",
                   yaxis_type="log", legend=dict(x=0.02, y=0.98, font=dict(size=11)))
-viz.fig_defaults(fig, height=430, title=f"{DEPTH_B}층 역전파 그래디언트 노름")
+viz.fig_defaults(fig, height=430, title=f"{DEPTH_B}층 역전파 그래디언트 norm")
 fig.show()
 ```
 

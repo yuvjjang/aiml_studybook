@@ -388,7 +388,7 @@ print(f"퍼플렉서티 {np.exp(hist[0]):.1f} → {np.exp(hist[-1]):.1f}  (어�
 
 ```{python}
 #| label: fig-training
-#| fig-cap: "학습 곡선, 학습률 스케줄, 그래디언트 노름"
+#| fig-cap: "학습 곡선, 학습률 스케줄, 그래디언트 norm"
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -396,7 +396,7 @@ from src import viz
 
 steps_ax = np.arange(1, len(hist) + 1)
 fig = make_subplots(rows=1, cols=3,
-                    subplot_titles=("손실", "학습률 (warmup + cosine)", "그래디언트 노름"))
+                    subplot_titles=("손실", "학습률 (warmup + cosine)", "그래디언트 norm"))
 
 fig.add_trace(go.Scatter(x=steps_ax, y=hist, mode="lines", showlegend=False,
                          line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
@@ -420,7 +420,7 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-손실이 $\log V$(노란 점선)에서 시작해 내려갑니다. 가운데 그림에서 학습률이 40스텝 동안 올라갔다가(warmup) 코사인으로 내려오는 것을, 오른쪽에서 그래디언트 노름이 대부분 클리핑 임계 위에 있어 실제로 클리핑이 작동하고 있음을 볼 수 있습니다.
+손실이 $\log V$(노란 점선)에서 시작해 내려갑니다. 가운데 그림에서 학습률이 40스텝 동안 올라갔다가(warmup) 코사인으로 내려오는 것을, 오른쪽에서 그래디언트 norm이 대부분 클리핑 임계 위에 있어 실제로 클리핑이 작동하고 있음을 볼 수 있습니다.
 :::
 
 ---

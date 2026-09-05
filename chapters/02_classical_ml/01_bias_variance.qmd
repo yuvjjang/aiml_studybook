@@ -432,7 +432,7 @@ import numpy as np
 import plotly.graph_objects as go
 from src import viz
 
-# 무작위 특성 회귀: 특성 수 p 를 늘리며 최소노름 해를 구한다
+# 무작위 특성 회귀: 특성 수 p 를 늘리며 최소norm 해를 구한다
 rng = np.random.default_rng(1)
 n_train, n_test, d_in, noise = 40, 400, 20, 0.35
 
@@ -448,7 +448,7 @@ tr_e, te_e = [], []
 for p in ps:
     F = rng.normal(size=(d_in, p)) / np.sqrt(d_in)   # 무작위 사영 특성
     Z_tr, Z_te = np.tanh(X_tr @ F), np.tanh(X_te @ F)
-    # 최소노름 최소제곱 해 (p > n 이면 pinv 가 최소노름 보간해를 준다)
+    # 최소norm 최소제곱 해 (p > n 이면 pinv 가 최소norm 보간해를 준다)
     beta = np.linalg.pinv(Z_tr) @ y_tr
     tr_e.append(np.mean((Z_tr @ beta - y_tr) ** 2))
     te_e.append(np.mean((Z_te @ beta - y_te) ** 2))
@@ -471,7 +471,7 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-$p < n$ 구간은 고전적 U자입니다. $p = n$ 근처에서 시험 오차가 **치솟고**, 그 너머에서 **다시 내려갑니다**. 임계점에서는 해가 유일하게 결정되어 잡음까지 정확히 맞춰야 하지만, $p > n$ 에서는 무수한 보간해 중 **가장 노름이 작은 것**을 고를 수 있기 때문입니다.
+$p < n$ 구간은 고전적 U자입니다. $p = n$ 근처에서 시험 오차가 **치솟고**, 그 너머에서 **다시 내려갑니다**. 임계점에서는 해가 유일하게 결정되어 잡음까지 정확히 맞춰야 하지만, $p > n$ 에서는 무수한 보간해 중 **가장 norm이 작은 것**을 고를 수 있기 때문입니다.
 :::
 
 ### 왜 하필 $p=n$ 에서 치솟는가
@@ -479,7 +479,7 @@ $p < n$ 구간은 고전적 U자입니다. $p = n$ 근처에서 시험 오차가
 첨두의 정체는 [0.0 의 조건수](../00_foundations/00_linear_algebra.qmd)다.
 
 $p < n$ 에서는 최소제곱해가 $\hat\beta = (X^\top X)^{-1}X^\top y$ 이고,
-$p > n$ 에서는 보간해 중 최소 노름인 $\hat\beta = X^\top(XX^\top)^{-1}y$ 다.
+$p > n$ 에서는 보간해 중 최소 norm인 $\hat\beta = X^\top(XX^\top)^{-1}y$ 다.
 어느 쪽이든 **가장 작은 특이값이 분모에 들어간다.**
 
 $$\|\hat\beta\| \;\lesssim\; \frac{\|y\|}{\sigma_{\min}(X)}$$
@@ -492,7 +492,7 @@ $p/n$ 비에 따라 달라진다(마르첸코-파스투르). 핵심은 이것이
 
 즉 $p=n$ 은 **자유도가 딱 맞아떨어져 잡음까지 정확히 맞춰야 하는 지점**이고,
 그러려면 계수가 폭발해야 한다. 그 폭발이 곧 분산이다.
-$p$ 를 더 키우면 방향이 남아돌아 최소 노름 해가 여유를 갖고, 계수가 다시 작아진다.
+$p$ 를 더 키우면 방향이 남아돌아 최소 norm 해가 여유를 갖고, 계수가 다시 작아진다.
 
 ```{python}
 #| label: interpolation-peak
@@ -512,7 +512,7 @@ for p in [10, 30, 50, 58, 60, 62, 70, 120, 400]:
         y = rng.normal(0, 1, n)
         s = np.linalg.svd(X, compute_uv=False)
         smin.append(s.min()); kappa.append(s.max() / max(s.min(), 1e-15))
-        # 최소 노름 해 (p<n 이면 최소제곱과 일치)
+        # 최소 norm 해 (p<n 이면 최소제곱과 일치)
         beta = np.linalg.lstsq(X, y, rcond=None)[0]
         nrm.append(np.linalg.norm(beta))
     print(f"{p:>6}{p/n:>7.2f}{np.mean(smin):>12.4f}"
@@ -534,7 +534,7 @@ $p > n$ 이면 훈련 오차를 0으로 만드는 해가 무한히 많다.
 어떤 해를 고르느냐가 일반화를 결정하고, 최적화 알고리즘이 그 선택을 한다.
 
 - 경사하강은 초기값에서 가까운 해로 수렴하는 경향이 있다 — **암묵적 정규화**
-- 결과적으로 "작은 노름", "평평한 최소점" 쪽 해가 선택된다
+- 결과적으로 "작은 norm", "평평한 최소점" 쪽 해가 선택된다
 - 그래서 명시적 정규화 없이도 일반화가 된다
 
 이것은 편향-분산 분해가 **틀렸다**는 뜻이 아니다. 분해식 자체는 항상 참이다.

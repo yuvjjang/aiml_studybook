@@ -405,11 +405,11 @@ $$\text{내적} = \|a\|\|b\|\cos\theta
 \qquad\qquad
 \text{코사인} = \cos\theta$$
 
-내적은 **노름이 큰 항목을 선호**한다.
+내적은 **norm이 큰 항목을 선호**한다.
 
 ```{python}
 #| label: fig-cosine-vs-dot
-#| fig-cap: "노름 편차가 커질수록 두 척도가 다른 이웃을 고릅니다"
+#| fig-cap: "norm 편차가 커질수록 두 척도가 다른 이웃을 고릅니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -424,7 +424,7 @@ base /= np.linalg.norm(base, axis=1, keepdims=True)      # 방향만 남김
 spreads = np.linspace(0.0, 1.5, 13)
 overlap, top1_same = [], []
 for sp in spreads:
-    norms = np.exp(rng.normal(0, sp, N_I))               # 로그정규 노름
+    norms = np.exp(rng.normal(0, sp, N_I))               # 로그정규 norm
     X_ = base * norms[:, None]
     q = X_[:50]
     dot = q @ X_.T
@@ -444,7 +444,7 @@ fig.add_trace(go.Scatter(x=spreads, y=overlap, mode="lines+markers",
 fig.add_trace(go.Scatter(x=spreads, y=top1_same, mode="lines+markers",
                          name="1위가 같은 비율",
                          line=dict(color=viz.WARM, width=2.5)))
-fig.update_layout(xaxis_title="노름의 로그정규 표준편차 (0 = 모두 같은 노름)",
+fig.update_layout(xaxis_title="norm의 로그정규 표준편차 (0 = 모두 같은 norm)",
                   yaxis_title="일치 비율", yaxis=dict(range=[0, 1.05]),
                   legend=dict(x=0.02, y=0.25))
 viz.fig_defaults(fig, height=390, title="내적 검색과 코사인 검색이 같은 답을 주는가")
@@ -457,18 +457,18 @@ fig.show()
 
 import numpy as np
 
-print(f"{'노름 표준편차':>13} {'상위10 겹침':>13} {'1위 일치':>11}")
+print(f"{'norm 표준편차':>13} {'상위10 겹침':>13} {'1위 일치':>11}")
 print("-" * 40)
 for sp, ov, t1 in zip(spreads, overlap, top1_same):
     print(f"{sp:>13.2f} {ov:>13.3f} {t1:>11.3f}")
 print()
-print(f"노름이 모두 같으면 (표준편차 0) 두 척도는 **정확히 같은 순위**를 준다: "
+print(f"norm이 모두 같으면 (표준편차 0) 두 척도는 **정확히 같은 순위**를 준다: "
       f"겹침 {overlap[0]:.3f}")
-print(f"노름이 흩어질수록 갈라진다: 표준편차 {spreads[-1]:.1f} 에서 겹침 {overlap[-1]:.3f}")
+print(f"norm이 흩어질수록 갈라진다: 표준편차 {spreads[-1]:.1f} 에서 겹침 {overlap[-1]:.3f}")
 print()
-print("어느 쪽이 옳은가는 **노름이 무엇을 뜻하느냐**에 달렸다.")
-for a, b in [("노름 = 인기도/신뢰도", "내적 — 인기 항목을 위로 올리고 싶을 때"),
-             ("노름 = 학습 아티팩트", "코사인 — 빈도 때문에 커진 노름은 잡음"),
+print("어느 쪽이 옳은가는 **norm이 무엇을 뜻하느냐**에 달렸다.")
+for a, b in [("norm = 인기도/신뢰도", "내적 — 인기 항목을 위로 올리고 싶을 때"),
+             ("norm = 학습 아티팩트", "코사인 — 빈도 때문에 커진 norm은 잡음"),
              ("모르겠음", "정규화하고 코사인 — 대부분의 검색 시스템이 이렇게 한다")]:
     print(f"  {a:<22} → {b}")
 print()
@@ -738,7 +738,7 @@ class TinyLM(nn.Module):
 | 분포 가설 | 같이 등장 → 가까운 벡터. 레이블 없이 구조 회복 (실측) |
 | 필요 차원 | 어휘 크기가 아니라 **내재 구조**가 정함 |
 | 차원축소 지도 | 방법·perplexity 마다 다른 그림 — 그림으로 결론 금지 |
-| 코사인 vs 내적 | 노름이 같으면 동일, 흩어지면 다른 이웃 |
+| 코사인 vs 내적 | norm이 같으면 동일, 흩어지면 다른 이웃 |
 | 허브니스 | 중심 근처 점이 허브. **정규화하면 크게 완화** |
 | 이방성 | 진단은 평균 쌍별 코사인. 이 합성 실험에선 재현 안 됨 |
 | weight tying | 절약률은 $V\!\cdot\!d$ / 전체 — 모델 크기와 단조 관계 아님 |

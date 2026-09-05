@@ -31,7 +31,7 @@ $$(T^\pi V)(s) = \sum_a \pi(a|s)\Big[R(s,a)+\gamma\sum_{s'}P(s'|s,a)V(s')\Big]
 $$(T^* V)(s) = \max_a \Big[R(s,a)+\gamma\sum_{s'}P(s'|s,a)V(s')\Big]
 \qquad \text{(벨만 최적 연산자)}$$
 
-핵심 성질은 **둘 다 $\gamma$-수축**이라는 것이다. 최대 노름에 대해
+핵심 성질은 **둘 다 $\gamma$-수축**이라는 것이다. 최대 norm에 대해
 
 $$\|TV_1 - TV_2\|_\infty \le \gamma\,\|V_1 - V_2\|_\infty$$
 
@@ -164,7 +164,7 @@ for i, g_ in enumerate([0.8, 0.9, 0.95, 0.99]):
                              line=dict(color=viz.color(i), width=2.5)))
 viz.fig_defaults(
     fig, "가치 반복의 오차 ‖V_k − V*‖∞", height=450,
-    xaxis_title="반복 횟수", yaxis_title="최대 노름 오차 (로그)",
+    xaxis_title="반복 횟수", yaxis_title="최대 norm 오차 (로그)",
     yaxis_type="log")
 viz.annotate_box(fig, "직선의 기울기 = 실측 수렴률<br>"
                       "<b>γ가 1에 가까울수록 완만하다</b>",

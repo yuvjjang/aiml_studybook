@@ -613,7 +613,7 @@ for nm, kw, col in LAB:
                              line=dict(color=col,
                                        width=3 if not kw else 2)))
 viz.fig_defaults(
-    fig, "가중치 노름 ‖w‖ (참 가치는 0)", height=450,
+    fig, "가중치 norm ‖w‖ (참 가치는 0)", height=450,
     xaxis_title="갱신 스텝", yaxis_title="‖w‖ (로그)", yaxis_type="log")
 viz.annotate_box(fig, "주황만 발산한다<br><b>셋이 모여야 터진다</b>",
                  x=0.02, y=0.98, xanchor="left", yanchor="top")

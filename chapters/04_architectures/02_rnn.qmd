@@ -164,7 +164,7 @@ HID_V, T_V, B_V = 64, 100, 32
 rng = np.random.default_rng(0)
 
 def bptt_norms(sigma, activation="tanh", seed=0):
-    """W_hh 의 스펙트럼 반지름을 sigma 로 맞추고, BPTT 그래디언트 노름을 잰다."""
+    """W_hh 의 스펙트럼 반지름을 sigma 로 맞추고, BPTT 그래디언트 norm을 잰다."""
     r = np.random.default_rng(seed)
     W = r.normal(0, 1/np.sqrt(HID_V), (HID_V, HID_V))
     W *= sigma / np.max(np.abs(np.linalg.eigvals(W)))     # 스펙트럼 반지름 = sigma
@@ -179,7 +179,7 @@ def bptt_norms(sigma, activation="tanh", seed=0):
         h = np.tanh(pre) if activation == "tanh" else np.maximum(pre, 0)
         hs.append(h)
 
-    # 마지막 시점 손실에서 거슬러 올라가며 노름 기록
+    # 마지막 시점 손실에서 거슬러 올라가며 norm 기록
     g = r.normal(0, 1, (B_V, HID_V)) / np.sqrt(B_V*HID_V)
     norms = [float(np.linalg.norm(g))]
     for t in range(T_V-1, 0, -1):
@@ -194,7 +194,7 @@ sigmas = [0.5, 0.8, 0.95, 1.0, 1.05, 1.2, 2.0]
 curves = {s: bptt_norms(s) for s in sigmas}
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("시점별 그래디언트 노름 (오른쪽 = 손실 지점)",
+                    subplot_titles=("시점별 그래디언트 norm (오른쪽 = 손실 지점)",
                                     "100 시점 거슬러 간 뒤의 배율"))
 for i, s in enumerate(sigmas):
     v = np.maximum(curves[s], 1e-300)
@@ -292,7 +292,7 @@ HID_T, B_T = 48, 64
 
 def train_rnn(T, signal_pos=0, clip=1.0, sigma=1.0, lr=0.05,
               steps=500, wx=2.0, seed=0):
-    """바닐라 RNN 을 SGD 로 학습한다. (손실 이력, 클리핑 전 그래디언트 노름) 반환.
+    """바닐라 RNN 을 SGD 로 학습한다. (손실 이력, 클리핑 전 그래디언트 norm) 반환.
 
     signal_pos : 신호가 놓인 시점. 마지막 시점까지의 거리 = T-1-signal_pos
     sigma      : W_hh 의 스펙트럼 반지름
@@ -452,7 +452,7 @@ print("**필요한 것은 정보를 감쇠 없이 나르는 통로다.** 그것�
 ## 그래디언트 클리핑: 폭발 쪽만은 막을 수 있다
 
 소실은 구조를 바꿔야 하지만, **폭발은 값싸게 막는다.**
-노름이 임계를 넘으면 방향은 두고 크기만 줄인다.
+norm이 임계를 넘으면 방향은 두고 크기만 줄인다.
 
 폭발이 실제로 일어나는 영역에서 재보자 — $\sigma = 5$, 학습률 1.0.
 
@@ -472,7 +472,7 @@ for lbl, c in [("클리핑 없음", None), ("클리핑 1.0", 1.0), ("클리핑 0
     runs[lbl] = train_rnn(T=T_C, signal_pos=0, clip=c, sigma=SIG, lr=LR_C)
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("훈련 손실", "클리핑 전 그래디언트 노름"))
+                    subplot_titles=("훈련 손실", "클리핑 전 그래디언트 norm"))
 for i, (lbl, (loss, gn)) in enumerate(runs.items()):
     v = np.nan_to_num(loss, nan=1e2, posinf=1e2)
     sm = np.convolve(v, np.ones(15)/15, mode="valid")
@@ -508,7 +508,7 @@ for lbl, (loss, gn) in runs.items():
           f"{np.percentile(gn, 99):>13.2e} {np.median(gn):>11.2e}  {v}")
 print()
 none_g = runs["클리핑 없음"][1]
-print(f"클리핑 없을 때 관측된 최대 그래디언트 노름: {np.nanmax(none_g):.2e}")
+print(f"클리핑 없을 때 관측된 최대 그래디언트 norm: {np.nanmax(none_g):.2e}")
 print(f"  중앙값 {np.median(none_g):.2e} 대비 {np.nanmax(none_g)/np.median(none_g):.1e}배")
 print("  → 드물게 오는 이 한 번의 스텝이 가중치를 망가뜨린다.")
 print()
