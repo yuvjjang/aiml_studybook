@@ -20,7 +20,61 @@ jupyter: ai-ml-study
 ## 무작위화가 인과를 주는 이유
 
 [1.0](00_data_and_types.qmd)에서 봤듯, 관찰 데이터에서는 교란이 결론을 뒤집는다.
-무작위 배정은 그 문제를 **설계로** 없앤다.
+무작위 배정은 그 문제를 **설계로** 없앤다. 왜 그런지는 표기 하나를 도입하면 정확히 말할 수 있다.
+
+### 잠재적 결과: 인과를 적는 언어
+
+각 사용자 $i$ 에게 **두 개의 결과**가 있다고 본다.
+
+$$Y_i(1) = \text{처치받았을 때의 결과}, \qquad Y_i(0) = \text{받지 않았을 때의 결과}$$
+
+그 사용자의 인과효과는 $\tau_i = Y_i(1) - Y_i(0)$ 이고, 우리가 알고 싶은 것은 평균이다.
+
+$$\text{ATE} = \mathbb{E}[Y(1) - Y(0)]$$
+
+**인과추론의 근본 문제**가 여기서 바로 보인다. 한 사용자에게서 둘 중 **하나만** 관측된다.
+처치를 받았으면 $Y_i(1)$ 만 보이고 $Y_i(0)$ 은 영원히 알 수 없다.
+$\tau_i$ 는 개인 수준에서 **원리적으로 관측 불가능**하다 — 그래서 평균으로 후퇴한다.
+
+관측되는 것은 배정 $T_i$ 에 따라 골라진 하나뿐이다.
+
+$$Y_i = T_i\,Y_i(1) + (1-T_i)\,Y_i(0)$$
+
+### 무작위화가 하는 일
+
+우리가 실제로 계산하는 것은 두 군의 관측 평균 차이다.
+
+$$\hat{\Delta} = \mathbb{E}[Y \mid T=1] - \mathbb{E}[Y \mid T=0]
+= \mathbb{E}[Y(1) \mid T=1] - \mathbb{E}[Y(0) \mid T=0]$$
+
+이것이 ATE 와 같으려면 조건부 기댓값에서 조건을 떼어낼 수 있어야 한다.
+무작위 배정은 정확히 그것을 보장한다. 동전으로 $T$ 를 정하면
+$T$ 는 사용자의 어떤 성질과도 무관하므로
+
+$$T \perp\!\!\!\perp \big(Y(0), Y(1)\big)$$
+
+이 독립성 덕분에 조건이 사라진다.
+
+$$\mathbb{E}[Y(1)\mid T=1] = \mathbb{E}[Y(1)], \qquad
+\mathbb{E}[Y(0)\mid T=0] = \mathbb{E}[Y(0)]$$
+
+$$\Longrightarrow\quad \hat{\Delta} = \mathbb{E}[Y(1)] - \mathbb{E}[Y(0)] = \text{ATE}$$
+
+**무작위화는 통계적 기법이 아니라 이 독립성을 설계로 만들어 내는 장치다.**
+그리고 독립성은 $u$ 를 측정했는지와 무관하게 성립하므로,
+**관측되지 않은 교란까지** 균형을 맞춘다. 아래 실험의 마지막 두 열이 그것이다.
+
+::: {.callout-warning}
+## 무작위화가 보장하지 않는 것
+
+- **작은 표본에서의 균형** — 독립성은 기댓값 수준의 진술이다.
+  $n$ 이 작으면 우연히 한쪽에 특성이 쏠릴 수 있고, 그래서 층화 무작위화를 쓴다.
+- **간섭이 없음(SUTVA)** — $Y_i$ 가 **자신의** 처치에만 의존한다는 가정이 따로 필요하다.
+  소셜 네트워크나 마켓플레이스처럼 사용자끼리 영향을 주면 깨진다(아래 참조).
+- **배정대로 처치받음** — 배정은 무작위여도 실제 사용은 자기선택일 수 있다.
+  이때 순수 비교는 ITT(배정 의도 기준)를 추정하고, 실제 사용 효과를 원하면
+  도구변수 같은 추가 장치가 필요하다([1.6](06_causal_inference.qmd)).
+:::
 
 ```{python}
 #| label: randomization-why
@@ -291,6 +345,74 @@ $$Y^{\text{CUPED}} = Y - \theta(X - \bar{X}),
 
 $X$ 는 처치 전에 정해지므로 **처치와 무관**하다.
 따라서 이 조정은 **편향을 만들지 않으면서** 분산만 줄인다.
+
+### 얼마나 줄어드는가, 그리고 왜 그 $\theta$ 인가
+
+두 질문 모두 분산을 전개하면 바로 답이 나온다.
+
+$$\operatorname{Var}\big(Y - \theta(X-\bar{X})\big)
+= \operatorname{Var}(Y) - 2\theta\operatorname{Cov}(Y,X) + \theta^2\operatorname{Var}(X)$$
+
+$\theta$ 에 대한 볼록 이차식이므로 미분해서 0으로 놓으면 최솟값을 주는 $\theta$ 가 나온다.
+
+$$-2\operatorname{Cov}(Y,X) + 2\theta\operatorname{Var}(X) = 0
+\quad\Longrightarrow\quad
+\theta^\star = \frac{\operatorname{Cov}(Y,X)}{\operatorname{Var}(X)}$$
+
+**위 식의 $\theta$ 는 임의로 고른 값이 아니라 분산을 최소화하는 유일한 값**이고,
+$X$ 에 대한 $Y$ 의 회귀계수와 같다. 이 값을 다시 넣으면 남는 분산이 정리된다.
+
+$$\operatorname{Var}(Y^{\text{CUPED}}) = \operatorname{Var}(Y) - \frac{\operatorname{Cov}(Y,X)^2}{\operatorname{Var}(X)}
+= \operatorname{Var}(Y)\,\big(1-\rho^2\big)$$
+
+$\rho$ 는 $Y$ 와 $X$ 의 상관계수다. **분산이 정확히 $1-\rho^2$ 배로 줄어든다.**
+
+여기에 앞의 표본 크기 공식 $n \propto \sigma^2/\text{MDE}^2$ 를 결합하면 실무적 결론이 나온다.
+필요한 표본도 같은 비율로 줄어든다.
+
+$$n_{\text{CUPED}} = (1-\rho^2)\,n$$
+
+```{python}
+#| label: cuped-gain
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'사전-사후 상관 ρ':>16}{'분산 배율 1-ρ²':>16}{'필요 표본 감소':>16}{'기간 단축':>12}")
+for rho in [0.3, 0.5, 0.7, 0.8, 0.9]:
+    f = 1 - rho ** 2
+    print(f"{rho:>16.1f}{f:>16.2f}{1 - f:>15.0%}{f'{f:.2f}배':>12}")
+
+print("\n상관 0.7 이면 분산이 절반으로 줄어 실험 기간도 절반이다.")
+print("사전 기간 지표는 대개 사후와 상관이 높아(0.6~0.9) 효과가 크다.")
+
+# 시뮬레이션으로 확인
+rng = np.random.default_rng(0)
+n = 200_000
+X = rng.normal(0, 1, n)                       # 실험 전 지표
+Y = 0.8 * X + rng.normal(0, 0.6, n)           # 실험 후 지표
+theta = np.cov(Y, X)[0, 1] / np.var(X, ddof=1)
+Yc = Y - theta * (X - X.mean())
+
+rho = np.corrcoef(Y, X)[0, 1]
+print(f"\n시뮬레이션:  ρ = {rho:.4f}")
+print(f"  Var(Y)        = {Y.var(ddof=1):.4f}")
+print(f"  Var(Y_CUPED)  = {Yc.var(ddof=1):.4f}")
+print(f"  실제 비율      = {Yc.var(ddof=1)/Y.var(ddof=1):.4f}")
+print(f"  이론값 1-ρ²   = {1 - rho**2:.4f}")
+print(f"  평균 변화      = {Yc.mean() - Y.mean():+.6f}  ← 0 (편향 없음)")
+```
+
+::: {.key-concept}
+CUPED 가 통하는 조건은 **$X$ 가 처치 이전에 확정된 값**이라는 것 하나다.
+처치 이후에 측정된 변수를 공변량으로 쓰면 처치의 영향을 함께 빼버려
+**편향이 생긴다** — 이것이 [1.6](06_causal_inference.qmd)에서 다룰
+"매개 변수를 통제하면 안 된다"는 규칙의 한 사례다.
+
+같은 이유로 사용자 ID 단위 실험에서 사전 기간이 없는 신규 사용자는
+CUPED 를 적용할 수 없다. 실무에서는 신규/기존을 나눠 처리하거나
+$X$ 가 없는 쪽은 $\bar{X}$ 로 채워 조정량을 0으로 만든다.
+:::
 
 ```{python}
 #| label: fig-cuped
