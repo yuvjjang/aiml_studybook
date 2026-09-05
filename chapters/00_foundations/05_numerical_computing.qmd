@@ -63,6 +63,75 @@ bf16은 가수를 7비트로 줄이는 대신 지수를 8비트로 유지한다 
 신경망 학습은 정밀도보다 범위에 민감하다는 것이 경험적으로 확인되었다.
 :::
 
+### 부동소수점 연산의 기본 모델
+
+수치 계산의 거의 모든 논의가 딱 한 줄의 가정 위에 서 있다.
+실수 $x$ 를 가장 가까운 부동소수점 수로 반올림하는 것을 $\mathrm{fl}(x)$ 라 하면
+
+$$\mathrm{fl}(x) = x(1+\delta), \qquad |\delta| \le u$$
+
+여기서 $u$ 를 **단위 반올림(unit roundoff)** 이라 하고, 가수가 $m$ 비트일 때
+
+$$u = 2^{-(m+1)} = \frac{\epsilon}{2}$$
+
+이다($\epsilon$ 은 `np.finfo(dt).eps`, 즉 1 다음 수와 1의 간격).
+핵심은 **오차가 절대량이 아니라 비율로 들어온다**는 것이다.
+1 근처에서든 $10^{20}$ 근처에서든 상대오차는 똑같이 $u$ 이하다.
+
+여기서 격자 간격도 따라 나온다. $2^e \le |x| < 2^{e+1}$ 인 구간에서
+이웃한 두 부동소수점 수의 간격(ulp)은
+
+$$\mathrm{ulp}(x) = 2^{e-m} = \epsilon \cdot 2^{\lfloor \log_2 |x|\rfloor}$$
+
+즉 **간격은 $x$ 의 크기에 비례해 계단식으로 벌어진다.**
+아래 그림이 보여주는 것이 이 식이고, $\epsilon|x|/2 < \mathrm{ulp}(x) \le \epsilon|x|$ 라
+"상대 정밀도가 일정하다"는 말과 같은 뜻이다.
+
+```{python}
+#| label: float-model
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+# ① fl(x) = x(1+δ) 를 직접 확인한다
+x = rng.uniform(1, 2, 200_000)
+delta = (x.astype(np.float32).astype(np.float64) - x) / x
+u32 = np.finfo(np.float32).eps / 2
+print(f"float32  ε = {np.finfo(np.float32).eps:.3e}   u = ε/2 = {u32:.3e}")
+print(f"실제 관측된 최대 |δ| = {np.abs(delta).max():.3e}   → 상한 안: "
+      f"{np.abs(delta).max() <= u32}")
+
+# ② 격자 간격은 ε·2^⌊log₂x⌋
+print(f"\n{'x':>10}  {'실제 ulp':>12}  {'ε·2^⌊log₂x⌋':>14}")
+eps = np.finfo(np.float32).eps
+for v in [1.0, 1e3, 1e6, 1e8]:
+    v32 = np.float32(v)
+    gap = float(np.nextafter(v32, np.float32(np.inf)) - v32)
+    pred = eps * 2.0 ** np.floor(np.log2(v))
+    print(f"{v:>10.0e}  {gap:>12.3e}  {pred:>14.3e}")
+
+print("\n간격이 크기에 비례해 벌어지므로, 큰 수에 작은 수를 더하면 사라진다:")
+big = np.float32(1e8)
+print(f"  float32에서 1e8 + 1 == 1e8 ?  {big + np.float32(1.0) == big}")
+```
+
+::: {.key-concept}
+$\mathrm{fl}(x)=x(1+\delta)$ 라는 모델이 알려주는 것은
+**부동소수점 연산은 "약간 다른 입력에 대한 정확한 연산"** 이라는 관점이다.
+
+그래서 결과가 나빠지는 경우가 둘로 갈린다.
+
+- **문제 자체가 민감한 경우** — 입력이 조금만 달라도 답이 크게 달라진다.
+  [0.0 의 조건수](00_linear_algebra.qmd)가 재는 것이 정확히 이것이다.
+- **알고리즘이 나쁜 경우** — 문제는 순한데 계산 순서가 오차를 키운다.
+  아래의 분산 공식과 합산이 이 경우다.
+
+앞의 것은 알고리즘을 바꿔도 해결되지 않고, 뒤의 것은 해결된다.
+수치 문제를 만났을 때 먼저 물어야 할 질문이 "둘 중 어느 쪽인가"다.
+:::
+
 ---
 
 ## G0.5.1 — 수는 균등하게 놓여 있지 않다
@@ -166,6 +235,52 @@ print("→ 큰 상수가 더해진 데이터에서 naive 공식은 완전히 무
 print("  E[X²] 과 (E[X])² 가 거의 같은 큰 수라서, 빼면 유효숫자가 사라진다.")
 ```
 
+### 얼마나 날아가는지 계산할 수 있다
+
+"유효숫자가 사라진다"를 정량화해 두면 언제 위험한지 미리 안다.
+$x, y$ 가 이미 상대오차 $u$ 를 품고 있다고 하자. 저장된 값은 $\hat{x}=x(1+\delta_1)$, $\hat{y}=y(1+\delta_2)$ 다.
+빼면 오차의 **절대량**은 그대로 옮겨오는데 결과의 크기는 작아진다.
+
+$$\frac{|(\hat{x}-\hat{y})-(x-y)|}{|x-y|}
+= \frac{|x\delta_1 - y\delta_2|}{|x-y|}
+\;\le\; u \cdot \underbrace{\frac{|x|+|y|}{|x-y|}}_{\text{증폭 배율}}$$
+
+이 배율이 **뺄셈의 조건수**다. $x \approx y$ 이면 분모가 0으로 가면서 폭발한다.
+[0.0 의 조건수](00_linear_algebra.qmd)와 정확히 같은 개념이 스칼라 한 번의 연산에 적용된 것이다.
+
+$\log_{10}(\text{배율})$ 만큼 유효자리를 잃는다고 읽으면 실용적이다.
+float32 는 유효자리가 약 7이므로 배율이 $10^7$ 이면 남는 것이 없다.
+
+```{python}
+#| label: cancellation-condition
+#| code-fold: false
+
+import numpy as np
+
+print(f"{'x':>12}{'y':>14}{'증폭 배율':>14}{'잃는 자리':>10}{'float32 남는 자리':>18}")
+for x, y in [(1.0, 0.5), (1.0, 0.9), (1.0, 0.999), (1.0, 0.9999999)]:
+    amp = (abs(x) + abs(y)) / abs(x - y)
+    lost = np.log10(amp)
+    print(f"{x:>12.7f}{y:>14.7f}{amp:>14.2e}{lost:>10.1f}{7 - lost:>18.1f}")
+
+print("\n마지막 줄은 float32 유효자리를 전부 소진한다.")
+print("빼기 전에는 두 수 모두 7자리가 정확했는데, 뺀 결과에는 정확한 자리가 없다.")
+```
+
+여기서 실무 규칙이 나온다. **소거는 뺄셈 자체가 아니라 "가까운 두 수의 뺄셈"이 문제다.**
+그리고 대개 식을 다시 쓰면 피할 수 있다.
+
+| 위험한 형태 | 안전한 형태 | 이유 |
+|---|---|---|
+| $\mathbb{E}[X^2]-(\mathbb{E}[X])^2$ | $\mathbb{E}[(X-\bar{x})^2]$ | 큰 수끼리 빼지 않는다 |
+| $\sqrt{x+1}-\sqrt{x}$ | $\dfrac{1}{\sqrt{x+1}+\sqrt{x}}$ | 유리화하면 뺄셈이 사라진다 |
+| $1-\cos x$ (작은 $x$) | $2\sin^2(x/2)$ | 삼각항등식으로 치환 |
+| $\log(1+x)$ (작은 $x$) | `np.log1p(x)` | 전용 함수가 소거를 피해 구현되어 있다 |
+| $e^x-1$ (작은 $x$) | `np.expm1(x)` | 같은 이유 |
+
+마지막 두 줄이 실제로 자주 쓰인다. 로그확률을 다루는 코드에서 `log1p`/`expm1` 이
+보이면 대개 이 이유다.
+
 ::: {.callout-warning}
 ## 실무에서 만나는 소거
 
@@ -174,6 +289,73 @@ print("  E[X²] 과 (E[X])² 가 거의 같은 큰 수라서, 빼면 유효숫�
   [5.6의 그래디언트 검사](../05_transformer/06_build_gpt.qmd)에서 $\epsilon=10^{-5}$ 를 쓴 이유다.
 - **긴 시퀀스 누적** — 보상 합산, 로그확률 누적. Kahan 합산이나 float64 누적기를 쓴다.
 :::
+
+### 덧붙임: 합산 오차는 순서에 달려 있다
+
+위 경고의 마지막 줄("긴 시퀀스 누적")도 정량적인 답이 있다.
+$n$ 개를 순서대로 더하면 오차 상한이 항 수에 비례해 자란다.
+
+$$\Big|\hat{S}_n - S_n\Big| \;\lesssim\; n\,u \sum_i |a_i|$$
+
+먼저 더한 항일수록 이후의 모든 반올림에 노출되기 때문이다.
+$n$ 이 백만이고 float32($u \approx 6\times10^{-8}$)면 $nu \approx 0.06$ — 유효자리가 남지 않는다.
+
+두 가지 개선이 있다.
+
+| 방법 | 오차 상한 | 비용 |
+|---|---|---|
+| 순차 합산 | $O(nu)$ | 기준 |
+| **pairwise 합산** | $O(u\log n)$ | 사실상 동일 |
+| **Kahan 보정 합산** | $O(u)$ ($n$ 과 무관) | 덧셈 4배 |
+
+pairwise 는 배열을 반씩 나눠 재귀적으로 더하는 방식이라 누적 깊이가 $\log n$ 으로 줄어든다.
+**NumPy 의 `np.sum` 이 이미 이 방식을 쓴다** — 그래서 파이썬 `for` 루프로 더한 것보다 정확하다.
+
+Kahan 은 매 단계에서 반올림으로 잃은 부분을 별도 변수에 담아 다음 항에 되돌린다.
+
+```{python}
+#| label: summation
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(1)
+a = rng.uniform(0, 1, 200_000).astype(np.float32)
+exact = float(np.sum(a.astype(np.float64)))          # 참값 기준
+
+naive = np.float32(0.0)
+for v in a:                                          # 순차 누적
+    naive += v
+
+def kahan(arr):
+    s = np.float32(0.0)
+    c = np.float32(0.0)                              # 잃어버린 부분을 담는 보정항
+    for v in arr:
+        y = v - c
+        t = s + y
+        c = (t - s) - y                              # 이번에 반올림으로 날아간 양
+        s = t
+    return s
+
+print(f"n = {len(a):,}  (float32 누적)\n")
+print(f"{'방법':<22}{'결과':>16}{'상대오차':>14}")
+for name, val in [("순차 루프", naive),
+                  ("np.sum (pairwise)", np.sum(a)),
+                  ("Kahan 보정", kahan(a))]:
+    print(f"{name:<22}{float(val):>16.4f}{abs(float(val)-exact)/exact:>14.2e}")
+print(f"{'참값 (float64)':<22}{exact:>16.4f}")
+
+print("\npairwise 만으로 순차 루프보다 27배 정확하다 — 공짜다.")
+print("Kahan 은 거기서 다시 10배 줄이지만 덧셈 횟수가 늘어난다.")
+```
+
+실무 지침은 단순하다. **직접 루프로 누적하지 말고 `np.sum`/`torch.sum` 을 쓴다.**
+그래도 부족하면 누적기만 float64 로 올린다(`np.sum(a, dtype=np.float64)`) —
+Kahan 을 직접 구현할 일은 드물다.
+
+이 문제가 실제로 드러나는 곳은 **손실 누적과 평가 지표 집계**다.
+배치별 손실을 float16 으로 수만 번 더하면 뒤쪽 배치의 기여가 통째로 사라질 수 있다.
+그래서 혼합정밀도 학습에서도 **누적은 fp32 로 한다**(아래 참조).
 
 ---
 
@@ -188,8 +370,22 @@ $$\log\sum_i e^{z_i}$$
 
 $$\log\sum_i e^{z_i} = m + \log\sum_i e^{z_i - m}, \qquad m = \max_i z_i$$
 
-지수 안의 값이 항상 $\le 0$ 이 되어 $e^{z_i-m} \le 1$ 이므로 오버플로가 불가능하고,
-최댓값 항은 정확히 $e^0=1$ 이라 언더플로해서 전부 0이 되는 일도 없다.
+항등식 자체는 한 줄이다. $e^{z_i} = e^m e^{z_i-m}$ 이므로 공통인수 $e^m$ 을 합 밖으로 빼내면
+
+$$\log\sum_i e^{z_i} = \log\!\Big(e^m \sum_i e^{z_i-m}\Big) = m + \log\sum_i e^{z_i-m}$$
+
+**수학적으로는 완전히 같은 식이고, 달라지는 것은 중간값의 크기뿐이다.**
+
+$m$ 을 굳이 최댓값으로 잡는 이유가 여기서 분명해진다.
+
+- 모든 지수가 $z_i - m \le 0$ 이라 $e^{z_i-m} \le 1$ — **오버플로가 원천적으로 불가능**하다.
+- 최댓값 항은 정확히 $e^0 = 1$ 이라 합이 최소 1 이상 — **로그의 입력이 0이 되지 않는다.**
+- 나머지 항이 언더플로해서 0이 되더라도 잃는 것은 원래 무시할 만한 기여분뿐이다.
+
+즉 최댓값은 "오버플로를 막으면서 언더플로도 안전한" 유일한 선택에 가깝다.
+softmax 도 같은 항등식의 결과다 — 분자와 분모에서 $e^m$ 이 약분되므로
+$\text{softmax}(z) = \text{softmax}(z-m)$ 이고,
+[0.4 에서 본 "로짓 이동 불변성"](04_information_theory.qmd)이 구현 차원에서 이렇게 쓰인다.
 
 ---
 
