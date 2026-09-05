@@ -112,6 +112,91 @@ fig.show()
 마진을 최대화하지 않으므로 일반화 보장이 약하다.
 :::
 
+### 몇 번이면 끝나는가: Novikoff 경계
+
+"유한 번"이 얼마인지도 계산할 수 있고, 그 답에 **마진**이 등장한다.
+분리하는 단위벡터 $\mathbf{w}^\star$ 가 있어 모든 샘플이 마진 $\gamma$ 이상 떨어져 있다고 하자.
+그리고 모든 입력의 크기가 $R$ 이하라고 하자.
+
+$$y_i\,\mathbf{w}^{\star\top}\mathbf{x}_i \ge \gamma > 0, \qquad \|\mathbf{x}_i\| \le R$$
+
+갱신을 $k$ 번 했을 때의 가중치를 $\mathbf{w}_k$ 라 두고 **두 방향에서 조인다.**
+
+**① 아래에서**: 갱신마다 $\mathbf{w}^\star$ 와의 내적이 최소 $\gamma$ 씩 는다.
+갱신은 틀렸을 때만 $\mathbf{w}_{k} = \mathbf{w}_{k-1} + y_i\mathbf{x}_i$ 로 일어나므로
+
+$$\mathbf{w}_k^\top\mathbf{w}^\star = \mathbf{w}_{k-1}^\top\mathbf{w}^\star + y_i\mathbf{x}_i^\top\mathbf{w}^\star
+\;\ge\; \mathbf{w}_{k-1}^\top\mathbf{w}^\star + \gamma
+\quad\Longrightarrow\quad
+\mathbf{w}_k^\top\mathbf{w}^\star \ge k\gamma$$
+
+코시-슈바르츠에 의해 $\|\mathbf{w}_k\| \ge \mathbf{w}_k^\top\mathbf{w}^\star \ge k\gamma$ 다.
+
+**② 위에서**: 크기 자체는 천천히 자란다. 갱신은 **틀렸을 때만** 일어나므로
+$y_i\mathbf{w}_{k-1}^\top\mathbf{x}_i \le 0$ 이고, 따라서
+
+$$\|\mathbf{w}_k\|^2 = \|\mathbf{w}_{k-1}\|^2 + 2\underbrace{y_i\mathbf{w}_{k-1}^\top\mathbf{x}_i}_{\le\,0} + \|\mathbf{x}_i\|^2
+\;\le\; \|\mathbf{w}_{k-1}\|^2 + R^2
+\quad\Longrightarrow\quad
+\|\mathbf{w}_k\|^2 \le kR^2$$
+
+**둘을 합치면** $k^2\gamma^2 \le \|\mathbf{w}_k\|^2 \le kR^2$ 이고, $k$ 로 나누면
+
+$$\boxed{\ k \;\le\; \left(\frac{R}{\gamma}\right)^{2}\ }$$
+
+갱신 횟수가 **데이터 수와 무관**하고 오직 $R/\gamma$ 에만 의존한다.
+백만 개든 열 개든, 마진이 같으면 갱신 횟수의 상한이 같다.
+
+```{python}
+#| label: novikoff
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+def perceptron_updates(X, y, max_iter=200_000):
+    w = np.zeros(X.shape[1])
+    k = 0
+    for _ in range(max_iter):
+        wrong = np.where(y * (X @ w) <= 0)[0]
+        if len(wrong) == 0:
+            return k
+        i = wrong[0]
+        w = w + y[i] * X[i]
+        k += 1
+    return None
+
+print(f"{'요청 간격':>10}{'실제 마진 γ':>13}{'R':>7}{'(R/γ)² 상한':>14}"
+      f"{'실제 갱신':>11}{'n':>7}")
+for gap in [1.0, 0.5, 0.2, 0.1]:
+    for n in [50, 500]:
+        y = np.where(rng.random(n) < 0.5, -1.0, 1.0)
+        # 첫 축을 반드시 부호대로 두어 선형 분리를 보장한다
+        X = np.c_[y * (gap + np.abs(rng.normal(0, 0.5, n))),
+                  rng.normal(0, 1, n)]
+        R = float(np.linalg.norm(X, axis=1).max())
+        gamma = float((y * X[:, 0]).min())        # w* = e1 기준 마진
+        k = perceptron_updates(X, y)
+        print(f"{gap:>10.1f}{gamma:>13.3f}{R:>7.2f}{(R/gamma)**2:>14.0f}"
+              f"{k:>11}{n:>7}")
+
+print()
+print("실제 갱신 횟수가 언제나 (R/γ)² 상한 안에 있다.")
+print("마진이 작아질수록 상한이 제곱으로 커지고, 실제 갱신도 함께 늘어난다.")
+print("n 이 10배여도 상한은 거의 같다 — 데이터 수와 무관하다는 것이 정리의 요점이다.")
+```
+
+::: {.key-concept}
+$R/\gamma$ 라는 양이 [SVM](../02_classical_ml/05_svm_kernels.qmd)에서 다시 나온다.
+거기서는 **마진을 최대화**하는 것이 목적이었고, 여기서는 마진이
+**수렴 속도를 결정**한다. 같은 양이 두 역할을 한다.
+
+퍼셉트론이 아무 분리선이나 찾는 것도 이 증명이 설명한다 —
+경계는 "언젠가 멈춘다"만 보장할 뿐, 멈춘 곳의 마진에 대해서는 아무 말도 하지 않는다.
+마진이 큰 해를 원하면 목적함수에 그렇게 적어 넣어야 하고, 그것이 SVM 이다.
+:::
+
 ---
 
 ## XOR: 첫 번째 벽
