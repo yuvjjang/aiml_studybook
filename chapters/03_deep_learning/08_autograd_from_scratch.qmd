@@ -32,6 +32,68 @@ $c = ab$ 이면 $\partial c/\partial a = b$, $\partial c/\partial b = a$ 이므�
 
 이 규칙을 연산마다 하나씩 적어두면, **그래프 전체의 미분이 자동으로 나온다.**
 
+### 왜 `=` 가 아니라 `+=` 인가
+
+구현에서 가장 중요한 한 글자다. 근거는 **다변수 연쇄법칙**이다.
+어떤 노드 $v$ 가 여러 연산에 재사용되면, 손실로 가는 경로가 여러 개 생긴다.
+그 경로들의 기여는 **더해진다.**
+
+$$\frac{\partial L}{\partial v} = \sum_{u \,\in\, \text{children}(v)} \frac{\partial L}{\partial u}\,\frac{\partial u}{\partial v}$$
+
+$v$ 를 조금 흔들면 $u_1, u_2, \dots$ 가 각각 흔들리고 그 효과가 $L$ 에서 합쳐지기 때문이다.
+그래서 각 자식이 자기 몫을 **누적**해야 하고, 덮어쓰면 마지막 경로만 남는다.
+
+가장 단순한 예로 $y = x \cdot x$ 를 보자. 참값은 $dy/dx = 2x$ 다.
+곱셈의 역함수는 두 부모에게 각각 상대편 값을 곱해 보내는데,
+여기서는 두 부모가 **같은 노드**라 같은 자리에 $x$ 가 두 번 도착한다.
+`+=` 면 $x + x = 2x$ 로 맞고, `=` 면 $x$ 가 되어 절반이 된다.
+
+```{python}
+#| label: accumulate-why
+#| code-fold: false
+
+class Node:
+    def __init__(self, v):
+        self.data, self.grad, self._back = v, 0.0, lambda: None
+
+def mul(a, b, accumulate=True):
+    out = Node(a.data * b.data)
+    def back():
+        if accumulate:
+            a.grad += b.data * out.grad
+            b.grad += a.data * out.grad
+        else:                                  # 잘못된 구현
+            a.grad = b.data * out.grad
+            b.grad = a.data * out.grad
+    out._back = back
+    return out
+
+for acc in (True, False):
+    x = Node(3.0)
+    y = mul(x, x, accumulate=acc)              # y = x²
+    y.grad = 1.0
+    y._back()
+    tag = "+=  (올바름)" if acc else "=   (틀림)"
+    print(f"{tag}   dy/dx = {x.grad:.1f}   참값 2x = {2*x.data:.1f}")
+```
+
+### 위상 정렬이 필요한 이유
+
+`+=` 만으로는 부족하다. **언제 역함수를 호출할지**도 정해져야 한다.
+
+노드 $v$ 의 그래디언트는 **모든 자식이 기여를 마친 뒤에야 완성된다.**
+아직 덜 채워진 $\partial L/\partial v$ 로 $v$ 의 역함수를 호출하면,
+그 값이 부모에게 그대로 전파되어 그래프 전체가 틀어진다.
+
+그래서 역전파는 **위상 역순**으로 진행해야 한다 —
+어떤 노드를 처리하기 전에 그 노드에 의존하는 모든 노드가 먼저 처리되어야 한다.
+계산 그래프가 **비순환**(DAG)이므로 그런 순서가 항상 존재하고,
+위 구현의 `topo` 정렬이 그 순서를 만든다.
+
+이것이 순전파를 먼저 끝내야 하는 이유이기도 하다.
+그래프의 모양은 실행하면서 결정되므로(동적 그래프),
+전체 구조를 알기 전에는 올바른 순서를 알 수 없다.
+
 ---
 
 ## 최소 구현
