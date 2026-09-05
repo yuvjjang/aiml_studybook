@@ -174,6 +174,80 @@ X = StandardScaler().fit_transform(X)        # ✗ 전체 통계가 새어 들�
 X = SelectKBest(k=20).fit_transform(X, y)    # ✗ 타깃을 보고 열을 골랐음
 ```
 
+### 왜 스케일링이 필요한가
+
+방법을 고르기 전에, 애초에 왜 필요한지가 정리되어야 한다.
+이유가 **세 가지**이고 서로 다르다 — 모델에 따라 해당되는 것이 달라진다.
+
+**① 최적화가 느려진다.** 선형 모델의 손실 $\|X\beta-y\|^2$ 의 헤시안은 $2X^\top X$ 이고,
+[0.1 에서 본 대로](../00_foundations/01_calculus_optimization.qmd) 경사하강의 수렴 속도는
+그 조건수 $\kappa$ 가 정한다. 특성 하나가 다른 것보다 1000배 큰 눈금을 쓰면
+$X^\top X$ 의 고유값도 그만큼 벌어져 손실 표면이 길쭉한 협곡이 된다.
+
+$$\text{수렴에 필요한 스텝 수} \;\propto\; \kappa(X^\top X)$$
+
+**② 거리가 큰 눈금에 지배된다.** kNN·k-means·SVM(RBF)처럼 거리를 쓰는 모델에서
+
+$$d(\mathbf{a},\mathbf{b})^2 = \sum_j (a_j-b_j)^2$$
+
+각 항의 크기는 그 특성의 **단위**에 달려 있다. 소득(원 단위, 수천만)과 나이(수십)를
+그대로 넣으면 사실상 소득만 보는 모델이 된다. 단위를 미터에서 밀리미터로 바꾸는 것만으로
+이웃이 달라진다.
+
+**③ 정규화가 불공평해진다.** Ridge/Lasso의 벌점 $\lambda\sum_j \beta_j^2$ 은
+모든 계수에 **같은** 벌점을 매긴다. 그런데 특성의 눈금이 크면 같은 효과를 내는 계수가
+작아지므로 벌점을 덜 받는다. 즉 **스케일링을 안 하면 정규화의 세기가 특성마다 달라진다.**
+그래서 정규화를 쓰는 모델에서는 표준화가 선택이 아니라 필수다.
+
+```{python}
+#| label: why-scale
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+n = 500
+age = rng.normal(45, 12, n)                    # 수십 단위
+income = rng.normal(5_000_000, 1_500_000, n)   # 수백만 단위
+X = np.c_[age, income]
+Xs = (X - X.mean(0)) / X.std(0)                # 표준화
+
+print("① 최적화 — XᵀX 의 조건수")
+print(f"   원본     κ = {np.linalg.cond(X.T @ X):>12.3e}")
+print(f"   표준화   κ = {np.linalg.cond(Xs.T @ Xs):>12.3e}")
+
+print("\n② 거리 — 무작위 점쌍 5000개에서 각 특성이 거리에 기여하는 평균 비율")
+i, j = rng.integers(0, n, 5000), rng.integers(0, n, 5000)
+for name, M in [("원본", X), ("표준화", Xs)]:
+    d2 = (M[i] - M[j]) ** 2
+    share = d2.mean(0) / d2.mean(0).sum()
+    print(f"   {name:<8} 나이 {share[0]:>7.2%}   소득 {share[1]:>7.2%}")
+
+print("\n③ 정규화 — 같은 효과를 내는 계수의 크기")
+print("   나이가 1 표준편차 오를 때와 같은 효과를 내려면")
+print(f"   원본 계수 비율은 약 {X.std(0)[1]/X.std(0)[0]:,.0f} : 1 이다.")
+print("   λΣβ² 는 이 둘을 똑같이 벌하므로, 큰 눈금 특성이 사실상 벌점을 면제받는다.")
+```
+
+::: {.key-concept}
+**어떤 모델이 스케일링을 필요로 하는가**
+
+| 모델 | 필요한가 | 이유 |
+|---|---|---|
+| 선형·로지스틱 회귀 (정규화 O) | **필수** | ③ 벌점 공평성 |
+| 선형 회귀 (정규화 X, 닫힌 해) | 불필요 | 해가 스케일에 불변 |
+| 경사하강으로 푸는 모든 것 | **필수** | ① 조건수 |
+| kNN, k-means, SVM(RBF) | **필수** | ② 거리 |
+| 신경망 | **필수** | ①, 그리고 활성화 포화 |
+| 결정트리, 랜덤포레스트, 부스팅 | **불필요** | 분할이 순서만 본다 |
+
+마지막 줄이 중요하다. 트리 계열은 각 특성에서 **임계값 하나**로 자르고
+그 판단이 순서에만 의존하므로, 단조 변환에 완전히 불변이다
+([1.0 의 허용 변환](00_data_and_types.qmd) 관점에서 트리는 순서 척도만 쓴다).
+그래서 트리 모델에 표준화를 넣는 것은 해롭지는 않지만 무의미하다.
+:::
+
 ---
 
 ## G1.3.2 — 스케일링: 이상치가 있을 때
@@ -283,6 +357,55 @@ $$\text{Box-Cox: } x^{(\lambda)} = \begin{cases}
 \qquad (x > 0 \text{ 필요})$$
 
 Yeo-Johnson은 이를 음수까지 확장한 것이다.
+
+### 왜 $x^\lambda$ 가 아니라 $\dfrac{x^\lambda-1}{\lambda}$ 인가
+
+그냥 $x^\lambda$ 를 쓰면 될 것 같은데 굳이 1을 빼고 $\lambda$ 로 나눈다.
+이유가 두 가지다.
+
+**① $\lambda \to 0$ 에서 로그로 이어진다.** $x^\lambda = e^{\lambda\ln x}$ 를 전개하면
+
+$$\frac{x^\lambda - 1}{\lambda} = \frac{e^{\lambda \ln x}-1}{\lambda}
+= \frac{(1 + \lambda\ln x + \tfrac{1}{2}\lambda^2\ln^2 x + \cdots) - 1}{\lambda}
+\;\xrightarrow[\lambda\to0]{}\; \ln x$$
+
+$x^\lambda$ 만 쓰면 $\lambda\to0$ 에서 상수 1로 수렴해 정보가 사라진다.
+1을 빼고 $\lambda$ 로 나누는 것은 **$\lambda=0$ 에서 로그와 매끄럽게 이어 붙이기 위한 규격화**다.
+덕분에 $\lambda$ 를 연속적인 하나의 손잡이로 다룰 수 있다.
+
+**② $\lambda<0$ 에서도 순서가 보존된다.** $\lambda=-1$ 이면 $x^{-1}$ 은 **순감소** 함수라
+큰 값과 작은 값이 뒤집힌다. 그런데 $\frac{x^{-1}-1}{-1} = 1 - \frac{1}{x}$ 는 순증가다.
+$\lambda$ 로 나누는 것이 음수일 때 부호를 되돌려 준다.
+**어떤 $\lambda$ 에서도 변환이 단조 증가**라는 성질이 유지되는 것이다.
+
+$\lambda$ 자체는 **최대우도로 고른다.** 변환 후 데이터가 정규분포를 따른다고 보고
+로그우도를 최대화하는 $\lambda$ 를 찾는데, 변수변환이므로 야코비안 항
+$(\lambda-1)\sum_i \ln x_i$ 가 함께 들어간다
+([0.2 의 변수변환](../00_foundations/02_probability.qmd)과 같은 이유다).
+
+```{python}
+#| label: boxcox-why
+#| code-fold: false
+
+import numpy as np
+
+x = np.array([0.5, 1.0, 2.0, 5.0, 10.0])
+
+print("① λ → 0 에서 로그로 수렴하는가\n")
+print(f"{'λ':>10}" + "".join(f"{v:>9.1f}" for v in x))
+for lam in [1.0, 0.5, 0.1, 0.01, 0.0001]:
+    t = (x ** lam - 1) / lam
+    print(f"{lam:>10.4f}" + "".join(f"{v:>9.4f}" for v in t))
+print(f"{'ln x':>10}" + "".join(f"{v:>9.4f}" for v in np.log(x)))
+
+print("\n② λ < 0 에서도 순서가 보존되는가\n")
+for lam in [-1.0, -0.5]:
+    t = (x ** lam - 1) / lam
+    mono = np.all(np.diff(t) > 0)
+    print(f"  λ={lam:>5}  변환값 {np.round(t, 3)}  순증가={mono}")
+    print(f"  {'':>7}  (나누지 않으면 x^λ = {np.round(x ** lam, 3)}  순증가="
+          f"{np.all(np.diff(x ** lam) > 0)})")
+```
 
 ```{python}
 #| label: fig-power-transform
@@ -479,6 +602,66 @@ for s in ["결측률이 낮고(<5%) MCAR 이면 삭제나 단순 대치로 충�
           "**어떤 대치든 fit 은 학습셋에서만** — 위 누수 규칙 그대로"]:
     print(f"  · {s}")
 ```
+
+### target encoding 을 고치는 법: 축소(shrinkage)
+
+위 실험은 **계산 시점**의 문제를 보여줬다. 시점을 바로잡아도 문제가 하나 더 남는다.
+관측이 3개뿐인 범주의 타깃 평균은 신뢰할 수 없는데, 100개짜리 범주의 평균과
+똑같은 무게로 쓰이기 때문이다.
+
+해법은 **전체 평균 쪽으로 끌어당기는 것**이다. 범주 $c$ 의 관측 수를 $n_c$,
+그 범주의 타깃 평균을 $\bar{y}_c$, 전체 평균을 $\bar{y}$ 라 하면
+
+$$\hat{y}_c = \frac{n_c\,\bar{y}_c + m\,\bar{y}}{n_c + m}$$
+
+$m$ 은 **가상의 관측 수**다. 식을 다시 쓰면 두 값의 가중평균임이 분명해진다.
+
+$$\hat{y}_c = w_c\,\bar{y}_c + (1-w_c)\,\bar{y}, \qquad w_c = \frac{n_c}{n_c+m}$$
+
+- $n_c \gg m$ → $w_c \to 1$: 데이터가 충분하니 그 범주의 평균을 믿는다
+- $n_c \ll m$ → $w_c \to 0$: 데이터가 부족하니 전체 평균으로 후퇴한다
+- $n_c = m$ → 정확히 반반
+
+::: {.key-concept}
+이 식은 [0.2 의 베타-이항 켤레](../00_foundations/02_probability.qmd)와 **같은 식**이다.
+거기서 사후평균이 $\frac{a+k}{a+b+n}$ 이었던 것을 떠올리면,
+$m$ 이 사전분포의 유사 관측 수 $a+b$ 자리에 그대로 앉는다.
+
+즉 target encoding 의 평활화는 임시방편이 아니라 **경험적 베이즈 축소 추정량**이다.
+"데이터가 적으면 전체 평균 쪽으로 물러난다"는 규칙이 베이즈 갱신의 결론과 일치한다.
+같은 구조가 [2.7 앙상블](../02_classical_ml/07_ensembles.qmd)의 정규화,
+계층 모형의 부분 풀링(partial pooling)에서 반복된다.
+:::
+
+```{python}
+#| label: target-smoothing
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+global_mean = 0.30
+m = 20.0                                   # 가상 관측 수 (평활 강도)
+
+print(f"전체 평균 {global_mean:.2f},  평활 강도 m = {m:.0f}\n")
+print(f"{'범주 크기 n_c':>13}{'원 평균':>10}{'가중치 w':>10}{'평활 후':>10}{'이동량':>10}")
+for n_c in [1, 3, 10, 20, 100, 1000]:
+    raw = 0.90                             # 우연히 매우 높게 나온 범주
+    w = n_c / (n_c + m)
+    smoothed = w * raw + (1 - w) * global_mean
+    print(f"{n_c:>13}{raw:>10.2f}{w:>10.3f}{smoothed:>10.3f}"
+          f"{smoothed - raw:>10.3f}")
+
+print("\n관측 1개짜리 범주의 0.90 은 0.33 까지 끌려 내려간다 — 거의 전체 평균이다.")
+print("1000개짜리 범주는 0.88 로 거의 그대로 남는다.")
+print("m 은 '몇 개쯤 봐야 그 범주를 믿을 것인가'를 정하는 손잡이다.")
+```
+
+평활만으로는 누수가 사라지지 않는다는 점은 그대로다.
+**두 가지를 함께 해야 한다** — 학습 폴드 안에서만 계산하고(시점),
+그 안에서 다시 축소한다(신뢰도). 실무에서는 여기에 더해
+out-of-fold 인코딩(각 폴드의 값을 나머지 폴드로 계산)을 쓰는 것이 표준이다.
 
 ---
 
