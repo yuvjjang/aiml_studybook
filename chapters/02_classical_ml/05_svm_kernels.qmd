@@ -111,6 +111,63 @@ fig.show()
 
 ## 최적화 문제와 쌍대
 
+### 마진 최대화가 왜 $\tfrac12\|\mathbf{w}\|^2$ 최소화가 되는가
+
+"동등하다"는 말에는 눈금 고정이라는 단계가 하나 숨어 있다.
+
+초평면 $\mathbf{w}^\top\mathbf{x}+b=0$ 까지의 거리는 [0.0](../00_foundations/00_linear_algebra.qmd)의
+점-평면 거리 공식으로
+
+$$d(\mathbf{x}) = \frac{|\mathbf{w}^\top\mathbf{x}+b|}{\|\mathbf{w}\|}$$
+
+여기에 문제가 하나 있다. $(\mathbf{w},b)$ 를 $(c\mathbf{w},cb)$ 로 바꿔도
+**같은 초평면**이라 거리는 변하지 않는데 $\|\mathbf{w}\|$ 는 변한다.
+즉 표현이 유일하지 않다. 그래서 **눈금을 고정한다** —
+경계에 가장 가까운 점에서 함수값의 크기가 정확히 1이 되도록 잡는다.
+
+$$\min_i\, y_i(\mathbf{w}^\top\mathbf{x}_i+b) = 1$$
+
+이 규격화 아래에서 마진(양쪽 여백의 절반)이 깔끔하게 정리된다.
+
+$$\text{마진} = \min_i \frac{y_i(\mathbf{w}^\top\mathbf{x}_i+b)}{\|\mathbf{w}\|} = \frac{1}{\|\mathbf{w}\|}$$
+
+$$\boxed{\ \text{마진 최대화} \iff \|\mathbf{w}\| \text{ 최소화} \iff \tfrac{1}{2}\|\mathbf{w}\|^2 \text{ 최소화}\ }$$
+
+제곱과 $\tfrac12$ 은 순전히 편의다 — 단조 변환이라 최적해가 같고,
+미분하면 $\mathbf{w}$ 가 깔끔하게 나오며, 무엇보다 **볼록 이차계획**이 되어
+전역 최적해가 보장된다. 규격화가 만든 부등식 제약 $y_i(\mathbf{w}^\top\mathbf{x}_i+b)\ge 1$ 이
+아래 문제의 제약 그대로다.
+
+```{python}
+#| label: margin-scaling
+#| code-fold: false
+
+import numpy as np
+
+# 같은 초평면을 서로 다른 눈금으로 표현해 본다
+w0, b0 = np.array([1.0, 1.0]), -2.0
+pts = np.array([[2.0, 1.0], [0.5, 0.5], [3.0, 2.0]])
+y = np.array([1.0, -1.0, 1.0])
+
+print(f"{'배율 c':>8}{'‖w‖':>10}{'가장 가까운 점의 함수값':>22}{'기하 마진':>12}")
+for c in [0.5, 1.0, 2.0, 10.0]:
+    w, b = c * w0, c * b0
+    f = y * (pts @ w + b)
+    print(f"{c:>8.1f}{np.linalg.norm(w):>10.3f}{f.min():>22.3f}"
+          f"{f.min()/np.linalg.norm(w):>12.4f}")
+
+print("\n기하 마진은 c 와 무관하다 — 같은 초평면이니 당연하다.")
+print("‖w‖ 만 보고 '마진이 크다'고 말할 수 없는 이유이고,")
+print("그래서 함수값의 최솟값을 1 로 고정하는 규격화가 필요하다.")
+
+# 규격화 후: 마진 = 1/‖w‖
+c_norm = 1.0 / (y * (pts @ w0 + b0)).min()
+w, b = c_norm * w0, c_norm * b0
+print(f"\n규격화 배율 c = {c_norm:.4f}")
+print(f"  함수값 최솟값 = {(y * (pts @ w + b)).min():.4f}  (1 이 되었다)")
+print(f"  1/‖w‖ = {1/np.linalg.norm(w):.4f}  = 기하 마진")
+```
+
 마진을 최대화하는 것은 다음과 동등하다.
 
 $$\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2
