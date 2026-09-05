@@ -127,6 +127,88 @@ def flash_attention(Q, K, V, block_size=64, causal=False):
 
 ---
 
+### 왜 타일링이 가능한가: 온라인 softmax
+
+FlashAttention 의 발상은 단순하다 — $n\times n$ 점수 행렬을 만들지 않고
+**블록 단위로 처리한다.** 그런데 softmax 는 분모에 **전체 합**이 들어가므로
+얼핏 전부 보기 전에는 계산할 수 없어 보인다.
+
+$$\text{softmax}(s)_j = \frac{e^{s_j - m}}{\sum_{j'} e^{s_{j'} - m}},
+\qquad m = \max_{j'} s_{j'}$$
+
+해법은 **부분합을 들고 다니며 갱신**하는 것이다.
+지금까지 본 최댓값 $m$ 과 지수합 $\ell$ 을 유지하다가, 새 블록의 $(m', \ell')$ 을 만나면
+
+$$m^{\text{new}} = \max(m, m'), \qquad
+\ell^{\text{new}} = e^{\,m - m^{\text{new}}}\,\ell + e^{\,m' - m^{\text{new}}}\,\ell'$$
+
+**옛 합에 보정 인자를 곱해 새 기준으로 옮기는 것**이 전부다.
+출력 누적기 $O$ 도 같은 인자로 재조정한다.
+
+$$O^{\text{new}} = \frac{e^{\,m-m^{\text{new}}}\,\ell\;O + e^{\,m'-m^{\text{new}}}\,\ell'\,O'}{\ell^{\text{new}}}$$
+
+[0.5 의 log-sum-exp 트릭](../00_foundations/05_numerical_computing.qmd)이
+스트리밍 형태로 확장된 것이고, 그래서 **근사가 아니라 정확히 같은 값**이 나온다.
+
+```{python}
+#| label: online-softmax
+#| code-fold: false
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+
+n, d = 2048, 64
+s = rng.normal(0, 3, n)                   # 점수 한 행
+V = rng.normal(0, 1, (n, d))
+
+# ① 표준: 전체를 한 번에
+w = np.exp(s - s.max())
+ref = (w / w.sum()) @ V
+
+# ② 온라인: 블록으로 나눠 누적 (행렬 전체를 들고 있지 않는다)
+m, ell, O = -np.inf, 0.0, np.zeros(d)
+for lo in range(0, n, 128):                # 블록 크기 128
+    sb, Vb = s[lo:lo+128], V[lo:lo+128]
+    m_b = sb.max()
+    w_b = np.exp(sb - m_b)
+    ell_b, O_b = w_b.sum(), w_b @ Vb
+
+    m_new = max(m, m_b)
+    a, b = np.exp(m - m_new) if np.isfinite(m) else 0.0, np.exp(m_b - m_new)
+    O = a * O * ell + b * O_b               # 두 누적기를 같은 기준으로
+    ell = a * ell + b * ell_b
+    O = O / ell
+    m = m_new
+
+print(f"표준 계산과의 최대 오차: {np.abs(O - ref).max():.3e}")
+print(f"블록 하나가 들고 있는 점수 개수: 128  (전체 {n} 개가 아니다)")
+print()
+print("근사가 아니라 부동소수점 오차 수준에서 같다.")
+print("softmax 의 분모를 '나중에 보정'할 수 있다는 것이 타일링의 열쇠다.")
+```
+
+### 이득은 연산이 아니라 메모리 왕복에서 온다
+
+FlashAttention 은 FLOPs 를 줄이지 않는다. 오히려 재계산 때문에 **조금 늘어난다.**
+줄이는 것은 **HBM 왕복량**이다. SRAM 크기를 $M$ 이라 하면
+
+| | HBM 접근량 | 비고 |
+|---|---|---|
+| 표준 어텐션 | $\Theta(n^2 + nd)$ | $n\times n$ 행렬을 쓰고 다시 읽는다 |
+| FlashAttention | $\Theta\!\left(\dfrac{n^2d^2}{M}\right)$ | 블록만 오간다 |
+
+$M$ 이 $d^2$ 보다 훨씬 크므로 $\frac{n^2d^2}{M} \ll n^2$ 이다.
+$d=64$, $M=100\text{KB}$ 정도면 왕복량이 **한 자릿수 배 줄어든다.**
+
+여기서 실무적 함의가 하나 나온다. **긴 문맥에서 병목은 계산이 아니라 대역폭**이므로,
+GPU 의 FLOPS 수치만 보고 성능을 예측하면 빗나간다.
+어텐션의 산술 강도(연산량 / 메모리 접근량)가 낮다는 것이 문제의 본질이고,
+같은 이유로 추론 시 **KV 캐시 읽기**가 디코딩 속도를 지배한다
+([7.14 추론 최적화](../07_language/14_inference_optimization.qmd)).
+
+---
+
 ## G5.7.1 — 근사가 아니라 정확히 같다
 
 FlashAttention이 자주 오해받는 지점이다. 이것은 **근사 기법이 아니다.**

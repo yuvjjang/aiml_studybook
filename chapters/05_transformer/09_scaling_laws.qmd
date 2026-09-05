@@ -152,6 +152,110 @@ Kaplan과 Hoffmann이 서로 다른 답을 낸 것은 데이터가 아니라 **�
 
 ---
 
+### 연산 최적 배분은 라그랑주 한 번이면 나온다
+
+Chinchilla 의 결론 — "$N$ 과 $D$ 를 **같은 비율로** 키워라" — 은 관찰이 아니라 계산 결과다.
+손실을 파라미터와 데이터의 함수로 두고
+
+$$L(N, D) = \underbrace{E}_{\text{줄일 수 없는 항}}
++ \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}}$$
+
+여기에 연산량 제약을 건다. 학습 FLOPs 는 경험적으로
+
+$$C \approx 6ND$$
+
+(순전파 2, 역전파 4 — 파라미터당 토큰당 6회 곱셈-덧셈이라는 어림이다.)
+
+**제약 있는 최소화**이므로 [0.0 의 라그랑주](../00_foundations/00_linear_algebra.qmd)를 쓴다.
+
+$$\mathcal{L} = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta} + \lambda\,(6ND - C)$$
+
+두 편미분을 0으로 놓으면
+
+$$-\frac{\alpha A}{N^{\alpha+1}} + 6\lambda D = 0,
+\qquad
+-\frac{\beta B}{D^{\beta+1}} + 6\lambda N = 0$$
+
+$\lambda$ 를 소거하기 위해 각각 $N$, $D$ 를 곱해 비교하면 깔끔한 관계가 남는다.
+
+$$\boxed{\ \frac{\alpha A}{N^{\alpha}} = \frac{\beta B}{D^{\beta}}\ }$$
+
+**두 항의 기여가 균형을 이룰 때가 최적**이라는 뜻이다.
+한쪽이 지배하면 그쪽에 자원을 더 주는 것이 이득이므로 당연한 결과이기도 하다.
+
+여기서 $C=6ND$ 를 대입해 풀면 지수가 나온다.
+
+$$N^\star \propto C^{\,\frac{\beta}{\alpha+\beta}},
+\qquad
+D^\star \propto C^{\,\frac{\alpha}{\alpha+\beta}}$$
+
+Chinchilla 가 적합한 값은 $\alpha \approx 0.34$, $\beta \approx 0.28$ 로 **비슷하지만 같지는 않다.**
+넣어 보면
+
+$$N^\star \propto C^{0.45}, \qquad D^\star \propto C^{0.55}$$
+
+두 지수가 $\tfrac12$ 근처라 **"$N$ 과 $D$ 를 대체로 같은 비율로"** 라는 결론이 나온다.
+다만 $\beta<\alpha$ 라 데이터 쪽 지수가 조금 크고, 그래서 $D/N$ 비는
+연산량이 커질수록 **천천히 증가**한다 — 완전히 일정하지는 않다.
+"토큰 수 ≈ 파라미터 수의 20배"는 Chinchilla 규모 근처에서의 어림이지
+모든 규모에 통하는 상수가 아니다.
+
+Kaplan 이 $N$ 쪽에 치우친 답($N \propto C^{0.73}$)을 얻은 것은
+$\alpha,\beta$ 추정과 학습률 스케줄 처리가 달랐기 때문이고,
+**지수가 조금만 달라져도 배분이 크게 달라진다**는 것이 위 식에 그대로 보인다.
+
+```{python}
+#| label: compute-optimal
+#| code-fold: false
+
+import numpy as np
+
+# Chinchilla 논문의 적합값 (Hoffmann et al., 2022)
+E, A, B = 1.69, 406.4, 410.7
+alpha, beta = 0.34, 0.28
+
+def optimal(C):
+    # C = 6ND 제약 아래 L 최소화 — 위 균형 조건을 수치로 푼다
+    Ns = np.logspace(7, 12, 20000)
+    Ds = C / (6 * Ns)
+    L = E + A / Ns**alpha + B / Ds**beta
+    i = int(np.argmin(L))
+    return Ns[i], Ds[i], L[i]
+
+print(f"{'연산량 C':>10}  {'최적 N':>16}  {'최적 D':>18}  {'D/N':>7}  {'손실':>6}")
+for C in [1e19, 1e21, 1e23, 1e25]:
+    N, D, L = optimal(C)
+    print(f"{C:>10.0e}  {N:>16,.0f}  {D:>18,.0f}  {D/N:>7.1f}  {L:>6.3f}")
+
+print()
+print("이론 지수:  N ∝ C^%.3f,  D ∝ C^%.3f"
+      % (beta/(alpha+beta), alpha/(alpha+beta)))
+N1, D1, _ = optimal(1e21)
+N2, D2, _ = optimal(1e23)
+print("실측 지수:  N ∝ C^%.3f,  D ∝ C^%.3f"
+      % (np.log(N2/N1)/np.log(100), np.log(D2/D1)/np.log(100)))
+
+print()
+print("두 지수가 0.5 근처라 '대체로 같은 비율' 이 맞지만, β < α 이므로")
+print("데이터 쪽이 조금 더 빨리 커야 하고 D/N 비가 천천히 오른다.")
+print("'토큰 수 = 파라미터의 20배' 는 Chinchilla 규모 근처의 어림일 뿐이다.")
+```
+
+::: {.callout-warning}
+## 이 유도가 가정하는 것
+
+- **함수 형태를 가정했다.** $L = E + A/N^\alpha + B/D^\beta$ 는 관측에 맞춘 것이지
+  원리에서 유도된 것이 아니다. 다른 형태를 쓰면 결론이 달라진다.
+- **$C=6ND$ 는 어림이다.** 어텐션의 $n^2$ 항, MoE, 활성화 재계산을 무시한다.
+  긴 문맥에서는 어텐션 항이 무시할 수 없어 실제 비용이 이 식보다 커진다.
+- **학습 연산만 센다.** 배포 후 추론 비용을 넣으면 최적점이 **작은 모델 쪽으로** 옮겨간다 —
+  아래 절에서 다룬다. 같은 손실이면 작은 모델이 영원히 싸기 때문이다.
+- $\alpha, \beta$ 는 **데이터·아키텍처·최적화 설정에 의존**한다.
+  다른 설정에서 측정한 지수를 그대로 가져다 쓰면 안 된다.
+:::
+
+---
+
 ## G5.9.1 — 연산 최적 배분
 
 고정된 연산 예산 $C$ 에서 $N$ 과 $D$ 를 어떻게 나눌 것인가.
