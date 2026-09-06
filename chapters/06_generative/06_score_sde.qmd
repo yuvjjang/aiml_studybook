@@ -161,16 +161,22 @@ for col in (1, 2):
                              marker=dict(size=3,
                                          color=viz.hex_rgba(viz.GREEN, 0.4))),
                   row=1, col=col)
-steps_f = []
+# t 별 트레이스가 2개씩(두 열) 앞쪽에 있고, 뒤의 2개는 항상 보인다.
+frames_f = []
 for si, t in enumerate(TS_SHOW):
-    vis = [False]*(2*len(TS_SHOW)) + [True, True]
-    vis[2*si] = True; vis[2*si+1] = True
-    steps_f.append((f"{t}", {"visible": vis}))
+    frames_f.append(go.Frame(
+        name=f"{t}",
+        traces=list(range(2 * len(TS_SHOW))),
+        data=[go.Scatter(visible=(j // 2 == si)) for j in range(2 * len(TS_SHOW))]))
+fig.frames = frames_f
 for c in (1, 2):
     fig.update_xaxes(range=[-6, 6], row=1, col=c)
     fig.update_yaxes(range=[-6, 6], scaleanchor=f"x{c if c > 1 else ''}",
                      row=1, col=c)
-fig.update_layout(sliders=[viz.slider(steps_f, prefix="타임스텝 t = ", pad_t=45)])
+fig.update_layout(
+    sliders=[viz.frame_slider(TS_SHOW, prefix="타임스텝 t = ", pad_t=48)],
+    updatemenus=[viz.play_buttons(duration=600, y=1.16, x=0.08)],
+)
 viz.fig_defaults(fig, height=430,
                  title="화살표 = ∇log p_t 방향 (길이는 3에서 자름)")
 fig.show()

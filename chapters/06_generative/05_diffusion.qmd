@@ -286,10 +286,15 @@ for si, t_ in enumerate(SHOW_T):
                              marker=dict(size=3,
                                          color=viz.hex_rgba(viz.GREEN, 0.45))),
                   row=1, col=3)
+# 앞의 4개 트레이스는 항상 보이고, t 별 산점도(4번부터)만 하나씩 켠다.
+# 전부 go.Scatter 라 프레임에서 visible 만 바꿔도 안전하다.
+frames_s = []
 for si, t_ in enumerate(SHOW_T):
-    vis = [True]*4 + [False]*len(SHOW_T)
-    vis[4+si] = True
-    steps_s.append((f"{t_}", {"visible": vis}))
+    frames_s.append(go.Frame(
+        name=f"{t_}",
+        traces=list(range(4, 4 + len(SHOW_T))),
+        data=[go.Scatter(visible=(j == si)) for j in range(len(SHOW_T))]))
+fig.frames = frames_s
 
 fig.update_xaxes(title_text="t / T", row=1, col=1)
 fig.update_xaxes(title_text="t / T", row=1, col=2)
@@ -297,7 +302,10 @@ fig.update_yaxes(title_text="ᾱ_t", row=1, col=1)
 fig.update_yaxes(title_text="dB", row=1, col=2)
 fig.update_xaxes(range=[-5, 5], row=1, col=3)
 fig.update_yaxes(range=[-5, 5], scaleanchor="x3", row=1, col=3)
-fig.update_layout(sliders=[viz.slider(steps_s, prefix="타임스텝 t = ", pad_t=45)])
+fig.update_layout(
+    sliders=[viz.frame_slider(SHOW_T, prefix="타임스텝 t = ", pad_t=48)],
+    updatemenus=[viz.play_buttons(duration=600, y=1.18, x=0.08)],
+)
 viz.fig_defaults(fig, height=400, title="")
 fig.show()
 ```

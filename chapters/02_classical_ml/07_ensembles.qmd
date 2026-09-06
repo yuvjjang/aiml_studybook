@@ -350,14 +350,19 @@ accs_a = [acc_a[k] for k in rounds]
 fig.add_trace(go.Scatter(x=rounds, y=accs_a, mode="lines+markers", showlegend=False,
                          line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
 
-steps = []
-for k in rounds:
-    steps.append((str(k), {
-        "z": [surf_a[k], None, None, None],
-        "marker.size": [None, wts[k][ya==-1], wts[k][ya==1], None],
-    }))
-fig.update_layout(sliders=[viz.slider(steps, prefix="라운드 = ",
-                                      active=rounds.index(k0), pad_t=55)])
+# 결정 함수(0)와 샘플 가중치(1,2)만 변한다 — 정확도 곡선은 고정
+fig.frames = [
+    go.Frame(name=str(k), traces=[0, 1, 2],
+             data=[go.Contour(z=surf_a[k]),
+                   go.Scatter(marker=dict(size=wts[k][ya == -1])),
+                   go.Scatter(marker=dict(size=wts[k][ya == 1]))])
+    for k in rounds
+]
+fig.update_layout(
+    sliders=[viz.frame_slider(rounds, prefix="라운드 = ",
+                              active=rounds.index(k0), pad_t=58)],
+    updatemenus=[viz.play_buttons(duration=600, y=1.16, x=0.08)],
+)
 fig.update_xaxes(title_text="x₁", row=1, col=1)
 fig.update_yaxes(title_text="x₂", row=1, col=1)
 fig.update_xaxes(title_text="라운드", row=1, col=2)
@@ -425,9 +430,18 @@ fig.add_trace(go.Scatter(x=xg, y=resid_pts[k0], mode="markers", showlegend=False
                          marker=dict(size=5, color=viz.WARM)), row=2, col=1)
 fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.4)", dash="dash"), row=2, col=1)
 
-steps = [(f"{k}", {"y": [yg, fit_curve[k], resid_pts[k]]}) for k in stages]
-fig.update_layout(sliders=[viz.slider(steps, prefix="라운드 = ",
-                                      active=stages.index(k0), pad_t=55)])
+# 앙상블 예측(1)과 남은 잔차(2)만 변한다 — 원 데이터(0)는 고정
+fig.frames = [
+    go.Frame(name=str(k), traces=[1, 2],
+             data=[go.Scatter(y=fit_curve[k]),
+                   go.Scatter(y=resid_pts[k])])
+    for k in stages
+]
+fig.update_layout(
+    sliders=[viz.frame_slider(stages, prefix="라운드 = ",
+                              active=stages.index(k0), pad_t=58)],
+    updatemenus=[viz.play_buttons(duration=700, y=1.10, x=0.08)],
+)
 fig.update_xaxes(title_text="x", row=2, col=1)
 fig.update_yaxes(title_text="y", row=1, col=1)
 fig.update_yaxes(title_text="잔차", range=[-1.2, 1.2], row=2, col=1)

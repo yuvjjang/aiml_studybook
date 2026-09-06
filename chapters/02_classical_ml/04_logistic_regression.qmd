@@ -241,17 +241,23 @@ fig.add_trace(go.Scatter(x=np.arange(len(losses)), y=losses, mode="lines",
 fig.add_trace(go.Scatter(x=[s0], y=[losses[s0]], mode="markers", showlegend=False,
                          marker=dict(size=12, color=viz.YELLOW)), row=1, col=2)
 
-steps = [(str(s), {"z": [probs[s], None, None, None, None],
-                   "x": [gx, X[yb==0,0], X[yb==1,0], np.arange(len(losses)), [s]],
-                   "y": [gy, X[yb==0,1], X[yb==1,1], losses, [losses[s]]]})
-         for s in checkpoints]
-fig.update_layout(sliders=[viz.slider(steps, prefix="학습 스텝 = ",
-                                      active=checkpoints.index(s0), pad_t=55)])
+# 데이터와 손실 곡선은 고정이므로 등고선(0)과 현재 위치 마커(4)만 프레임에 담는다
+fig.frames = [
+    go.Frame(name=str(s), traces=[0, 4],
+             data=[go.Contour(z=probs[s]),
+                   go.Scatter(x=[s], y=[losses[s]])])
+    for s in checkpoints
+]
+fig.update_layout(
+    sliders=[viz.frame_slider(checkpoints, prefix="학습 스텝 = ",
+                              active=checkpoints.index(s0), pad_t=58)],
+    updatemenus=[viz.play_buttons(duration=500, y=1.16, x=0.08)],
+)
 fig.update_xaxes(title_text="x₁", row=1, col=1)
 fig.update_yaxes(title_text="x₂", row=1, col=1)
 fig.update_xaxes(title_text="스텝", row=1, col=2)
 fig.update_yaxes(title_text="교차엔트로피", row=1, col=2)
-viz.fig_defaults(fig, height=430, title="로지스틱 회귀 학습")
+viz.fig_defaults(fig, height=450, title="로지스틱 회귀 학습")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```
