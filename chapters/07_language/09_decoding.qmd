@@ -244,6 +244,88 @@ for a, b, c in [
 
 ## G7.9.3 — 온도, top-k, top-p
 
+세 손잡이가 하는 일을 식으로 갈라 두면 언제 무엇을 쓸지가 분명해진다.
+
+**온도**는 로짓을 나눈다. 확률을 재분배할 뿐 **후보를 없애지 않는다.**
+
+$$p_i(T) = \frac{\exp(z_i/T)}{\sum_j \exp(z_j/T)}$$
+
+$T\to 0$ 이면 최대 로짓에 확률이 몰려 greedy 가 되고,
+$T\to\infty$ 면 지수의 인자가 0으로 가 **균등분포**가 된다.
+그 사이에서 엔트로피가 단조 증가한다 — 온도는 곧 **불확실성 손잡이**다.
+
+**top-k** 와 **top-p** 는 반대로 후보를 **자른 뒤 재정규화**한다.
+
+$$\mathcal{V}_k = \{\text{상위 } k \text{개}\},
+\qquad
+\mathcal{V}_p = \text{누적확률이 } p \text{를 처음 넘는 최소 집합}$$
+
+$$\tilde{p}_i = \frac{p_i}{\sum_{j\in\mathcal{V}} p_j}\ (i\in\mathcal{V}),
+\qquad \tilde{p}_i = 0\ (\text{그 외})$$
+
+결정적 차이는 **집합 크기가 고정인가 적응적인가**다.
+top-k 는 분포가 뾰족하든 평평하든 항상 $k$ 개를 남긴다.
+top-p 는 뾰족하면 1~2개만, 평평하면 수십 개를 남긴다 —
+**모델이 확신할 때는 좁히고 헤맬 때는 넓힌다.**
+
+```{python}
+#| label: decoding-knobs
+#| code-fold: false
+
+import numpy as np
+
+# 이 챕터의 다른 청크와 이름이 겹치지 않도록 _d 접미사를 쓴다
+def _softmax_T(z, T):
+    e = np.exp((z - z.max()) / T)
+    return e / e.sum()
+
+def _entropy(p):
+    p = p[p > 0]
+    return float(-(p * np.log2(p)).sum())
+
+rng_d = np.random.default_rng(0)
+V_d = 50
+sharp_d = np.sort(rng_d.normal(0, 3, V_d))[::-1]      # 확신하는 분포
+flat_d = np.sort(rng_d.normal(0, 0.5, V_d))[::-1]     # 헤매는 분포
+
+print(f"① 온도는 엔트로피를 조절한다 (후보는 그대로 {V_d}개)")
+print()
+print(f"{'T':>7}{'뾰족한 분포 H':>16}{'평평한 분포 H':>16}")
+for T in [0.2, 0.5, 1.0, 2.0, 5.0]:
+    print(f"{T:>7.1f}{_entropy(_softmax_T(sharp_d,T)):>16.3f}"
+          f"{_entropy(_softmax_T(flat_d,T)):>16.3f}")
+print(f"{'균등':>7}{np.log2(V_d):>16.3f}{np.log2(V_d):>16.3f}   ← T→∞ 극한")
+
+print()
+print("② top-k 는 고정, top-p 는 적응적")
+print()
+print(f"{'':<12}{'뾰족한 분포':>14}{'평평한 분포':>14}")
+for k in [5, 20]:
+    print(f"{f'top-k={k}':<12}{k:>14}{k:>14}")
+for pp in [0.9, 0.95]:
+    sizes = []
+    for z in (sharp_d, flat_d):
+        p = np.sort(_softmax_T(z, 1.0))[::-1]
+        sizes.append(int(np.searchsorted(np.cumsum(p), pp) + 1))
+    print(f"{f'top-p={pp}':<12}{sizes[0]:>14}{sizes[1]:>14}")
+
+print("\ntop-p 는 같은 설정에서 확신할 때 후보를 좁히고 헤맬 때 넓힌다.")
+print("top-k 는 뾰족한 분포에서 쓸데없이 넓고, 평평한 분포에서는 지나치게 좁다.")
+```
+
+::: {.key-concept}
+**온도와 절단은 순서가 있다.** 구현은 보통 온도를 먼저 적용하고 그 결과에서 자른다.
+순서를 바꾸면 결과가 달라진다 — 온도가 분포 모양을 바꾸므로
+top-p 가 고르는 집합의 크기도 함께 바뀌기 때문이다.
+
+그리고 셋은 **같은 목적의 서로 다른 도구가 아니다.**
+온도는 남은 후보들 사이의 상대 확률을 조정하고,
+절단은 꼬리의 쓰레기 토큰을 아예 제거한다.
+꼬리에 확률이 조금씩 흩어져 있으면 각각은 작아도 **합이 무시할 수 없어**
+긴 생성에서 반드시 한 번은 뽑힌다 — 절단이 필요한 이유가 이것이고,
+아래 G7.9.4 가 그 왜곡을 정량화한다.
+:::
+
 ```{python}
 #| label: temperature
 #| code-fold: false
