@@ -147,7 +147,7 @@ $\boldsymbol\mu_j = \frac{1}{|C_j|}\sum_{\mathbf{x}\in C_j}\mathbf{x}$ 가 최�
 
 ```{python}
 #| label: fig-kmeans-iter
-#| fig-cap: "할당 ↔ 중심 갱신이 번갈아 일어나며 수렴합니다."
+#| fig-cap: "할당 ↔ 중심 갱신이 번갈아 일어나며 수렴합니다. ▶ 재생을 눌러 보세요."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -162,7 +162,7 @@ iners = [h[2] for h in hist]
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
                     subplot_titles=("할당과 중심", "목적함수 (inertia)"))
-i0 = min(1, len(hist)-1)
+i0 = 0
 Ci, li, _ = hist[i0]
 for k in range(3):
     m = li == k
@@ -178,26 +178,46 @@ fig.add_trace(go.Scatter(x=np.arange(len(iners)), y=iners, mode="lines+markers",
 fig.add_trace(go.Scatter(x=[i0], y=[iners[i0]], mode="markers", showlegend=False,
                          marker=dict(size=12, color=viz.YELLOW)), row=1, col=2)
 
-steps = []
+# 한 반복을 두 프레임으로 쪼갠다 — 할당(색 변화)과 갱신(× 이동)을 분리해야
+# '번갈아 일어난다' 가 눈에 보인다. 갱신되는 트레이스는 0~3 과 5 번이다.
+def _pts(li_, k):
+    m = li_ == k
+    return Xk[m, 0], Xk[m, 1]
+
+frames, labels_seq = [], []
 for i, (Ci_, li_, in_) in enumerate(hist):
-    steps.append((str(i), {
-        "x": [Xk[li_==0,0], Xk[li_==1,0], Xk[li_==2,0], Ci_[:,0],
-              np.arange(len(iners)), [i]],
-        "y": [Xk[li_==0,1], Xk[li_==1,1], Xk[li_==2,1], Ci_[:,1],
-              iners, [in_]]}))
-fig.update_layout(sliders=[viz.slider(steps, prefix="반복 = ", active=i0, pad_t=55)])
+    C_next = hist[i + 1][0] if i + 1 < len(hist) else C      # 마지막은 수렴한 중심
+    for phase, Cshow in (("할당", Ci_), ("갱신", C_next)):
+        nm = f"{i}·{phase}"
+        labels_seq.append(nm)
+        xs0, ys0 = _pts(li_, 0); xs1, ys1 = _pts(li_, 1); xs2, ys2 = _pts(li_, 2)
+        frames.append(go.Frame(
+            name=nm, traces=[0, 1, 2, 3, 5],
+            data=[go.Scatter(x=xs0, y=ys0),
+                  go.Scatter(x=xs1, y=ys1),
+                  go.Scatter(x=xs2, y=ys2),
+                  go.Scatter(x=Cshow[:, 0], y=Cshow[:, 1]),
+                  go.Scatter(x=[i], y=[in_])]))
+fig.frames = frames
+
+fig.update_layout(
+    sliders=[viz.frame_slider(labels_seq, prefix="단계 = ", pad_t=58)],
+    updatemenus=[viz.play_buttons(duration=700, y=1.14, x=0.08)],
+)
 fig.update_xaxes(title_text="x₁", row=1, col=1)
 fig.update_yaxes(title_text="x₂", row=1, col=1)
 fig.update_xaxes(title_text="반복", row=1, col=2)
 fig.update_yaxes(title_text="inertia", row=1, col=2)
-viz.fig_defaults(fig, height=440,
+viz.fig_defaults(fig, height=460,
                  title=f"Lloyd 알고리즘 · inertia {iners[0]:.0f} → {iners[-1]:.0f}")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-inertia가 **단조 감소**합니다 — 두 단계 모두 목적함수를 늘리지 않기 때문입니다. 대개 5~10회면 수렴합니다.
+**▶ 재생**을 누르면 두 단계가 **한 프레임씩 번갈아** 나타납니다 — 점의 색만 바뀌는 프레임이 **할당**, 노란 ×만 움직이는 프레임이 **중심 갱신**입니다. 둘이 교대하는 것이 Lloyd 알고리즘의 전부입니다.
+
+오른쪽 inertia 가 **단조 감소**합니다. 두 단계 모두 목적함수를 늘리지 않기 때문이고, 대개 5~10회면 더 이상 변하지 않습니다. 그 지점이 알고리즘이 멈추는 곳입니다.
 :::
 
 ### 초기화가 중요하다

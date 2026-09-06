@@ -90,6 +90,29 @@ def slider(steps, prefix="", suffix="", active=0, pad_t=50):
     )
 
 
+def frame_slider(labels, prefix="", suffix="", active=0, pad_t=50, duration=0):
+    """`fig.frames` 애니메이션용 슬라이더.
+
+    `slider()` 는 method="update" 라 프레임과 무관하게 트레이스를 갈아끼운다.
+    이 함수는 method="animate" 로 **이름 붙은 프레임**을 가리키므로
+    `play_buttons()` 의 재생과 슬라이더가 같은 프레임을 공유한다.
+
+    labels : 프레임 이름 목록. `go.Frame(name=...)` 과 문자열이 일치해야 한다.
+    """
+    return dict(
+        active=active,
+        currentvalue=dict(prefix=prefix, suffix=suffix, font=dict(size=13)),
+        pad=dict(t=pad_t),
+        steps=[
+            dict(method="animate", label=str(l),
+                 args=[[str(l)], dict(mode="immediate",
+                                      frame=dict(duration=duration, redraw=True),
+                                      transition=dict(duration=0))])
+            for l in labels
+        ],
+    )
+
+
 def play_buttons(duration=60, y=1.12, x=0.5):
     """프레임 애니메이션용 재생/정지 버튼."""
     return dict(

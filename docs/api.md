@@ -59,6 +59,19 @@ fig.update_layout(sliders=[viz.slider(
 )])
 ```
 
+### `frame_slider(labels, prefix="", suffix="", active=0, pad_t=50, duration=0)`
+`fig.frames` 애니메이션용 슬라이더. `slider()` 와 달리 `method="animate"` 라
+**이름 붙은 프레임**을 가리키므로, `play_buttons()` 의 재생과 슬라이더가
+같은 프레임을 공유합니다. `labels` 는 `go.Frame(name=...)` 과 문자열이 일치해야 합니다.
+
+```python
+fig.frames = [go.Frame(name=str(i), data=[...], traces=[0, 1]) for i in range(n)]
+fig.update_layout(
+    sliders=[viz.frame_slider(range(n), prefix="반복 = ")],
+    updatemenus=[viz.play_buttons(duration=350)],
+)
+```
+
 ### `play_buttons(duration=60, y=1.12, x=0.5)`
 `fig.frames` 애니메이션용 재생/정지 버튼 `updatemenus` 항목.
 
