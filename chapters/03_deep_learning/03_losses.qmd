@@ -812,6 +812,22 @@ for r in rows:
 
 ---
 
+::: {.callout-tip}
+## 직접 해보기
+
+**① 손실이 무엇을 추정하는지 확인한다**
+`loss-target-numbers` 에 분위수 손실(pinball, $\tau=0.9$)을 추가하라.
+최소화하는 값이 90분위수에 오는가?
+
+**② 라벨 스무딩의 로짓 간격을 예측한다**
+$\epsilon=0.1$, $K=10$ 일 때 최적 로짓 간격은 $\log\frac{(K-1)(1-\epsilon)}{\epsilon}$ 이다.
+계산한 값과 `smoothing-numbers` 의 실측을 비교하라.
+
+**③ Focal loss 의 γ 를 극단으로**
+$\gamma=0$ 이면 무엇이 되는가? $\gamma=5$ 면 쉬운 샘플의 기여가 몇 배 줄어드는가?
+`focal-effect` 로 확인하라.
+:::
+
 ## 요약
 
 | 개념 | 핵심 |

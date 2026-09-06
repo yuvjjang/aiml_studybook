@@ -861,6 +861,22 @@ no_decay = ["bias", "LayerNorm.weight", "embedding"]
 
 ---
 
+::: {.callout-tip}
+## 직접 해보기
+
+**① 모멘텀의 최적 계수를 이론과 맞춰 본다**
+조건수 $\kappa$ 인 이차함수에서 최적 모멘텀은 $\left(\frac{\sqrt\kappa-1}{\sqrt\kappa+1}\right)^2$ 다.
+`momentum-numbers` 의 $\kappa$ 로 계산한 값이 실측 최적과 맞는가?
+
+**② AdamW 와 L2 가 갈라지는 지점**
+`adamw-vs-l2` 에서 기울기 크기가 좌표마다 크게 다른 문제를 만들어라.
+두 방식의 최종 가중치 norm 차이가 얼마나 벌어지는가?
+
+**③ 워밍업이 필요한 이유를 재현한다**
+`warmup-numbers` 에서 워밍업을 없애고 초기 몇 스텝의 $\hat v$ 값을 찍어 보라.
+분모가 작아 갱신이 폭주하는 것이 보이는가?
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
