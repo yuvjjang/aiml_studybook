@@ -795,7 +795,53 @@ masked = np.where(mask, -np.inf, scores)
 print(f"mask    {mask.shape} → 브로드캐스트 → {masked.shape}")
 ```
 
-브로드캐스팅 규칙은 단순하다. **뒤에서부터 축을 맞추되, 크기가 1이거나 없으면 늘린다.**
+### 왜 브로드캐스팅을 쓰는가
+
+위 코드의 마지막 두 줄이 브로드캐스팅이다. `(N, N)` 마스크 **하나**가
+`(B, H, N, N)` 점수 전체에 걸렸다. 이것을 안 쓰면 이렇게 써야 한다.
+
+```python
+for b in range(B):
+    for h in range(H):
+        scores[b, h] = np.where(mask, -np.inf, scores[b, h])
+```
+
+이유는 셋이고, 성격이 서로 다르다.
+
+**① 반복문이 사라진다.** Python 반복문은 원소마다 인터프리터를 거친다.
+브로드캐스팅은 같은 일을 C 레벨 루프 한 번으로 끝낸다.
+
+**② 메모리를 쓰지 않는다.** 이것이 핵심이다. 마스크를 `(B, H, N, N)` 으로
+**복사해서** 걸어도 결과는 같지만, 브로드캐스팅은 복사하지 않는다.
+왜 그런지는 바로 다음 절에서 stride 로 확인한다.
+
+**③ 수식이 그대로 코드가 된다.** $X - \bar{X}$ 가 `X - X.mean(0)` 이 되고,
+$QK^\top/\sqrt{d}$ 가 `Q @ K.transpose(0, 1, 3, 2) / np.sqrt(D)` 가 된다.
+종이에 쓴 식과 코드의 모양이 같아진다.
+
+②를 숫자로 확인한다.
+
+```{python}
+#| label: broadcast-why
+#| code-fold: false
+
+import numpy as np
+
+B, H, N = 2, 4, 6
+mask = np.triu(np.ones((N, N), dtype=bool), k=1)
+tiled = np.broadcast_to(mask, (B, H, N, N)).copy()      # 명시적으로 복제하면
+
+print(f"마스크 원본  {str(mask.shape):<14} {mask.nbytes:>5}바이트")
+print(f"복제한 마스크 {str(tiled.shape):<14} {tiled.nbytes:>5}바이트"
+      f"   ← {tiled.nbytes // mask.nbytes}배")
+print()
+print("브로드캐스팅은 이 복제를 하지 않는다 — 원본 그대로 두고 같은 곳을 다시 읽는다.")
+```
+
+배치와 헤드가 커질수록 이 배수가 그대로 커진다.
+$B{=}32$, $H{=}32$, $N{=}2048$ 이면 마스크 하나가 4MB 인데 복제하면 4GB 다.
+
+브로드캐스팅 규칙 자체는 단순하다. **뒤에서부터 축을 맞추되, 크기가 1이거나 없으면 늘린다.**
 
 | A | B | 결과 | 설명 |
 |---|---|------|------|
