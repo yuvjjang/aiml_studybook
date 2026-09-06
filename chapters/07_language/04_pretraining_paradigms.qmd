@@ -28,6 +28,86 @@ jupyter: ai-ml-study
 
 ---
 
+## 네 가지 목표를 식으로 나란히 놓으면
+
+이름만으로는 차이가 흐릿하다. 무엇을 최대화하는지 적어 보면 선택의 성격이 드러난다.
+$\tilde{\mathbf{x}}$ 는 망가뜨린 입력, $\mathcal{M}$ 은 가린 위치의 집합이다.
+
+$$
+\begin{aligned}
+\textbf{인과 LM (GPT)}\quad
+&\max \sum_{t=1}^{T} \log p(x_t \mid x_{<t})
+&&\text{모든 위치}\\[4pt]
+\textbf{마스크 LM (BERT)}\quad
+&\max \sum_{t\in\mathcal{M}} \log p(x_t \mid \tilde{\mathbf{x}})
+&&|\mathcal{M}| \approx 0.15\,T\\[4pt]
+\textbf{구간 복원 (T5)}\quad
+&\max \sum_{s} \log p(\text{span}_s \mid \tilde{\mathbf{x}})
+&&\text{구간을 통째로}\\[4pt]
+\textbf{치환 판별 (ELECTRA)}\quad
+&\max \sum_{t=1}^{T} \log p\big(\mathbb{1}[x_t \text{ 가 원본}] \mid \tilde{\mathbf{x}}\big)
+&&\text{모든 위치, 이진}
+\end{aligned}
+$$
+
+세 축으로 갈린다.
+
+| | 문맥 | 예측 대상 수 | 목표당 정보량 |
+|---|---|---|---|
+| 인과 LM | 왼쪽만 | $T$ | $\log V$ 비트급 |
+| 마스크 LM | 양방향 | $0.15\,T$ | $\log V$ 비트급 |
+| 구간 복원 | 양방향(인코더) | 구간 수 | 구간 길이에 비례 |
+| 치환 판별 | 양방향 | $T$ | **1비트** |
+
+ELECTRA 의 위치가 흥미롭다. **모든 위치에서 신호를 받지만 각 신호가 1비트**뿐이다.
+그래서 같은 연산에서 BERT 보다 빠르게 배우지만(신호가 $6.7$ 배 많다),
+생성 능력은 얻지 못한다 — 판별자는 분포를 모형화하지 않는다.
+
+```{python}
+#| label: objective-signal
+#| code-fold: false
+
+import numpy as np
+
+T, V = 512, 32_000
+bits_token = np.log2(V)
+
+rows = [
+    ("인과 LM (GPT)",        T,             bits_token, "생성 O"),
+    ("마스크 LM (BERT)",     int(0.15 * T), bits_token, "생성 X"),
+    ("구간 복원 (T5)",       int(0.15 * T), bits_token, "생성 O (조건부)"),
+    ("치환 판별 (ELECTRA)",  T,             1.0,        "생성 X"),
+]
+
+print(f"시퀀스 길이 {T}, 어휘 {V:,}\n")
+print(f"{'목표':<22}{'예측 수':>9}{'신호당 비트':>13}{'총 비트':>12}{'생성':>16}")
+for name, k, b, gen in rows:
+    print(f"{name:<22}{k:>9,}{b:>13.1f}{k*b:>12,.0f}{gen:>16}")
+
+print()
+print("총 비트만 보면 인과 LM 이 압도적이다.")
+print("ELECTRA 는 예측 수는 같지만 신호당 1비트라 총량이 1/15 이다.")
+print("그럼에도 BERT 보다 효율적인 것은, 판별 과제가 훨씬 쉬워서")
+print("같은 비트를 얻는 데 드는 연산이 적기 때문이다 — 비트 수와 학습 효율은 다른 축이다.")
+```
+
+::: {.key-concept}
+이 표가 [5.5 의 마스크 세기](../05_transformer/05_encoder_decoder.qmd)와 같은 이야기를 한다.
+**인과 LM 은 문맥을 절반만 보는 대신 신호를 6.7배 얻는다.**
+
+여기에 두 가지가 더해져 승부가 갈렸다.
+
+- **생성 가능성** — 인과 분해 $p(x) = \prod_t p(x_t\mid x_{<t})$ 는 정확한 분해라
+  그대로 샘플링하면 된다. 양방향 목표에는 대응하는 분해가 없다.
+- **과제 통합** — 분류·요약·번역을 전부 "이어 쓰기"로 표현할 수 있어
+  과제마다 헤드를 붙일 필요가 없다.
+
+한편 양방향 목표가 사라진 것은 아니다. 문장 전체가 한꺼번에 주어지는
+검색·재순위·분류에서는 여전히 유리해서, 임베딩 모델 계열로 남아 있다.
+:::
+
+---
+
 ## G7.4.1 — 양방향성의 가치를 정확히 계산한다
 
 [7.2](02_language_models.qmd)의 2차 마르코프 소스를 다시 쓴다.
