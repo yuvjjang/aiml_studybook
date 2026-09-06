@@ -190,6 +190,117 @@ print("  건너뛰기 조건이 없으면 여기서 틀린다. 이 줄이 그 �
 
 ---
 
+### 격자를 직접 보기
+
+점화식은 **격자 위의 이동 규칙**이다. 그림으로 보면 세 항이 각각 어떤 화살표인지,
+그리고 왜 "경로를 전부 더한다"가 되는지가 한눈에 들어온다.
+
+```{python}
+#| label: fig-ctc-lattice
+#| fig-cap: "CTC 정렬 격자. 색은 전방 변수 α, 화살표는 허용된 이동입니다. 슬라이더로 타깃을 바꿔 보세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+SYM = {0: "∅", 1: "a", 2: "b"}
+rg_l = np.random.default_rng(3)
+
+def lattice_data(target, T=8, C=3):
+    lg = rg_l.normal(0, 1.2, (T, C))
+    lp = lg - logsumexp(lg, axis=1)[:, None]
+    _, a, ext = ctc_forward(lp, target)
+    A = np.exp(a - a.max())                       # 색용으로 정규화
+    A[a <= NEG / 2] = np.nan                      # 도달 불가 셀은 비운다
+    return A, ext, lp
+
+def arrows(ext, T):
+    """허용된 이동을 (x0,y0,x1,y1) 목록으로. 세 종류를 색으로 구분."""
+    S = len(ext)
+    seg = {"머무름": [], "한 칸": [], "건너뛰기": []}
+    for t in range(T - 1):
+        for s in range(S):
+            seg["머무름"].append((t, s, t + 1, s))
+            if s + 1 < S:
+                seg["한 칸"].append((t, s, t + 1, s + 1))
+            if s + 2 < S and ext[s + 2] != 0 and ext[s + 2] != ext[s]:
+                seg["건너뛰기"].append((t, s, t + 1, s + 2))
+    return seg
+
+TARGETS = {"a b  (다른 글자)": [1, 2], "a a  (같은 글자)": [1, 1]}
+T = 8
+data = {k: lattice_data(v, T) for k, v in TARGETS.items()}
+
+k0 = "a b  (다른 글자)"
+A0, ext0, _ = data[k0]
+
+fig = go.Figure()
+fig.add_trace(go.Heatmap(z=A0.T, x=list(range(T)),
+                         y=[f"{s}: {SYM[e]}" for s, e in enumerate(ext0)],
+                         colorscale="Blues", showscale=False,
+                         xgap=3, ygap=3, hoverongaps=False,
+                         hovertemplate="t=%{x}, s=%{y}<br>α∝%{z:.3f}<extra></extra>"))
+
+COL = {"머무름": "rgba(255,255,255,0.35)", "한 칸": viz.GREEN, "건너뛰기": viz.WARM}
+for name, col in COL.items():
+    seg = arrows(ext0, T)[name]
+    xs, ys = [], []
+    for x0, y0, x1, y1 in seg:
+        xs += [x0, x1, None]
+        ys += [y0, y1, None]
+    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=name,
+                             line=dict(color=col, width=1.6), hoverinfo="skip"))
+
+steps = []
+for name, (A, ext, _) in data.items():
+    yl = [f"{s}: {SYM[e]}" for s, e in enumerate(ext)]
+    sg = arrows(ext, T)
+    xs_all, ys_all = [], []
+    for kind in COL:
+        xs, ys = [], []
+        for x0, y0, x1, y1 in sg[kind]:
+            xs += [x0, x1, None]
+            ys += [y0, y1, None]
+        xs_all.append(xs); ys_all.append(ys)
+    steps.append((name, {
+        "z": [A.T, None, None, None],
+        "y": [yl] + ys_all,
+        "x": [list(range(T))] + xs_all,
+    }))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="타깃 = ", active=0, pad_t=58)],
+    xaxis=dict(title="시각 t", dtick=1),
+    yaxis=dict(title="확장 라벨 ℓ′ 위치 s", autorange="reversed"),
+    legend=dict(x=1.02, y=0.99),
+)
+viz.fig_defaults(fig, height=470, title="CTC 격자 — 왼쪽 위에서 오른쪽 아래로 가는 모든 경로의 합")
+fig.show()
+```
+
+::: {.interaction-hint}
+화살표 세 종류가 점화식의 세 항입니다. **흰색**은 $\alpha_{t-1}(s)$(제자리), **초록**은 $\alpha_{t-1}(s-1)$(한 칸), **주황**은 $\alpha_{t-1}(s-2)$(blank 건너뛰기)입니다.
+
+타깃을 `a a` 로 바꾸면 **주황 화살표가 사라지는 구간**이 생깁니다. 같은 글자가 연속이라 사이의 blank 를 건너뛸 수 없기 때문이고, 그래서 `aa` 를 내려면 반드시 blank 를 한 프레임 이상 거쳐야 합니다.
+:::
+
+::: {.key-concept}
+격자를 보면 CTC 가 [8.3 의 Viterbi](03_classical_speech.qmd)와 어떻게 다른지도 분명해진다.
+
+- **Viterbi** — 격자에서 **가장 좋은 경로 하나**를 고른다($\max$).
+- **CTC 전방 알고리즘** — **모든 경로의 확률을 더한다**($\sum$).
+
+두 알고리즘의 코드는 `max` 를 `logaddexp` 로 바꾼 것 하나만 다르다.
+그런데 그 차이가 "정렬을 정해 놓고 배운다"와 "정렬을 주변화한다"를 가른다.
+[0.2 의 주변화](../00_foundations/02_probability.qmd)가 여기서 동적계획법으로 구현된 것이다.
+
+왼쪽 위에서 시작해 오른쪽 아래 두 칸 중 하나로 끝나야 한다는 제약도 그림에 보인다 —
+마지막 라벨을 낸 뒤 blank 로 끝나든 그대로 끝나든 둘 다 유효하기 때문이다.
+:::
+
+---
+
 ## G8.4.2 — 손실과 그래디언트
 
 손실은 $-\log P(\ell\mid X)$ 다. 후방 변수 $\beta$ 를 같이 구하면 그래디언트가 닫힌 형태로 나온다.

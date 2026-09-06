@@ -28,6 +28,45 @@ $$
 
 두 줄이 전부다. 각 줄이 **"정규화 → 연산 → 원본에 더하기"** 라는 같은 패턴이다.
 
+```{mermaid}
+%%| label: fig-block-topology
+%%| fig-cap: "pre-LN 블록. 굵은 세로선이 잔차 스트림이고, 두 서브층은 거기에 더할 값을 계산할 뿐입니다."
+flowchart TB
+  IN["입력 x"] --> N1["Norm"]
+  N1 --> MHA["Multi-Head<br/>Attention"]
+  MHA --> A1(("+"))
+  IN ==>|잔차| A1
+  A1 --> N2["Norm"]
+  N2 --> FFN["FFN<br/>d → 4d → d"]
+  FFN --> A2(("+"))
+  A1 ==>|잔차| A2
+  A2 --> OUT["출력"]
+```
+
+그림에서 읽어야 할 것은 **굵은 선**이다.
+입력에서 출력까지 **어떤 연산도 거치지 않는 길**이 뚫려 있고,
+두 서브층은 그 길에 **더할 값을 계산할 뿐**이다.
+[4.1 에서 본 $I + F'$](../04_architectures/01_cnn_modern.qmd)의 항등 경로가 이것이고,
+100층을 넘겨도 그래디언트가 살아남는 이유다.
+
+::: {.callout-note}
+## post-LN 은 어디가 다른가
+
+원 논문(2017)은 정규화를 **더한 뒤에** 뒀다.
+
+$$
+\text{post-LN:}\quad x \leftarrow \text{Norm}\big(x + \text{MHA}(x)\big)
+$$
+
+한 글자 차이 같지만 그림으로 보면 결정적이다 —
+**잔차 스트림이 매 블록마다 Norm 을 통과한다.**
+굵은 선이 끊기는 셈이라 위에서 말한 "연산 없는 길"이 사라지고,
+깊이가 깊어지면 학습이 불안정해진다.
+
+그래서 post-LN 은 warmup 이 필수이고 pre-LN 은 없어도 되는 경우가 많다.
+아래 G5.4.2 가 그 차이를 수치로 잰다.
+:::
+
 ```{python}
 #| label: block-forward
 #| code-fold: false

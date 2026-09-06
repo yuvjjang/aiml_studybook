@@ -172,6 +172,25 @@ print("  그것이 불가능해서 나온 것이 아래의 **강제 정렬**이�
 음소 하나를 상태 셋으로 나눈다 — 시작 전이, 정상 구간, 끝 전이.
 왼쪽에서 오른쪽으로만 가고, 각 상태에서 머무를 수 있다.
 
+```{mermaid}
+%%| label: fig-hmm-topology
+%%| fig-cap: "음소 하나의 좌→우 3상태 HMM. 자기 전이(머무름)와 다음 상태로의 전이만 있습니다."
+flowchart LR
+  I(( )) --> S1
+  S1["s1<br/>시작 전이"] -->|a₁₂| S2["s2<br/>정상 구간"]
+  S2 -->|a₂₃| S3["s3<br/>끝 전이"]
+  S3 --> O(( ))
+  S1 -->|a₁₁| S1
+  S2 -->|a₂₂| S2
+  S3 -->|a₃₃| S3
+  style I fill:none,stroke:none
+  style O fill:none,stroke:none
+```
+
+되돌아가는 화살표가 없다는 것이 **좌→우(left-to-right) 구조**다.
+말은 시간을 거스르지 않으므로 이 제약이 자연스럽고,
+덕분에 디코딩이 [8.4 의 격자](04_ctc_rnnt.qmd)처럼 단순한 동적계획법이 된다.
+
 $$a_{ij} = P(q_{t+1} = j \mid q_t = i), \qquad
 b_j(x) = P(x \mid q_t = j)$$
 
