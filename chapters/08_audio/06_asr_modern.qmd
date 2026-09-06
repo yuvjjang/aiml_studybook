@@ -465,6 +465,90 @@ for a, b in [("잡음", "잡음 합성(MUSAN 등), SNR 무작위화"),
 실시간 자막은 발화가 끝나기를 기다릴 수 없다.
 그런데 [8.4](04_ctc_rnnt.qmd)에서 봤듯 CTC는 **증거를 본 뒤에** 출력한다.
 
+무엇을 맞바꾸는지부터 그림으로 본다. 시각 $t$ 의 출력을 내려면
+과거 $P$ 프레임과 미래 $F$ 프레임을 봐야 하고, **미래를 보는 만큼 기다려야 한다.**
+
+```{python}
+#| label: fig-lookahead
+#| fig-cap: "미래 문맥 F 가 곧 지연이다. 슬라이더로 F 를 바꿔 보세요."
+
+import sys; sys.path.append("../..")
+import numpy as np
+import plotly.graph_objects as go
+from src import viz
+
+HOP_MS = 10                      # 프레임 간격
+PAST = 4
+T_AXIS = 16
+t0 = 8                           # 지금 출력하려는 시각
+
+FS = [0, 1, 2, 4, 8]
+
+def window(F):
+    """(창 시작, 창 끝, 출력 가능 시각)"""
+    return t0 - PAST, t0 + F, t0 + F
+
+fig = go.Figure()
+
+# 프레임 눈금 (배경)
+fig.add_trace(go.Scatter(
+    x=list(range(T_AXIS)), y=[0]*T_AXIS, mode="markers",
+    marker=dict(size=7, color="rgba(255,255,255,0.25)", symbol="line-ns-open"),
+    showlegend=False, hoverinfo="skip"))
+
+F0 = 2
+lo, hi, emit = window(F0)
+
+bars = [
+    ("과거 문맥", lo, t0, viz.ACCENT, 0.9),
+    ("현재 프레임", t0, t0 + 1, viz.YELLOW, 1.0),
+    ("미래 문맥 (기다려야 함)", t0 + 1, hi + 1, viz.WARM, 0.9),
+]
+for name, a, b, col, op in bars:
+    fig.add_trace(go.Scatter(
+        x=[a, b, b, a, a], y=[-0.35, -0.35, 0.35, 0.35, -0.35],
+        fill="toself", mode="lines", name=name,
+        line=dict(width=0), fillcolor=viz.hex_rgba(col, op * 0.55),
+        hovertemplate=f"{name}<extra></extra>"))
+
+fig.add_trace(go.Scatter(
+    x=[emit + 1], y=[0], mode="markers+text", name="출력 가능 시점",
+    marker=dict(size=16, color=viz.GREEN, symbol="star"),
+    text=[f"  +{(F0+1)*HOP_MS}ms"], textposition="middle right",
+    textfont=dict(color=viz.GREEN)))
+
+steps = []
+for F in FS:
+    lo, hi, emit = window(F)
+    xs = [
+        list(range(T_AXIS)),
+        [lo, t0, t0, lo, lo],
+        [t0, t0 + 1, t0 + 1, t0, t0],
+        [t0 + 1, hi + 1, hi + 1, t0 + 1, t0 + 1],
+        [emit + 1],
+    ]
+    steps.append((f"{F}  (+{(F+1)*HOP_MS}ms)", {
+        "x": xs,
+        "text": [None, None, None, None, [f"  +{(F+1)*HOP_MS}ms"]],
+    }))
+
+fig.update_layout(
+    sliders=[viz.slider(steps, prefix="미래 문맥 F = ", active=FS.index(F0), pad_t=58)],
+    xaxis=dict(title="프레임 (10 ms 간격)", dtick=1, range=[-0.5, T_AXIS - 0.5]),
+    yaxis=dict(visible=False, range=[-1, 1]),
+    legend=dict(x=0.01, y=0.99),
+)
+viz.fig_defaults(fig, height=330,
+                 title=f"시각 t={t0} 의 출력을 내기까지 — 과거 {PAST} + 미래 F 프레임")
+fig.show()
+```
+
+::: {.interaction-hint}
+$F=0$ 이면 현재 프레임까지만 보고 바로 출력합니다(완전 인과적, 지연 10ms). $F$ 를 키우면 주황 구간만큼 **더 기다려야** 별이 오른쪽으로 밀립니다 — $F=8$ 이면 90ms 입니다.
+
+지연이 $F$ 에 **선형**으로 는다는 것이 요점입니다. 아래 표에서 정확도가 그만큼 좋아지는지를 보면 교환비가 나옵니다.
+:::
+
 문맥 창의 미래 쪽을 잘라 가며 정확도와 지연을 함께 잰다.
 
 ```{python}
