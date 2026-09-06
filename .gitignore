@@ -13,3 +13,6 @@ _freeze/
 # quarto render 가 .qmd 옆에 남기는 중간 산출물 (책 출력은 _site/)
 chapters/**/*.html
 chapters/**/*_files/
+/index.html
+/site_libs/
+/settings.html
