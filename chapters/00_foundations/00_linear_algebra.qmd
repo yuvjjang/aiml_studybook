@@ -306,6 +306,66 @@ $$A^k \mathbf{v} = \lambda^k \mathbf{v}$$
 [4.2 RNN](../04_architectures/02_rnn.qmd)의 그래디언트 소실·폭발이 정확히 이 식으로 설명된다 —
 $|\lambda| < 1$ 이면 지수적으로 사라지고, $|\lambda| > 1$ 이면 폭발한다.
 
+### 고유분해: 고유벡터를 기저로 삼기
+
+그런데 $A^k\mathbf{v} = \lambda^k\mathbf{v}$ 는 $\mathbf{v}$ 가 **고유벡터일 때만** 쓸 수 있다.
+아무 벡터에나 쓰려면 그 벡터를 고유벡터들의 합으로 먼저 풀어써야 한다.
+그 작업을 행렬 하나로 적어 둔 것이 **고유분해(eigendecomposition)** 다.
+
+고유벡터를 열로 세운 행렬 $V$ 와 고유값을 대각에 놓은 $\Lambda$ 를 두면,
+$A\mathbf{v}_i = \lambda_i\mathbf{v}_i$ 를 모든 $i$ 에 대해 한꺼번에 쓴 것이 $AV = V\Lambda$ 이고,
+$V$ 가 역행렬을 가지면
+
+$$A = V\Lambda V^{-1}$$
+
+이 된다. 읽는 순서가 오른쪽부터다 — $V^{-1}$ 로 **고유벡터 기저로 옮기고**,
+$\Lambda$ 로 **축마다 늘렸다 줄이고**, $V$ 로 **원래 좌표로 되돌린다.**
+그 기저에서는 $A$ 가 그냥 대각행렬이라, 이렇게 만드는 일을 **대각화**라고 부른다.
+
+거듭제곱이 왜 쉬워지는지도 여기서 나온다. 가운데만 남고 $V^{-1}V$ 가 전부 소거된다.
+
+$$A^k = V\Lambda^k V^{-1}$$
+
+```{python}
+#| label: eigendecomposition
+#| code-fold: false
+
+import numpy as np
+
+A = np.array([[2.0, 1.0],
+              [1.0, 1.5]])
+lam, V = np.linalg.eig(A)
+
+print(f"고유값 Λ = diag({lam.real.round(4)})   ← 대칭이라 실수")
+print(f"복원 오차  |VΛV⁻¹ − A|      = "
+      f"{np.abs(V @ np.diag(lam) @ np.linalg.inv(V) - A).max():.2e}")
+
+k = 8
+direct = np.linalg.matrix_power(A, k)
+viaeig = V @ np.diag(lam**k) @ np.linalg.inv(V)
+print(f"거듭제곱 오차 |VΛ⁸V⁻¹ − A⁸|  = {np.abs(direct - viaeig).max():.2e}")
+print()
+
+# 대각화가 안 되는 행렬 — 고유값은 1 하나뿐인데 고유벡터도 하나뿐이다
+D = np.array([[1.0, 1.0],
+              [0.0, 1.0]])
+lam2, V2 = np.linalg.eig(D)
+print(f"결손행렬 [[1,1],[0,1]] 의 고유값 : {lam2.real.round(4)}   ← 1 이 두 번")
+print(f"  고유벡터 행렬 V 의 rank        : {np.linalg.matrix_rank(V2)}  (2 여야 하는데)")
+print(f"  V 의 조건수                    : {np.linalg.cond(V2):.1e}  ← 역행렬이 없다")
+```
+
+**그래서 고유분해에는 조건이 붙는다.**
+
+- **정사각행렬만** 된다. $m \ne n$ 이면 $A\mathbf{v} = \lambda\mathbf{v}$ 자체가 성립하지 않는다.
+- **$V$ 가 가역이어야** 한다. 위의 $[[1,1],[0,1]]$ 처럼 독립인 고유벡터가 모자라면
+  (**결손행렬**) 대각화가 불가능하다.
+- 실행렬이라도 **고유값이 복소수**일 수 있다 — 회전이 섞이면 그렇게 된다.
+
+**대칭행렬은 이 세 가지가 전부 해결된 최선의 경우**다.
+$V$ 를 직교행렬로 잡을 수 있어 $V^{-1} = V^\top$ 이 되고, 역행렬을 구할 필요조차 없어진다.
+다음 그림에서 그 성질을 눈으로 확인한 뒤, 스펙트럼 정리로 정리한다.
+
 ---
 
 ## G0.0.3 — 고유벡터 찾기
