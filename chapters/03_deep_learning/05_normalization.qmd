@@ -64,25 +64,17 @@ viz.fig_defaults(fig, height=380, title="같은 색 = 같은 μ, σ 를 공유�
 fig.show()
 ```
 
-```{python}
-#| label: norm-axes-table
-#| code-fold: false
+| 이름 | 평균 내는 축 | 통계 단위 | 배치 의존 | 주 사용처 |
+|---|---|---|---|---|
+| BatchNorm | (N, H, W) | 채널 | 배치에 의존 | CNN |
+| LayerNorm | (C,) 또는 (C,H,W) | 샘플 | 배치 독립 | Transformer, RNN |
+| InstanceNorm | (H, W) | 샘플×채널 | 배치 독립 | 스타일 변환 |
+| GroupNorm | (C/G, H, W) | 샘플×그룹 | 배치 독립 | 작은 배치 비전 |
+| RMSNorm | (C,) | 샘플 | 배치 독립 | 최신 LLM |
 
-rows = [
-    ("BatchNorm",    "(N, H, W)",  "채널",   "배치에 의존",  "CNN"),
-    ("LayerNorm",    "(C,) 또는 (C,H,W)", "샘플", "배치 독립", "Transformer, RNN"),
-    ("InstanceNorm", "(H, W)",     "샘플×채널", "배치 독립", "스타일 변환"),
-    ("GroupNorm",    "(C/G, H, W)", "샘플×그룹", "배치 독립", "작은 배치 비전"),
-    ("RMSNorm",      "(C,)",       "샘플",   "배치 독립",  "최신 LLM"),
-]
-print(f"{'이름':<14} {'평균 내는 축':<20} {'통계 단위':<12} {'배치 의존':<12} {'주 사용처'}")
-print("-" * 76)
-for r in rows:
-    print(f"{r[0]:<14} {r[1]:<20} {r[2]:<12} {r[3]:<12} {r[4]}")
-print()
-print("배치 의존 여부가 실무에서 가장 중요한 구분이다.")
-print("BatchNorm 만 학습/추론 동작이 다르고, 배치 크기·분산 학습에 제약을 만든다.")
-```
+배치 의존 여부가 실무에서 가장 중요한 구분이다.
+BatchNorm 만 학습/추론 동작이 다르고, 배치 크기·분산 학습에 제약을 만든다.
+
 
 ---
 
@@ -685,27 +677,19 @@ print("  그래서 정규화 뒤의 층에 거는 weight decay 는 정규화가 
 
 ## 선택 가이드
 
-```{python}
-#| label: norm-guide
-#| code-fold: false
+| 상황 | 권장 | 이유 |
+|---|---|---|
+| CNN 분류, 배치 ≥ 32 | BatchNorm | 여전히 최선 |
+| 객체 검출·분할 | GroupNorm | 배치를 못 키움 |
+| Transformer | RMSNorm (pre) | 현재 표준 |
+| RNN / 시퀀스 | LayerNorm | 시점 독립 |
+| 스타일 변환·GAN | InstanceNorm | 샘플별 스타일 제거 |
+| 배치 1 추론이 중요 | LayerNorm/GroupNorm | 학습/추론 동일 |
+| 초대형 깊이 (100층+) | DeepNorm 또는 pre-LN | 그래디언트 흐름 |
 
-rows = [
-    ("CNN 분류, 배치 ≥ 32",   "BatchNorm",  "여전히 최선"),
-    ("객체 검출·분할",         "GroupNorm",  "배치를 못 키움"),
-    ("Transformer",         "RMSNorm (pre)", "현재 표준"),
-    ("RNN / 시퀀스",         "LayerNorm",  "시점 독립"),
-    ("스타일 변환·GAN",        "InstanceNorm", "샘플별 스타일 제거"),
-    ("배치 1 추론이 중요",      "LayerNorm/GroupNorm", "학습/추론 동일"),
-    ("초대형 깊이 (100층+)",   "DeepNorm 또는 pre-LN", "그래디언트 흐름"),
-]
-print(f"{'상황':<24} {'권장':<22} {'이유'}")
-print("-" * 64)
-for r in rows:
-    print(f"{r[0]:<24} {r[1]:<22} {r[2]}")
-print()
-print("정규화를 아예 빼는 것도 가능하다 (Fixup, ReZero, NF-Net).")
-print("다만 초기화·잔차 스케일을 훨씬 조심스럽게 다뤄야 한다 — 다음 장의 주제다.")
-```
+정규화를 아예 빼는 것도 가능하다 (Fixup, ReZero, NF-Net).
+다만 초기화·잔차 스케일을 훨씬 조심스럽게 다뤄야 한다 — 다음 장의 주제다.
+
 
 ---
 

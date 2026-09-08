@@ -628,27 +628,19 @@ print("두 구현이 독립적으로 같은 값을 낸다 — 서로가 서로�
 
 ## 진짜 프레임워크는 무엇을 더 하는가
 
-```{python}
-#| label: real-frameworks
-#| code-fold: false
+| 항목 | 이 장의 구현 | PyTorch / JAX |
+|---|---|---|
+| 연산 커버리지 | 10개 | 2000+ 개, 각각 CPU/CUDA/Metal 커널 |
+| 메모리 | 노드마다 유지 | 중간값 재계산(checkpointing), 인플레이스 최적화 |
+| 그래프 | 매번 재구성 | 동적(eager) + 컴파일(torch.compile, JAX jit) |
+| 정밀도 | float64 | bf16/fp16 혼합정밀도 + 손실 스케일링 |
+| 병렬 | 없음 | 데이터/텐서/파이프라인 병렬 |
+| 고차 미분 | 불가 | grad of grad (Hessian-vector product) |
+| 연산 융합 | 없음 | 여러 연산을 커널 하나로 합침 |
 
-rows = [
-    ("연산 커버리지",   "10개",        "2000+ 개, 각각 CPU/CUDA/Metal 커널"),
-    ("메모리",         "노드마다 유지",  "중간값 재계산(checkpointing), 인플레이스 최적화"),
-    ("그래프",         "매번 재구성",   "동적(eager) + 컴파일(torch.compile, JAX jit)"),
-    ("정밀도",         "float64",     "bf16/fp16 혼합정밀도 + 손실 스케일링"),
-    ("병렬",           "없음",         "데이터/텐서/파이프라인 병렬"),
-    ("고차 미분",       "불가",         "grad of grad (Hessian-vector product)"),
-    ("연산 융합",       "없음",         "여러 연산을 커널 하나로 합침"),
-]
-print(f"{'항목':<14} {'이 장의 구현':<16} {'PyTorch / JAX'}")
-print("-" * 74)
-for r in rows:
-    print(f"{r[0]:<14} {r[1]:<16} {r[2]}")
-print()
-print("하지만 **핵심 논리는 정확히 같다.** 위상 정렬 후 역순 순회.")
-print("PyTorch 의 autograd 엔진도 결국 이 구조를 C++ 로 아주 빠르게 돌리는 것이다.")
-```
+하지만 **핵심 논리는 정확히 같다.** 위상 정렬 후 역순 순회.
+PyTorch 의 autograd 엔진도 결국 이 구조를 C++ 로 아주 빠르게 돌리는 것이다.
+
 
 ::: {.callout-note}
 ## 역방향 모드 vs 순방향 모드
