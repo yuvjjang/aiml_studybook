@@ -319,24 +319,16 @@ fig.show()
 
 ## 어떤 계열을 쓸 것인가
 
-```{python}
-#| label: family-guide
-#| code-fold: false
+| 과제 | 계열 | 대표 모델 | 비고 |
+|---|---|---|---|
+| 문장 분류·감정 분석 | encoder-only | BERT, DeBERTa | 작고 빠름 |
+| 검색용 임베딩 | encoder-only | E5, BGE | 양방향이 유리 |
+| 개체명 인식·태깅 | encoder-only | BERT 계열 | 토큰별 출력 |
+| 번역·요약 | enc-dec 또는 dec | T5 / LLM | 요즘은 LLM도 충분 |
+| 음성 인식 | encoder-decoder | Whisper | 고정 입력 반복 참조 |
+| 대화·코드·범용 생성 | decoder-only | GPT, LLaMA | 사실상 기본값 |
+| 이미지 생성 조건 주입 | 크로스 어텐션 | Stable Diffusion | 다른 양식을 참조 |
 
-rows = [
-    ("문장 분류·감정 분석",   "encoder-only",     "BERT, DeBERTa",   "작고 빠름"),
-    ("검색용 임베딩",         "encoder-only",     "E5, BGE",         "양방향이 유리"),
-    ("개체명 인식·태깅",      "encoder-only",     "BERT 계열",       "토큰별 출력"),
-    ("번역·요약",             "enc-dec 또는 dec", "T5 / LLM",        "요즘은 LLM도 충분"),
-    ("음성 인식",             "encoder-decoder",  "Whisper",         "고정 입력 반복 참조"),
-    ("대화·코드·범용 생성",    "decoder-only",     "GPT, LLaMA",      "사실상 기본값"),
-    ("이미지 생성 조건 주입",  "크로스 어텐션",     "Stable Diffusion", "다른 양식을 참조"),
-]
-print(f"{'과제':<24} {'계열':<20} {'대표 모델':<20} {'비고'}")
-print("-" * 82)
-for r in rows:
-    print(f"{r[0]:<24} {r[1]:<20} {r[2]:<20} {r[3]}")
-```
 
 ::: {.callout-note}
 ## 현재의 수렴 경향

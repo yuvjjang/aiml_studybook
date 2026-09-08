@@ -402,18 +402,16 @@ fig.update_layout(legend=dict(x=0.02, y=0.98))
 fig.show()
 ```
 
-```{python}
-#| label: linear-crossover
-#| code-fold: false
+선형 어텐션이 이득인 구간 (n > d):
+d_head 또는 d_model =   64  →  n >   64 부터 유리
+d_head 또는 d_model =  128  →  n >  128 부터 유리
+d_head 또는 d_model =  512  →  n >  512 부터 유리
+d_head 또는 d_model = 1024  →  n > 1024 부터 유리
 
-print("선형 어텐션이 이득인 구간 (n > d):")
-for d in [64, 128, 512, 1024]:
-    print(f"  d_head 또는 d_model = {d:>4}  →  n > {d:>4} 부터 유리")
-print()
-print("현대 LLM 의 헤드 차원은 64~128 이므로,")
-print("헤드 단위로 보면 대부분의 시퀀스 길이에서 이론상 유리하다.")
-print("그럼에도 잘 안 쓰이는 이유는 아래 참고.")
-```
+현대 LLM 의 헤드 차원은 64~128 이므로,
+헤드 단위로 보면 대부분의 시퀀스 길이에서 이론상 유리하다.
+그럼에도 잘 안 쓰이는 이유는 아래 참고.
+
 
 ::: {.callout-warning}
 ## 선형 어텐션이 표준이 되지 못한 이유
