@@ -544,7 +544,7 @@ rows = [
     ("<|im_start|>, <|im_end|>", "대화 턴 경계", "ChatML 계열"),
     ("<|user|>, <|assistant|>", "역할 표시", "지시 조정 모델"),
     ("<|tool_call|>", "도구 호출 구간", "에이전트 (7.11)"),
-    ("<fim_prefix/suffix/middle>", "중간 채우기", "코드 補完"),
+    ("<fim_prefix/suffix/middle>", "중간 채우기", "코드 자동완성"),
 ]
 print(f"{'토큰':<28} {'용도':<20} {'비고'}")
 print("-" * 76)
