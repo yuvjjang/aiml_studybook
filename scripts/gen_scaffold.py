@@ -98,7 +98,10 @@ def build_quarto_yml():
         "      dark: [slate, custom.scss]",
         "      light: [flatly, custom.scss]",
         "    css: styles.css",
-        "    include-in-header: theme-settings.html",
+        # mathjax-config 는 Quarto 가 넣는 mathjax 스크립트보다 먼저 실행되어야 한다.
+        "    include-in-header:",
+        "      - mathjax-config.html",
+        "      - theme-settings.html",
         # Quarto 기본 본문 열은 850px 라 넓은 화면에서 양옆이 크게 남는다.
         # 여기를 넉넉히 잡아 두고, 실제 상한은 styles.css 의 --reader-measure
         # (설정 페이지의 '본문 최대 너비')가 정하게 한다.

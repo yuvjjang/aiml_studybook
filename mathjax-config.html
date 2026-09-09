@@ -1,0 +1,22 @@
+<!-- MathJax 설정. Quarto 가 넣는 mathjax 스크립트보다 먼저 실행되어야 하므로
+     include-in-header 에서 theme-settings.html 과 함께 <head> 에 들어간다. -->
+<script>
+/* 긴 디스플레이 수식을 화면 폭에 맞춰 여러 줄로 쪼갠다.
+ *
+ * MathJax 4 의 displayOverflow 기본값은 'overflow' 라, 화면보다 넓은 수식이
+ * 그대로 넘쳐 페이지를 옆으로 민다. 이것을 CSS 의 overflow 로 막으려 하면
+ * 안 된다 — MathJax 는 분수·행렬·큰 괄호를 음수 마진으로 쌓아 올리기 때문에,
+ * 컨테이너에 overflow 를 걸면 그 조각들이 위아래로 잘린다(분자·분모가 각각
+ * 반씩 잘려 보이는 증상이 이것이다).
+ *
+ * 'linebreak' 은 MathJax 가 자기 레이아웃을 알고 직접 줄을 나누므로
+ * 잘림이 생기지 않는다. 측정으로도 좁은 화면에서 상자를 넘는 수식이
+ * 0개가 된다. 수식이 화면에 들어가는 데스크톱에서는 아무 일도 하지 않는다.
+ */
+window.MathJax = {
+  chtml: {
+    displayOverflow: "linebreak",
+    linebreaks: { inline: true }
+  }
+};
+</script>

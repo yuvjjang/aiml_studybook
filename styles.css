@@ -148,23 +148,12 @@ pre.sourceCode,
    각자 자기 상자 안에서만 스크롤하도록 가둔다.
    ═════════════════════════════════════════════════════════════════ */
 
-/* 디스플레이 수식.
-   .math.display 는 인라인 span 이라 overflow 가 먹지 않는다.
-   MathJax 가 실제로 그리는 컨테이너를 직접 잡아야 한다.
-
-   !important 인 이유: MathJax 는 자기 스타일시트를 런타임에 <head> 끝에 붙인다.
-   특이도가 같으면 나중에 온 쪽이 이기므로 그냥 두면 이 규칙이 먹지 않는다.
-
-   위아래 여백이 핵심이다. 가로 스크롤이 생기면 스크롤바가 아래를 먹고,
-   큰 괄호·분수·행렬은 원래 상자보다 조금 더 높다. 여백 없이 overflow-y 를
-   hidden 으로 두면 그만큼 잘린다(측정: 아이폰 폭에서 53개 중 24개가 3~9px 잘림).
-   0.7em/0.9em 은 6개 챕터 수식 128개가 전부 안 잘리는 최솟값이다. */
-mjx-container[display="true"] {
-  overflow-x: auto !important;
-  overflow-y: hidden !important;
-  max-width: 100% !important;
-  padding: 0.7em 0 0.9em !important;
-}
+/* 디스플레이 수식은 여기서 건드리지 않는다.
+   MathJax 는 분수·행렬·큰 괄호를 음수 마진으로 쌓아 올리기 때문에,
+   mjx-container 에 overflow 를 걸면 그 조각들이 위아래로 잘린다
+   (분자와 분모가 각각 반씩 잘려 보이는 증상이 이것이다).
+   화면보다 넓은 수식은 MathJax 자신의 displayOverflow: "linebreak" 로
+   줄을 나눠 처리한다 — mathjax-config.html 참고. */
 
 /* 코드와 코드 출력 */
 pre.sourceCode,
