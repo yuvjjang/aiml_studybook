@@ -239,7 +239,7 @@ FlashAttention과 같은 종류의 승부다. 알고리즘을 바꾸는 대신 �
 
 ## G5.10.2 — 추론 메모리: 상수 vs 선형
 
-SSM 계열의 가장 명확한 이점이 여기 있다.
+SSM 계열의 가장 명확한 이점이 이것이다.
 
 ```{python}
 #| label: fig-inference-memory
