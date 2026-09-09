@@ -118,7 +118,13 @@ def build_quarto_yml():
         "    code-tools: true",
         "    highlight-style: dracula",
         "    fig-align: center",
-        "    html-math-method: mathjax",
+        # SVG 출력을 쓴다. CHTML(기본값)은 글자 상자 크기를 MathJax 자기 폰트 기준으로
+        # 미리 계산해 두는데, 웹폰트를 시스템 폰트로 덮어쓰는 브라우저(삼성 인터넷이
+        # mjx-c 앞에 samsungoneui 를 끼워넣는다)에서는 그 상자가 안 맞아 글자가 잘린다.
+        # SVG 는 글리프를 벡터 path 로 그려 폰트가 관여하지 않는다.
+        "    html-math-method:",
+        "      method: mathjax",
+        "      url: https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js",
         "    smooth-scroll: true",
         "    anchor-sections: true",
         "",

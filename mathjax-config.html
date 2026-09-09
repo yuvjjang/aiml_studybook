@@ -6,14 +6,19 @@
  * MathJax 4 의 displayOverflow 기본값은 'overflow' 라, 화면보다 넓은 수식이
  * 그대로 넘쳐 페이지를 옆으로 민다. 이것을 CSS 의 overflow 로 막으려 하면
  * 안 된다 — MathJax 는 분수·행렬·큰 괄호를 음수 마진으로 쌓아 올리기 때문에,
- * 컨테이너에 overflow 를 걸면 그 조각들이 위아래로 잘린다(분자·분모가 각각
- * 반씩 잘려 보이는 증상이 이것이다).
+ * 컨테이너에 overflow 를 걸면 그 조각들이 위아래로 잘린다.
  *
  * 'linebreak' 은 MathJax 가 자기 레이아웃을 알고 직접 줄을 나누므로
- * 잘림이 생기지 않는다. 측정으로도 좁은 화면에서 상자를 넘는 수식이
- * 0개가 된다. 수식이 화면에 들어가는 데스크톱에서는 아무 일도 하지 않는다.
+ * 잘림이 생기지 않는다. 수식이 화면에 들어가는 데스크톱에서는 아무 일도 하지 않는다.
+ *
+ * 출력은 SVG 다(_quarto.yml 의 html-math-method 참고). svg 와 chtml 양쪽에
+ * 같은 설정을 넣어 두어, 출력 방식을 되돌리더라도 줄바꿈은 유지되게 한다.
  */
 window.MathJax = {
+  svg: {
+    displayOverflow: "linebreak",
+    linebreaks: { inline: true }
+  },
   chtml: {
     displayOverflow: "linebreak",
     linebreaks: { inline: true }

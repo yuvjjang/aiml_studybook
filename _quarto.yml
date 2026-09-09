@@ -193,7 +193,9 @@ format:
     code-tools: true
     highlight-style: dracula
     fig-align: center
-    html-math-method: mathjax
+    html-math-method:
+      method: mathjax
+      url: https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js
     smooth-scroll: true
     anchor-sections: true
 
