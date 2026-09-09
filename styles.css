@@ -98,7 +98,12 @@ a:hover { color: var(--reader-link); }
 .quarto-container { max-width: none; }
 
 main.content {
-  max-width: var(--reader-measure);
+  /* 100% 를 함께 거는 이유가 있다. main 은 그리드 자식이라 min-width 가 auto 이고,
+     그러면 내용의 최소 폭(넓은 Plotly SVG 등) 아래로는 줄지 않는다 — 폭이 좁은 화면에서
+     본문 열이 트랙을 뚫고 나가 페이지 전체가 옆으로 밀린다.
+     max-width 가 확정값이면 그 자동 최소 폭이 max-width 로 잘리므로, 100% 를 상한에
+     포함시켜 트랙 밖으로 나가지 못하게 한다. */
+  max-width: min(var(--reader-measure), 100%);
   margin-inline: auto;
 }
 
@@ -145,12 +150,20 @@ pre.sourceCode,
 
 /* 디스플레이 수식.
    .math.display 는 인라인 span 이라 overflow 가 먹지 않는다.
-   MathJax 가 실제로 그리는 컨테이너를 직접 잡아야 한다. */
+   MathJax 가 실제로 그리는 컨테이너를 직접 잡아야 한다.
+
+   !important 인 이유: MathJax 는 자기 스타일시트를 런타임에 <head> 끝에 붙인다.
+   특이도가 같으면 나중에 온 쪽이 이기므로 그냥 두면 이 규칙이 먹지 않는다.
+
+   위아래 여백이 핵심이다. 가로 스크롤이 생기면 스크롤바가 아래를 먹고,
+   큰 괄호·분수·행렬은 원래 상자보다 조금 더 높다. 여백 없이 overflow-y 를
+   hidden 으로 두면 그만큼 잘린다(측정: 아이폰 폭에서 53개 중 24개가 3~9px 잘림).
+   0.7em/0.9em 은 6개 챕터 수식 128개가 전부 안 잘리는 최솟값이다. */
 mjx-container[display="true"] {
-  overflow-x: auto;
-  overflow-y: hidden;
-  max-width: 100%;
-  padding-bottom: 0.25rem;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  max-width: 100% !important;
+  padding: 0.7em 0 0.9em !important;
 }
 
 /* 코드와 코드 출력 */
