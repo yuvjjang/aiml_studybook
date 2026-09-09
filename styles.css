@@ -134,3 +134,79 @@ pre.sourceCode,
   font-size: calc(var(--reader-font-size) * 0.85);
   line-height: 1.55;
 }
+
+/* ═════════════════════════════════════════════════════════════════
+   모바일
+
+   본문에서 가로로 넘치는 것은 셋이다 — 여러 열의 표, 긴 디스플레이 수식,
+   코드 출력. 이것들이 페이지 자체를 넓히면 본문 전체가 좌우로 흔들리므로
+   각자 자기 상자 안에서만 스크롤하도록 가둔다.
+   ═════════════════════════════════════════════════════════════════ */
+
+/* 디스플레이 수식.
+   .math.display 는 인라인 span 이라 overflow 가 먹지 않는다.
+   MathJax 가 실제로 그리는 컨테이너를 직접 잡아야 한다. */
+mjx-container[display="true"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding-bottom: 0.25rem;
+}
+
+/* 코드와 코드 출력 */
+pre.sourceCode,
+.cell-output pre {
+  overflow-x: auto;
+}
+
+/* 긴 URL·식별자가 열을 밀어내지 않게 */
+main.content p,
+main.content li,
+main.content td,
+main.content th {
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 768px) {
+  /* 표: 줄바꿈으로 뭉개지 말고 자기 안에서 가로로 스크롤한다 */
+  main.content table.table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    font-size: 0.9em;
+  }
+
+  /* 제목이 두세 줄로 접히지 않을 만큼 줄인다 */
+  h1.title { font-size: 1.55rem; }
+  main.content h2 { font-size: 1.3rem; }
+  main.content h3 { font-size: 1.12rem; }
+  main.content h4 { font-size: 1.02rem; }
+
+  /* 상자류 안쪽 여백 — 좁은 화면에서는 본문 폭을 그만큼 잡아먹는다 */
+  .math-box,
+  .key-concept,
+  .callout-body-container {
+    padding: 0.75rem 0.85rem;
+  }
+
+  .math.display { font-size: 1.02em; }
+
+  /* 그래픽 높이.
+     플롯 컨테이너는 인라인 style 로 height 가 박혀 나오므로 !important 가 필요하다.
+     세로 화면에서 490px 는 화면을 거의 다 덮는다. */
+  div:has(> .plotly-graph-div) {
+    height: 60vh !important;
+    max-height: 400px;
+    min-height: 290px;
+  }
+
+  .plotly-graph-div { box-shadow: none; }
+
+  /* 읽기 설정 위젯은 한 줄에 하나씩 */
+  .reader-settings { grid-template-columns: 1fr; }
+
+  /* 인터랙션 힌트는 좁은 화면에서 가운데 정렬이 오히려 읽기 나쁘다 */
+  .interaction-hint { text-align: left; }
+}
