@@ -53,7 +53,18 @@ def prose_of(path):
     """qmd 에서 검사 대상 본문만 남긴다."""
     s = io.open(path, encoding="utf-8").read()
     s = re.sub(r"^---\n.*?\n---\n", "", s, flags=re.S)        # YAML 머리말
-    s = re.sub(r"```.*?```", "", s, flags=re.S)               # 코드 청크
+
+    # 코드 청크는 줄 단위로 걷어낸다. 본문에 인라인으로 ```python 을 언급하는
+    # 문장이 있어서, 정규식으로 ```...``` 를 짝지으면 펜스가 어긋난다.
+    out, in_fence = [], False
+    for line in s.split("\n"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            out.append(line)
+    s = "\n".join(out)
+
     s = re.sub(r"\$\$.*?\$\$", "", s, flags=re.S)             # 디스플레이 수식
     s = re.sub(r"(?m)^\s*\|.*$", "", s)                       # 표
     s = re.sub(r"\$[^$\n]*\$", "@", s)                        # 인라인 수식
@@ -67,6 +78,18 @@ def scan(path):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if args and "--dump" in sys.argv:          # 본문만 덤프 (사람이 통독할 용도)
+        for a in args:
+            p = Path(a)
+            if not p.is_absolute():
+                p = ROOT / p
+            for f in ([p] if p.suffix == ".qmd" else sorted(p.rglob("*.qmd"))):
+                s = prose_of(f)
+                s = re.sub(r"\n{3,}", "\n\n", s).strip()
+                print(f"\n{'=' * 70}\n### {f.relative_to(ROOT).as_posix()}\n{'=' * 70}")
+                print(s)
+        return
+
     if args:                                   # 단일 챕터의 실제 문장 보기
         p = Path(args[0])
         if not p.is_absolute():
