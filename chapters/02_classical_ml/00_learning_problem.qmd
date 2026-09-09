@@ -59,8 +59,8 @@ $\mathcal{H}$ 안에서 $\hat{R}$ 을 최소화하는 **방법**의 문제다.
 | 종류 | 입력 | 목표 | 예 |
 |---|---|---|---|
 | 지도학습 | (x, y) 쌍 | y 예측 | 분류, 회귀 |
-| 비지도학습 | x 만 | 구조 발견 | 군집화, 차원축소 |
-| 자기지도학습 | x 만 | x 일부로 x 나머지 예측 | BERT, GPT, SimCLR |
+| 비지도학습 | x만 | 구조 발견 | 군집화, 차원축소 |
+| 자기지도학습 | x만 | x 일부로 x 나머지 예측 | BERT, GPT, SimCLR |
 | 준지도학습 | 레이블 소수 + x 다수 | 레이블 효율 | 의사 레이블링 |
 | 강화학습 | 상태·행동·보상 | 누적 보상 최대화 | 게임, RLHF |
 
@@ -106,7 +106,7 @@ $$\frac{d}{dc}\,\mathbb{E}[(Y-c)^2] = -2\,\mathbb{E}[Y-c] = 0
 c^\star = \mathbb{E}[Y]$$
 
 **MAE → 중앙값.** $|Y-c|$ 는 $c=Y$ 에서 미분 불가라 열등미분을 쓴다
-([0.2 의 Lasso](../00_foundations/02_probability.qmd)와 같은 도구다).
+([0.2의 Lasso](../00_foundations/02_probability.qmd)와 같은 도구다).
 $\frac{d}{dc}|y-c| = -\operatorname{sign}(y-c)$ 이므로
 
 $$\frac{d}{dc}\,\mathbb{E}|Y-c| = -\mathbb{E}[\operatorname{sign}(Y-c)]
@@ -120,16 +120,16 @@ $$\Longrightarrow\quad P(Y>c) = P(Y<c) = \tfrac{1}{2}
 $$\rho_\tau(u) = \begin{cases} \tau\,u & u \ge 0\\ (\tau-1)\,u & u < 0\end{cases}$$
 
 같은 방식으로 미분하면 $\tau P(Y>c) - (1-\tau)P(Y<c) = 0$, 즉 $P(Y \le c) = \tau$ 다.
-$c^\star$ 는 **$\tau$ 분위수**이고, $\tau=0.5$ 면 MAE 와 정확히 같아진다.
+$c^\star$ 는 **$\tau$ 분위수**이고, $\tau=0.5$ 면 MAE와 정확히 같아진다.
 
 ::: {.key-concept}
 **손실을 고르는 것은 "분포의 어느 지점을 예측할 것인가"를 고르는 것이다.**
 
 수요 예측에서 과소예측(품절)이 과대예측(재고)보다 3배 비싸다면,
-평균을 예측하는 MSE 는 애초에 잘못된 목적이다.
+평균을 예측하는 MSE는 애초에 잘못된 목적이다.
 $\tau = 3/(3+1) = 0.75$ 인 pinball 손실을 쓰면 **비용 구조가 그대로 반영된다.**
 
-이것이 [0.2 의 "손실 = 잡음 분포 가정"](../00_foundations/02_probability.qmd)과
+이것이 [0.2의 "손실 = 잡음 분포 가정"](../00_foundations/02_probability.qmd)과
 동전의 양면이다. 잡음이 가우스라 보면 평균을 추정하게 되고,
 라플라스라 보면 중앙값을 추정하게 된다.
 :::
@@ -419,7 +419,7 @@ $\mathcal{H}$ 가 유한하고 손실이 $[0,1]$ 이면 두 도구로 끝난다.
 
 $$P\big(|R(h)-\hat{R}(h)| > \varepsilon\big) \le 2e^{-2n\varepsilon^2}$$
 
-를 주고, 여기에 [0.3 에서 쓴 합집합 상한](../00_foundations/03_statistics.qmd)을 씌우면
+를 주고, 여기에 [0.3에서 쓴 합집합 상한](../00_foundations/03_statistics.qmd)을 씌우면
 
 $$P\big(\exists h \in \mathcal{H}: |R(h)-\hat{R}(h)| > \varepsilon\big) \le 2|\mathcal{H}|\,e^{-2n\varepsilon^2}$$
 
@@ -431,7 +431,7 @@ $$\boxed{\ R(h) \;\le\; \hat{R}(h) + \sqrt{\frac{\ln|\mathcal{H}| + \ln(2/\delta
 
 - **가설공간이 넓을수록 벌점이 커진다** — 다만 $\ln|\mathcal{H}|$ 라 완만하다.
   $\mathcal{H}$ 가 1000배 커져도 벌점은 $\sqrt{\ln 1000}\approx 2.6$ 배 정도만 는다.
-- **데이터가 늘면 $1/\sqrt{n}$ 로 줄어든다** — [0.2 의 표준오차](../00_foundations/02_probability.qmd)와 같은 속도다.
+- **데이터가 늘면 $1/\sqrt{n}$ 로 줄어든다** — [0.2의 표준오차](../00_foundations/02_probability.qmd)와 같은 속도다.
 - **$\mathcal{H}$ 를 데이터를 본 뒤에 넓히면 보장이 깨진다** — 시험셋을 여러 번 보는 것이
   왜 위험한지가 여기서 나온다. 그때의 유효 $|\mathcal{H}|$ 는 "시도한 모델 수"다.
 
@@ -473,7 +473,7 @@ print("이것이 '고르는 행위' 자체가 만드는 낙관이고, 위 경계
 
 경계에서 가져갈 것은 숫자가 아니라 **구조**다 —
 "훈련 오차 + 복잡도 벌점"이라는 형태가 정규화([2.3](03_regularization.qmd)),
-AIC·BIC, MDL 에 이르기까지 반복해서 나타난다.
+AIC·BIC, MDL에 이르기까지 반복해서 나타난다.
 :::
 
 ```{python}
@@ -556,7 +556,7 @@ print("  시험 R² 는 0 근처에 머물거나 음수가 된다 (평균 예측
 
 **② 낙관 편향을 예측한다**
 `selection-optimism` 에서 $|H|$ 를 $10^4$ 로 늘리면 편향이 얼마가 되겠는가.
-$\sqrt{\ln|H|}$ 에 비례한다면 1000 → 10000 에서 몇 배인지 먼저 계산하라.
+$\sqrt{\ln|H|}$ 에 비례한다면 1000 → 10000에서 몇 배인지 먼저 계산하라.
 
 **③ 경계를 실제 값과 비교한다**
 $n=200$, $|H|=1000$, $\delta=0.05$ 로 일반화 경계의 벌점 항을 계산하라.

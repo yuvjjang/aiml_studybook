@@ -154,19 +154,19 @@ Kaplan과 Hoffmann이 서로 다른 답을 낸 것은 데이터가 아니라 **�
 
 ### 연산 최적 배분은 라그랑주 한 번이면 나온다
 
-Chinchilla 의 결론 — "$N$ 과 $D$ 를 **같은 비율로** 키워라" — 은 관찰이 아니라 계산 결과다.
+Chinchilla의 결론 — "$N$ 과 $D$ 를 **같은 비율로** 키워라" — 은 관찰이 아니라 계산 결과다.
 손실을 파라미터와 데이터의 함수로 두고
 
 $$L(N, D) = \underbrace{E}_{\text{줄일 수 없는 항}}
 + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}}$$
 
-여기에 연산량 제약을 건다. 학습 FLOPs 는 경험적으로
+여기에 연산량 제약을 건다. 학습 FLOPs는 경험적으로
 
 $$C \approx 6ND$$
 
 (순전파 2, 역전파 4 — 파라미터당 토큰당 6회 곱셈-덧셈이라는 어림이다.)
 
-**제약 있는 최소화**이므로 [0.1 의 라그랑주](../00_foundations/01_calculus_optimization.qmd)를 쓴다.
+**제약 있는 최소화**이므로 [0.1의 라그랑주](../00_foundations/01_calculus_optimization.qmd)를 쓴다.
 
 $$\mathcal{L} = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta} + \lambda\,(6ND - C)$$
 
@@ -189,7 +189,7 @@ $$N^\star \propto C^{\,\frac{\beta}{\alpha+\beta}},
 \qquad
 D^\star \propto C^{\,\frac{\alpha}{\alpha+\beta}}$$
 
-Chinchilla 가 적합한 값은 $\alpha \approx 0.34$, $\beta \approx 0.28$ 로 **비슷하지만 같지는 않다.**
+Chinchilla가 적합한 값은 $\alpha \approx 0.34$, $\beta \approx 0.28$ 로 **비슷하지만 같지는 않다.**
 넣어 보면
 
 $$N^\star \propto C^{0.45}, \qquad D^\star \propto C^{0.55}$$
@@ -200,7 +200,7 @@ $$N^\star \propto C^{0.45}, \qquad D^\star \propto C^{0.55}$$
 "토큰 수 ≈ 파라미터 수의 20배"는 Chinchilla 규모 근처에서의 어림이지
 모든 규모에 통하는 상수가 아니다.
 
-Kaplan 이 $N$ 쪽에 치우친 답($N \propto C^{0.73}$)을 얻은 것은
+Kaplan이 $N$ 쪽에 치우친 답($N \propto C^{0.73}$)을 얻은 것은
 $\alpha,\beta$ 추정과 학습률 스케줄 처리가 달랐기 때문이고,
 **지수가 조금만 달라져도 배분이 크게 달라진다**는 것이 위 식에 그대로 보인다.
 

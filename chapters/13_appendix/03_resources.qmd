@@ -145,23 +145,23 @@ fig
 | 강화학습 | Sutton & Barto, RL: An Introduction | 이 분야의 정본, 무료 |
 | NLP | Jurafsky & Martin, Speech and Language Processing 무료 초안 계속 갱신 |  |
 | 정보이론 | MacKay, Information Theory (무료) | 확률·부호화·추론 |
-| 인과추론 | Pearl, The Book of Why / Causal Inference 12.0 이 못 답한 것 |  |
+| 인과추론 | Pearl, The Book of Why / Causal Inference 12.0이 못 답한 것 |  |
 
 **강의** — 순서를 잡아 주는 것들
 
 | 과목 | 특징 |
 |---|---|
 | Karpathy, Neural Networks: Zero to Hero **바닥부터 GPT까지 직접 구현** |  |
-| Stanford CS231n (비전) | CNN 의 표준 강의 |
+| Stanford CS231n (비전) | CNN의 표준 강의 |
 | Stanford CS224n (NLP) | 매년 갱신되는 NLP 지형 |
 | Stanford CS336 (LLM 만들기) | 학습·시스템까지 전 과정 |
 | MIT 6.S191 | 짧고 넓은 입문 |
-| David Silver, RL Course | Sutton&Barto 와 짝 |
+| David Silver, RL Course | Sutton&Barto와 짝 |
 | Hugging Face Courses | 실무 툴체인 중심 |
 | fast.ai | 위에서 아래로 가는 접근 |
 
-**Karpathy 의 시리즈를 특히 권한다** —
-이 책의 Part 3·5·12.1 이 같은 정신으로 쓰였다. 안이 보여야 안다.
+**Karpathy의 시리즈를 특히 권한다** —
+이 책의 Part 3·5·12.1이 같은 정신으로 쓰였다. 안이 보여야 안다.
 
 
 ---
@@ -182,7 +182,7 @@ fig
 | 양자화 | bitsandbytes, AutoGPTQ, llama.cpp | 11.4 |
 | 실험 추적 | MLflow, Weights & Biases | 11.0 |
 | 해석 | Captum, TransformerLens, SAELens | 12.0·12.1 |
-| 고전 ML | scikit-learn | Part 2 의 도구 |
+| 고전 ML | scikit-learn | Part 2의 도구 |
 | 표 데이터 | XGBoost, LightGBM | **여전히 강한 기준선** |
 
 **선택 기준**
@@ -191,7 +191,7 @@ fig
 - 표 데이터라면 **먼저 그래디언트 부스팅**을 돌려 보라 — 딥러닝이 이기지 못하는 경우가 여전히 많다
 - **추론 서빙은 직접 만들지 말 것.** PagedAttention·연속 배칭 구현은 생각보다 훨씬 어렵다 (11.5)
 - 반대로 **학습 루프는 한 번쯤 직접 써 보라** — 무엇이 어디서 느린지 감이 생긴다
-- 라이브러리는 빠르게 바뀐다. **개념이 남고 API 는 사라진다**
+- 라이브러리는 빠르게 바뀐다. **개념이 남고 API는 사라진다**
 
 
 ---
@@ -202,8 +202,8 @@ fig
 |---|---|---|
 | 모델·데이터 허브 | Hugging Face Hub | **라이선스가 제각각** |
 | 텍스트 사전학습 | The Pile, C4, RedPajama, FineWeb | 출처·중복 확인 |
-| 이미지 | ImageNet, LAION, COCO | LAION 은 URL 목록 |
-| 음성 | LibriSpeech, Common Voice | CV 는 기여자 라이선스 |
+| 이미지 | ImageNet, LAION, COCO | LAION은 URL 목록 |
+| 음성 | LibriSpeech, Common Voice | CV는 기여자 라이선스 |
 | 평가 | MMLU, HELM, LMSYS Arena | **오염 주의** |
 | 표 데이터 | OpenML, UCI, Kaggle | 출처 표기 필요 |
 
@@ -214,7 +214,7 @@ fig
 - **출력물에 대한 제약**을 두는 라이선스도 있다 (다른 모델 학습에 쓰지 말 것 등)
 - 데이터 계보를 기록해 두라 — [12.4](../12_trust/04_fairness_privacy.qmd) 의 삭제 요구에 답하려면 필요하다
 
-**벤치마크·리더보드를 읽는 법** — Part 11·12 에서 배운 것을 여기에 쓴다
+**벤치마크·리더보드를 읽는 법** — Part 11·12에서 배운 것을 여기에 쓴다
 
 | 무엇을 볼 것인가 | 왜 |
 |---|---|
@@ -314,12 +314,12 @@ for s in ["**끝까지 갈 수 있는 크기**로 자르라 — "
 |---|---|---|
 | 10.1 | 감소율이 γ에 붙는다 | 0.506 — 스펙트럼 반지름이 정한다 |
 | 10.3 | 리플레이가 발산을 막는다 | 타깃망만 막는다 (6.6e6 vs 12.6) |
-| 11.2 | 1F1B 가 거품을 줄인다 | 거품은 같고 활성화만 준다 |
+| 11.2 | 1F1B가 거품을 줄인다 | 거품은 같고 활성화만 준다 |
 | 11.4 | 손실이 더해진다 | 덜 더해진다 — 0.133 vs 예상 0.235 |
-| 12.0 | saliency 가 모델을 보여준다 | 구조가 그린 지도일 수 있다 |
-| 12.2 | 앙상블이 OOD 를 안다 | 외삽은 못 잡는다 (E/A 0.23) |
+| 12.0 | saliency가 모델을 보여준다 | 구조가 그린 지도일 수 있다 |
+| 12.2 | 앙상블이 OOD를 안다 | 외삽은 못 잡는다 (E/A 0.23) |
 | 12.3 | 적대적 학습은 정확도를 깎는다 | 여기선 올렸다 (+0.107) |
-| 12.4 | DP 는 소수 집단에 더 나쁘다 | 시드 5개 평균에선 사라졌다 |
+| 12.4 | DP는 소수 집단에 더 나쁘다 | 시드 5개 평균에선 사라졌다 |
 
 **여덟 번 다 서술을 고쳤다.** 그때마다 더 나은 재료가 나왔다.
 

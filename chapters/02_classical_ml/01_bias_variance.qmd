@@ -72,7 +72,7 @@ $$\mathbb{E}\big[(y_0-\hat{f}_D(x_0))^2\big]
 $$= \text{잡음} + \text{편향}^2 + \text{분산}$$
 
 $\bar{f}$ 를 기준점으로 삼은 것이 전부다 —
-[0.2 에서 $\mathrm{Var}=\mathbb{E}[X^2]-\mu^2$ 를 유도한 것](../00_foundations/02_probability.qmd)과 같은 수법이다.
+[0.2에서 $\mathrm{Var}=\mathbb{E}[X^2]-\mu^2$ 를 유도한 것](../00_foundations/02_probability.qmd)과 같은 수법이다.
 
 ::: {.callout-warning}
 ## 이 분해는 제곱오차에만 성립한다
@@ -476,7 +476,7 @@ $p < n$ 구간은 고전적 U자입니다. $p = n$ 근처에서 시험 오차가
 
 ### 왜 하필 $p=n$ 에서 치솟는가
 
-첨두의 정체는 [0.0 의 조건수](../00_foundations/00_linear_algebra.qmd)다.
+첨두의 정체는 [0.0의 조건수](../00_foundations/00_linear_algebra.qmd)다.
 
 $p < n$ 에서는 최소제곱해가 $\hat\beta = (X^\top X)^{-1}X^\top y$ 이고,
 $p > n$ 에서는 보간해 중 최소 norm인 $\hat\beta = X^\top(XX^\top)^{-1}y$ 다.
@@ -523,7 +523,7 @@ print("σ_min 이 0 으로 붙는 지점과 정확히 일치한다 — 첨두의
 ```
 
 이것이 [2.3 정규화](03_regularization.qmd)와 연결되는 지점이기도 하다.
-Ridge 의 $(X^\top X + \lambda I)^{-1}$ 은 작은 특이값에 $\lambda$ 를 더해
+Ridge의 $(X^\top X + \lambda I)^{-1}$ 은 작은 특이값에 $\lambda$ 를 더해
 바로 이 발산을 막는다. **충분한 정규화를 걸면 이중하강의 첨두 자체가 사라진다** —
 첨두는 과매개변수화의 본질이 아니라 정규화 부재의 증상이다.
 

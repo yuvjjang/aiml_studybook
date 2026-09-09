@@ -49,7 +49,7 @@ $$\hat{\mathbf{y}}_{\text{OLS}} = \sum_j \mathbf{u}_j\mathbf{u}_j^\top\mathbf{y}
 
 ### 왜 편향을 받아들이는 것이 이득인가
 
-[2.2 의 가우스-마르코프](02_linear_regression.qmd)는 OLS 가 **불편 추정량 중** 최선이라고 했다.
+[2.2의 가우스-마르코프](02_linear_regression.qmd)는 OLS가 **불편 추정량 중** 최선이라고 했다.
 정규화는 그 조건을 깨고 들어온다 — 편향을 조금 받고 분산을 많이 줄인다.
 이 거래가 **언제나 이득이 되는 구간이 존재한다**는 것을 직교 설계에서 정확히 보일 수 있다.
 
@@ -58,7 +58,7 @@ $X^\top X = I$ 로 두면 Ridge 해가 OLS 해의 단순 축소가 된다.
 $$\hat{\boldsymbol\beta}_{\text{ridge}} = \frac{1}{1+\lambda}\,\hat{\boldsymbol\beta}_{\text{OLS}}$$
 
 $\hat{\boldsymbol\beta}_{\text{OLS}}$ 는 평균 $\boldsymbol\beta$, 공분산 $\sigma^2 I$ 이므로
-[2.1 의 분해](01_bias_variance.qmd)를 그대로 적용하면 두 항이 나온다.
+[2.1의 분해](01_bias_variance.qmd)를 그대로 적용하면 두 항이 나온다.
 
 $$\underbrace{\left\|\mathbb{E}[\hat{\boldsymbol\beta}_{\text{ridge}}]-\boldsymbol\beta\right\|^2}_{\text{편향}^2}
 = \left(\frac{\lambda}{1+\lambda}\right)^2\|\boldsymbol\beta\|^2,
@@ -78,7 +78,7 @@ $$\frac{d\,\text{MSE}}{d\lambda} = \frac{2\big(\lambda\|\boldsymbol\beta\|^2 - \
 
 **$\lambda=0$(즉 OLS)에서 기울기가 항상 음수다.**
 $\boldsymbol\beta$ 가 무엇이든, $\sigma^2>0$ 이기만 하면
-$\lambda$ 를 0에서 조금 키우는 것이 **반드시** MSE 를 낮춘다.
+$\lambda$ 를 0에서 조금 키우는 것이 **반드시** MSE를 낮춘다.
 최적값은 미분을 0으로 놓아 바로 나온다.
 
 $$\boxed{\ \lambda^\star = \frac{\sigma^2 p}{\|\boldsymbol\beta\|^2}\ }$$
@@ -634,16 +634,16 @@ AdamW는 감쇠를 그래디언트가 아니라 **갱신 단계에 직접** 적�
 ## 직접 해보기
 
 **① λ* 공식을 검증한다**
-`ridge-beats-ols` 에서 $\|\beta\|$ 를 1 과 10 으로 바꿔 최적 $\lambda$ 를 재라.
+`ridge-beats-ols` 에서 $\|\beta\|$ 를 1과 10으로 바꿔 최적 $\lambda$ 를 재라.
 $\lambda^\star = \sigma^2 p/\|\beta\|^2$ 가 예측한 값과 맞는가?
 
 **② Lasso 경로를 그린다**
-$\lambda$ 를 $\lambda_{\max}$ 에서 0 까지 줄이며 0이 아닌 계수 개수를 세라.
+$\lambda$ 를 $\lambda_{\max}$ 에서 0까지 줄이며 0이 아닌 계수 개수를 세라.
 경로가 조각별 선형인 것이 보이는가?
 
-**③ ElasticNet 이 필요한 상황을 만든다**
-상관이 0.99 인 특성 두 개를 만들고 Lasso 와 ElasticNet 을 비교하라.
-Lasso 는 둘 중 하나만 남기는가? 시드를 바꾸면 남는 쪽이 바뀌는가?
+**③ ElasticNet이 필요한 상황을 만든다**
+상관이 0.99 인 특성 두 개를 만들고 Lasso와 ElasticNet을 비교하라.
+Lasso는 둘 중 하나만 남기는가? 시드를 바꾸면 남는 쪽이 바뀌는가?
 :::
 
 ## 요약

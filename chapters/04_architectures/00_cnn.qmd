@@ -691,15 +691,15 @@ print("  · 속도를 올리려면    → 초반에 빨리 다운샘플 (stem st
 
 **① 파라미터 수를 손으로 세고 맞춰 본다**
 $224\times224\times3$ 입력에 $3\times3$ 커널 64개를 쓰는 층의 파라미터 수는?
-같은 일을 MLP 로 하면 몇 개인가? `mlp-vs-cnn-params` 와 비교하라.
+같은 일을 MLP로 하면 몇 개인가? `mlp-vs-cnn-params` 와 비교하라.
 
 **② 이동 등변성이 깨지는 지점**
 `mlp-translation` 의 입력을 1픽셀 옮겼을 때 CNN 특성맵도 정확히 1픽셀 옮겨지는가?
-stride 2 를 넣으면? padding 을 없애면?
+stride 2를 넣으면? padding을 없애면?
 
 **③ 수용 영역을 목표에 맞춘다**
-$3\times3$ conv 를 몇 층 쌓아야 수용 영역이 $32\times32$ 를 덮는가?
-`receptive-field-numbers` 의 공식으로 계산하고 dilation 을 쓰면 몇 층이면 되는지 비교하라.
+$3\times3$ conv를 몇 층 쌓아야 수용 영역이 $32\times32$ 를 덮는가?
+`receptive-field-numbers` 의 공식으로 계산하고 dilation을 쓰면 몇 층이면 되는지 비교하라.
 :::
 
 ## 요약
@@ -713,9 +713,9 @@ $3\times3$ conv 를 몇 층 쌓아야 수용 영역이 $32\times32$ 를 덮는�
 | 출력 크기 | $O = \lfloor (I+2P-D(K-1)-1)/S \rfloor + 1$ |
 | 수용영역 | $r_l = r_{l-1} + (k-1)\prod s_i$ — stride/팽창이 지수 성장 |
 | 3×3 쌓기 | 5×5 한 층보다 파라미터 72%, 비선형 2배 |
-| 1×1 병목 | 비싼 3×3 을 좁은 채널에서만 |
+| 1×1 병목 | 비싼 3×3을 좁은 채널에서만 |
 | depthwise separable | 비용 $1/C_{out} + 1/K^2$ |
-| 비용 분포 | 파라미터는 FC 에, FLOPs 는 초반 합성곱에 |
+| 비용 분포 | 파라미터는 FC에, FLOPs는 초반 합성곱에 |
 
 CNN은 **이미지의 성질을 아키텍처에 새겨 넣었다.**
 그 대가로 파라미터가 극적으로 줄었고, 적은 데이터로도 학습이 됐다.

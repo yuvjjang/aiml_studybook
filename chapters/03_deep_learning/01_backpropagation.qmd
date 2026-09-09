@@ -620,7 +620,7 @@ V자 곡선의 바닥이 어디인가? 절단오차와 반올림오차의 균형
 어느 모드가 싸지는가? 비용비 $n/m$ 이 예측한 대로인가?
 
 **③ 잔차 연결이 곱을 덧셈으로 바꾼다**
-`vanish-numbers` 에 skip connection 을 넣고 층별 기울기 norm 을 다시 재라.
+`vanish-numbers` 에 skip connection을 넣고 층별 기울기 norm을 다시 재라.
 $\prod \sigma'$ 가 $\prod(1+\sigma')$ 로 바뀌는 효과가 보이는가?
 :::
 

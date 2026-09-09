@@ -73,7 +73,7 @@ print("딥러닝 손실의 헤시안은 조건수가 10^4~10^6 에 이르는 것
 | AdaGrad | 2011 s ← s + g²; | θ ← θ − ηg/√s  2× η 가 단조 감소 |
 | RMSProp | 2012 s ← βs + (1−β)g² | 2× 감소를 멈춤 |
 | Adam | 2014 모멘텀 + RMSProp + 편향보정 | 3× 사실상 표준 |
-| AdamW | 2017 weight decay 를 분리 | 3× 현재 표준 |
+| AdamW | 2017 weight decay를 분리 | 3× 현재 표준 |
 | LAMB | 2019 층별 신뢰 비율 | 3× 초대형 배치 |
 | Lion | 2023 부호만 사용, 모멘트 1개 | 2× 메모리 절약 |
 | Sophia | 2023 대각 헤시안 추정 | 3× 2차 근사 |
@@ -385,7 +385,7 @@ $$\mathbb{E}[m_t] \approx (1-\beta_1)\,\mathbb{E}[g]\cdot\frac{1-\beta_1^{\,t}}{
 = \big(1-\beta_1^{\,t}\big)\,\mathbb{E}[g]$$
 
 $1-\beta_1^t$ 배만큼 **작게** 나온다는 뜻이고, 그래서 그 값으로 나눠 되돌린다.
-$t=1$, $\beta_1=0.9$ 면 계수가 0.1 이라 보정 없이는 첫 스텝이 10배 작아진다.
+$t=1$, $\beta_1=0.9$ 면 계수가 0.1이라 보정 없이는 첫 스텝이 10배 작아진다.
 $v$ 쪽도 같은 논리이고 $\beta_2=0.999$ 라 훨씬 오래 간다 — 1000 스텝쯤 지나야 사라진다.
 
 위 그림처럼 그래디언트가 일정하면 이 보정이 완벽하게 상쇄된다.
@@ -399,7 +399,7 @@ RAdam 논문이 이 분산을 정량화했고, 실무의 답은 그냥 warmup이
 
 ---
 
-## AdamW: weight decay 를 분리하는 이유
+## AdamW: weight decay를 분리하는 이유
 
 L2 정규화를 손실에 넣으면 그래디언트에 $\lambda\theta$ 가 더해진다.
 그런데 Adam은 그 그래디언트를 **$\sqrt{\hat v}$ 로 나눈다.**
@@ -860,7 +860,7 @@ no_decay = ["bias", "LayerNorm.weight", "embedding"]
 조건수 $\kappa$ 인 이차함수에서 최적 모멘텀은 $\left(\frac{\sqrt\kappa-1}{\sqrt\kappa+1}\right)^2$ 다.
 `momentum-numbers` 의 $\kappa$ 로 계산한 값이 실측 최적과 맞는가?
 
-**② AdamW 와 L2 가 갈라지는 지점**
+**② AdamW와 L2가 갈라지는 지점**
 `adamw-vs-l2` 에서 기울기 크기가 좌표마다 크게 다른 문제를 만들어라.
 두 방식의 최종 가중치 norm 차이가 얼마나 벌어지는가?
 
