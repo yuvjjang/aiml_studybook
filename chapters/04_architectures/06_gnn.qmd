@@ -259,7 +259,7 @@ for k in range(KMAX+1):
 
 fig = make_subplots(rows=1, cols=2,
                     subplot_titles=("표현의 다양성이 사라진다",
-                                    "차수 벡터 √deg 로 수렴한다"))
+                                    "차수 벡터 √deg로 수렴한다"))
 for nm, v, col in [("MAD (평균 쌍별 코사인 거리)", mads, viz.ACCENT),
                    ("디리클레 에너지", dirs, viz.WARM),
                    ("커뮤니티 분리도", seps, viz.GREEN)]:

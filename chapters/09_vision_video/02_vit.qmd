@@ -261,7 +261,7 @@ viz.fig_defaults(
     fig, "이동 s 픽셀에 대한 등변성 오차 (격자 정렬 후)", height=460,
     xaxis_title="이동량 s (픽셀)", yaxis_title="상대 L2 오차",
     xaxis=dict(tickmode="array", tickvals=SS))
-viz.annotate_box(fig, "패치 P 는 s ≡ 0 (mod P) 에서만 0<br>"
+viz.annotate_box(fig, "패치 P는 s ≡ 0 (mod P) 에서만 0<br>"
                       "<b>그 사이에서는 특징이 통째로 바뀐다</b>",
                  x=0.98, y=0.98, yanchor="top")
 fig

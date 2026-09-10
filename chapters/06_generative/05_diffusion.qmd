@@ -263,7 +263,7 @@ X_RING = CEN[rr0.integers(0, 8, 4000)] + rr0.normal(0, 0.2, (4000, 2))
 
 fig = make_subplots(rows=1, cols=3, column_widths=[0.30, 0.30, 0.40],
                     subplot_titles=("ᾱ_t (남은 신호)", "SNR (dB)",
-                                    "t 에 따른 데이터 파괴 (cosine)"))
+                                    "t에 따른 데이터 파괴 (cosine)"))
 tt = np.arange(T)/T
 for nm, ab, c in [("linear", AB_LIN, viz.WARM), ("cosine", AB_COS, viz.ACCENT)]:
     fig.add_trace(go.Scatter(x=tt, y=np.round(ab, 5), mode="lines", name=nm,

@@ -263,7 +263,7 @@ viz.fig_defaults(
     fig, "참조 모델에서 멀어질 때 (β를 낮추며)", height=470,
     xaxis_title="KL(π ‖ π_ref)", yaxis_title="점수")
 viz.annotate_box(fig, "점선과 실선의 간격 = 보상 해킹<br>"
-                      "<b>c=2 는 천장의 68%에서 멈춘다</b>",
+                      "<b>c=2는 천장의 68%에서 멈춘다</b>",
                  x=0.98, y=0.02)
 fig
 ```

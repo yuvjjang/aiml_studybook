@@ -507,7 +507,7 @@ viz.fig_defaults(
     xaxis_title="외형 임베딩의 잡음 (클수록 나쁜 Re-ID)",
     yaxis_title="IDF1", xaxis=dict(tickmode="array", tickvals=AN))
 viz.annotate_box(fig, "교차점 오른쪽에서는<br>"
-                      "<b>Re-ID 를 넣는 것이 손해다</b>", x=0.98, y=0.98,
+                      "<b>Re-ID를 넣는 것이 손해다</b>", x=0.98, y=0.98,
                  yanchor="top")
 fig
 ```

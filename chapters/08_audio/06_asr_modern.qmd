@@ -539,7 +539,7 @@ fig.update_layout(
     legend=dict(x=0.01, y=0.99),
 )
 viz.fig_defaults(fig, height=330,
-                 title=f"시각 t={t0} 의 출력을 내기까지 — 과거 {PAST} + 미래 F 프레임")
+                 title=f"시각 t={t0}의 출력을 내기까지 — 과거 {PAST} + 미래 F 프레임")
 fig.show()
 ```
 

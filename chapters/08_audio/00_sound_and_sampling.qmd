@@ -319,7 +319,7 @@ from src import audio, viz
 FS = [300, 1500, 3000, 3900, 5000, 7000, 9000]
 fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
                     subplot_titles=("파형 — 원본(16kHz)과 재추출(8kHz)",
-                                    "8kHz 로 본 크기 스펙트럼"))
+                                    "8kHz로 본 크기 스펙트럼"))
 tt = audio.time_axis(0.006, SR)
 t2 = audio.time_axis(0.006, SR_LOW)
 init = 4
