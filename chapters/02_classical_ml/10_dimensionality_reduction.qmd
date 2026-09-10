@@ -184,7 +184,7 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="데이터 회전 = ",
 fig.update_xaxes(title_text="x₁", range=[-7, 7], row=1, col=1)
 fig.update_yaxes(title_text="x₂", range=[-7, 7], scaleanchor="x", row=1, col=1)
 fig.update_yaxes(title_text="설명 분산 비율", range=[0, 1], row=1, col=2)
-viz.fig_defaults(fig, height=430, title="PCA 는 회전에 등변적이다")
+viz.fig_defaults(fig, height=430, title="PCA는 회전에 등변적이다")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```
@@ -596,7 +596,7 @@ for c, (P, ttl) in enumerate([(Xp, None), (Yp, None)], start=1):
     fig.update_yaxes(showticklabels=(c == 1), scaleanchor=f"x{c if c>1 else ''}",
                      row=1, col=c)
 
-viz.fig_defaults(fig, height=380, title="t-SNE 가 크기와 거리를 바꾼다")
+viz.fig_defaults(fig, height=380, title="t-SNE가 크기와 거리를 바꾼다")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```

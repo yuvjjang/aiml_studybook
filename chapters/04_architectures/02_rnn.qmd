@@ -109,7 +109,7 @@ fig.update_xaxes(title_text="시간 t", range=[-0.7, max(lengths)-0.3])
 fig.update_yaxes(showticklabels=False, range=[-0.6, 2.8],
                  title_text="입력 / 은닉 / 출력")
 viz.fig_defaults(fig, height=380,
-                 title="같은 W_hh 가 매 시점 재사용된다 — 가로 화살표가 전부 같은 행렬")
+                 title="같은 W_hh가 매 시점 재사용된다 — 가로 화살표가 전부 같은 행렬")
 fig.show()
 ```
 

@@ -425,7 +425,7 @@ cos_sim = np.sum(V * AV, axis=1) / (np.linalg.norm(V, axis=1) * np.linalg.norm(A
 misalign = np.degrees(np.arccos(np.clip(np.abs(cos_sim), -1, 1)))
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
-                    subplot_titles=("v 와 Av", "방향 불일치 각도"))
+                    subplot_titles=("v와 Av", "방향 불일치 각도"))
 
 i0 = 20
 fig.add_trace(go.Scatter(x=[0, V[i0, 0]], y=[0, V[i0, 1]], mode="lines+markers",
@@ -471,8 +471,8 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="v 의 각도 = ",
                                       active=i0 // 4, pad_t=60)])
 fig.update_xaxes(range=[-3.2, 3.2], title_text="x₁", scaleanchor="y", row=1, col=1)
 fig.update_yaxes(range=[-3.2, 3.2], title_text="x₂", row=1, col=1)
-fig.update_xaxes(title_text="v 의 각도 (°)", row=1, col=2)
-fig.update_yaxes(title_text="v 와 Av 사이 각 (°)", row=1, col=2)
+fig.update_xaxes(title_text="v의 각도 (°)", row=1, col=2)
+fig.update_yaxes(title_text="v와 Av 사이 각 (°)", row=1, col=2)
 
 viz.fig_defaults(fig, height=460,
                  title=f"고유값 λ₁={eigvals[0]:.3f}, λ₂={eigvals[1]:.3f}")

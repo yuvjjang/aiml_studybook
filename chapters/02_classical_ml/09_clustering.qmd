@@ -403,7 +403,7 @@ for c, nm in enumerate(names, start=1):
         fig.update_xaxes(showticklabels=False, row=r, col=c)
         fig.update_yaxes(showticklabels=False, row=r, col=c)
 
-viz.fig_defaults(fig, height=520, title="k-means 가 실패하는 상황")
+viz.fig_defaults(fig, height=520, title="k-means가 실패하는 상황")
 fig.update_layout(margin=dict(l=30, r=25, t=85, b=30))
 fig.update_annotations(font_size=10)
 fig.show()
@@ -559,7 +559,7 @@ n_clusters = [res[e][1] for e in epss]
 n_noise = [res[e][2] for e in epss]
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
-                    subplot_titles=("군집 결과", "eps 에 따른 군집 수와 잡음 수"))
+                    subplot_titles=("군집 결과", "eps에 따른 군집 수와 잡음 수"))
 e0 = 0.20
 lab0 = res[e0][0]
 for k in sorted(set(lab0)):

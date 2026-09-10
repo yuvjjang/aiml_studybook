@@ -183,7 +183,7 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ", active=12, pad_t=55
 fig.update_yaxes(title_text="축소 계수 σ²/(σ²+λ)", range=[0, 1.05], row=1, col=1)
 fig.update_xaxes(title_text="λ", type="log", row=1, col=2)
 fig.update_yaxes(title_text="유효 자유도", row=1, col=2)
-viz.fig_defaults(fig, height=420, title="Ridge 는 불안정한 방향을 골라 억제한다")
+viz.fig_defaults(fig, height=420, title="Ridge는 불안정한 방향을 골라 억제한다")
 fig.show()
 ```
 

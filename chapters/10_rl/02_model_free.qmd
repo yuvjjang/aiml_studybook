@@ -329,7 +329,7 @@ for i, (n_, row, b, a) in enumerate(SWEEP):
                              line=dict(color=viz.color(i), width=2.4),
                              marker=dict(size=8)))
 fig.add_vline(x=0.1, line=dict(color="rgba(255,255,255,0.35)", dash="dash"))
-fig.add_annotation(x=0.1, y=1, yref="paper", text="α=0.1 로 고정하면",
+fig.add_annotation(x=0.1, y=1, yref="paper", text="α=0.1로 고정하면",
                    showarrow=False, yanchor="bottom", font=dict(size=11))
 viz.fig_defaults(
     fig, "n-스텝 TD: 학습률별 RMSE (100 에피소드)", height=470,

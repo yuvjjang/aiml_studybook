@@ -121,7 +121,7 @@ fig.update_layout(
     bargap=0.06,
 )
 viz.fig_defaults(fig, height=280,
-                 title="d_model = 12 를 h개 헤드로 분할 (총 차원은 항상 12)")
+                 title="d_model = 12를 h개 헤드로 분할 (총 차원은 항상 12)")
 fig.update_layout(margin=dict(l=55, r=30, t=60, b=95))
 fig.show()
 ```

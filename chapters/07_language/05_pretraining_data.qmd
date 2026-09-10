@@ -266,7 +266,7 @@ fig.update_yaxes(title_text="퍼플렉서티", type="log", row=1, col=1)
 fig.update_xaxes(title_text="반복 횟수", row=1, col=2)
 fig.update_yaxes(title_text="테스트 / 훈련", row=1, col=2)
 viz.fig_defaults(fig, height=390,
-                 title="총 토큰 예산은 40,000 으로 고정되어 있습니다")
+                 title="총 토큰 예산은 40,000으로 고정되어 있습니다")
 fig.show()
 ```
 
@@ -369,7 +369,7 @@ fig.add_hline(y=2**H_A, line=dict(color=viz.hex_rgba(viz.ACCENT, 0.6),
 fig.add_hline(y=2**H_B, line=dict(color=viz.hex_rgba(viz.WARM, 0.6),
                                   dash="dot"),
               annotation_text=f"B 참값 {2**H_B:.2f}")
-fig.update_layout(xaxis_title="도메인 A 의 비율",
+fig.update_layout(xaxis_title="도메인 A의 비율",
                   yaxis_title="퍼플렉서티 (로그)", yaxis_type="log")
 viz.fig_defaults(fig, height=400, title="")
 fig.show()

@@ -549,7 +549,7 @@ fig.add_trace(go.Scatter(x=R, y=[m[3] for m in MAE], mode="lines+markers",
                          fill="tonexty",
                          fillcolor=viz.hex_rgba(viz.ACCENT, 0.20)))
 fig.add_vline(x=75, line=dict(color=viz.hex_rgba(viz.GREEN, 0.6), dash="dash"))
-fig.add_annotation(x=75, y=1, yref="paper", text="MAE 의 75%",
+fig.add_annotation(x=75, y=1, yref="paper", text="MAE의 75%",
                    showarrow=False, yanchor="bottom",
                    font=dict(size=11, color=viz.GREEN))
 viz.fig_defaults(

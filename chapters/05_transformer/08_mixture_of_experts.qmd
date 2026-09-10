@@ -157,7 +157,7 @@ fig.update_yaxes(title_text="토큰 비율", range=[0, 0.55], row=1, col=1)
 fig.update_xaxes(title_text="쏠림 강도", row=1, col=2)
 fig.update_yaxes(title_text="최대부하 / 이상부하", row=1, col=2)
 
-viz.fig_defaults(fig, height=420, title="부하 불균형 — MoE 의 핵심 난제")
+viz.fig_defaults(fig, height=420, title="부하 불균형 — MoE의 핵심 난제")
 fig.update_layout(margin=dict(l=55, r=30, t=70, b=100))
 fig.show()
 ```

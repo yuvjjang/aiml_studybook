@@ -211,7 +211,7 @@ fig.add_trace(go.Scatter(x=z_grid, y=d_curve, mode="lines", name="σ′(z)",
 hist, edges = np.histogram(samples[s0], bins=60, range=(-10, 10), density=True)
 centers = (edges[:-1] + edges[1:]) / 2
 fig.add_trace(go.Bar(x=centers, y=hist * 0.25 / max(hist.max(), 1e-9),
-                     name="입력 z 의 분포",
+                     name="입력 z의 분포",
                      marker_color=viz.hex_rgba(viz.WARM, 0.55)), row=1, col=1)
 fig.add_trace(go.Scatter(x=scales, y=mean_grad, mode="lines+markers",
                          showlegend=False,
@@ -503,7 +503,7 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="게이트 가중치 W₂ = 
 fig.update_xaxes(title_text="x")
 fig.update_yaxes(title_text="값", range=[-5, 5], row=1, col=1)
 fig.update_yaxes(title_text="출력", range=[-6, 12], row=1, col=2)
-viz.fig_defaults(fig, height=400, title="SwiGLU 의 두 경로")
+viz.fig_defaults(fig, height=400, title="SwiGLU의 두 경로")
 fig.update_layout(legend=dict(x=0.02, y=0.98))
 fig.show()
 ```

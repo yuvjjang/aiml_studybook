@@ -359,7 +359,7 @@ for thr in [0.08, 0.10, 0.15]:
                        font=dict(size=10, color=viz.GREEN))
 viz.fig_defaults(
     fig, f"일별 PSI 분포 (하루 {NDAY}건, 400일)", height=430,
-    xaxis_title="특성별 PSI 의 최댓값", yaxis_title="일수",
+    xaxis_title="특성별 PSI의 최댓값", yaxis_title="일수",
     barmode="overlay")
 fig
 ```

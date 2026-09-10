@@ -270,7 +270,7 @@ MDES = np.logspace(np.log10(0.005), np.log10(0.5), 40)
 POWERS = [0.7, 0.8, 0.9, 0.95]
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("MDE 에 따른 필요 표본 (그룹당)",
+                    subplot_titles=("MDE에 따른 필요 표본 (그룹당)",
                                     "표본이 정해졌을 때 잡을 수 있는 MDE"))
 for i, pw in enumerate(POWERS):
     fig.add_trace(go.Scatter(x=MDES, y=[required_n(m, power=pw) for m in MDES],

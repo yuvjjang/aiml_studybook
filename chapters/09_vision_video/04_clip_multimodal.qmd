@@ -438,7 +438,7 @@ fig.add_annotation(x=D_[0], y=0.5, text="0.5 = 두 양식이 섞여 있음",
                    font=dict(size=11))
 fig.add_vrect(x0=380, x1=900, fillcolor=viz.hex_rgba(viz.PINK, 0.10),
               line_width=0)
-fig.add_annotation(x=600, y=0.72, text="CLIP 의 영역<br>(512~768차원)",
+fig.add_annotation(x=600, y=0.72, text="CLIP의 영역<br>(512~768차원)",
                    showarrow=False, font=dict(size=11, color=viz.PINK))
 viz.fig_defaults(
     fig, "임베딩 차원과 모달리티 갭", height=450,

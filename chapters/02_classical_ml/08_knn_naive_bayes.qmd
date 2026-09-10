@@ -108,7 +108,7 @@ fig.update_xaxes(title_text="x₁", row=1, col=1)
 fig.update_yaxes(title_text="x₂", row=1, col=1)
 fig.update_xaxes(title_text="k", type="log", row=1, col=2)
 fig.update_yaxes(title_text="정확도", row=1, col=2)
-viz.fig_defaults(fig, height=440, title="kNN 의 유일한 하이퍼파라미터")
+viz.fig_defaults(fig, height=440, title="kNN의 유일한 하이퍼파라미터")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```

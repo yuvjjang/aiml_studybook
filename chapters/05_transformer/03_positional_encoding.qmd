@@ -162,7 +162,7 @@ fig.add_trace(go.Scatter(x=r * np.cos(theta), y=r * np.sin(theta), mode="lines",
                          line=dict(color="rgba(255,255,255,0.18)", width=1)),
               row=1, col=1)
 fig.add_trace(go.Scatter(x=Q[:, 0], y=Q[:, 1], mode="markers+lines",
-                         name="q 의 위치별 회전",
+                         name="q의 위치별 회전",
                          marker=dict(size=6, color=np.arange(n_pos),
                                      colorscale="Blues", showscale=False),
                          line=dict(color=viz.hex_rgba(viz.ACCENT, 0.4), width=1)),

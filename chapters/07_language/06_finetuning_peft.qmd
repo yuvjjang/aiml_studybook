@@ -196,7 +196,7 @@ fig.update_yaxes(title_text="설명 비율", type="log", row=1, col=1)
 fig.update_xaxes(title_text="상위 k개", type="log", row=1, col=2)
 fig.update_yaxes(title_text="누적 비율", row=1, col=2)
 viz.fig_defaults(fig, height=390,
-                 title="초록 점선: LoRA 에서 흔히 쓰는 rank 4, 8, 16")
+                 title="초록 점선: LoRA에서 흔히 쓰는 rank 4, 8, 16")
 fig.show()
 ```
 
@@ -404,7 +404,7 @@ from plotly.subplots import make_subplots
 from src import viz
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
-                    subplot_titles=("rank 에 따른 성능과 망각",
+                    subplot_titles=("rank에 따른 성능과 망각",
                                     "적응 성능 vs 망각 (프론티어)"),
                     specs=[[{"secondary_y": True}, {"type": "xy"}]])
 rs = [r[0] for r in LORA_ROWS]
@@ -437,7 +437,7 @@ fig.update_xaxes(title_text="A 망각 배수 (낮을수록 좋음)", type="log",
                  row=1, col=2)
 fig.update_yaxes(title_text="B PPL (낮을수록 좋음)", row=1, col=2)
 viz.fig_defaults(fig, height=400,
-                 title="오른쪽 그림에서 **왼쪽 아래**가 좋습니다")
+                 title="오른쪽 그림에서 <b>왼쪽 아래</b>가 좋습니다")
 fig.show()
 ```
 

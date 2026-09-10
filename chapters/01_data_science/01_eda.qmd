@@ -179,7 +179,7 @@ def ecdf(a):
     return s, np.arange(1, len(s)+1)/len(s)
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("ECDF (파라미터 없음)", "ECDF 의 기울기 = 밀도"))
+                    subplot_titles=("ECDF (파라미터 없음)", "ECDF의 기울기 = 밀도"))
 sx, sy = ecdf(mix)
 step = max(1, len(sx)//400)
 fig.add_trace(go.Scatter(x=sx[::step], y=sy[::step], mode="lines", name="혼합분포",
@@ -198,7 +198,7 @@ fig.add_trace(go.Scatter(x=grid, y=true_pdf, mode="lines", name="진짜 밀도",
 fig.update_xaxes(title_text="값")
 fig.update_yaxes(title_text="F(t)", row=1, col=1)
 fig.update_yaxes(title_text="dF/dt", row=1, col=2)
-viz.fig_defaults(fig, height=390, title="ECDF 로 본 같은 데이터")
+viz.fig_defaults(fig, height=390, title="ECDF로 본 같은 데이터")
 fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 fig.show()
 ```
@@ -422,7 +422,7 @@ for i, (k, (a, b)) in enumerate(PATS.items(), start=1):
     fig.update_xaxes(showticklabels=False, row=1, col=i)
     fig.update_yaxes(showticklabels=False, row=1, col=i)
 viz.fig_defaults(fig, height=280,
-                 title="피어슨 r 은 전부 0 근처다")
+                 title="피어슨 r은 전부 0 근처다")
 fig.show()
 ```
 

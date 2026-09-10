@@ -99,7 +99,7 @@ fig.add_vline(x=0.5, line=dict(color=viz.YELLOW, dash="dash"),
 fig.update_layout(barmode="overlay", xaxis_title="시험셋 AUC", yaxis_title="빈도",
                   legend=dict(x=0.02, y=0.98))
 viz.fig_defaults(fig, height=400,
-                 title=f"X 와 y 가 **완전히 무관**한 데이터 ({n_feat_total}개 특성 중 {n_keep}개 선택)")
+                 title=f"X와 y가 <b>완전히 무관</b>한 데이터 ({n_feat_total}개 특성 중 {n_keep}개 선택)")
 fig.show()
 ```
 

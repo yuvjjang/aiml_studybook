@@ -116,7 +116,7 @@ import numpy as np
 
 
 def eer(scores, labels):
-    """동일 오류율. labels=True 가 같은 화자."""
+    """동일 오류율. labels=True가 같은 화자."""
     o = np.argsort(-scores)
     l = labels[o]
     P, N = l.sum(), (~l).sum()

@@ -176,7 +176,7 @@ fig.update_xaxes(title_text="미니배치 크기", type="log", row=1, col=2)
 fig.update_yaxes(title_text="그래디언트 표준오차", type="log", row=1, col=2)
 fig.update_layout(barmode="overlay")
 viz.fig_defaults(fig, height=400,
-                 title="두 추정량 모두 평균은 2.0 으로 맞습니다 — 퍼짐이 다릅니다")
+                 title="두 추정량 모두 평균은 2.0으로 맞습니다 — 퍼짐이 다릅니다")
 fig.show()
 ```
 
@@ -331,7 +331,7 @@ fig.add_trace(go.Scatter(x=xb, y=BS["kl"], mode="lines+markers", name="KL항",
                          line=dict(color=viz.ACCENT, width=2.5),
                          marker=dict(size=9)), row=1, col=1,
               secondary_y=True)
-fig.update_xaxes(title_text="β (로그축, β=0 은 0.02 위치)", type="log",
+fig.update_xaxes(title_text="β (로그축, β=0은 0.02 위치)", type="log",
                  row=1, col=1)
 fig.update_yaxes(title_text="재구성항", type="log", row=1, col=1)
 fig.update_yaxes(title_text="KL항", row=1, col=1, secondary_y=True)

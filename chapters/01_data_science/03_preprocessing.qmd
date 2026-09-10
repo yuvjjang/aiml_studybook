@@ -449,7 +449,7 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ",
 fig.update_layout(xaxis_title="변환 후 값 (표준화)", yaxis_title="밀도",
                   legend=dict(x=0.02, y=0.98))
 viz.fig_defaults(fig, height=420,
-                 title="Box-Cox 변환 (원본은 로그정규, λ=1 이 원본)")
+                 title="Box-Cox 변환 (원본은 로그정규, λ=1이 원본)")
 fig.show()
 ```
 

@@ -588,7 +588,7 @@ for i, md in enumerate(MODELS, start=1):
     fig.update_yaxes(title_text="오차 과소평가 비율", range=[0, 0.85], row=1, col=i)
     fig.update_xaxes(tickangle=-20, row=1, col=i)
 viz.fig_defaults(fig, height=430,
-                 title="무작위 CV 가 시간 분할 대비 오차를 얼마나 낮게 보고하는가")
+                 title="무작위 CV가 시간 분할 대비 오차를 얼마나 낮게 보고하는가")
 fig.show()
 ```
 

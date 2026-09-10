@@ -380,7 +380,7 @@ fig.add_trace(go.Scatter(x=rhos, y=[r[4] for r in DUP], mode="lines+markers",
                          marker=dict(size=11)))
 viz.fig_defaults(
     fig, "순열 중요도: 상관이 커지면 개별 몫이 사라진다", height=440,
-    xaxis_title="x0 과 x1 의 상관 ρ", yaxis_title="순열 중요도 (MSE 증가)",
+    xaxis_title="x0과 x1의 상관 ρ", yaxis_title="순열 중요도 (MSE 증가)",
     barmode="group")
 fig
 ```
@@ -650,7 +650,7 @@ for (name, (_, rows, _)), col in zip(SAL.items(), [viz.ACCENT, viz.WARM]):
 fig.add_hline(y=0, line=dict(color="rgba(255,255,255,0.3)"))
 viz.fig_defaults(
     fig, "가중치를 무작위화해도 지도가 남는가", height=470,
-    xaxis_title="무작위화 범위", yaxis_title="원본 saliency 와의 순위상관",
+    xaxis_title="무작위화 범위", yaxis_title="원본 saliency와의 순위상관",
     yaxis=dict(range=[-0.25, 1.15]), barmode="group",
     yaxis2=dict(title="분류 정확도", overlaying="y", side="right",
                 range=[0, 1.1], showgrid=False))

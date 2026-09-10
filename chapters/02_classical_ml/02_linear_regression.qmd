@@ -170,7 +170,7 @@ fig = go.Figure()
 fig.add_trace(go.Surface(x=P[..., 0], y=P[..., 1], z=P[..., 2],
                          colorscale=[[0, viz.hex_rgba(viz.ACCENT, 0.25)],
                                      [1, viz.hex_rgba(viz.ACCENT, 0.25)]],
-                         showscale=False, opacity=0.45, name="X 의 열공간",
+                         showscale=False, opacity=0.45, name="X의 열공간",
                          hoverinfo="skip"))
 for i, (vec, name, col) in enumerate([
         (y, "y (관측)", viz.YELLOW),
@@ -186,7 +186,7 @@ fig.add_trace(go.Scatter3d(x=[y_hat[0], y[0]], y=[y_hat[1], y[1]],
                            marker=dict(size=[0, 5], color=viz.WARM)))
 for k in range(2):
     fig.add_trace(go.Scatter3d(x=[0, X[0, k]], y=[0, X[1, k]], z=[0, X[2, k]],
-                               mode="lines", name=f"X 의 열 {k+1}",
+                               mode="lines", name=f"X의 열 {k+1}",
                                line=dict(color="rgba(255,255,255,0.5)", width=3)))
 
 fig.update_layout(scene=dict(xaxis_title="관측 1", yaxis_title="관측 2",
