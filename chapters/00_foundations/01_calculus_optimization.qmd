@@ -425,9 +425,30 @@ $\mathbf{y}(\mathbf{x}+\Delta) \approx \mathbf{y}(\mathbf{x}) + J\Delta$ — [0.
 | 원소별 활성화 | $\mathbf{y} = \sigma(\mathbf{x})$ | $J = \operatorname{diag}(\sigma'(x_1),\dots,\sigma'(x_n))$ | $n\times n$ **대각** |
 | 소프트맥스 | $\mathbf{y} = \operatorname{softmax}(\mathbf{x})$ | $J = \operatorname{diag}(\mathbf{y}) - \mathbf{y}\mathbf{y}^\top$ | $n\times n$ 밀집 |
 
-두 번째가 중요하다. 활성화의 야코비안은 **대각행렬**이므로 실제로 행렬을 만들 이유가 없다.
-$J\mathbf{v}$ 는 그냥 원소별 곱 $\sigma'(\mathbf{x}) \odot \mathbf{v}$ 다.
+두 번째가 중요한데, 왜 중요한지 보려면 **연쇄법칙이 야코비안을 어디에 쓰는지**부터 짚어야 한다.
+위의 연쇄법칙 $\partial L/\partial\mathbf{x} = J^\top\big(\partial L/\partial\mathbf{y}\big)$ 을 다시 보면
+야코비안은 **벡터 하나에 곱해지는 자리**에만 나타난다.
+우리에게 필요한 것은 $J$ 라는 행렬 자체가 아니라 **$J$ 를 곱한 결과 벡터**뿐이라는 뜻이다.
+그 결과를 행렬 없이 바로 얻을 수 있다면 행렬을 만들 이유가 없다.
+
+대각행렬이 정확히 그런 경우다. $J = \operatorname{diag}(\mathbf{d})$ 를 $\mathbf{v}$ 에 곱하면
+$i$ 행에 살아 있는 원소가 $d_i$ 하나뿐이라 합이 한 항으로 줄어든다.
+
+$$(J\mathbf{v})_i = \sum_j J_{ij} v_j = d_i v_i
+\quad\Longrightarrow\quad
+J\mathbf{v} = \mathbf{d} \odot \mathbf{v}$$
+
+여기서 $\mathbf{d} = \sigma'(\mathbf{x})$ 다. 대각행렬은 전치해도 그대로이므로
+$J^\top\mathbf{v}$ 도 같은 식이고, 이 층에서는 전치를 신경 쓸 일조차 없다.
+
+차이가 얼마나 큰지는 숫자로 보면 분명하다. 폭 $n=4096$ 인 활성화 층에서
+$J$ 를 곧이곧대로 만들면 $4096 \times 4096$ 행렬이라 fp32 기준 64MB를 쓰고
+곱셈이 1,677만 번 필요하다. 그런데 그 안에서 0이 아닌 값은 대각선의 4,096개뿐이다.
+원소별 곱으로 처리하면 메모리는 벡터 하나, 곱셈은 4,096번으로 끝난다 — 양쪽 모두 정확히 $n$ 배 차이다.
+
 프레임워크가 ReLU의 역전파를 "마스크 곱하기" 한 줄로 처리하는 것도 그래서다.
+ReLU의 $\sigma'$ 는 0 아니면 1이라 $\mathbf{d}$ 가 곧 마스크가 된다.
+"필요한 것은 행렬이 아니라 곱한 결과"라는 이 관점이 아래 VJP와 역전파로 그대로 이어진다.
 
 #### 왜 전치가 붙는가
 
