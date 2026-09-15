@@ -89,7 +89,7 @@ BatchNorm 뒤에 **일부러 분포 이동 잡음을 주입해도** 학습이 �
 그래디언트가 더 예측 가능해져 큰 학습률을 쓸 수 있다.
 
 이 가설은 두 가지로 검증할 수 있다.
-(1) 그래디언트의 립시츠 상수 $eta$ 가 실제로 작아지는가,
+(1) 그래디언트의 립시츠 상수 $\beta$ 가 실제로 작아지는가,
 (2) 더 큰 학습률에서 살아남는가. 둘 다 재보자.
 
 ```{python}
@@ -169,14 +169,16 @@ for name, (loss, beta) in runs.items():
     if name == "정규화 없음":
         continue
     print(f"{name}: β 중앙값이 정규화 없음 대비 {np.median(beta)/base:.2f}배")
-print()
-print("β 가 작다는 것은 '한 스텝 갔을 때 그래디언트가 덜 변한다'는 뜻이다.")
-print()
-print("결과가 갈렸다. BatchNorm 은 평활화 가설대로지만 LayerNorm 은 오히려 β 가 크다.")
-print("이 β 는 η=0.05 라는 **한 지점**에서 잰 값이고, 그 지점은 세 설정 모두")
-print("이미 잘 학습되는 영역이다. 가설의 진짜 주장 — '더 큰 학습률을 견딘다' — 은")
-print("아직 검증되지 않았다. 다음 절에서 직접 잰다.")
+beta_ratio = {name: float(np.median(beta)/base) for name, (_, beta) in runs.items()}
 ```
+
+$\beta$ 가 작다는 것은 "한 스텝 갔을 때 그래디언트가 덜 변한다"는 뜻이다.
+
+결과가 갈렸다. BatchNorm 은 평활화 가설대로 $\beta$ 가 `{python} f"{beta_ratio['BatchNorm']:.2f}"`배로 작아졌지만,
+LayerNorm 은 `{python} f"{beta_ratio['LayerNorm']:.2f}"`배로 오히려 크다.
+이 $\beta$ 는 $\eta=0.05$ 라는 **한 지점**에서 잰 값이고, 그 지점은 세 설정 모두
+이미 잘 학습되는 영역이다. 가설의 진짜 주장 — "더 큰 학습률을 견딘다" — 은
+아직 검증되지 않았다. 다음 절에서 직접 잰다.
 
 ---
 
@@ -234,12 +236,20 @@ for name, ls in curves.items():
     span = f"{lrs[ok[0]]:.4f} ~ {lrs[ok[-1]]:.3f}  ({len(ok)}/16)" if len(ok) else "없음"
     print(f"{name:<14} {lrs[best]:>10.4f} {arr[best]:>11.4f} {span:>26}")
 print()
+max_lr = {}
 for name, ls in curves.items():
     arr = np.nan_to_num(np.array(ls, dtype=float), nan=9e9)
     ok = np.where(arr < np.log(2))[0]
     if len(ok):
-        print(f"{name}: 학습 가능한 최대 η = {lrs[ok[-1]]:.3f}")
+        max_lr[name] = float(lrs[ok[-1]])
+        print(f"{name}: 학습 가능한 최대 η = {max_lr[name]:.3f}")
 ```
+
+여기서는 가설이 확인된다. 학습 가능한 최대 학습률이 정규화 없음 대비
+BatchNorm 은 `{python} f"{max_lr['BatchNorm']/max_lr['정규화 없음']:.1f}"`배,
+LayerNorm 은 `{python} f"{max_lr['LayerNorm']/max_lr['정규화 없음']:.1f}"`배다.
+앞 절의 $\beta$ 측정과 이 결과가 LayerNorm 에서 어긋나는 것 자체가 교훈이다 —
+한 지점의 국소 평활도와 학습률 내성은 같은 것이 아니다.
 
 ---
 
@@ -374,26 +384,24 @@ def cos_sim(A, B):
     return float(np.mean((A*B).sum(-1) /
                  (np.linalg.norm(A, axis=-1)*np.linalg.norm(B, axis=-1))))
 
-print("두 정규화의 차이는 정확히 '평균을 빼는가'뿐이다.")
-print(f"활성화 평균이 μ, 표준편차가 1 이면 코사인 유사도 ≈ 1/√(1+μ²) 로 예측된다.")
-print()
 print(f"{'활성화 평균 μ':>13} {'코사인 유사도':>14} {'예측 1/√(1+μ²)':>17}")
 print("-" * 48)
 for mu0 in [0.0, 0.05, 0.1, 0.3, 1.0, 5.0]:
     Z = rng.normal(mu0, 1.0, (1024, d))
     c = cos_sim(layernorm(Z), rmsnorm(Z))
     print(f"{mu0:>13.2f} {c:>14.4f} {1/np.sqrt(1+mu0**2):>17.4f}")
-print()
-print("실제 Transformer 의 활성화 평균은 표준편차 대비 아주 작다.")
-print("그 영역(μ ≲ 0.1)에서 두 정규화의 출력은 사실상 같은 방향이다.")
-print()
-print("연산량 비교 (d 차원 벡터 1개 기준)")
-print(f"  LayerNorm : 평균·분산 두 번 순회 + 뺄셈 + 나눗셈 ≈ {4*d} 연산")
-print(f"  RMSNorm   : 제곱합 한 번 순회 + 나눗셈          ≈ {2*d} 연산")
-print()
-print("→ RMSNorm 이 통하는 것은 '평균이 원래 작아서'다. 무조건 같은 것이 아니다.")
-print("  활성화 평균이 크게 치우친 구조라면 위 표의 μ=1.0, 5.0 행이 그 대가를 보여준다.")
 ```
+
+두 정규화의 차이는 정확히 "평균을 빼는가"뿐이다. 활성화 평균이 $\mu$, 표준편차가 1 이면
+두 출력의 코사인 유사도는 $1/\sqrt{1+\mu^2}$ 로 예측되고, 표가 그대로 맞는다.
+실제 Transformer 의 활성화 평균은 표준편차 대비 아주 작아서, 그 영역($\mu \lesssim 0.1$)에서
+두 정규화의 출력은 사실상 같은 방향이다.
+
+연산량은 $d$ 차원 벡터 하나 기준으로 LayerNorm 이 평균·분산 두 번 순회 + 뺄셈 + 나눗셈 $\approx 4d$,
+RMSNorm 이 제곱합 한 번 순회 + 나눗셈 $\approx 2d$ 다.
+
+RMSNorm 이 통하는 것은 "평균이 원래 작아서"다. 무조건 같은 것이 아니다.
+활성화 평균이 크게 치우친 구조라면 위 표의 $\mu=1.0, 5.0$ 행이 그 대가를 보여준다.
 
 ::: {.key-concept}
 **RMSNorm이 이긴 이유**
@@ -506,9 +514,7 @@ for dep in depths:
     sp = data[("pre", dep)][0][-1]
     sq = data[("post", dep)][0][-1]
     print(f"{dep:>6} {sp:>17.3f} {sp/np.sqrt(dep):>9.3f} {sq:>18.3f}")
-print()
-print("pre-LN 은 √깊이 에 비례해 자란다 (계수가 깊어질수록 0.64 로 수렴).")
-print("post-LN 은 매 블록 끝에서 다시 정규화하므로 깊이와 무관하게 1 이다.")
+std_pre_64 = float(data[("pre", 64)][0][-1])
 print()
 print("② 층별 그래디언트 norm — 입력층 / 출력층 비")
 print(f"{'깊이':>6} {'pre-LN':>10} {'post-LN':>10}")
@@ -517,16 +523,19 @@ for dep in depths:
     rp = data[("pre", dep)][1][0]/data[("pre", dep)][1][-1]
     rq = data[("post", dep)][1][0]/data[("post", dep)][1][-1]
     print(f"{dep:>6} {rp:>10.3f} {rq:>10.3f}")
-print()
-print("이 장난감 스택에서는 **둘 다 그래디언트가 소실되지 않는다.**")
-print("오히려 pre-LN 쪽 비가 더 크게 나왔다 — 실제 Transformer 의 알려진 결과와 다르다.")
 ```
+
+① 에서 pre-LN 은 $\sqrt{\text{깊이}}$ 에 비례해 자란다 (계수가 깊어질수록 0.64 로 수렴).
+post-LN 은 매 블록 끝에서 다시 정규화하므로 깊이와 무관하게 1 이다.
+
+② 에서 이 장난감 스택은 **둘 다 그래디언트가 소실되지 않는다.**
+오히려 pre-LN 쪽 비가 더 크게 나왔다 — 실제 Transformer 의 알려진 결과와 다르다.
 
 ::: {.callout-warning}
 ## 이 실험이 보여주는 것과 보여주지 못하는 것
 
 **재현된 것**: pre-LN의 잔차 스트림 분산이 깊이에 비례해 커진다는 성질.
-64층에서 표준편차가 5.1까지 자랐고, $0.64\sqrt{L}$ 에 수렴했다.
+64층에서 표준편차가 `{python} f"{std_pre_64:.1f}"` 까지 자랐고, $0.64\sqrt{L}$ 에 수렴했다.
 $x$ 가 정규화를 거치지 않고 누적되므로 당연한 결과다.
 
 **재현되지 않은 것**: "post-LN은 깊어지면 그래디언트가 소실되어 warmup 없이는
@@ -623,10 +632,10 @@ for c in [0.5, 1.0, 2.0, 4.0]:
     L, g = loss_and_grad(c * W)
     print(f"{c:>8.1f}{L:>14.4f}{np.linalg.norm(g):>12.5f}"
           f"{c*np.linalg.norm(g):>12.5f}")
-
-print("\n손실은 c 와 무관하고, ‖∇L‖ 은 정확히 1/c 로 줄어든다")
-print("(마지막 열 c·‖∇L‖ 이 일정한 것이 그 증거다).")
 ```
+
+손실은 $c$ 와 무관하고, $\|\nabla L\|$ 은 정확히 $1/c$ 로 줄어든다 —
+마지막 열 $c\|\nabla L\|$ 이 일정한 것이 그 증거다.
 
 ::: {.callout-warning}
 ## weight decay와의 상호작용
@@ -663,15 +672,15 @@ for norm, label in [(None, "정규화 없음"), ("batch", "BatchNorm"), ("layer"
     n1 = np.linalg.norm(g1["W0"])
     print(f"{label:<12} 손실 {L0:.6f} → {L1:.6f}   "
           f"‖∂L/∂W₀‖ {n0:.3e} → {n1:.3e} ({n1/n0:.4f}배)")
-print()
-print("정규화가 있으면 W 를 3배 해도 손실이 (거의) 그대로다 — 스케일 불변.")
-print("대신 그래디언트가 1/3 로 줄어든다. 즉 **유효 학습률이 ‖W‖ 에 반비례한다.**")
-print()
-print("이것이 weight decay 와 정규화의 상호작용을 만든다:")
-print("  decay 가 ‖W‖ 를 줄인다 → 유효 학습률이 커진다")
-print("  둘이 균형을 이루는 지점이 '유효 학습률'의 실제 값이다.")
-print("  그래서 정규화 뒤의 층에 거는 weight decay 는 정규화가 아니라 학습률 조절에 가깝다.")
 ```
+
+실제 MLP 에서도 같다. 정규화가 있으면 $W_0$ 를 3배 해도 손실이 (거의) 그대로다 — 스케일 불변.
+대신 그래디언트가 $1/3$ 로 줄어들고, 상대 스텝 크기로는 $1/9$ 이다 —
+앞에서 유도한 대로 **유효 학습률이 $\|W\|^2$ 에 반비례한다.**
+
+이것이 weight decay 와 정규화의 상호작용을 만든다. decay 가 $\|W\|$ 를 줄이면 유효 학습률이 커지고,
+둘이 균형을 이루는 지점이 유효 학습률의 실제 값이다.
+그래서 정규화 뒤의 층에 거는 weight decay 는 정규화가 아니라 학습률 조절에 가깝다.
 
 ---
 
@@ -705,8 +714,8 @@ $1/\sqrt B$ 로 커지는가? GroupNorm으로 바꾸면?
 그렇다면 **유효 학습률**은 어떻게 되는가? weight decay가 왜 필요해지는가?
 
 **③ Pre-LN과 Post-LN의 워밍업 의존성**
-`pre-post-numbers` 에서 워밍업 없이 두 구조를 학습시켜라.
-어느 쪽이 발산하는가? 층 수를 늘리면 차이가 커지는가?
+`fig-lr-tolerance` 의 학습 루틴에 `fig-pre-post-ln` 의 두 잔차 블록을 넣고, 워밍업 없이 학습시켜라.
+어느 쪽이 먼저 발산하는가? 층 수를 늘리면 차이가 커지는가?
 :::
 
 ## 요약
@@ -715,13 +724,13 @@ $1/\sqrt B$ 로 커지는가? GroupNorm으로 바꾸면?
 |------|------|
 | 정규화 공통 형태 | $\gamma(z-\mu)/\sigma + \beta$ — 다른 것은 축뿐 |
 | 내부 공변량 이동 | 원 논문의 설명, 이후 반박됨 |
-| 현재 설명 | **큰 학습률 허용** (실측: BN 9.7배, LN 1.8배) |
+| 현재 설명 | **큰 학습률 허용** (실측: BN `{python} f"{max_lr['BatchNorm']/max_lr['정규화 없음']:.1f}"`배, LN `{python} f"{max_lr['LayerNorm']/max_lr['정규화 없음']:.1f}"`배) |
 | BatchNorm | 배치 의존. 작은 배치·시퀀스·분산 학습에 약함 |
 | LayerNorm | 배치 독립. 학습/추론 동일 |
 | RMSNorm | 평균 빼기 제거. 활성화 평균이 작을 때만 LN과 같음 |
 | pre-LN | 항등 경로 보존, warmup 없이 학습 가능. 잔차 분산이 $\sqrt{L}$ 로 증가 |
 | post-LN | 잔차 스케일이 깊이와 무관하게 일정. 학습은 어렵지만 최종 성능은 더 좋다는 보고 |
-| 스케일 불변성 | 유효 학습률 $\propto 1/\|W\|$ — weight decay와 얽힘 |
+| 스케일 불변성 | 유효 학습률 $\propto 1/\|W\|^2$ — weight decay와 얽힘 |
 
 정규화는 활성화의 스케일을 다스려 학습을 **가능하게** 한다.
 다음 장은 그 다음 문제다 — 학습이 되고 나면, 이제 **과적합을 어떻게 막을 것인가**.
