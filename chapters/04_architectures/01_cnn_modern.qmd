@@ -18,31 +18,22 @@ ResNet(2015)이 도입한 이 한 줄짜리 아이디어는 CNN을 넘어
 
 ## 깊이 경쟁, 그리고 벽
 
-```{python}
-#| label: cnn-history
-#| code-fold: false
+| 모델 | 연도 | 깊이 | 파라미터(M) | 기여 |
+|---|---|---|---|---|
+| LeNet-5 | 1998 | 5 | 0.06 | 합성곱+풀링의 원형, 우편번호 인식 |
+| AlexNet | 2012 | 8 | 62 | ReLU·드롭아웃·GPU — 딥러닝의 시작점 |
+| VGG-16 | 2014 | 16 | 138 | 3×3 만으로 쌓기, 단순함의 힘 |
+| GoogLeNet | 2014 | 22 | 6.8 | Inception 병렬 경로, 1×1 병목 |
+| ResNet-50 | 2015 | 50 | 25.6 | 잔차 연결 — 깊이의 벽을 넘음 |
+| ResNet-152 | 2015 | 152 | 60.2 | 같은 원리로 152층 |
+| DenseNet-121 | 2017 | 121 | 8.0 | 모든 앞 층을 이어붙여 특성 재사용 |
+| SENet-154 | 2017 | 154 | 115 | 채널 어텐션 — 어텐션의 CNN 판 |
+| MobileNetV2 | 2018 | 53 | 3.5 | depthwise separable + 역병목 |
+| EfficientNet-B0 | 2019 | 82 | 5.3 | 깊이·너비·해상도 복합 스케일링 |
+| ConvNeXt-T | 2022 | 18 | 28.6 | ViT 설계를 CNN 에 역수입 |
 
-rows = [
-    ("LeNet-5",     1998, 5,   0.06,  "합성곱+풀링의 원형, 우편번호 인식"),
-    ("AlexNet",     2012, 8,   62.0,  "ReLU·드롭아웃·GPU — 딥러닝의 시작점"),
-    ("VGG-16",      2014, 16,  138.0, "3×3 만으로 쌓기, 단순함의 힘"),
-    ("GoogLeNet",   2014, 22,  6.8,   "Inception 병렬 경로, 1×1 병목"),
-    ("ResNet-50",   2015, 50,  25.6,  "잔차 연결 — 깊이의 벽을 넘음"),
-    ("ResNet-152",  2015, 152, 60.2,  "같은 원리로 152층"),
-    ("DenseNet-121",2017, 121, 8.0,   "모든 앞 층을 이어붙여 특성 재사용"),
-    ("SENet-154",   2017, 154, 115.0, "채널 어텐션 — 어텐션의 CNN 판"),
-    ("MobileNetV2", 2018, 53,  3.5,   "depthwise separable + 역병목"),
-    ("EfficientNet-B0", 2019, 82, 5.3, "깊이·너비·해상도 복합 스케일링"),
-    ("ConvNeXt-T",  2022, 18,  28.6,  "ViT 설계를 CNN 에 역수입"),
-]
-print(f"{'모델':<18} {'연도':>6} {'깊이':>6} {'파라미터(M)':>13} {'기여'}")
-print("-" * 84)
-for r in rows:
-    print(f"{r[0]:<18} {r[1]:>6} {r[2]:>6} {r[3]:>13.1f} {r[4]}")
-print()
-print("2012→2015 의 3년 동안 깊이가 8층에서 152층으로 19배가 되었다.")
-print("그 사이에 넘어야 했던 벽이 하나 있었다 — **성능 저하(degradation) 문제**.")
-```
+2012→2015 의 3년 동안 깊이가 8층에서 152층으로 19배가 되었다.
+그 사이에 넘어야 했던 벽이 하나 있었다 — **성능 저하(degradation) 문제**.
 
 ---
 
@@ -180,35 +171,36 @@ CHANCE = np.log(2)
 dead = [d for d in depths if abs(res[("plain", d)][0] - CHANCE) < 0.01]
 blown = [d for d in depths if res[("res", d)][0] > 1.0]
 ok = [d for d in depths if res[("res_scaled", d)][0] < 0.15]
-
-print(f"① **잔차 없는 망은 {dead[0]}블록에서 죽는다.** "
-      f"훈련 손실이 정확히 log 2 = {CHANCE:.4f} 다.")
-print(f"   과적합이 아니라 **훈련조차 안 된다** — 이것이 성능 저하 문제다.")
-print(f"   32블록까지는 {res[('plain', 32)][0]:.4f} 로 버티다가 갑자기 무너진다.")
-print()
-print(f"② **잔차를 그냥 붙이면 {blown[0]}블록부터 발산한다** "
-      f"(손실 {res[('res', blown[0])][0]:.1f}).")
-print("   h ← h + F(h) 는 매 블록 분산을 더하므로 활성화가 깊이에 비례해 커진다")
-print("   ([3.7](../03_deep_learning/07_initialization.qmd)에서 측정한 그대로다).")
-print()
-print(f"③ **1/√L 로 줄이면 {min(ok)}~{max(ok)}블록 전부에서 학습된다.**")
+dead0 = dead[0]; blown0 = blown[0]
+last_alive = max(d for d in depths if d < dead0)
 lo = min(res[("res_scaled", d)][0] for d in depths)
 hi = max(res[("res_scaled", d)][0] for d in depths)
-print(f"   손실이 {lo:.4f} ~ {hi:.4f} 사이로 **깊이와 거의 무관하다.**")
-print()
-print("**잔차 연결만으로는 부족하다.** 스케일을 함께 다스려야 깊이가 공짜가 된다.")
-print("실제 ResNet 은 1/√L 대신 블록마다 BatchNorm 을 넣어 같은 일을 한다.")
 ```
+
+읽어야 할 것이 셋이다.
+
+1. **잔차 없는 망은 `{python} f"{dead0}"`블록에서 죽는다.** 훈련 손실이 정확히 $\log 2$ =
+   `{python} f"{CHANCE:.4f}"` 다. 과적합이 아니라 **훈련조차 안 된다** — 이것이 성능 저하 문제다.
+   `{python} f"{last_alive}"`블록까지는 `{python} f"{res[('plain', last_alive)][0]:.4f}"` 로 버티다가 갑자기 무너진다.
+2. **잔차를 그냥 붙이면 `{python} f"{blown0}"`블록부터 발산한다** (손실 `{python} f"{res[('res', blown0)][0]:.1f}"`).
+   $h \leftarrow h + F(h)$ 에서 정규화 없는 $F$ 는 입력 스케일을 따라가므로 활성화가 층마다 배로 불어난다
+   ([3.7](../03_deep_learning/07_initialization.qmd)에서 측정한 그대로다).
+3. **$1/\sqrt L$ 로 줄이면 `{python} f"{min(ok)}"`~`{python} f"{max(ok)}"`블록 전부에서 학습된다.**
+   손실이 `{python} f"{lo:.4f}"`~`{python} f"{hi:.4f}"` 사이로 **깊이와 거의 무관하다.**
+
+**잔차 연결만으로는 부족하다.** 스케일을 함께 다스려야 깊이가 공짜가 된다.
+실제 ResNet 은 $1/\sqrt L$ 대신 블록마다 BatchNorm 을 넣어 같은 일을 한다 — 분기 출력의
+분산을 고정하면 지수 폭발이 선형 누적으로 바뀐다.
 
 ::: {.callout-warning}
 ## 이 실험이 보여주는 것과 원 논문의 실험
 
-여기서 잔차 없는 망이 무너진 것은 64블록부터다. 반면 ResNet 논문(He et al., 2015)이
+여기서 잔차 없는 망이 무너진 것은 `{python} f"{dead0}"`블록부터다. 반면 ResNet 논문(He et al., 2015)이
 보고한 성능 저하는 **CIFAR-10에서 20층 대 56층**, ImageNet에서 18층 대 34층으로
 훨씬 얕은 곳에서 나타났다.
 
 차이는 과제 난이도에 있다. two-moons는 2차원 두 클래스 문제라 너무 쉬워서,
-32블록까지는 얕은 부분만으로도 충분히 풀린다. 실제 이미지 분류처럼 어려운 과제에서는
+`{python} f"{last_alive}"`블록까지는 얕은 부분만으로도 충분히 풀린다. 실제 이미지 분류처럼 어려운 과제에서는
 훨씬 얕은 깊이에서 최적화가 무너진다.
 
 **재현된 것**: 깊이가 늘면 plain 망의 훈련 손실이 결국 무작위 수준으로 죽는다는 것,
@@ -267,11 +259,10 @@ print(f"{'F′ 스케일':>10}{'plain':>14}{'residual':>14}")
 for scale in [0.05, 0.1, 0.2]:
     s = scale / np.sqrt(n)
     print(f"{scale:>10.2f}{grad_norm(False, s):>14.3e}{grad_norm(True, s):>14.3e}")
-
-print()
-print("plain 은 F′ 이 조금만 작아도 50층에서 완전히 사라진다.")
-print("residual 은 I 경로 덕분에 같은 조건에서 크기가 유지된다.")
 ```
+
+plain 은 $F'$ 이 조금만 작아도 50층에서 완전히 사라진다.
+residual 은 $I$ 경로 덕분에 같은 조건에서 자릿수가 유지된다.
 
 ::: {.key-concept}
 전개식의 둘째 항 이후를 보면 다른 해석도 나온다.
@@ -353,15 +344,14 @@ intent = {
 for n in names:
     p, f = stats[n]
     print(f"{n:<22} {p:>12,} {f/1e9:>11.2f} {f/base[1]:>10.1%}  {intent[n]}")
-print()
 cheap = min(names, key=lambda n: stats[n][1])
-print(f"가장 싼 블록: {cheap} ({stats[cheap][1]/base[1]:.1%})")
-print()
-print("주의: **비용이 싸다고 좋은 블록이 아니다.** 표현력이 함께 줄기 때문이다.")
-print("공정한 비교는 '같은 FLOPs 예산에서 어느 쪽이 정확한가'로 해야 하고,")
-print("실제 속도는 FLOPs 가 아니라 메모리 접근 패턴이 좌우하는 경우가 많다.")
-print("(depthwise 는 FLOPs 는 낮지만 산술 강도가 낮아 GPU 에서 기대만큼 빠르지 않다.)")
 ```
+
+가장 싼 블록은 `{python} cheap` (basic 대비 `{python} f"{stats[cheap][1]/base[1]:.1%}"`)이다.
+하지만 **비용이 싸다고 좋은 블록이 아니다** — 표현력이 함께 줄기 때문이다.
+공정한 비교는 '같은 FLOPs 예산에서 어느 쪽이 정확한가'로 해야 하고, 실제 속도는 FLOPs 가 아니라
+메모리 접근 패턴이 좌우하는 경우가 많다. depthwise 는 FLOPs 는 낮지만 산술 강도가 낮아
+GPU 에서 기대만큼 빠르지 않다.
 
 ---
 
@@ -395,13 +385,15 @@ print(f"Inception 3a 블록 ({C_IN} 채널, {HW}×{HW})")
 print(f"  1×1 축소 없이 : {naive/1e6:>8.1f} MFLOPs")
 print(f"  1×1 축소 사용 : {bott/1e6:>8.1f} MFLOPs  ({bott/naive:.1%})")
 print()
-print("5×5 경로가 비용을 지배한다. 그 앞에 1×1 로 192→16 채널로 줄이면")
-print(f"  5×5 경로만: {HW*HW*25*C_IN*32/1e6:.1f} → "
-      f"{(HW*HW*1*C_IN*16 + HW*HW*25*16*32)/1e6:.1f} MFLOPs")
-print()
-print("**1×1 합성곱의 진짜 용도가 이것이다** — 비싼 연산 앞에서 채널을 줄이는 것.")
-print("ResNet 병목, MobileNet pointwise, Transformer 의 FFN 축소가 전부 같은 발상이다.")
+p5_naive = HW*HW*25*C_IN*32/1e6
+p5_bott = (HW*HW*1*C_IN*16 + HW*HW*25*16*32)/1e6
+print(f"  5×5 경로만   : {p5_naive:>8.1f} → {p5_bott:.1f} MFLOPs (1×1 로 192→16 채널 축소)")
 ```
+
+5×5 경로가 비용을 지배한다. 그 앞에 1×1 로 채널을 192→16 으로 줄이면 그 경로만
+`{python} f"{p5_naive:.0f}"` → `{python} f"{p5_bott:.0f}"` MFLOPs 가 되고, 블록 전체는
+`{python} f"{bott/naive:.0%}"` 로 준다. **1×1 합성곱의 진짜 용도가 이것이다** — 비싼 연산 앞에서
+채널을 줄이는 것. ResNet 병목, MobileNet pointwise, Transformer 의 FFN 축소가 전부 같은 발상이다.
 
 ---
 
@@ -472,37 +464,29 @@ print("-" * 70)
 for i in range(8):
     print(f"{i:>4} {kern_names[i]:<12} {sq_mean[i]:>9.4f} {sq_std[i]:>10.4f} "
           f"{gate_init[i]:>12.3f} {gate[i]:>14.3f}")
-print()
-print(f"무작위 초기화 게이트 범위: {gate_init.min():.3f} ~ {gate_init.max():.3f} "
-      f"({gate_init.max()/gate_init.min():.2f}배) — 거의 평평하다.")
-print(f"구성한 '학습 후' 게이트 범위: {gate.min():.3f} ~ {gate.max():.3f} "
-      f"({gate.max()/gate.min():.1f}배)")
-print()
-order = np.argsort(-gate)
-print("게이트가 높은 순 (= SE 가 살리기로 한 채널):")
-for i in order:
-    print(f"  {gate[i]:.3f}  ch{i} {kern_names[i]:<10} 표준편차 {sq_std[i]:.4f}")
-print()
-print("표준편차가 큰 채널 — 에지·엠보스처럼 **변화를 담은 채널** — 이 살아남고,")
-print("블러처럼 정보가 뭉개진 채널은 눌린다. 이것이 SE 가 학습하는 종류의 함수다.")
-print()
+
+gi_lo, gi_hi = float(gate_init.min()), float(gate_init.max())
+g_lo, g_hi = float(gate.min()), float(gate.max())
+top = np.argsort(-gate)[:3]
+top_txt = ", ".join(kern_names[i] for i in top)
 C_SE = 256
-for ratio in [4, 8, 16]:
-    p = C_SE*(C_SE//ratio)*2
-    print(f"  SE 블록 추가 파라미터 (C={C_SE}, 축소비 {ratio}): {p:,} "
-          f"— 3×3 블록({3*3*C_SE*C_SE:,}) 대비 {p/(3*3*C_SE*C_SE):.1%}")
-print()
-print("**거의 공짜로 어텐션을 얻는다.**")
-print()
-print("주의: 위 '학습 후' 게이트는 역전파로 얻은 것이 아니라, 표준편차를 sigmoid 에")
-print("넣어 **손으로 구성한 것**이다. SE 블록이 표현할 수 있는 함수의 한 예를 보인 것이지,")
-print("실제로 학습되는 게이트가 이것이라는 뜻은 아니다.")
-print("실제 SENet 은 이 두 층을 역전파로 학습해 ImageNet top-1 오류를 약 1%p 낮췄다.")
-print()
-print("이것이 어텐션의 CNN 판이다 — '무엇에 집중할지 데이터가 정한다'.")
-print("차이는 SE 가 **채널**에만 적용된다는 것이고,")
-print("셀프 어텐션은 이것을 **공간 위치 전체**로 확장한다.")
+se_share = {r: C_SE*(C_SE//r)*2 / (3*3*C_SE*C_SE) for r in [4, 8, 16]}
 ```
+
+무작위 초기화의 게이트는 `{python} f"{gi_lo:.2f}"`~`{python} f"{gi_hi:.2f}"` 로 거의 평평하다.
+구성한 '학습 후' 게이트는 `{python} f"{g_lo:.2f}"`~`{python} f"{g_hi:.2f}"` 로 갈리고, 높은 순으로
+`{python} top_txt` 다. 표준편차가 큰 채널 — 에지·엠보스처럼 **변화를 담은 채널** — 이 살아남고,
+블러처럼 정보가 뭉개진 채널은 눌린다. 이것이 SE 가 학습하는 종류의 함수다.
+
+주의할 점은 위 '학습 후' 게이트가 역전파로 얻은 것이 아니라 표준편차를 sigmoid 에 넣어
+**손으로 구성한 것**이라는 사실이다. SE 블록이 표현할 수 있는 함수의 한 예를 보인 것이지,
+실제로 학습되는 게이트가 이것이라는 뜻은 아니다. 실제 SENet 은 이 두 층을 역전파로 학습해
+ImageNet top-1 오류를 약 1%p 낮췄다.
+
+비용은 거의 없다. $C=256$ 에서 SE 블록의 추가 파라미터는 축소비 16 일 때 3×3 블록의
+`{python} f"{se_share[16]:.1%}"`, 축소비 4 여도 `{python} f"{se_share[4]:.1%}"` 다 —
+**거의 공짜로 어텐션을 얻는다.** 이것이 어텐션의 CNN 판이다 — '무엇에 집중할지 데이터가 정한다'.
+차이는 SE 가 **채널**에만 적용된다는 것이고, 셀프 어텐션은 이것을 **공간 위치 전체**로 확장한다.
 
 ---
 
@@ -574,8 +558,6 @@ fig.show()
 
 import numpy as np
 
-print("① 같은 FLOPs 예산을 한 축에만 쓰면 얼마나 커질 수 있는가")
-print()
 B = 8.0
 print(f"{'배분':<14} {'깊이':>8} {'너비':>8} {'해상도':>8} {'FLOPs 검산':>12}")
 print("-" * 54)
@@ -588,24 +570,35 @@ p8 = np.log(B)/np.log(a*b**2*c**2)
 allocs["복합"] = (a**p8, b**p8, c**p8)
 for k, (d, w, r) in allocs.items():
     print(f"{k:<14} {d:>8.2f} {w:>8.2f} {r:>8.2f} {d*w**2*r**2:>12.2f}")
-print()
-print("깊이는 8배까지 갈 수 있지만 너비·해상도는 2.83배가 한계다 (제곱으로 들어가므로).")
-print("복합 배분은 셋을 1.79 / 1.35 / 1.56 배로 나눠 가진다.")
-print()
+cd, cw, cr = allocs["복합"]
+```
 
-print("② 복합 스케일링을 φ 로 따라가면")
+같은 FLOPs 예산 `{python} f"{B:.0f}"`배를 한 축에만 쓰면, 깊이는 `{python} f"{B:.0f}"`배까지 갈 수 있지만
+너비·해상도는 제곱으로 들어가므로 `{python} f"{np.sqrt(B):.2f}"`배가 한계다. 복합 배분은 셋을
+`{python} f"{cd:.2f}"` / `{python} f"{cw:.2f}"` / `{python} f"{cr:.2f}"` 배로 나눠 가진다.
+
+```{python}
+#| label: compound-phi
+#| code-fold: false
+
 print(f"{'φ':>3} {'깊이':>7} {'너비':>7} {'해상도(px)':>11} {'FLOPs 배수':>11}")
 print("-" * 44)
 for p in range(0, 8):
     d, w, r = a**p, b**p, c**p
     print(f"{p:>3} {d:>7.2f} {w:>7.2f} {r*224:>11.0f} {d*w**2*r**2:>11.1f}")
-print()
 print(f"실제 EfficientNet 의 해상도: {res_px.tolist()}")
 print(f"공식 예측(224·1.15^φ):      {[round(224*c**p) for p in range(8)]}")
-print("대체로 따라가지만 정확히 일치하지는 않는다 — 논문도 반올림·조정을 했다.")
-print()
+```
 
-print("③ 수확 체감은 실제로 나타나는가 (논문 보고값)")
+$\varphi$ 를 올리면 세 축이 함께 자라고 FLOPs 는 대략 $2^\varphi$ 배가 된다. 실제 EfficientNet 의
+해상도는 공식 예측을 대체로 따라가지만 정확히 일치하지는 않는다 — 논문도 반올림·조정을 했다.
+
+수확 체감은 실제로 나타나는가? 논문 보고값으로 보면
+
+```{python}
+#| label: compound-returns
+#| code-fold: false
+
 print(f"{'모델':>5} {'FLOPs(B)':>10} {'top-1':>7} {'FLOPs 2배당 이득':>18}")
 print("-" * 46)
 for i, (nm, _, _, f, ac) in enumerate(EFF):
@@ -615,14 +608,13 @@ for i, (nm, _, _, f, ac) in enumerate(EFF):
         df = np.log2(f/EFF[i-1][3])
         gain = (ac - EFF[i-1][4])/df
         print(f"{nm:>5} {f:>10.2f} {ac:>7.1f} {gain:>18.2f}%p")
-print()
 slope_lo = (EFF[2][4]-EFF[0][4])/np.log2(EFF[2][3]/EFF[0][3])
 slope_hi = (EFF[7][4]-EFF[5][4])/np.log2(EFF[7][3]/EFF[5][3])
-print(f"초반(B0→B2) FLOPs 2배당 {slope_lo:.2f}%p, 후반(B5→B7) {slope_hi:.2f}%p "
-      f"— {slope_lo/slope_hi:.1f}배 둔화")
-print(f"B0 에서 B7 까지 FLOPs 를 {EFF[7][3]/EFF[0][3]:.0f}배 쓰고 얻은 것은 "
-      f"{EFF[7][4]-EFF[0][4]:.1f}%p 다.")
 ```
+
+초반(B0→B2)은 FLOPs 2배당 `{python} f"{slope_lo:.2f}"`%p, 후반(B5→B7)은 `{python} f"{slope_hi:.2f}"`%p 로
+`{python} f"{slope_lo/slope_hi:.1f}"`배 둔화된다. B0 에서 B7 까지 FLOPs 를
+`{python} f"{EFF[7][3]/EFF[0][3]:.0f}"`배 쓰고 얻은 것은 `{python} f"{EFF[7][4]-EFF[0][4]:.1f}"`%p 다.
 
 ::: {.callout-warning}
 ## "균형이 낫다"는 수학이 아니라 실증이다
@@ -684,26 +676,20 @@ print()
 base, final = steps[0][1], steps[-1][1]
 recipe = steps[1][1] - steps[0][1]
 arch = final - steps[1][1]
-print(f"전체 향상 {final-base:+.1f}%p 중")
-print(f"  학습 레시피만 바꿔서 {recipe:+.1f}%p ({recipe/(final-base):.0%})")
-print(f"  아키텍처 변경으로   {arch:+.1f}%p ({arch/(final-base):.0%})")
-print()
-print(f"**2015년 ResNet-50 을 2022년 레시피로 다시 학습시키는 것만으로 {recipe:+.1f}%p 가 올랐다.**")
-print("아키텍처를 12단계에 걸쳐 ViT 처럼 뜯어고쳐서 얻은 것이 그보다 약간 큰 정도다.")
-print()
-print("아키텍처 변경 중에서도 기여가 몰려 있다:")
-for i in range(2, len(steps)):
-    d = steps[i][1] - steps[i-1][1]
-    if d >= 0.5:
-        print(f"  {steps[i][0]:<32} {d:+.1f}%p")
-print("  나머지 단계들은 대부분 0.0~0.1%p 다.")
-print()
-print("이것이 이 장의 가장 중요한 교훈이다:")
-print("  아키텍처 비교 논문을 읽을 때 **학습 조건이 같은지 반드시 확인해야 한다.**")
-print("  조건이 다르면 그 비교는 아키텍처가 아니라 레시피를 비교한 것이다.")
-print()
-print("(수치는 ConvNeXt 논문 Figure 2 의 보고값이다. 여기서 계산한 것이 아니다.)")
+recipe_share = recipe / (final - base)
+big_steps = ", ".join(f"{steps[i][0]} ({steps[i][1]-steps[i-1][1]:+.1f})"
+                      for i in range(2, len(steps)) if steps[i][1]-steps[i-1][1] >= 0.5)
 ```
+
+수치는 ConvNeXt 논문 Figure 2 의 보고값이다. 전체 향상 `{python} f"{final-base:+.1f}"`%p 중
+학습 레시피만 바꿔서 `{python} f"{recipe:+.1f}"`%p (`{python} f"{recipe_share:.0%}"`),
+아키텍처 변경으로 `{python} f"{arch:+.1f}"`%p 다.
+**2015년 ResNet-50 을 2022년 레시피로 다시 학습시키는 것만으로 `{python} f"{recipe:+.1f}"`%p 가 올랐다.**
+아키텍처를 10단계에 걸쳐 ViT 처럼 뜯어고쳐서 얻은 것이 그보다 약간 큰 정도이고, 그 안에서도
+기여는 몇 단계에 몰려 있다 — `{python} big_steps`%p. 나머지 단계들은 대부분 0.0~0.1%p 다.
+
+이것이 이 장의 가장 중요한 교훈이다. 아키텍처 비교 논문을 읽을 때 **학습 조건이 같은지
+반드시 확인해야 한다.** 조건이 다르면 그 비교는 아키텍처가 아니라 레시피를 비교한 것이다.
 
 ::: {.key-concept}
 **아키텍처 비교의 함정**
@@ -714,7 +700,7 @@ print("(수치는 ConvNeXt 논문 Figure 2 의 보고값이다. 여기서 계산
 - 새 아키텍처만 하이퍼파라미터를 튜닝
 - FLOPs는 맞췄지만 **실제 지연시간**은 안 맞춤
 - 시드 하나로 비교 ([3.9](../03_deep_learning/09_training_practice.qmd)에서
-  시드 잡음이 0.03 수준이었음을 기억하라)
+  시드만 바꿔도 결과가 하이퍼파라미터 몇 개의 효과만큼 흔들렸음을 기억하라)
 
 공정한 비교의 최소 조건: **같은 레시피, 같은 예산, 같은 탐색, 여러 시드.**
 :::
@@ -729,12 +715,13 @@ print("(수치는 ConvNeXt 논문 Figure 2 의 보고값이다. 여기서 계산
 과적합이라면 어느 쪽 오차가 높아야 하는가?
 
 **② 1×1 병목의 절감을 계산한다**
-$256\to256$ 채널 $3\times3$ conv와, $256\to64\to64\to256$ 병목의 FLOPs를 각각 세라.
-`inception-cost` 의 비율과 맞는가?
+$256\to256$ 채널 $3\times3$ conv와, $256\to64\to64\to256$ 병목의 FLOPs를 손으로 세라.
+`block-numbers` 의 basic 대비 비율과 맞는가?
 
-**③ 복합 스케일링을 어긋나게 해 본다**
-`compound-numbers` 에서 깊이만 2배, 너비만 2배 키운 경우와 균형 있게 키운 경우의
-FLOPs 대비 성능을 비교하라.
+**③ 같은 예산에서 깊이와 너비를 맞바꾼다**
+`fig-degradation` 의 `train_stack` 은 FLOPs 가 블록 수 × `WID`² 에 비례한다. 폭 32·깊이 16 과
+폭 64·깊이 4 는 예산이 같다. 두 설정(그리고 폭 16·깊이 64)의 시험 정확도를 비교하고,
+이 문제에서 어느 축이 유리한지 말하라.
 :::
 
 ## 요약
@@ -749,7 +736,7 @@ FLOPs 대비 성능을 비교하라.
 | SENet | 채널 어텐션 | 어텐션의 CNN 판 |
 | MobileNet | depthwise separable + 역병목 | 모바일 효율 |
 | EfficientNet | 복합 스케일링 | 예산 배분의 균형 |
-| ConvNeXt | ViT 설계를 CNN으로 | **레시피가 46%다** |
+| ConvNeXt | ViT 설계를 CNN으로 | **레시피가 `{python} f"{recipe_share:.0%}"`다** |
 
 CNN은 **공간 구조를 아키텍처에 새겼다.** 잔차 연결은 그 위에 깊이를 허용했다.
 
