@@ -422,7 +422,7 @@ print(f"{'집계 수준':<14} {'기울기':>10} {'상관계수':>10} {'결론'}"
 print("-" * 62)
 r_all = np.corrcoef(x, y)[0, 1]
 print(f"{'전체 (풀링)':<14} {fit_all[0]:>+10.3f} {r_all:>+10.3f}   "
-      f"많이 일할수록 만족도 **하락**")
+      f"많이 일할수록 만족도 하락")
 for gi in range(G):
     m = g == gi
     f = np.polyfit(x[m], y[m], 1)

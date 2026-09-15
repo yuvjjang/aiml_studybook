@@ -178,10 +178,10 @@ Yc = 0.2*Tc + 0.375*M + rng_c.normal(0, 1, N)
 CASES = [
     ("교란변수 (confounder)", "C → T,  C → Y",
      ols_coef(Ya, Ta), ols_coef(Ya, np.column_stack([Ta, C])),
-     "**반드시 통제**"),
+     "반드시 통제"),
     ("충돌부 (collider)", "T → S,  Y → S",
      ols_coef(Yb, Tb), ols_coef(Yb, np.column_stack([Tb, S])),
-     "**절대 통제 금지**"),
+     "절대 통제 금지"),
     ("매개변수 (mediator)", "T → M → Y",
      ols_coef(Yc, Tc), ols_coef(Yc, np.column_stack([Tc, M])),
      "질문에 따라 다름"),
@@ -481,7 +481,7 @@ print(f"{'γ':>7} {'1단계 F':>10} {'OLS':>10} {'IV 평균':>11} {'IV 중앙값
 print("-" * 76)
 for g in GAMMAS:
     d = IV_RES[g]
-    verdict = "**약한 도구**" if d["F"] < 10 else "쓸 만함"
+    verdict = "약한 도구" if d["F"] < 10 else "쓸 만함"
     print(f"{g:>7.3f} {d['F']:>10.1f} {d['ols']:>+10.4f} {d['iv']:>+11.4f} "
           f"{d['iv_med']:>+11.4f} {d['iv_sd']:>13.4f}  {verdict}")
 print()
