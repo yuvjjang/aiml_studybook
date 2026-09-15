@@ -68,23 +68,25 @@ print(f"{'너비':>6} {'파라미터':>10} {'샘플 대비':>10} {'훈련':>8} {
 print("-" * 56)
 for w, p_, a, b in zip(widths, n_params, tr_acc, te_acc):
     print(f"{w:>6} {p_:>10,} {p_/len(tr):>9.1f}× {a:>8.3f} {b:>8.3f} {a-b:>8.3f}")
-print()
+
 best = int(np.argmax(te_acc))
-print(f"검증 정확도가 가장 높은 너비: {widths[best]} "
-      f"(파라미터 {n_params[best]:,}, 샘플의 {n_params[best]/len(tr):.1f}배)")
 over = [i for i, p_ in enumerate(n_params) if p_ > len(tr)]
-print(f"파라미터가 샘플보다 많은 구간의 검증 정확도: "
-      f"{min(te_acc[i] for i in over):.3f} ~ {max(te_acc[i] for i in over):.3f}")
-print()
-se = np.sqrt(0.85*0.15/len(te))
-print(f"검증 샘플 {len(te)}개 → 정확도의 표준오차 ≈ {se:.3f} "
-      f"(= {se*len(te):.1f}개 샘플)")
-print(f"위 검증 정확도들은 {min(te_acc):.3f}~{max(te_acc):.3f} 범위이고, "
-      f"이 폭은 표준오차 {(max(te_acc)-min(te_acc))/se:.1f}배다.")
-print()
-print("즉 파라미터를 1,600배 늘리는 동안 검증 성능은 **사실상 변하지 않았다.**")
-print("고전 이론이 예측하는 붕괴가 일어나지 않는다는 것 — 이것이 '미스터리'다.")
+over_lo = float(min(te_acc[i] for i in over)); over_hi = float(max(te_acc[i] for i in over))
+se = float(np.sqrt(0.85*0.15/len(te)))          # 정확도 0.85 근처의 이항 표준오차
+spread_se = float((max(te_acc) - min(te_acc)) / se)
+param_ratio = n_params[-1] / n_params[0]
 ```
+
+검증 정확도가 가장 높은 너비는 `{python} f"{widths[best]}"`
+(파라미터 `{python} f"{n_params[best]:,}"`개, 샘플의 `{python} f"{n_params[best]/len(tr):.1f}"`배)이고,
+파라미터가 샘플보다 많은 구간의 검증 정확도는 `{python} f"{over_lo:.3f}"`~`{python} f"{over_hi:.3f}"` 다.
+이 차이가 의미 있는지는 검증 집합의 크기로 잰다. 검증 샘플 `{python} f"{len(te)}"`개에서
+정확도 0.85 근처의 표준오차는 약 `{python} f"{se:.3f}"` (샘플 `{python} f"{se*len(te):.1f}"`개분)인데,
+위 검증 정확도들의 전체 폭 `{python} f"{min(te_acc):.3f}"`~`{python} f"{max(te_acc):.3f}"` 는
+그 표준오차의 `{python} f"{spread_se:.1f}"`배에 불과하다.
+
+즉 파라미터를 `{python} f"{param_ratio:,.0f}"`배 늘리는 동안 검증 성능은 **사실상 변하지 않았다.**
+고전 이론이 예측하는 붕괴가 일어나지 않는다는 것 — 이것이 '미스터리'다.
 
 ---
 
@@ -129,12 +131,11 @@ for p in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]:
         continue
     M = (rng.random(2_000_000) > p).astype(float) / (1 - p)
     print(f"{p:>12.1f}{p/(1-p):>11.3f}{(a*M).var():>12.4f}{(a*M).mean():>14.4f}")
-
-print()
-print("평균은 어느 p 에서나 a 로 보존되지만 분산은 p/(1-p) 로 폭증한다.")
-print("p=0.9 면 잡음 분산이 신호의 9배다 — 학습이 불안정해지는 이유이고,")
-print("실무에서 p 를 0.1~0.5 로 쓰는 이유이기도 하다.")
 ```
+
+평균은 어느 $p$ 에서나 $a$ 로 보존되지만 분산은 $p/(1-p)$ 로 폭증한다.
+$p=0.9$ 면 잡음 분산이 신호($a^2$)의 9배다 — 학습이 불안정해지는 이유이고,
+실무에서 $p$ 를 0.1~0.5 로 쓰는 이유이기도 하다.
 
 ```{python}
 #| label: fig-dropout
@@ -194,16 +195,21 @@ print("-" * 40)
 for p in rates:
     a, b = res[p]
     print(f"{p:>10.1f} {a:>9.3f} {b:>9.3f} {a-b:>9.3f}")
-print()
-best = max(rates, key=lambda p: res[p][1])
-print(f"검증 최고: p = {best} ({res[best][1]:.3f}), p=0 대비 {res[best][1]-res[0.0][1]:+.3f}")
-print()
-# 앙상블 해석 검증: 서로 다른 마스크가 만드는 서브네트워크 수
-d = 128
-print(f"은닉 유닛 {d}개, p=0.5 → 가능한 서브네트워크 2^{d} ≈ 10^{d*np.log10(2):.0f} 개")
-print("모든 서브네트워크의 평균을 내는 것이 이론적 목표이고,")
-print("추론 시 전부 켜는 것은 그 평균의 **1차 근사**다 (선형층에서는 정확).")
+
+best_p = max(rates, key=lambda p: res[p][1])
+best_gain = res[best_p][1] - res[0.0][1]
+d = 128                                   # 은닉 유닛 수 → 가능한 서브네트워크 수 2^d
 ```
+
+검증 최고는 $p$ = `{python} f"{best_p}"` (`{python} f"{res[best_p][1]:.3f}"`, $p=0$ 대비
+`{python} f"{best_gain:+.3f}"`)이다. 앞 절의 표준오차 `{python} f"{se:.3f}"` 와 비교하면
+한 시드의 결과로 순위를 매길 만한 차이는 아니다 — 드롭아웃이 하는 일은 검증 정확도를
+올리는 것보다 **격차를 좁히는 것**이고, 그 대가로 훈련 정확도가 떨어진다.
+
+드롭아웃을 **앙상블**로 읽는 해석이 있다. 은닉 유닛 `{python} f"{d}"`개에 $p=0.5$ 면
+가능한 마스크(서브네트워크)가 $2^{128}$, 즉 약 10 의 `{python} f"{d*np.log10(2):.0f}"` 제곱 개다.
+모든 서브네트워크의 예측을 평균 내는 것이 이론적 목표이고,
+추론 시 전부 켜는 것은 그 평균의 **1차 근사**다 (선형층에서는 정확).
 
 ::: {.callout-note}
 ## 드롭아웃의 위상 변화
@@ -231,7 +237,7 @@ $$\tilde x = \lambda x_i + (1-\lambda)x_j, \qquad
 
 ```{python}
 #| label: fig-mixup
-#| fig-cap: "λ 에 따른 혼합과 결정 경계 변화"
+#| fig-cap: "λ 에 따른 두 샘플의 혼합과 α 에 따른 검증 정확도"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -324,20 +330,24 @@ for a in alphas:
         near_edge = float(np.mean((lam < 0.1) | (lam > 0.9)))
         shape = f"양 끝(λ<0.1 or >0.9) 비중 {near_edge:.1%}"
     print(f"{a:>7.1f} {acc:>13.3f}   {shape:>24}")
-print()
-best = max(alphas, key=lambda a: models[a][1])
-print(f"최고: α = {best} ({models[best][1]:.3f}), α=0 대비 {models[best][1]-models[0.0][1]:+.3f}")
-print()
-print("α 가 작으면 λ 가 0 이나 1 근처에 몰려 거의 원본 샘플이 나온다 (약한 정규화).")
-print("α 가 크면 λ 가 0.5 근처에 몰려 항상 반반 섞인다 (강한 정규화).")
-print("이미지 분류의 관례는 α = 0.2 ~ 0.4 다.")
+
+best_a = max(alphas, key=lambda a: models[a][1])
+best_a_gain = models[best_a][1] - models[0.0][1]
 ```
+
+$\alpha$ 가 하는 일은 $\lambda$ 의 분포를 정하는 것이다. $\alpha$ 가 작으면 $\lambda$ 가 0 이나 1 근처에 몰려
+거의 원본 샘플이 나오고(약한 정규화), $\alpha$ 가 크면 0.5 근처에 몰려 항상 반반 섞인다(강한 정규화).
+여기서는 $\alpha$ = `{python} f"{best_a}"` 가 최고(`{python} f"{models[best_a][1]:.3f}"`,
+$\alpha=0$ 대비 `{python} f"{best_a_gain:+.3f}"`)이고 이미지 분류의 관례도 $\alpha$ = 0.2~0.4 다.
+단, 이 차이 역시 표준오차(`{python} f"{se:.3f}"`) 안이다 — 훈련 120개짜리 2차원 문제에서
+Mixup 의 이득은 작고, 본래의 효과는 [3.3](03_losses.qmd)에서 본 **과신 억제**에 더 가깝다.
 
 ---
 
 ## 조기 종료
 
-가장 값싼 정규화다. 코드 세 줄이면 되고 계산 비용도 없다.
+가장 값싼 정규화다. 검증 손실을 주기적으로 재고, 최저점을 갱신하지 못한 채 `patience` 번이
+지나면 멈춘다 — 코드 세 줄이면 되고 계산 비용도 없다.
 
 ```{python}
 #| label: fig-early-stopping
@@ -381,21 +391,16 @@ fig.show()
 import numpy as np
 
 k = int(np.argmin(val_loss))
-print(f"검증 손실 최저: 스텝 {val_steps[k]} (전체의 {val_steps[k]/4000:.1%} 지점), "
-      f"손실 {val_loss[k]:.4f}")
-print(f"끝까지 갔을 때 검증 손실: {val_loss[-1]:.4f} ({val_loss[-1]/val_loss[k]:.2f}배)")
-print(f"그동안 훈련 손실은 {tr_loss[val_steps[k]]:.4f} → {tr_loss[-1]:.4f} 로 계속 내려갔다.")
-print()
-
-# 최저점 이후로 검증 손실이 다시 개선된 적이 있는가?
+best_step = int(val_steps[k]); best_frac = best_step / 4000
+best_val = float(val_loss[k]); last_val = float(val_loss[-1])
+tr_at_best = float(tr_loss[best_step]); tr_last = float(tr_loss[-1])
+# 최저점 이후로 검증 손실이 직전보다 내려간 평가 횟수
+n_after = len(val_loss) - k - 1
 improve_after = int(np.sum(np.diff(val_loss[k:]) < 0))
-print(f"최저점 이후 검증 손실이 직전보다 내려간 평가 횟수: "
-      f"{improve_after} / {len(val_loss)-k-1} ({improve_after/(len(val_loss)-k-1):.0%})")
-print(f"곡선은 계속 출렁이지만, 최저값 {val_loss[k]:.4f} 를 다시 넘어서지는 못했다.")
-print()
 
 print(f"{'patience':>10} {'멈추는 스텝':>12} {'낭비한 스텝':>12} {'찾은 최저 손실':>16}")
 print("-" * 54)
+pat_found = []
 for pat in [3, 5, 10, 20]:
     best_i, wait, stop = 0, 0, len(val_loss) - 1
     for i in range(1, len(val_loss)):
@@ -406,17 +411,27 @@ for pat in [3, 5, 10, 20]:
             if wait >= pat:
                 stop = i
                 break
+    pat_found.append(float(val_loss[best_i]))
     print(f"{pat:>10} {val_steps[stop]:>12} {val_steps[stop]-val_steps[best_i]:>12} "
           f"{val_loss[best_i]:>16.4f}")
-print()
-print("네 patience 모두 **같은 최적 가중치**를 찾았다. 차이는 낭비한 계산량뿐이다.")
-print("여기서는 최저점이 학습 초반(7%)에 뚜렷하게 찍혀서 운이 좋았다.")
-print("최저점이 학습 후반에 있거나 곡선이 완만하면 patience 3 은 진짜 최저점 전에")
-print("멈춰버린다. patience 는 '검증 잡음의 크기'와 '남은 예산'을 보고 정해야 한다.")
-print()
-print("실무에서는 '조기 종료'를 학습 중단이 아니라 **최고 체크포인트 저장**으로 구현한다.")
-print("끝까지 학습하되 검증이 최고일 때의 가중치를 따로 남기면 위험이 없다.")
 ```
+
+검증 손실의 최저점은 스텝 `{python} f"{best_step}"` (전체 4,000스텝의 `{python} f"{best_frac:.1%}"` 지점),
+손실 `{python} f"{best_val:.4f}"` 다. 끝까지 가면 검증 손실은 `{python} f"{last_val:.4f}"`
+(`{python} f"{last_val/best_val:.2f}"`배)로 올라가는데, 그동안 훈련 손실은
+`{python} f"{tr_at_best:.4f}"` → `{python} f"{tr_last:.4f}"` 로 계속 내려갔다.
+최저점 이후 검증 손실이 직전 평가보다 내려간 횟수가 `{python} f"{improve_after}"` / `{python} f"{n_after}"`
+(`{python} f"{improve_after/n_after:.0%}"`)나 되는 만큼 곡선은 계속 출렁이지만,
+최저값 `{python} f"{best_val:.4f}"` 를 다시 넘어서지는 못했다.
+
+네 patience 가 찾은 최저 손실은 `{python} f"{min(pat_found):.4f}"`~`{python} f"{max(pat_found):.4f}"` 로
+**모두 같은 최적 가중치**다. 차이는 낭비한 계산량뿐이다.
+여기서는 최저점이 학습 초반(`{python} f"{best_frac:.0%}"`)에 뚜렷하게 찍혀서 운이 좋았다.
+최저점이 학습 후반에 있거나 곡선이 완만하면 patience 3 은 진짜 최저점 전에 멈춰버린다.
+patience 는 '검증 잡음의 크기'와 '남은 예산'을 보고 정해야 한다.
+
+실무에서는 '조기 종료'를 학습 중단이 아니라 **최고 체크포인트 저장**으로 구현한다.
+끝까지 학습하되 검증이 최고일 때의 가중치를 따로 남기면, 너무 일찍 멈추는 위험이 없다.
 
 ---
 
@@ -427,6 +442,10 @@ print("끝까지 학습하되 검증이 최고일 때의 가중치를 따로 남
 $$\text{EMA:}\ \bar\theta_t = \tau\bar\theta_{t-1} + (1-\tau)\theta_t
 \qquad
 \text{SWA:}\ \bar\theta = \frac{1}{K}\sum_{k} \theta_{t_k}$$
+
+EMA 는 매 스텝 지수 가중 평균을 굴리고, SWA(Stochastic Weight Averaging)는 학습 후반에
+일정 간격으로 찍은 체크포인트 $K$ 개를 단순 평균한다. 둘 다 "궤적이 최소점 주변을 맴돌 때
+그 중심을 취하면 더 평평한 곳에 앉는다"는 같은 직관이고, 아래 실험은 EMA 로 한다.
 
 ```{python}
 #| label: fig-ema
@@ -496,24 +515,26 @@ arrs = {"원본": np.array(raw_hist)}
 for t in taus[1:]:
     arrs[f"EMA τ={t}"] = np.array(hist[t])
 for name, a in arrs.items():
-    tail = a[-8:]
+    tail = a[-8:]                                  # 평가 8회 = 마지막 200스텝
     print(f"{name:<14} {a[-1]:>15.4f} {a.min():>15.4f} {tail.std():>24.5f}")
-print()
-best = min(arrs, key=lambda k: arrs[k][-1])
-print(f"학습 종료 시점에서 가장 좋은 가중치: {best} "
-      f"(원본보다 {arrs['원본'][-1] - arrs[best][-1]:.4f} 낮음)")
+
+best_end = min(arrs, key=lambda k: arrs[k][-1])
+end_gain = float(arrs['원본'][-1] - arrs[best_end][-1])
 best_min = min(arrs, key=lambda k: arrs[k].min())
-print(f"학습 전 구간의 최저점: {best_min} ({arrs[best_min].min():.4f}), "
-      f"원본은 {arrs['원본'].min():.4f}")
-print("τ 가 너무 크면(0.999) 반응이 느려 최저점 자체는 오히려 높아진다 "
-      f"({arrs['EMA τ=0.999'].min():.4f}).")
-print("EMA 가 최저점을 크게 낮춰주지는 않는다 — 이득은 '끝까지 학습해도 나빠지지 않는다'에 있다.")
-print()
-print("EMA 의 가장 확실한 효과는 **검증 곡선이 매끄러워진다**는 것이다 (표준편차 열).")
-print(f"τ 가 클수록 반응이 느려진다. 유효 평균 구간 ≈ 1/(1−τ) 스텝:")
-for t in taus[1:]:
-    print(f"  τ={t} → 약 {1/(1-t):.0f} 스텝")
+min_999 = float(arrs['EMA τ=0.999'].min()); min_raw = float(arrs['원본'].min())
 ```
+
+학습 종료 시점에서 가장 좋은 가중치는 `{python} best_end` 로, 원본보다
+`{python} f"{end_gain:.4f}"` 낮다. 그런데 학습 전 구간의 최저점은 `{python} best_min`
+(`{python} f"{arrs[best_min].min():.4f}"`, 원본은 `{python} f"{min_raw:.4f}"`)이고,
+$\tau$ 가 너무 크면($0.999$) 반응이 느려 최저점 자체는 오히려 높아진다(`{python} f"{min_999:.4f}"`).
+즉 EMA 가 최저점을 크게 낮춰주지는 않는다 — 이득은 **끝까지 학습해도 나빠지지 않는다**는 데 있다.
+
+EMA 의 가장 확실한 효과는 **검증 곡선이 매끄러워진다**는 것이다(표준편차 열).
+$\tau$ 가 클수록 반응이 느려지고, 유효 평균 구간은 $1/(1-\tau)$ 스텝 — $\tau=0.9$ 면 10스텝,
+$0.99$ 면 100스텝, $0.999$ 면 1,000스텝이다. 총 `{python} f"{STEPS_E:,}"`스텝짜리 이 실험에서
+$\tau=0.999$ 는 학습의 2/3 를 평균하는 셈이라 초기의 나쁜 가중치가 끝까지 섞여 있고,
+$\tau=0.99$ 는 약 7% 를 평균한다. 아래 관례가 나오는 이유다.
 
 ::: {.key-concept}
 **EMA는 사실상 공짜 정규화다**
@@ -629,16 +650,23 @@ print("-" * 62)
 base_te = settings[0][2]
 for name, a, b in settings:
     print(f"{name:<22} {a:>8.3f} {b:>8.3f} {a-b:>8.3f} {b-base_te:>+10.3f}")
-print()
-best = max(settings, key=lambda s: s[2])
-print(f"검증 최고: {best[0]} ({best[2]:.3f}, 기준 대비 {best[2]-base_te:+.3f})")
-tight = min(settings, key=lambda s: s[1]-s[2])
-print(f"격차 최소: {tight[0]} ({tight[1]-tight[2]:.3f})")
-print()
-print("주의: 이 표는 시드 하나, 데이터셋 하나의 결과다.")
-print("격차가 작다고 좋은 것이 아니다 — 훈련 정확도까지 같이 떨어졌을 수 있다.")
-print("실제로는 여러 시드에서 검증 성능의 평균과 분산을 함께 봐야 한다.")
+
+best_s = max(settings, key=lambda s: s[2])
+tight_s = min(settings, key=lambda s: s[1]-s[2])
+wd_s = settings[2]
 ```
+
+weight decay 와 레이블 스무딩은 이 장에서 다루지 않았지만 [3.4](04_optimizers.qmd)와
+[3.3](03_losses.qmd)에서 본 정규화이므로 같은 예산에 넣었다.
+검증 최고는 `{python} best_s[0]` (`{python} f"{best_s[2]:.3f}"`, 기준 대비 `{python} f"{best_s[2]-base_te:+.3f}"`),
+격차 최소도 `{python} tight_s[0]` (`{python} f"{tight_s[1]-tight_s[2]:.3f}"`)이다.
+반대로 `{python} wd_s[0]` 는 검증이 `{python} f"{wd_s[2]-base_te:+.3f}"` 로 오히려 나빠졌는데,
+훈련 정확도도 `{python} f"{wd_s[1]:.3f}"` 로 같이 떨어진 것을 보면 이 문제에는 감쇠가 너무 강한 것이다
+— 정규화는 세기를 맞춰야 하는 도구지 켜기만 하면 되는 스위치가 아니다.
+
+주의할 점이 둘 있다. 이 표는 시드 하나, 데이터셋 하나의 결과이고 표의 차이 대부분은
+앞에서 잰 표준오차(`{python} f"{se:.3f}"`) 안이다. 그리고 격차가 작다고 좋은 것이 아니다 —
+훈련 정확도까지 같이 떨어졌을 수 있다. 실제로는 여러 시드에서 검증 성능의 평균과 분산을 함께 봐야 한다.
 
 ---
 
@@ -648,7 +676,7 @@ print("실제로는 여러 시드에서 검증 성능의 평균과 분산을 함
 ## 아직 답이 없는 질문
 
 Zhang et al.(2017)의 실험이 문제를 선명하게 만들었다.
-**레이블을 완전히 무작위로 바꾼 ImageNet도 신경망은 100% 외운다.**
+**레이블을 완전히 무작위로 바꾼 CIFAR-10 을 신경망은 100% 외운다** (ImageNet 도 95%).
 그러니 "모델이 단순해서 일반화한다"는 설명은 틀렸다.
 
 지금까지 나온 부분적 답들:
@@ -670,12 +698,12 @@ Zhang et al.(2017)의 실험이 문제를 선명하게 만들었다.
 ## 직접 해보기
 
 **① 드롭아웃의 추론 시 스케일을 빼먹는다**
-`dropout-numbers` 에서 inverted dropout의 $1/(1-p)$ 를 제거하고 추론하라.
+`dropout-variance` 의 마스크에서 $1/(1-p)$ 나누기를 빼고 평균을 다시 재라.
 출력이 몇 배 작아지는가? $p=0.5$ 면 예측한 대로인가?
 
-**② mixup이 결정경계를 어떻게 바꾸는가**
-`mixup-numbers` 의 $\alpha$ 를 0.1·0.4·1.0으로 바꿔 학습하고
-예측 확률의 히스토그램을 그려라. 과신이 줄어드는가?
+**② mixup이 과신을 어떻게 바꾸는가**
+`fig-mixup` 의 `train_mixup` 으로 $\alpha$ = 0.1·0.4·1.0 모델을 얻어
+검증 집합에서 예측 확률의 히스토그램을 그려라. 1 에 몰린 과신이 줄어드는가?
 
 **③ 조기 종료와 Ridge를 맞춰 본다**
 선형 모델에서 GD를 $t$ 스텝 돌린 것과 $\lambda \approx 1/(\eta t)$ 인 Ridge를 비교하라.
