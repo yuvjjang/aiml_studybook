@@ -11,8 +11,8 @@ jupyter: ai-ml-study
 
 그리고 역전파를 손으로 유도해보지 않으면
 그래디언트 소실·폭발, 잔차 연결, 그래디언트 클리핑이 전부 마법처럼 보인다.
-[5.6에서 GPT를 만들 때](../05_transformer/06_build_gpt.qmd) 이미 한 번 했지만,
-여기서는 그 기계를 처음부터 조립한다.
+[5.6에서 GPT를 만들 때](../05_transformer/06_build_gpt.qmd) 이 기계를 다시 조립하게 되는데,
+여기서 먼저 처음부터 한 번 만들어 둔다.
 
 ---
 
@@ -92,7 +92,7 @@ print("-" * 30)
 for name, (vx, vy, vz), ana in [("x", (x+eps, y, z), df_dx),
                                  ("y", (x, y+eps, z), df_dy),
                                  ("z", (x, y, z+eps), df_dz)]:
-    num = (f_fn(*vx if False else (vx, vy, vz)) - f_fn(x, y, z)) / eps
+    num = (f_fn(vx, vy, vz) - f_fn(x, y, z)) / eps
     print(f"{name:>4} {ana:>10.4f} {num:>12.4f}")
 ```
 
@@ -109,7 +109,7 @@ for name, (vx, vy, vz), ana in [("x", (x+eps, y, z), df_dx),
 마지막 규칙이 자주 실수가 나는 곳이다.
 한 변수를 여러 곳에서 쓰면 그래디언트가 **더해진다**.
 [5.6의 weight tying](../05_transformer/06_build_gpt.qmd)에서
-임베딩 행렬에 그래디언트가 두 번 기여한 것이 이 규칙이다.
+임베딩 행렬에 그래디언트가 두 번 기여하게 되는 것이 이 규칙이다.
 :::
 
 ---
@@ -172,10 +172,10 @@ for n_in, n_out, best in cases:
               else "출력이 적으니 뒤에서부터" if best == "reverse"
               else "둘 다 비슷한 비용")
     print(f"{n_in:>10,} {n_out:>10,} {best:>16}   {reason}")
-print()
-print("딥러닝은 항상 오른쪽 경우다: 파라미터 수십억 개 → 손실 스칼라 1개.")
-print("그래서 reverse-mode(역전파)가 유일하게 현실적인 선택이다.")
 ```
+
+딥러닝은 항상 두 번째 경우다 — 파라미터 수십억 개, 손실 스칼라 1개.
+그래서 reverse-mode(역전파)가 유일하게 현실적인 선택이다.
 
 ::: {.key-concept}
 **비용의 비대칭**
@@ -338,10 +338,10 @@ for name, kw, X, y, ls in cases:
     m = nn.MLP(seed=1, **kw)
     w, _ = nn.grad_check(m, X, y, loss=ls, n_sample=6)
     print(f"{name:<24} {w:>14.2e}  {'통과' if w < 1e-6 else '실패'}")
-print()
-print("10⁻⁶ 이하면 유도가 맞다. 10⁻² 이상이면 어딘가 틀렸다 —")
-print("대개 전치를 빠뜨렸거나 배치 축 합산을 잘못한 것이다.")
 ```
+
+$10^{-6}$ 이하면 유도가 맞다. $10^{-2}$ 이상이면 어딘가 틀렸다 —
+대개 전치를 빠뜨렸거나 배치 축 합산을 잘못한 것이다.
 
 ---
 
@@ -409,10 +409,10 @@ print("-" * 78)
 for name, ns in norms.items():
     r = ns[0] / max(ns[-1], 1e-300)
     print(f"{name:<26} {ns[0]:>12.3e} {ns[11]:>12.3e} {ns[-1]:>12.3e} {r:>12.2e}")
-print()
-print("→ sigmoid + 작은 초기화는 입력층 그래디언트가 사실상 0 이다.")
-print("  그 층들은 학습되지 않는다. 이것이 1990~2000년대 딥러닝의 벽이었다.")
 ```
+
+sigmoid + 작은 초기화는 입력층 그래디언트가 사실상 0 이다. 그 층들은 학습되지 않는다.
+이것이 1990~2000년대 딥러닝의 벽이었다.
 
 ::: {.interaction-hint}
 **sigmoid + small init**(파랑)은 입력 쪽으로 갈수록 그래디언트가 수십 자릿수 떨어집니다. **relu + he**는 층이 깊어져도 비슷한 크기를 유지합니다. 이 차이가 [3.7 초기화](07_initialization.qmd)의 전부입니다.
@@ -505,10 +505,10 @@ print(f"{'잔차 있음':<14} {res[0]:>12.3e} {res[20]:>12.3e} {res[-1]:>14.3e}"
 print()
 print(f"40층을 거친 뒤 배율:  잔차 없음 {plain[-1]/plain[0]:.2e}   "
       f"잔차 있음 {res[-1]/res[0]:.2e}")
-print()
-print("→ 잔차 연결은 그래디언트가 '지나가는 길'을 항상 열어둔다.")
-print("  ResNet 이전에 깊은 망이 학습되지 않았던 이유이자, 해결책이다.")
 ```
+
+잔차 연결은 그래디언트가 '지나가는 길'을 항상 열어둔다.
+ResNet 이전에 깊은 망이 학습되지 않았던 이유이자, 해결책이다.
 
 ---
 
@@ -611,16 +611,16 @@ for name, kw in [("relu + he (건강)",      dict(activation="relu", init="he"))
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 수치 미분의 최적 스텝을 찾는다**
-`grad-check-run` 의 $h$ 를 $10^{-1}$ 부터 $10^{-10}$ 까지 바꾸며 오차를 그려라.
-V자 곡선의 바닥이 어디인가? 절단오차와 반올림오차의 균형으로 설명하라.
+**① 수치 미분의 최적 스텝은 어디에 달렸는가**
+`fig-grad-check-eps` 의 실험을 6층 망의 **첫 층** 가중치로 반복하라.
+V자 곡선의 바닥 위치와 높이가 달라지는가? 절단오차와 반올림오차의 균형으로 설명하라.
 
 **② 순전파 모드가 유리한 경우**
 `mode-comparison` 에서 입력 1개, 출력 1000개인 함수를 만들어라.
 어느 모드가 싸지는가? 비용비 $n/m$ 이 예측한 대로인가?
 
 **③ 잔차 연결이 곱을 덧셈으로 바꾼다**
-`vanish-numbers` 에 skip connection을 넣고 층별 기울기 norm을 다시 재라.
+`fig-vanishing-exploding` 의 망에 skip connection 을 넣고 층별 기울기 norm 을 다시 재라.
 $\prod \sigma'$ 가 $\prod(1+\sigma')$ 로 바뀌는 효과가 보이는가?
 :::
 
