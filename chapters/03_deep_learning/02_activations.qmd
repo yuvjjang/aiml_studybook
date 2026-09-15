@@ -101,10 +101,10 @@ for nm in ["sigmoid", "tanh", "relu", "leaky_relu", "elu", "gelu", "swish"]:
     d = df(z, f(z))
     print(f"{nm:<12} {d.max():>10.3f} {d.mean():>10.3f} "
           f"{np.mean(np.abs(d) < 0.01):>12.1%} {f(np.array([0.0]))[0]:>9.3f}")
-print()
-print("σ′ 최댓값이 0.25 인 sigmoid 는 층마다 최소 4배씩 그래디언트를 줄인다.")
-print("ReLU 계열은 활성 영역에서 정확히 1 이라 크기가 보존된다.")
 ```
+
+$\sigma'$ 최댓값이 0.25 인 sigmoid 는 층마다 최소 4배씩 그래디언트를 줄인다.
+ReLU 계열은 활성 영역에서 정확히 1 이라 크기가 보존된다.
 
 ::: {.interaction-hint}
 슬라이더로 함수를 바꿔보세요. **sigmoid**의 도함수는 최대 0.25이고 양쪽 끝에서 0으로 붙습니다. **relu**는 양수 영역에서 정확히 1인 계단입니다. **gelu·swish**는 0 근처에서 부드럽고 음수 영역에서도 약간의 그래디언트를 남깁니다.
@@ -173,10 +173,10 @@ print(f"{'깊이':>6}{'sigmoid':>14}{'ReLU':>14}{'0.25^L':>14}")
 for d in [1, 5, 10, 20]:
     print(f"{d:>6}{grad_scale(sig, dsig, d):>14.3e}"
           f"{grad_scale(relu, drelu, d):>14.3e}{0.25**d:>14.3e}")
-
-print("\nsigmoid 는 깊이에 따라 0.25^L 에 가까운 속도로 사라진다.")
-print("ReLU 는 활성 영역의 도함수가 1 이라 같은 초기화에서 훨씬 오래 버틴다.")
 ```
+
+sigmoid 는 깊이에 따라 $0.25^L$ 에 가까운 속도로 사라진다.
+ReLU 는 활성 영역의 도함수가 1 이라 같은 초기화에서 훨씬 오래 버틴다.
 
 ```{python}
 #| label: fig-saturation
@@ -241,11 +241,10 @@ print(f"{'입력 표준편차':>13} {'평균 σ′':>10} {'포화(σ′<0.05) �
 print("-" * 60)
 for s, f_, m_ in zip(scales, frac_sat, mean_grad):
     print(f"{s:>13.1f} {m_:>10.4f} {f_:>17.1%} {m_**10:>14.2e}")
-print()
-print("→ 입력 스케일이 커지면 대부분이 포화 영역으로 밀려나고,")
-print("  10층만 쌓아도 그래디언트가 천문학적으로 줄어든다.")
-print("  이것이 [3.5 정규화 층]이 입력 스케일을 붙잡아두는 이유이기도 하다.")
 ```
+
+입력 스케일이 커지면 대부분이 포화 영역으로 밀려나고, 10층만 쌓아도 그래디언트가 천문학적으로 줄어든다.
+이것이 [3.5 정규화 층](05_normalization.qmd)이 입력 스케일을 붙잡아 두는 이유이기도 하다.
 
 ::: {.key-concept}
 **포화가 만드는 악순환**
@@ -338,10 +337,10 @@ print("-" * 44)
 for b0, d, a in zip(biases, dead_frac, accs):
     note = "  ← 완전 붕괴" if a < 0.55 else ""
     print(f"{b0:>10.2f} {d:>9.1%} {curves[b0][-1]:>11.4f} {a:>9.3f}{note}")
-print()
-print("→ 죽은 유닛은 그래디언트가 정확히 0 이라 **되살아나지 않는다.**")
-print("  bias 를 -4 로 밀면 98% 가 죽고 모델이 무작위 수준으로 떨어진다.")
 ```
+
+죽은 유닛은 그래디언트가 정확히 0 이라 **되살아나지 않는다.**
+bias 를 $-4$ 로 밀면 `{python} f"{dead_frac[-1]:.0%}"` 가 죽고 모델이 무작위 수준(정확도 `{python} f"{accs[-1]:.2f}"`)으로 떨어진다.
 
 ::: {.callout-warning}
 ## 실무에서 유닛이 죽는 경우
@@ -434,10 +433,10 @@ for v in z:
     phi = float(stats.norm.cdf(v))
     print(f"{v:>6.1f} {phi:>17.4f} {v*phi:>10.4f} "
           f"{gelu_f(np.array([v]))[0]:>17.4f} {max(v,0):>7.1f}")
-print()
-print("정확한 GELU 는 z·Φ(z) 이고, 실무 구현은 tanh 근사를 쓴다 (차이 < 0.001).")
-print("ReLU 는 Φ 를 계단함수로 바꾼 극단적 특수 경우로 볼 수 있다.")
 ```
+
+정확한 GELU 는 $z\Phi(z)$ 이고, 실무 구현은 tanh 근사를 쓴다 (차이 < 0.001).
+ReLU 는 $\Phi$ 를 계단함수로 바꾼 극단적 특수 경우로 볼 수 있다.
 
 ::: {.key-concept}
 **Swish (SiLU)**: $z\cdot\sigma(\beta z)$
@@ -454,7 +453,7 @@ GELU는 BERT·GPT 계열이, SiLU는 LLaMA 계열이 쓴다.
 ## GLU 계열: 게이트를 따로 학습하기
 
 현대 LLM의 실제 기본값은 ReLU도 GELU도 아니다.
-[5.4에서 본](../05_transformer/04_transformer_block.qmd) **SwiGLU** 다.
+[5.4에서 다시 만날](../05_transformer/04_transformer_block.qmd) **SwiGLU** 다.
 
 발상이 다르다. 게이트를 활성화 함수로 계산하는 대신 **별도의 선형층으로 학습**한다.
 
@@ -527,7 +526,7 @@ fig.show()
 ### 8/3 규칙
 
 행렬이 2개에서 3개로 늘어나므로, 파라미터를 맞추려면 은닉 차원을 $\tfrac{2}{3}$ 로 줄인다
-([5.4](../05_transformer/04_transformer_block.qmd)에서 계산했다).
+([5.4](../05_transformer/04_transformer_block.qmd)에서 블록 전체의 파라미터를 셀 때 다시 나온다).
 
 ```{python}
 #| label: swiglu-params
@@ -609,11 +608,10 @@ for dname in depth_sets:
     gap = losses["sigmoid"] / min(losses[a] for a in relu_like)
     print(f"{dname}: ReLU 계열끼리 손실 격차 {spread:.1f}배, "
           f"sigmoid 대 최선 {gap:.1f}배")
-print()
-print("→ ReLU 계열끼리는 어느 쪽을 골라도 큰 차이가 없다.")
-print("  차이를 만드는 것은 포화하는 활성화(sigmoid)를 쓰느냐이고,")
-print("  그 격차는 깊어질수록 벌어진다.")
 ```
+
+ReLU 계열끼리는 어느 쪽을 골라도 큰 차이가 없다.
+차이를 만드는 것은 포화하는 활성화(sigmoid)를 쓰느냐이고, 그 격차는 깊어질수록 벌어진다.
 
 ---
 
@@ -648,27 +646,18 @@ print("  그 격차는 깊어질수록 벌어진다.")
 
 ## 선택 가이드
 
-```{python}
-#| label: activation-guide
-#| code-fold: false
+| 상황 | 권장 | 이유 |
+|---|---|---|
+| 일반 은닉층 (기본) | ReLU | 빠르고 충분히 좋음 |
+| Transformer FFN | SwiGLU | 현대 LLM 사실상 표준 |
+| BERT/GPT 계열 FFN | GELU | 관례 |
+| 죽은 유닛이 문제 | Leaky/ELU | 음수 기울기 확보 |
+| 얕은 망·RNN 게이트 | sigmoid/tanh | 출력 범위가 필요할 때 |
+| CNN | ReLU | 여전히 지배적 |
+| 출력층 | 과제가 결정 | 손실과 짝을 이룸 |
 
-rows = [
-    ("일반 은닉층 (기본)",   "ReLU",       "빠르고 충분히 좋음"),
-    ("Transformer FFN",    "SwiGLU",     "현대 LLM 사실상 표준"),
-    ("BERT/GPT 계열 FFN",  "GELU",       "관례"),
-    ("죽은 유닛이 문제",     "Leaky/ELU",  "음수 기울기 확보"),
-    ("얕은 망·RNN 게이트",   "sigmoid/tanh", "출력 범위가 필요할 때"),
-    ("CNN",                "ReLU",       "여전히 지배적"),
-    ("출력층",              "과제가 결정", "손실과 짝을 이룸"),
-]
-print(f"{'상황':<22} {'권장':<14} {'이유'}")
-print("-" * 62)
-for r in rows:
-    print(f"{r[0]:<22} {r[1]:<14} {r[2]}")
-print()
-print("실무 순서: ReLU 로 시작 → 학습이 안 되면 원인을 진단 →")
-print("          죽은 유닛이면 Leaky, 성능을 더 짜내야 하면 GELU/SwiGLU")
-```
+실무 순서는 ReLU 로 시작하고, 학습이 안 되면 원인을 진단해서 죽은 유닛이면 Leaky 로,
+성능을 더 짜내야 하면 GELU/SwiGLU 로 간다.
 
 ::: {.key-concept}
 **활성화는 단독으로 고르는 것이 아니다**
@@ -697,8 +686,8 @@ $[-5,5]$ 에서 두 함수의 최대 차이가 얼마인가? 그 차이가 실�
 영향을 줄 만한 크기인지 판단하라.
 
 **③ 포화가 깊이에 따라 쌓이는 것**
-`saturation-depth` 의 층 수를 50까지 늘려라. tanh와 ReLU의
-활성 분산이 각각 어디로 수렴하는가? [3.7 초기화](07_initialization.qmd)와 연결하라.
+`saturation-depth` 의 층 수를 50까지 늘려라. sigmoid 와 ReLU 의
+그래디언트 크기가 각각 어디로 수렴하는가? [3.7 초기화](07_initialization.qmd)와 연결하라.
 :::
 
 ## 요약
@@ -714,7 +703,7 @@ $[-5,5]$ 에서 두 함수의 최대 차이가 얼마인가? 그 차이가 실�
 | Swish/SiLU | ~1.1 | GELU와 유사, 더 쌈 | — |
 | **SwiGLU** | — | 게이트를 **학습** | 파라미터 1.5배 (8/3로 보정) |
 
-| 핵심 사실 | |
+| 핵심 사실 | 내용 |
 |---|---|
 | 중요한 것 | 함수값이 아니라 **도함수의 크기** |
 | 포화 | 악순환 — 빠져나올 수 없음 |
