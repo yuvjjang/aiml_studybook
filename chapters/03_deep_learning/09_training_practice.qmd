@@ -17,28 +17,20 @@ jupyter: ai-ml-study
 
 ## 순서: 값싼 검사부터
 
-```{python}
-#| label: recipe-order
-#| code-fold: false
+| # | 할 일 | 비용 | 잡아내는 것 |
+|---|---|---|---|
+| 1 | 데이터를 눈으로 본다 | 1분 | 레이블 오류·전처리 버그·클래스 불균형 |
+| 2 | 초기 손실이 $\log C$ 인가 | 10초 | 출력층 편향·손실 함수 연결 오류 |
+| 3 | 샘플 10개에 과적합시킨다 | 1분 | 모델·역전파·옵티마이저 배선 오류 |
+| 4 | 입력을 0으로 만들어 본다 | 1분 | 입력이 실제로 쓰이고 있는가 |
+| 5 | 그래디언트 norm을 찍는다 | 1분 | 소실·폭발·특정 층만 0 |
+| 6 | 학습률 range test | 5분 | 학습률이 자릿수부터 틀렸는지 |
+| 7 | 정규화를 전부 끈다 | 10분 | 정규화가 학습 자체를 막고 있는지 |
+| 8 | 한 번에 하나만 바꾼다 | 계속 | 무엇이 효과를 냈는지 알기 위해 |
 
-steps = [
-    (1, "데이터를 눈으로 본다",        "1분",  "레이블 오류·전처리 버그·클래스 불균형"),
-    (2, "초기 손실이 log C 인가",     "10초", "출력층 편향·손실 함수 연결 오류"),
-    (3, "샘플 10개에 과적합시킨다",     "1분",  "모델·역전파·옵티마이저 배선 오류"),
-    (4, "입력을 0으로 만들어 본다",     "1분",  "입력이 실제로 쓰이고 있는가"),
-    (5, "그래디언트 norm을 찍는다",     "1분",  "소실·폭발·특정 층만 0"),
-    (6, "학습률 range test",        "5분",  "학습률이 자릿수부터 틀렸는지"),
-    (7, "정규화를 전부 끈다",         "10분", "정규화가 학습 자체를 막고 있는지"),
-    (8, "한 번에 하나만 바꾼다",       "계속", "무엇이 효과를 냈는지 알기 위해"),
-]
-print(f"{'#':>2} {'할 일':<24} {'비용':>6}  {'잡아내는 것'}")
-print("-" * 76)
-for s in steps:
-    print(f"{s[0]:>2} {s[1]:<24} {s[2]:>6}  {s[3]}")
-print()
-print("핵심 원칙: **비싼 실험 전에 값싼 검사를 전부 끝낸다.**")
-print("3번까지 통과하지 못한 코드로 8시간짜리 학습을 돌리면 8시간을 버린다.")
-```
+핵심 원칙은 **비싼 실험 전에 값싼 검사를 전부 끝낸다**는 것이다.
+3번까지 통과하지 못한 코드로 8시간짜리 학습을 돌리면 8시간을 버린다.
+아래에서는 이 중 실험으로 보여줄 수 있는 2·3·5·6번을 순서대로 다룬다.
 
 ---
 
@@ -86,12 +78,12 @@ print(f"{'양성 비율 π':>12}{'H(π)':>10}{'log 2 대비':>12}")
 for pi in [0.5, 0.1, 0.01, 0.001]:
     H = -(pi*np.log(pi) + (1-pi)*np.log(1-pi))
     print(f"{pi:>12.3f}{H:>10.4f}{H/np.log(2):>12.3f}")
-
-print("\n읽는 법:")
-print("  손실이 log K 보다 **크면**  → 초기화가 너무 크거나 배선 오류")
-print("  손실이 log K 보다 **작으면** → 누수를 의심 (이미 답을 알고 있다)")
-print("  1%  불균형에서 손실 0.69 로 시작하면 이미 이상하다 — 기준선은 0.056 이다")
+H_1pct = float(-(0.01*np.log(0.01) + 0.99*np.log(0.99)))
 ```
+
+양성 1% 인 데이터에서 손실 0.69 로 시작하면 모델이 균등 예측에서 출발한 것이고,
+클래스 빈도를 아는 기준선은 `{python} f"{H_1pct:.3f}"` 다 — 출력 bias 를 $\log$ 빈도로
+초기화하면 그 차이만큼의 초반 스텝을 아낀다.
 
 ::: {.key-concept}
 이 검사가 강력한 이유는 **모델을 전혀 학습시키지 않고도** 할 수 있기 때문이다.
@@ -104,7 +96,7 @@ print("  1%  불균형에서 손실 0.69 로 시작하면 이미 이상하다 �
 | $L_0 \gg \log K$ | 초기 가중치가 너무 큼, 로짓에 softmax를 두 번 적용 |
 | $L_0 \ll \log K$ | 레이블 누수, 타깃이 입력에 섞임 |
 | $L_0 = \log K$ 인데 안 줄어듦 | 학습률이 0에 가깝거나 그래디언트가 끊김 |
-| 불균형인데 $L_0 = \log 2$ | 클래스 비율을 반영하지 않은 기준선과 비교하고 있음 |
+| 불균형인데 $L_0 = \log 2$ | 출력 bias 가 0 — 버그는 아니지만 $\log$ 빈도로 초기화하면 초반을 아낌 |
 
 두 번째가 특히 중요하다. **시작부터 좋아 보이는 것은 나쁜 신호다.**
 :::
@@ -117,8 +109,6 @@ import sys; sys.path.append("../..")
 import numpy as np
 from src import nn, datasets
 
-print("클래스 C개 분류에서 무작위 초기화의 기대 손실 = log C")
-print()
 print(f"{'클래스 수 C':>11} {'예상 초기 손실':>15} {'실측':>10} {'차이':>10}")
 print("-" * 50)
 rng = np.random.default_rng(0)
@@ -127,17 +117,17 @@ for C in [2, 10, 100, 1000, 50257]:
     y_ = rng.integers(0, C, 256)
     L, _ = nn.softmax_ce_loss(logits, y_)
     print(f"{C:>11,} {np.log(C):>15.4f} {L:>10.4f} {abs(L-np.log(C)):>10.5f}")
-print()
-print("GPT-2 어휘 50257개의 초기 손실은 log(50257) = 10.82 여야 한다.")
-print("실제로 이 값에서 시작하지 않으면 임베딩·출력층 배선이 잘못된 것이다.")
-print()
 
-# 흔한 실패: 출력층 편향이 크게 초기화된 경우
+# 흔한 실패: 출력층이 크게 초기화된 경우
 bad = rng.normal(0, 3.0, (256, 10))
 Lb, _ = nn.softmax_ce_loss(bad, rng.integers(0, 10, 256))
-print(f"출력 로짓이 σ=3.0 으로 큰 경우: 초기 손실 {Lb:.4f} (정상 {np.log(10):.4f})")
-print("→ 처음부터 '확신에 찬 오답'을 내고 있다. 출력층 초기화를 줄여야 한다.")
 ```
+
+GPT-2 어휘 50,257개의 초기 손실은 $\log 50257$ = `{python} f"{np.log(50257):.2f}"` 여야 한다.
+실제로 이 값에서 시작하지 않으면 임베딩·출력층 배선이 잘못된 것이다.
+반대로 출력 로짓이 $\sigma=3.0$ 으로 크게 초기화되면 10 클래스에서 초기 손실이
+`{python} f"{Lb:.2f}"` (정상 `{python} f"{np.log(10):.2f}"`)로 뛴다 — 처음부터
+'확신에 찬 오답'을 내고 있는 것이고, 출력층 초기화를 줄여야 한다.
 
 ---
 
@@ -196,18 +186,16 @@ for n_ in sizes:
     loss, acc = runs[n_]
     verdict = "외움 ✓" if loss[-1] < 1e-3 else ("거의" if acc == 1.0 else "못 외움")
     print(f"{n_:>8} {n_par/n_:>14,.0f} {loss[-1]:>12.2e} {acc:>12.3f}   {verdict}")
-print()
-print("이 곡선이 나오지 않으면 — 즉 10개 샘플조차 못 외우면 —")
-print("데이터를 늘리거나 모델을 키울 것이 아니라 **버그를 찾아야 한다.**")
-print()
-print("자주 나오는 원인:")
-for reason in ["역전파 배선 오류 (그래디언트가 일부 층에 안 감)",
-               "옵티마이저에 파라미터를 등록하지 않음",
-               "손실 함수에 잘못된 축/모양을 넘김",
-               "학습률이 자릿수 단위로 틀림",
-               "데이터 로더가 매번 다른 샘플을 주고 있음 (섞임 버그)"]:
-    print(f"  · {reason}")
 ```
+
+이 곡선이 나오지 않으면 — 즉 10개 샘플조차 못 외우면 — 데이터를 늘리거나 모델을 키울 것이
+아니라 **버그를 찾아야 한다.** 자주 나오는 원인은 정해져 있다.
+
+- 역전파 배선 오류 (그래디언트가 일부 층에 안 감)
+- 옵티마이저에 파라미터를 등록하지 않음
+- 손실 함수에 잘못된 축/모양을 넘김
+- 학습률이 자릿수 단위로 틀림
+- 데이터 로더가 매번 다른 샘플을 주고 있음 (섞임 버그)
 
 ---
 
@@ -291,23 +279,21 @@ print("-" * 58)
 for k in tests:
     steep, lowest, diverge = picks[k]
     print(f"{LBL[k]:<12} {steep:>14.5f} {lowest:>14.5f} {diverge:>14.5f}")
-print()
-print("읽는 법:")
-print("  · 손실이 **가장 가파르게 내려가는** 지점을 고른다 (최저점이 아니다)")
-print("  · 최저점은 이미 불안정 직전인 경우가 많다 —")
-print(f"    실제로 세 옵티마이저 모두 최저 손실 지점이 발산 시작점과 거의 붙어 있다")
-print("  · 스케줄을 쓸 경우 이 값을 최대 학습률로 삼는다")
-print()
-print("측정 방법에 대해:")
-print("  미니배치 손실은 잡음이 심해서 **그냥 미분하면 초반 잡음 스파이크가 최소점으로 잡힌다.**")
-print("  그래서 (1) 시드 3개 평균, (2) EMA(β=0.95) 평활, (3) 초반 20스텝 제외 —")
-print("  세 가지를 다 해야 안정적인 값이 나온다. fast.ai 의 구현도 같은 방식이다.")
-print()
-ratio = picks["sgd"][0] / picks["adam"][0]
-print(f"SGD 권장 {picks['sgd'][0]:.5f} vs Adam 권장 {picks['adam'][0]:.5f} → {ratio:.1f}배 차이.")
-print("교과서적인 '자릿수 차이'만큼은 아니지만, 옵티마이저를 바꾸면")
-print("학습률도 다시 찾아야 한다는 결론은 그대로다.")
+
+ratio_sgd_adam = picks["sgd"][0] / picks["adam"][0]
 ```
+
+읽는 법은 세 줄이다. 손실이 **가장 가파르게 내려가는** 지점을 고른다 — 최저점이 아니다.
+최저점은 이미 불안정 직전인 경우가 많고, 실제로 세 옵티마이저 모두 최저 손실 지점이
+발산 시작점과 거의 붙어 있다. 스케줄을 쓸 경우 이 값을 최대 학습률로 삼는다.
+
+측정 방법에 주의할 점이 있다. 미니배치 손실은 잡음이 심해서 **그냥 미분하면 초반 잡음
+스파이크가 최소점으로 잡힌다.** 그래서 (1) 시드 3개 평균, (2) EMA($\beta=0.95$) 평활,
+(3) 초반 20스텝 제외 — 세 가지를 다 해야 안정적인 값이 나온다. fast.ai 의 구현도 같은 방식이다.
+
+SGD 권장 `{python} f"{picks['sgd'][0]:.4f}"` 대 Adam 권장 `{python} f"{picks['adam'][0]:.4f}"` 로
+`{python} f"{ratio_sgd_adam:.1f}"`배 차이다. 교과서적인 '자릿수 차이'만큼은 아니지만,
+옵티마이저를 바꾸면 학습률도 다시 찾아야 한다는 결론은 그대로다.
 
 ---
 
@@ -317,7 +303,7 @@ print("학습률도 다시 찾아야 한다는 결론은 그대로다.")
 
 ```{python}
 #| label: fig-failure-gallery
-#| fig-cap: "증상별 손실 곡선 — 각각을 실제로 재현했습니다"
+#| fig-cap: "증상별 손실 곡선 (6종 모두 실제 재현)"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -372,6 +358,7 @@ fig.show()
 import numpy as np
 
 CHANCE = np.log(2)
+verdicts = []
 print(f"{'증상':<24} {'초기 손실':>10} {'최종 훈련':>11} {'최종 검증':>11}  {'자동 판정'}")
 print("-" * 76)
 for c in cases:
@@ -388,45 +375,49 @@ for c in cases:
         verdict = "훈련만 좋음 — 과적합"
     else:
         verdict = "정상"
+    verdicts.append(verdict)
     print(f"{c['name']:<24} {ini:>10.4f} {fin:>11.4f} {val:>11.4f}  {verdict}")
-print()
-print("여섯 경우가 다섯 가지 판정으로 갈린다 — 곡선 모양만으로 원인을 상당히 좁힐 수 있다.")
-print()
-print("겹치는 둘에 주목하라. '초기화 과대'와 '깊은 sigmoid' 가 **둘 다 정확히**")
-print(f"log 2 = {CHANCE:.4f} 에 멈췄다. 모델이 입력을 전혀 쓰지 못하고 항상 50:50 을")
-print("출력한다는 뜻이다. 원인은 정반대인데(포화 vs 소실) 손실 곡선은 구별되지 않는다.")
-print("→ 여기서 손실 곡선은 할 일을 다 했다. **층별 그래디언트를 봐야 한다.**")
+n_verdicts = len(set(verdicts))
+```
 
-print()
-table = [
-    ("손실이 NaN/inf",     "학습률 과대, 초기화 과대, log(0), 0으로 나눔",
-                          "lr ÷10, 클리핑 1.0, eps 추가"),
-    ("손실이 전혀 안 변함",  "학습률 과소, 그래디언트가 0, 옵티마이저 미등록",
-                          "그래디언트 norm 출력, lr ×10"),
-    ("log C 에서 멈춤",    "출력이 입력과 무관, 포화 또는 소실",
-                          "층별 그래디언트 norm 확인"),
-    ("손실이 크게 진동",     "학습률 약간 과대, 배치 과소",
-                          "lr ÷3, 배치 ↑, warmup"),
-    ("훈련만 좋아짐",       "과적합",
-                          "증강·드롭아웃·조기종료·데이터 ↑"),
-    ("훈련도 검증도 나쁨",   "모델 용량 부족, 특징 부족",
-                          "모델 ↑, 학습 길게, 특징 점검"),
-    ("중간에 갑자기 튐",     "손실 스파이크 (이상 배치, fp16 오버플로)",
-                          "클리핑, β₂↓, 스킵 로직"),
-    ("재현이 안 됨",        "시드 미고정, 비결정적 연산",
-                          "시드 고정, 결정론 모드"),
-]
-print(f"{'증상':<20} {'가능한 원인':<38} {'첫 조치'}")
-print("-" * 86)
-for t in table:
-    print(f"{t[0]:<20} {t[1]:<38} {t[2]}")
+여섯 경우가 `{python} f"{n_verdicts}"`가지 판정으로 갈린다 — 곡선 모양만으로 원인을 상당히 좁힐 수 있다.
+
+겹치는 둘에 주목하라. '초기화 과대'와 '깊은 sigmoid' 가 **둘 다 정확히** $\log 2$ =
+`{python} f"{CHANCE:.4f}"` 에 멈췄다. 모델이 입력을 전혀 쓰지 못하고 항상 50:50 을 출력한다는
+뜻이다. 원인은 정반대다 — 초기화 과대는 첫 몇 스텝의 거대한 그래디언트로 가중치가 폭발하고
+ReLU 유닛이 죽어 출력이 상수가 된 것이고, 깊은 sigmoid 는 그래디언트가 입력 쪽에 닿지 못해
+처음부터 움직이지 않은 것이다. 그런데 손실 곡선은 구별되지 않는다.
+여기서 손실 곡선은 할 일을 다 했다. **층별 그래디언트를 봐야 한다.**
+
+| 증상 | 가능한 원인 | 첫 조치 |
+|---|---|---|
+| 손실이 NaN/inf | 학습률 과대, 초기화 과대, $\log 0$, 0으로 나눔 | lr ÷10, 클리핑 1.0, eps 추가 |
+| 손실이 전혀 안 변함 | 학습률 과소, 그래디언트가 0, 옵티마이저 미등록 | 그래디언트 norm 출력, lr ×10 |
+| $\log C$ 에서 멈춤 | 출력이 입력과 무관 — 죽은 유닛, 포화 또는 소실 | 층별 그래디언트 norm 확인 |
+| 손실이 크게 진동 | 학습률 약간 과대, 배치 과소 | lr ÷3, 배치 ↑, warmup |
+| 훈련만 좋아짐 | 과적합 | 증강·드롭아웃·조기종료·데이터 ↑ |
+| 훈련도 검증도 나쁨 | 모델 용량 부족, 특징 부족 | 모델 ↑, 학습 길게, 특징 점검 |
+| 중간에 갑자기 튐 | 손실 스파이크 (이상 배치, fp16 오버플로) | 클리핑, $\beta_2$ ↓, 스킵 로직 |
+| 재현이 안 됨 | 시드 미고정, 비결정적 연산 | 시드 고정, 결정론 모드 |
+
+```{python}
+#| label: adam-hides
+#| code-fold: false
+
+adam_sig = run_case("깊은 sigmoid (12층, Adam)", opt="adam", lr=0.01,
+                    act="sigmoid", depth=12, width=32)
+adam_lr3 = run_case("학습률 3.0 (Adam)", opt="adam", lr=3.0)
+fin_sig = float(adam_sig["loss"][-30:].mean()); fin_lr3 = float(adam_lr3["loss"][-30:].mean())
+print(f"12층 sigmoid, Adam 0.01 : 최종 훈련 손실 {fin_sig:.3f}  (SGD 는 log 2 = {CHANCE:.3f})")
+print(f"학습률 3.0, Adam        : 최종 훈련 손실 {fin_lr3:.3f}  (SGD 50 은 발산)")
 ```
 
 ::: {.callout-warning}
 ## Adam이 병리를 숨긴다
 
-위 사례들을 처음에 **Adam**으로 만들었더니 **여섯 중 넷이 실패하지 않았다.**
-학습률 3.0도, 초기화 6배도, 12층 sigmoid도 Adam은 그럭저럭 학습시켰다.
+같은 병리를 **Adam**으로 돌리면 둘이 사라진다. SGD 로는 $\log 2$ 에 갇혔던 12층 sigmoid 가
+손실 `{python} f"{fin_sig:.2f}"` 까지 학습되고, 학습률 3.0 이라는 터무니없는 값도 발산하지 않고
+`{python} f"{fin_lr3:.2f}"` 근처에서 버틴다.
 
 이유는 [3.4](04_optimizers.qmd)에서 본 그대로다.
 Adam은 스텝 크기를 $\hat m/\sqrt{\hat v}$ 로 정규화하므로,
@@ -457,19 +448,20 @@ import plotly.graph_objects as go
 from src import nn, datasets, viz
 
 X, y = datasets.two_moons(n=800, noise=0.25, seed=0)
+sub = np.random.default_rng(0).permutation(len(X))[:256]   # 두 클래스가 섞인 배치
 
 def layer_norms(act="relu", init_gain=1.0, depth=10, width=32, norm=None):
     m = nn.MLP([2] + [width]*depth + [2], activation=act, norm=norm, seed=0)
     for i in range(len(m.W)):
         m.W[i] *= init_gain
-    _, g = m.loss_and_grads(X[:256], y[:256], loss="softmax_ce")
+    _, g = m.loss_and_grads(X[sub], y[sub], loss="softmax_ce")
     return np.array([np.linalg.norm(g[f"W{i}"]) for i in range(depth+1)])
 
 diagnoses = {
     "정상 (ReLU + He)":     layer_norms(),
     "소실 (sigmoid)":       layer_norms(act="sigmoid"),
-    "포화 (초기화 ×1.5)":    layer_norms(init_gain=1.5),
-    "포화 (초기화 ×2.5)":    layer_norms(init_gain=2.5),
+    "폭발 (초기화 ×1.5)":    layer_norms(init_gain=1.5),
+    "폭발 (초기화 ×2.5)":    layer_norms(init_gain=2.5),
     "sigmoid + LayerNorm": layer_norms(act="sigmoid", norm="layer"),
 }
 
@@ -492,37 +484,42 @@ fig.show()
 
 import numpy as np
 
-print("두 가지를 **동시에** 봐야 한다: 층 간 비율(균형)과 절대 크기(생존)")
-print()
 print(f"{'설정':<22} {'입력층 ‖g‖':>12} {'출력층 ‖g‖':>12} {'최대/최소':>12}  {'판정'}")
 print("-" * 78)
 for k, v in diagnoses.items():
     ratio = v.max()/max(v.min(), 1e-300)
     if v.max() < 1e-6:
-        verdict = "전 층 포화 — 크기가 죽음"
+        verdict = "전 층 소멸 — 크기가 죽음"
+    elif v.max() > 10:
+        verdict = "전 층 폭발 — 크기가 너무 큼"
     elif ratio > 1e3:
         verdict = "층 간 불균형 — 소실"
     else:
         verdict = "정상"
     print(f"{k:<22} {v[0]:>12.2e} {v[-1]:>12.2e} {ratio:>12.2e}  {verdict}")
-print()
-print("① 소실(sigmoid): 비율이 크다. 출력층은 멀쩡한데 입력층만 죽었다.")
-print("② 포화(초기화 과대): **비율은 정상인데** 전 층이 함께 죽었다.")
-print("   비율만 보면 '정상'으로 오진한다 — 절대 크기를 반드시 같이 봐야 하는 이유다.")
-sig = diagnoses["소실 (sigmoid)"]
-sln = diagnoses["sigmoid + LayerNorm"]
-print(f"③ LayerNorm 을 넣으면 비율이 {sig.max()/sig.min():.1e} → {sln.max()/sln.min():.1e} 로 "
-      f"{(sig.max()/sig.min())/(sln.max()/sln.min()):.1f}배 개선된다.")
-print("   개선이지 해결이 아니다. 12층 sigmoid 는 여전히 학습이 어렵다.")
-print()
-print("실무 로깅 최소 세트:")
-for item in ["전역 그래디언트 norm (매 스텝)",
-             "층별 그래디언트 norm (100 스텝마다)",
-             "가중치 norm과 갱신량의 비 ‖Δw‖/‖w‖ (1e-3 근처가 건강)",
-             "학습률 (스케줄이 의도대로 도는지)",
-             "훈련·검증 손실"]:
-    print(f"  · {item}")
+
+sig = diagnoses["소실 (sigmoid)"]; sln = diagnoses["sigmoid + LayerNorm"]
+r_sig = float(sig.max()/sig.min()); r_sln = float(sln.max()/sln.min())
+exp15 = diagnoses["폭발 (초기화 ×1.5)"]; exp25 = diagnoses["폭발 (초기화 ×2.5)"]
 ```
+
+두 가지를 **동시에** 봐야 한다 — 층 간 비율(균형)과 절대 크기(생존).
+
+1. 소실(sigmoid)은 비율이 크다. 출력층은 멀쩡한데 입력층만 죽었다.
+2. 폭발(초기화 과대)은 **비율이 정상**(`{python} f"{exp15.max()/exp15.min():.1f}"`, ReLU + He 와 같다)인데
+   전 층의 크기가 `{python} f"{exp15.max():.0e}"`~`{python} f"{exp25.max():.0e}"` 로 함께 커졌다.
+   비율만 보면 '정상'으로 오진한다 — 절대 크기를 반드시 같이 봐야 하는 이유다.
+   앞 절의 '초기화 과대' 곡선이 $\log 2$ 로 떨어진 것은 이 크기의 첫 갱신이 유닛을 죽였기 때문이다.
+3. LayerNorm 을 넣으면 비율이 `{python} f"{r_sig:.1e}"` → `{python} f"{r_sln:.1e}"` 로
+   `{python} f"{r_sig/r_sln:.1f}"`배 개선된다. 개선이지 해결이 아니다 — 10층 sigmoid 는 여전히 학습이 어렵다.
+
+실무 로깅 최소 세트는 다음과 같다.
+
+- 전역 그래디언트 norm (매 스텝)
+- 층별 그래디언트 norm (100 스텝마다)
+- 가중치 norm과 갱신량의 비 $\|\Delta w\|/\|w\|$ ($10^{-3}$ 근처가 건강)
+- 학습률 (스케줄이 의도대로 도는지)
+- 훈련·검증 손실
 
 ::: {.key-concept}
 **갱신량 비율 $\|\Delta w\|/\|w\|$**
@@ -545,6 +542,7 @@ import numpy as np
 from src import nn, datasets
 
 X, y = datasets.two_moons(n=800, noise=0.25, seed=0)
+rows_ur = {}
 print(f"{'옵티마이저':>10} {'학습률':>9} {'‖Δw‖/‖w‖ 중앙값':>18} {'최종 ‖W1‖':>12}  {'판정'}")
 print("-" * 68)
 for kind in ["sgd", "adam"]:
@@ -570,14 +568,17 @@ for kind in ["sgd", "adam"]:
                    "너무 큼" if med > 1e-2 else
                    "너무 작음" if med < 1e-5 else "건강")
         print(f"{kind:>10} {lr:>9.0e} {med:>18.2e} {wnorm:>12.2f}  {verdict}")
-print()
-print("SGD 는 학습률에 비례해 비율이 깔끔하게 올라간다 (1e-7 → 1.0 에서 1e-8 → 1e-2).")
-print()
-print("**Adam 의 lr=1.0 행을 보라.** 비율이 lr=0.1 보다 오히려 *작다*.")
-print("학습이 잘 돼서가 아니라 분모인 ‖W‖ 가 폭발했기 때문이다 (‖W1‖ 열).")
-print("비율만 봤다면 '건강'으로 오진했을 것이다 — 그래서 판정에 가중치 norm을 함께 넣었다.")
-print("→ **어떤 지표든 단독으로는 속는다.** 최소 두 개를 같이 봐야 한다.")
+        rows_ur[(kind, lr)] = (med, wnorm)
 ```
+
+SGD 는 학습률에 비례해 비율이 깔끔하게 올라간다 — $10^{-7}$ 에서 $1.0$ 까지 학습률이 $10^7$ 배
+커지는 동안 비율은 `{python} f"{rows_ur[('sgd', 1e-7)][0]:.0e}"` 에서 `{python} f"{rows_ur[('sgd', 1.0)][0]:.0e}"` 로 따라간다.
+
+**Adam 의 lr=1.0 행을 보라.** 비율 `{python} f"{rows_ur[('adam', 1.0)][0]:.1e}"` 가
+lr=0.1 의 `{python} f"{rows_ur[('adam', 0.1)][0]:.1e}"` 보다 오히려 *작다*.
+학습이 잘 돼서가 아니라 분모인 $\|W\|$ 가 `{python} f"{rows_ur[('adam', 1.0)][1]:.0f}"` 으로 폭발했기
+때문이다 ($\|W_1\|$ 열). 비율만 봤다면 '건강'으로 오진했을 것이다 — 그래서 판정에 가중치
+norm 을 함께 넣었다. **어떤 지표든 단독으로는 속는다.** 최소 두 개를 같이 봐야 한다.
 
 ---
 
@@ -599,28 +600,26 @@ def train_once(model_seed, data_seed):
                  steps=300, batch_size=64, seed=data_seed)
     return float(np.mean(h["loss"][-20:]))
 
-print("시드를 고정하면 완전히 같은 결과가 나온다:")
 a1, a2 = train_once(0, 0), train_once(0, 0)
-print(f"  같은 시드 2회: {a1:.10f} vs {a2:.10f}  차이 {abs(a1-a2):.1e}")
-print()
-print("시드를 바꾸면 얼마나 달라지는가 — 이것이 '실험 잡음'의 크기다:")
+print(f"같은 시드 2회: {a1:.10f} vs {a2:.10f}  차이 {abs(a1-a2):.1e}")
 vals = [train_once(s, s) for s in range(8)]
-print(f"  8개 시드: 평균 {np.mean(vals):.4f}, 표준편차 {np.std(vals):.4f}, "
+print(f"8개 시드: 평균 {np.mean(vals):.4f}, 표준편차 {np.std(vals):.4f}, "
       f"범위 {min(vals):.4f}~{max(vals):.4f}")
-print()
-spread = max(vals) - min(vals)
-print(f"→ 시드만 바꿔도 {spread:.4f} 만큼 벌어진다.")
-print(f"  개선 폭이 이보다 작으면 **의미 없는 개선**이다.")
-print(f"  하이퍼파라미터 비교는 최소 3~5개 시드의 평균으로 해야 한다.")
-print()
-print("무엇을 고정해야 하는가:")
-for item in ["파이썬·NumPy·프레임워크 난수 시드",
-             "데이터 셔플 순서와 증강 난수",
-             "GPU 결정론 모드 (cuDNN benchmark 끄기 — 속도 손해가 있다)",
-             "라이브러리 버전 (연산 구현이 버전마다 다를 수 있다)",
-             "분산 학습 시 프로세스 수와 배치 분할 방식"]:
-    print(f"  · {item}")
+spread = float(max(vals) - min(vals))
 ```
+
+시드를 고정하면 완전히 같은 결과가 나오고, 시드를 바꾸면 최종 손실이
+`{python} f"{spread:.4f}"` 만큼 벌어진다 — 이것이 '실험 잡음'의 크기다.
+개선 폭이 이보다 작으면 **의미 없는 개선**이다. 하이퍼파라미터 비교는 최소 3~5개 시드의
+평균으로 해야 한다.
+
+고정해야 하는 것은 다음과 같다.
+
+- 파이썬·NumPy·프레임워크 난수 시드
+- 데이터 셔플 순서와 증강 난수
+- GPU 결정론 모드 (cuDNN benchmark 끄기 — 속도 손해가 있다)
+- 라이브러리 버전 (연산 구현이 버전마다 다를 수 있다)
+- 분산 학습 시 프로세스 수와 배치 분할 방식
 
 ---
 
@@ -658,14 +657,16 @@ for scale in [1, 2**8, 2**12, 2**16, 2**20]:
     o = float((sc > f16.max).mean())
     print(f"  손실 스케일 2^{int(np.log2(scale)):>2} → 언더플로 {u:>7.2%}, "
           f"오버플로 {o:>7.2%}")
-print()
-print("손실 스케일링: 역전파 전에 손실에 S를 곱하고, 갱신 전에 그래디언트를 S로 나눈다.")
-print("작은 그래디언트를 fp16 표현 범위 안으로 밀어 올리는 것이다.")
-print()
-print("bf16 은 지수 비트가 fp32 와 같아서(8비트) 이 문제가 없다.")
-print("대신 가수가 7비트뿐이라 정밀도가 낮다 — 그래도 딥러닝에서는 이 교환이 유리하다.")
-print("그래서 A100 이후의 학습은 대부분 bf16 을 쓰고 손실 스케일링을 생략한다.")
 ```
+
+전형적인 그래디언트 분포에서 fp16 은 `{python} f"{under:.0%}"` 가 0 으로 사라진다.
+**손실 스케일링**은 역전파 전에 손실에 $S$ 를 곱하고 갱신 전에 그래디언트를 $S$ 로 나누는
+것으로, 작은 그래디언트를 fp16 표현 범위 안으로 밀어 올린다 — 위 표에서 $2^{12}$~$2^{16}$ 이
+언더플로와 오버플로 사이의 창이다.
+
+bf16 은 지수 비트가 fp32 와 같아서(8비트) 이 문제가 없다. 대신 가수가 7비트뿐이라 정밀도가
+낮다 — 그래도 딥러닝에서는 이 교환이 유리하다. 그래서 A100 이후의 학습은 대부분 bf16 을 쓰고
+손실 스케일링을 생략한다.
 
 ---
 
@@ -685,14 +686,14 @@ perm = np.random.default_rng(0).permutation(len(X)); tr, va = perm[:750], perm[7
 
 BASE = dict(lr=0.01, width=48, depth=2, batch=64, wd=0.0, init_gain=1.0, opt="adam")
 
-def evaluate(**over):
+def evaluate(seed=0, **over):
     cfg = {**BASE, **over}
-    m = nn.MLP([2] + [cfg["width"]]*cfg["depth"] + [2], activation="relu", seed=0)
+    m = nn.MLP([2] + [cfg["width"]]*cfg["depth"] + [2], activation="relu", seed=seed)
     for i in range(len(m.W)):
         m.W[i] *= cfg["init_gain"]
     nn.train(m, X[tr], y[tr], loss="softmax_ce",
              opt=nn.Optimizer(cfg["opt"], lr=cfg["lr"], weight_decay=cfg["wd"]),
-             steps=500, batch_size=cfg["batch"], seed=1)
+             steps=500, batch_size=cfg["batch"], seed=seed+1)
     return float((m.predict(X[va]).argmax(1) == y[va]).mean())
 
 sweeps = {
@@ -707,6 +708,8 @@ sens = {}
 for name, grid in sweeps.items():
     accs = [evaluate(**g) for g in grid]
     sens[name] = (accs, max(accs) - min(accs))
+noise_accs = [evaluate(seed=s) for s in range(5)]          # 기본 설정, 시드만 변경
+noise_span = max(noise_accs) - min(noise_accs)
 
 order_ = sorted(sens, key=lambda k: -sens[k][1])
 fig = go.Figure()
@@ -732,76 +735,73 @@ print("-" * 68)
 for k in order_:
     accs, span = sens[k]
     print(f"{k:<16} {' '.join(f'{a:.3f}' for a in accs):<40} {span:.3f}")
-print()
-print(f"이 문제에서 가장 민감한 것: {order_[0]} (폭 {sens[order_[0]][1]:.3f})")
-print(f"가장 둔감한 것: {order_[-1]} (폭 {sens[order_[-1]][1]:.3f})")
-print()
-print("**예상과 다른 결과다.** 흔히 '학습률이 가장 민감하다'고 하는데,")
-print(f"여기서는 weight decay 가 {sens['weight decay'][1]:.3f} 로 학습률 "
-      f"{sens['학습률'][1]:.3f} 의 {sens['weight decay'][1]/sens['학습률'][1]:.1f}배다.")
-print()
-print("이유는 **탐색 범위를 어떻게 잡았는가**에 있다.")
-wd_accs = sens["weight decay"][0]
-print(f"  weight decay 탐색값별 정확도: {' '.join(f'{a:.3f}' for a in wd_accs)}")
-print(f"  마지막 값(0.5) 하나가 {wd_accs[-1]:.3f} 로 모델을 파괴했다.")
-print(f"  그 값을 빼면 폭이 {max(wd_accs[:-1])-min(wd_accs[:-1]):.3f} 로 "
-      f"학습률({sens['학습률'][1]:.3f})보다 작아진다.")
-print()
-print("교훈 두 가지:")
-print("  ① '민감도'는 파라미터의 성질이 아니라 **내가 고른 탐색 범위의 성질**이다.")
-print("     파괴적인 값 하나를 넣으면 그 파라미터가 1등이 된다.")
-print("  ② 그래도 실무 우선순위는 학습률이 먼저다. 이유는 민감도 크기가 아니라,")
-print("     **합리적 범위 안에서 성능을 계속 바꾸는 것**이 학습률이기 때문이다.")
-print(f"     학습률은 다섯 값 모두에서 0.82~0.93 사이를 오갔다 — 파괴 없이 계속 움직인다.")
-print()
-print("주의: 이 순위는 이 문제·이 예산·시드 1개의 결과다.")
-print(f"앞 절에서 잰 시드 잡음이 0.03 수준이었으므로, "
-      f"폭이 {0.03:.2f} 이하인 항목(배치·너비·깊이·초기화)의 순위는 사실상 의미가 없다.")
-print()
-print("일반적 우선순위 (경험칙):")
-for i, item in enumerate(["학습률 (그리고 스케줄)",
-                          "모델 크기 / 학습 스텝 수 — 계산 예산 배분",
-                          "배치 크기 (학습률과 함께 움직임)",
-                          "weight decay",
-                          "warmup 길이, β₂",
-                          "그 외 (드롭아웃, 활성화 함수, …)"], start=1):
-    print(f"  {i}. {item}")
+print(f"{'시드 잡음 (기본 설정)':<16} {' '.join(f'{a:.3f}' for a in noise_accs):<40} {noise_span:.3f}")
+
+wd_accs = sens["weight decay"][0]; lr_accs = sens["학습률"][0]
+wd_span_trim = max(wd_accs[:-1]) - min(wd_accs[:-1])
+insig_txt = ", ".join(k for k in order_ if sens[k][1] <= noise_span)
+se_acc = float(np.sqrt(0.93*0.07/len(va)))
 ```
+
+이 문제에서 가장 민감한 것은 `{python} order_[0]` (폭 `{python} f"{sens[order_[0]][1]:.3f}"`),
+가장 둔감한 것은 `{python} order_[-1]` (폭 `{python} f"{sens[order_[-1]][1]:.3f}"`)이다.
+**예상과 다른 결과다.** 흔히 '학습률이 가장 민감하다'고 하는데, 여기서는 weight decay 가
+`{python} f"{sens['weight decay'][1]:.3f}"` 로 학습률 `{python} f"{sens['학습률'][1]:.3f}"` 의
+`{python} f"{sens['weight decay'][1]/sens['학습률'][1]:.1f}"`배다.
+
+이유는 **탐색 범위를 어떻게 잡았는가**에 있다. weight decay 의 마지막 값(0.5) 하나가
+정확도 `{python} f"{wd_accs[-1]:.3f}"` 로 모델을 파괴했고, 그 값을 빼면 폭이
+`{python} f"{wd_span_trim:.3f}"` 로 학습률보다 작아진다. 교훈이 둘이다.
+
+1. '민감도'는 파라미터의 성질이 아니라 **내가 고른 탐색 범위의 성질**이다.
+   파괴적인 값 하나를 넣으면 그 파라미터가 1등이 된다.
+2. 그래도 실무 우선순위는 학습률이 먼저다. 이유는 민감도 크기가 아니라
+   **합리적 범위 안에서 성능을 계속 바꾸는 것**이 학습률이기 때문이다.
+   학습률은 다섯 값 모두에서 `{python} f"{min(lr_accs):.2f}"`~`{python} f"{max(lr_accs):.2f}"` 사이를
+   오갔다 — 파괴 없이 계속 움직인다.
+
+주의할 점은 이 순위가 이 문제·이 예산·시드 1개의 결과라는 것이다. 마지막 행처럼 기본 설정을
+시드만 바꿔 5번 돌려도 검증 정확도가 `{python} f"{noise_span:.3f}"` 만큼 흔들리고, 검증 샘플
+`{python} f"{len(va)}"`개에서 정확도의 표준오차 자체가 `{python} f"{se_acc:.3f}"` 다.
+폭이 그 수준인 항목(`{python} insig_txt`)의 순위는 사실상 의미가 없다.
+
+일반적 우선순위(경험칙)는 다음과 같다.
+
+1. 학습률 (그리고 스케줄)
+2. 모델 크기 / 학습 스텝 수 — 계산 예산 배분
+3. 배치 크기 (학습률과 함께 움직임)
+4. weight decay
+5. warmup 길이, $\beta_2$
+6. 그 외 (드롭아웃, 활성화 함수, …)
 
 ---
 
 ## 체크포인팅
 
+| 항목 | 중요도 | 없으면 |
+|---|---|---|
+| 모델 가중치 | 필수 | 이것만 있으면 추론은 된다 |
+| 옵티마이저 상태 | 필수 | Adam 모멘트가 0부터 — 재시작 시 손실 스파이크 |
+| 스텝 번호 | 필수 | 학습률 스케줄 위치를 잃는다 |
+| 데이터로더 상태 | 권장 | 같은 샘플을 다시 본다 |
+| 난수 생성기 상태 | 권장 | 완전한 재현이 안 된다 |
+| EMA 가중치 | 쓴다면 필수 | 별도 사본이 사라진다 |
+| 설정 스냅샷 | 권장 | 무엇으로 만든 체크포인트인지 모른다 |
+
 ```{python}
 #| label: checkpointing
 #| code-fold: false
 
-items = [
-    ("모델 가중치",         "필수",   "이것만 있으면 추론은 된다"),
-    ("옵티마이저 상태",      "필수",   "없으면 Adam 모멘트가 0부터 — 재시작 시 손실 스파이크"),
-    ("스텝 번호",           "필수",   "학습률 스케줄 위치"),
-    ("데이터로더 상태",      "권장",   "같은 샘플을 다시 보지 않기 위해"),
-    ("난수 생성기 상태",     "권장",   "완전한 재현성"),
-    ("EMA 가중치",         "쓴다면 필수", "별도 사본"),
-    ("설정 스냅샷",         "권장",   "무엇으로 만든 체크포인트인지"),
-]
-print(f"{'항목':<18} {'중요도':<12} {'없으면'}")
-print("-" * 72)
-for it in items:
-    print(f"{it[0]:<18} {it[1]:<12} {it[2]}")
-print()
 N = 7e9
 print(f"7B 모델 AdamW 체크포인트 크기 (fp32 상태 기준)")
 print(f"  가중치       : {N*4/1e9:>6.1f} GB")
 print(f"  Adam m, v    : {N*8/1e9:>6.1f} GB")
 print(f"  합계         : {N*12/1e9:>6.1f} GB")
-print()
-print("이 크기 때문에 실무의 관례가 생긴다:")
-print("  · 최근 N개만 유지 (rolling)")
-print("  · 검증 최고 1개는 영구 보존")
-print("  · 옵티마이저 상태 없는 '추론용' 체크포인트를 따로 저장")
-print("  · 저장 자체가 수 분 걸리므로 비동기로 쓴다")
 ```
+
+가중치보다 옵티마이저 상태가 2배 크다. 이 크기 때문에 실무의 관례가 생긴다 — 최근 $N$ 개만
+유지(rolling)하고, 검증 최고 1개는 영구 보존하며, 옵티마이저 상태 없는 '추론용' 체크포인트를
+따로 저장하고, 저장 자체가 수 분 걸리므로 비동기로 쓴다.
 
 ---
 
@@ -831,9 +831,9 @@ print("  · 저장 자체가 수 분 걸리므로 비동기로 쓴다")
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 초기 손실을 손으로 예측한다**
-클래스 1000개 분류의 초기 손실은 $\ln 1000 \approx 6.91$ 이어야 한다.
-`initial-loss-check` 를 1000 클래스로 바꿔 확인하라. 어긋나면 무엇을 의심하는가?
+**① 불균형 데이터의 초기 손실을 낮춘다**
+`initial-loss-check` 에서 레이블을 양성 1% 로 만들고, 출력 bias 를 0 으로 둘 때와
+$\log$ 빈도로 초기화할 때의 초기 손실을 비교하라. 각각 $\log 2$ 와 $H(0.01)$ 에 맞는가?
 
 **② 작은 배치를 일부러 못 외우게 만든다**
 `overfit-tiny-numbers` 에서 weight decay를 크게 넣으면 손실이 0에 못 간다.
