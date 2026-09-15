@@ -28,20 +28,21 @@ MLP는 이 둘을 전혀 모른다. CNN은 이 둘을 **구조로 강제한다.*
 
 import numpy as np
 
-print("첫 층 하나의 파라미터 수 비교 (출력 채널 64개 기준)")
-print()
 print(f"{'입력 해상도':>16} {'입력 차원':>12} {'MLP(완전연결)':>18} {'CNN(3×3 커널)':>16} {'비율'}")
 print("-" * 76)
+ratio_first = {}
 for h, w, c in [(28, 28, 1), (64, 64, 3), (224, 224, 3), (1024, 1024, 3)]:
     n_in = h*w*c
     mlp = n_in * 64 + 64                 # 완전연결
     cnn = 3*3*c*64 + 64                  # 3×3 커널 64개
+    ratio_first[h] = mlp / cnn
     print(f"{f'{h}×{w}×{c}':>16} {n_in:>12,} {mlp:>18,} {cnn:>16,} {mlp/cnn:>10,.0f}배")
-print()
-print("CNN 의 파라미터 수는 **입력 해상도와 무관하다.** 커널 크기와 채널 수만으로 정해진다.")
-print("MLP 는 해상도의 제곱에 비례해 커지므로, 격차가 해상도와 함께 벌어진다:")
-print("  224×224 에서 5,376배, 1024×1024 에서 112,347배.")
 ```
+
+첫 층 하나(출력 채널 64개)만 비교해도 이렇다. CNN 의 파라미터 수는 **입력 해상도와 무관하다** —
+커널 크기와 채널 수만으로 정해진다. MLP 는 픽셀 수(변의 길이의 제곱)에 비례해 커지므로 격차가
+해상도와 함께 벌어진다: 224×224 에서 `{python} f"{ratio_first[224]:,.0f}"`배,
+1024×1024 에서 `{python} f"{ratio_first[1024]:,.0f}"`배.
 
 파라미터 수만 문제가 아니다. 더 근본적인 문제가 있다.
 
@@ -63,25 +64,29 @@ v1, v2 = img.ravel(), shifted.ravel()
 cos = float(v1 @ v2 / (np.linalg.norm(v1)*np.linalg.norm(v2)))
 c1, c2 = v1 - v1.mean(), v2 - v2.mean()
 corr = float(c1 @ c2 / (np.linalg.norm(c1)*np.linalg.norm(c2)))
+changed = float(np.mean(np.abs(img-shifted) > 0.01))
 print(f"원본과 5픽셀 이동본:")
-print(f"  코사인 유사도          {cos:.4f}   (밝기 기준선이 공유돼 높게 나온다)")
-print(f"  평균 제거 후 상관계수   {corr:.4f}   ← 실제 패턴의 유사도")
-print(f"  값이 바뀐 픽셀 비율     {float(np.mean(np.abs(img-shifted) > 0.01)):.1%}")
-print()
-print("MLP 의 가중치는 **픽셀 위치마다 따로** 있다. 79% 의 픽셀 값이 바뀌었다는 것은")
-print("그 가중치들이 보는 입력이 거의 전부 달라졌다는 뜻이다.")
-print("모든 위치에서 같은 패턴을 인식하려면 모든 위치마다 따로 학습해야 한다.")
-print()
+print(f"  코사인 유사도          {cos:.4f}")
+print(f"  평균 제거 후 상관계수   {corr:.4f}")
+print(f"  값이 바뀐 픽셀 비율     {changed:.1%}")
 
 # CNN 은 어떤가 — 같은 커널로 두 이미지를 필터링해 본다
 k = imaging.KERNELS["소벨 x"]
 f1, f2 = imaging.convolve2d(img, k), imaging.convolve2d(shifted, k)
 # 특성맵도 정확히 같은 만큼 이동해 있는가?
 f1_rolled = np.roll(f1, 5, axis=1)
-inner = np.abs(f1_rolled[:, 8:-8] - f2[:, 8:-8]).max()      # 경계 제외
+inner = float(np.abs(f1_rolled[:, 8:-8] - f2[:, 8:-8]).max())      # 경계 제외
 print(f"CNN: conv(shift(x)) 와 shift(conv(x)) 의 최대 차이 (경계 제외): {inner:.2e}")
-print("→ 특성맵이 입력과 **정확히 같은 만큼** 함께 이동한다. 이것이 등변성(equivariance)이다.")
 ```
+
+코사인 유사도가 `{python} f"{cos:.2f}"` 로 높아 보이는 것은 밝기 기준선이 공유되기 때문이고,
+평균을 제거한 상관계수 `{python} f"{corr:.2f}"` 가 실제 패턴의 유사도다.
+MLP 의 가중치는 **픽셀 위치마다 따로** 있다. `{python} f"{changed:.0%}"` 의 픽셀 값이 바뀌었다는 것은
+그 가중치들이 보는 입력이 거의 전부 달라졌다는 뜻이고, 모든 위치에서 같은 패턴을 인식하려면
+모든 위치마다 따로 학습해야 한다.
+
+반면 CNN 의 특성맵은 입력과 **정확히 같은 만큼** 함께 이동한다 — 경계를 제외하면 두 특성맵의 최대 차이가
+`{python} f"{inner:.1e}"` 다. 이것이 등변성(equivariance)이다.
 
 ::: {.key-concept}
 **등변성(equivariance)과 불변성(invariance)은 다르다**
@@ -127,10 +132,11 @@ print(corr[2:5, 2:5].astype(int))
 print()
 print("진짜 합성곱 결과 (중심 3×3):")
 print(true_conv[2:5, 2:5].astype(int))
-print()
-print("→ 정확히 180° 뒤집힌 관계다. 커널이 학습 대상이면 이 차이는 의미가 없다.")
-print("  이 책도 프레임워크 관례를 따라 상호상관을 '합성곱'이라 부른다.")
 ```
+
+델타 입력은 커널 자체를 찍어내므로 두 결과가 정확히 180° 뒤집힌 관계임이 보인다.
+커널이 학습 대상이면 이 차이는 의미가 없고, 이 책도 프레임워크 관례를 따라 상호상관을
+'합성곱'이라 부른다.
 
 ---
 
@@ -138,7 +144,7 @@ print("  이 책도 프레임워크 관례를 따라 상호상관을 '합성곱'
 
 ```{python}
 #| label: fig-conv-sliding
-#| fig-cap: "커널이 위치를 옮겨가며 특성맵의 값을 하나씩 채웁니다."
+#| fig-cap: "커널이 위치를 옮겨가며 특성맵의 값을 하나씩 채우는 과정"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -214,14 +220,14 @@ print(f"  입력 패치            커널")
 for r in range(K):
     print(f"  {patch[r].astype(int)}      {kern[r].astype(int)}")
 print(f"  원소별 곱의 합 = {float(np.sum(patch*kern)):.0f}  →  특성맵[0,0]")
-print()
-print(f"입력 {H}×{W}, 커널 {K}×{K} (패딩 없음, 스트라이드 1) → 출력 {OH}×{OW}")
-print(f"곱셈-덧셈 연산 횟수: {OH*OW} 위치 × {K*K} = {OH*OW*K*K:,} 회")
-print()
-print(f"**커널의 값 {K*K}개가 {OH*OW}개 위치 전부에서 재사용된다.**")
-print(f"이것이 가중치 공유(weight sharing)다. 완전연결이라면 "
-      f"{H*W} × {OH*OW} = {H*W*OH*OW:,} 개의 가중치가 필요하다.")
 ```
+
+입력 `{python} f"{H}×{W}"`, 커널 `{python} f"{K}×{K}"` (패딩 없음, 스트라이드 1)이면 출력은
+`{python} f"{OH}×{OW}"` 이고, 곱셈-덧셈은 `{python} f"{OH*OW}"` 위치 × `{python} f"{K*K}"` =
+`{python} f"{OH*OW*K*K:,}"` 회다.
+**커널의 값 `{python} f"{K*K}"`개가 `{python} f"{OH*OW}"`개 위치 전부에서 재사용된다.**
+이것이 가중치 공유(weight sharing)다. 완전연결이라면 `{python} f"{H*W}"` × `{python} f"{OH*OW}"` =
+`{python} f"{H*W*OH*OW:,}"` 개의 가중치가 필요하다.
 
 ---
 
@@ -280,16 +286,12 @@ for n in names:
     k = imaging.KERNELS[n]
     r = results[n]
     print(f"{n:<12} {k.sum():>7.2f} {r.mean():>10.4f} {r.std():>13.4f}   {desc[n]}")
-print()
-print("**커널 합이 1이면 밝기를 보존하고, 0이면 변화량만 남긴다.**")
-edge = [n for n in names if abs(imaging.KERNELS[n].sum()) < 1e-9]
-print(f"  합 = 0 인 커널: {', '.join(edge)} → 출력 평균이 0 근처")
-for n in edge:
-    print(f"    {n:<12} 출력 평균 {results[n].mean():+.4f}")
-print()
-print("CNN 은 이 9개 숫자를 손으로 정하지 않고 **역전파로 찾는다.**")
-print("첫 층이 학습한 커널을 시각화하면 실제로 에지·색 대비 검출기가 나온다.")
+edge_txt = ", ".join(n for n in names if abs(imaging.KERNELS[n].sum()) < 1e-9)
 ```
+
+**커널 합이 1이면 밝기를 보존하고, 0이면 변화량만 남긴다.** 합이 0 인 커널(`{python} edge_txt`)의
+출력 평균이 0 근처인 것이 그것이다. CNN 은 이 9개 숫자를 손으로 정하지 않고 **역전파로 찾는다.**
+첫 층이 학습한 커널을 시각화하면 실제로 에지·색 대비 검출기가 나온다.
 
 ---
 
@@ -346,7 +348,6 @@ fig.show()
 
 import numpy as np
 
-print("자주 쓰는 설정들")
 print(f"{'설명':<26} {'K':>3} {'P':>3} {'S':>3} {'D':>3} {'224 → 출력':>12}")
 print("-" * 62)
 cfgs = [
@@ -360,16 +361,12 @@ cfgs = [
 ]
 for name, k, p, s, d in cfgs:
     print(f"{name:<26} {k:>3} {p:>3} {s:>3} {d:>3} {out_size(224, k, p, s, d):>12}")
-print()
-print("크기를 유지하려면 P = D(K−1)/2 이면 된다 (S=1 일 때).")
-for k, d in [(3, 1), (5, 1), (7, 1), (3, 2), (3, 4)]:
-    p = d*(k-1)//2
-    print(f"  K={k}, D={d} → P={p}, 출력 {out_size(224, k, p, 1, d)}  "
-          f"(유효 커널 폭 {d*(k-1)+1})")
-print()
-print("**팽창은 파라미터를 늘리지 않고 수용영역만 키운다.**")
-print("분할(segmentation)에서 해상도를 잃지 않고 문맥을 넓힐 때 쓴다.")
 ```
+
+자주 쓰는 설정은 위 표로 정리된다. 크기를 유지하려면($S=1$) $P = D(K-1)/2$ 이면 된다 —
+팽창 $D$ 가 커널의 유효 폭을 $D(K-1)+1$ 로 늘리기 때문에 패딩도 그만큼 늘어난다
+($K=3, D=2$ 면 유효 폭 5, $P=2$). **팽창은 파라미터를 늘리지 않고 수용영역만 키운다.**
+분할(segmentation)에서 해상도를 잃지 않고 문맥을 넓힐 때 쓴다.
 
 ---
 
@@ -380,9 +377,12 @@ print("분할(segmentation)에서 해상도를 잃지 않고 문맥을 넓힐 �
 
 $$r_l = r_{l-1} + (k_l - 1)\prod_{i<l} s_i$$
 
+층 $l$ 의 커널이 한 칸 더 보는 것은 원본에서 앞 층들의 stride 곱만큼이므로, stride 가 있으면
+수용영역이 **지수적으로** 자란다. 팽창 $d_l$ 은 $(k_l-1)$ 을 $d_l(k_l-1)$ 로 바꾸는 것과 같다.
+
 ```{python}
 #| label: fig-receptive-field
-#| fig-cap: "층을 쌓을수록 한 뉴런이 보는 원본 영역이 넓어집니다"
+#| fig-cap: "층을 쌓을수록 넓어지는 한 뉴런의 수용영역"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -443,32 +443,27 @@ print(f"{'구성':<24} " + " ".join(f"{l:>6}" for l in [1, 2, 4, 6, 8, 10, 12]) 
 print("-" * 76)
 for k, v in rf.items():
     print(f"{k:<24} " + " ".join(f"{v[l-1]:>6}" for l in [1, 2, 4, 6, 8, 10, 12]))
-print()
-print("224×224 입력 전체를 보려면:")
-for k, n in need.items():
-    print(f"  {k:<24} {f'{n}층' if n else f'12층으로는 부족 (최대 {rf[k][-1]})'}")
-print()
+
 r3 = rf["3×3, stride 1"]
-print(f"stride 1 만 쓰면 수용영역이 **선형**으로 자란다: {r3[0]} → {r3[-1]} (층당 +2)")
-print(f"  → 224 를 다 보려면 {(224-1)//2 + 1}층이 필요하다. 비현실적이다.")
-print()
 r3s2 = rf["3×3, stride 2"]
 rd = rf["3×3, 팽창 1,2,4,8…"]
-print(f"stride 2 와 팽창 2배는 **수치가 완전히 같다**: {r3s2 == rd}")
-print(f"  둘 다 {r3s2[0]} → {r3s2[-1]} 로 지수 성장한다. 점화식이 동일하기 때문이다.")
-print()
-print("차이는 수용영역이 아니라 **출력 해상도**에 있다:")
-print(f"{'층':>4} {'수용영역':>10} {'stride2 해상도':>15} {'팽창 해상도':>13}")
-print("-" * 46)
-for l in [1, 3, 5, 7, 9]:
-    print(f"{l:>4} {r3s2[l-1]:>10} {224/2**l:>15.2f} {224:>13}")
-print()
-print("7층이면 둘 다 224 전체를 보지만, stride 쪽은 특성맵이 1.75픽셀만 남는다.")
-print("**분할·검출은 해상도가 답이므로 팽창을 쓴다** (DeepLab). 분류는 stride 로 충분하다.")
-print()
-print("설계 규칙: **분류하려는 대상의 크기만큼은 수용영역이 커야 한다.**")
-print("수용영역이 물체보다 작으면 모델은 물체 전체를 한 번에 볼 수 없다.")
+same_growth = (list(r3s2) == list(rd))
+n_s2 = need["3×3, stride 2"]
+print(f"224 를 다 보는 데 필요한 층 수: " +
+      ", ".join(f"{k} {n}층" if n else f"{k} >12층(최대 {rf[k][-1]})" for k, n in need.items()))
 ```
+
+stride 1 만 쓰면 수용영역이 **선형**으로 자란다 — `{python} f"{r3[0]}"` → `{python} f"{r3[-1]}"`,
+층당 +2 이므로 224 를 다 보려면 `{python} f"{(224-1)//2 + 1}"`층이 필요하다. 비현실적이다.
+stride 2 와 팽창 2배는 점화식이 같아서 **수치가 완전히 같고**(`{python} "일치" if same_growth else "불일치"`),
+둘 다 `{python} f"{r3s2[0]}"` → `{python} f"{r3s2[-1]:,}"` 로 지수 성장해 `{python} f"{n_s2}"`층이면 224 를 다 본다.
+
+차이는 수용영역이 아니라 **출력 해상도**에 있다. 층마다 stride 2 를 쓰면 해상도가 매 층 절반이 되어
+`{python} f"{n_s2}"`층 뒤에는 특성맵이 `{python} f"{224/2**n_s2:.2f}"`픽셀만 남지만, 팽창은 224 를 그대로 유지한다.
+**분할·검출은 해상도가 답이므로 팽창을 쓴다**(DeepLab). 분류는 stride 로 충분하다.
+
+설계 규칙은 하나다. **분류하려는 대상의 크기만큼은 수용영역이 커야 한다.**
+수용영역이 물체보다 작으면 모델은 물체 전체를 한 번에 볼 수 없다.
 
 ### 3×3 두 층 = 5×5 한 층 (VGG의 발견)
 
@@ -486,10 +481,10 @@ print(f"  5×5 한 층    : {one_5:,} 파라미터")
 print(f"  3×3 두 층    : {two_3:,} 파라미터  ({two_3/one_5:.0%})")
 print(f"  7×7 한 층    : {7*7*C*C:,}")
 print(f"  3×3 세 층    : {3*(3*3*C*C):,}  ({3*(3*3*C*C)/(7*7*C*C):.0%})")
-print()
-print("같은 수용영역을 **더 적은 파라미터로**, 게다가 비선형성을 더 많이 끼워서 얻는다.")
-print("VGG(2014) 가 이것을 밀어붙여 3×3 만으로 망을 쌓았고, 이후 표준이 되었다.")
 ```
+
+같은 수용영역을 **더 적은 파라미터로**, 게다가 비선형성을 더 많이 끼워서 얻는다.
+VGG(2014) 가 이것을 밀어붙여 3×3 만으로 망을 쌓았고, 이후 표준이 되었다.
 
 ---
 
@@ -526,17 +521,17 @@ print(f"파라미터")
 print(f"  단순 3×3 : {3*3*C*C:>10,}")
 print(f"  병목      : {1*1*C*BOTTLE + 3*3*BOTTLE*BOTTLE + 1*1*BOTTLE*C:>10,}"
       f"  ({(1*1*C*BOTTLE + 3*3*BOTTLE*BOTTLE + 1*1*BOTTLE*C)/(3*3*C*C):.0%})")
-print()
-print("ResNet-50 이상이 전부 이 병목 블록을 쓴다. 비싼 3×3 을 좁은 채널에서만 한다.")
-print()
 
 # depthwise separable
 dw = flops(H, 3, C, 1) + flops(H, 1, C, C)   # 채널별 3×3 + 1×1 점별
 print(f"깊이별 분리 합성곱 (MobileNet)")
 print(f"  depthwise 3×3 + pointwise 1×1     : {dw/1e9:>7.2f} GFLOPs ({dw/plain:.1%})")
 print(f"  이론 감소율 = 1/C_out + 1/K² = 1/{C} + 1/9 = {1/C + 1/9:.4f}")
-print(f"  실측 비율                          = {dw/plain:.4f}")
 ```
+
+ResNet-50 이상이 전부 이 병목 블록을 쓴다 — 비싼 3×3 을 좁은 채널에서만 하면 연산과 파라미터가
+`{python} f"{bottleneck/plain:.0%}"` 로 준다. 깊이별 분리 합성곱은 실측 비율이 이론값
+$1/C_{\text{out}} + 1/K^2$ 과 정확히 일치한다.
 
 ::: {.key-concept}
 **깊이별 분리 합성곱**
@@ -616,22 +611,20 @@ print(f"{'방식':<16} " + " ".join(f"{s:>6}" for s in shifts) + "   (이동 픽
 print("-" * 78)
 for k, v in curves.items():
     print(f"{k:<16} " + " ".join(f"{x:>6.3f}" for x in v))
-print()
-print("작은 이동(1~2px)에서의 평균 변화량:")
-for k, v in curves.items():
-    print(f"  {k:<16} {np.mean(v[1:3]):.4f}")
-print()
-best = min(curves, key=lambda k: np.mean(curves[k][1:3]))
-print(f"→ 가장 안정적인 것: {best}")
-print()
-print("**공짜가 아니다.** 전역 풀링은 완전히 불변이지만 위치 정보를 전부 버린다.")
-print("검출·분할처럼 '어디에 있는지'가 답인 과제에서는 쓸 수 없다.")
-print()
-print("최근 경향: 풀링 대신 **stride 합성곱**을 쓴다.")
-print("  · 다운샘플링을 학습 가능한 연산으로 만든다")
-print("  · max pooling 의 비선형성은 이미 활성화 함수가 제공한다")
-print("  · ResNet 이후 대부분의 아키텍처가 stride 2 합성곱으로 해상도를 줄인다")
+small = {k: float(np.mean(v[1:3])) for k, v in curves.items()}   # 1~2px 이동의 평균 변화량
 ```
+
+작은 이동(1~2px)에서 특성의 상대 변화량은 풀링 없음 `{python} f"{small['풀링 없음']:.2f}"`,
+max pool 2×2 `{python} f"{small['max pool 2×2']:.2f}"`, 4×4 `{python} f"{small['max pool 4×4']:.2f}"`,
+전역 max pool `{python} f"{small['전역 max pool']:.2f}"` 다 — 풀링 창이 커질수록 안정적이다.
+(전역 max pool 이 정확히 0 인 것은 `np.roll` 이 순환 이동이라 최댓값이 그대로 보존되기 때문이다.)
+
+**공짜가 아니다.** 전역 풀링은 완전히 불변이지만 위치 정보를 전부 버린다.
+검출·분할처럼 '어디에 있는지'가 답인 과제에서는 쓸 수 없다.
+
+최근 경향은 풀링 대신 **stride 합성곱**을 쓰는 것이다. 다운샘플링이 학습 가능한 연산이 되고,
+max pooling 의 비선형성은 이미 활성화 함수가 제공하기 때문이다. ResNet 이후 대부분의 아키텍처가
+stride 2 합성곱으로 해상도를 줄인다.
 
 ---
 
@@ -672,17 +665,13 @@ print(f"{'합계':<20} {'':>8} {tp:>14,} {tf/1e6:>12,.0f}")
 print()
 conv_p = sum(r[1] for r in rows[:-1]); fc_p = rows[-1][1]
 conv_f = sum(r[2] for r in rows[:-1]); fc_f = rows[-1][2]
-print(f"합성곱 층: 파라미터 {conv_p/tp:.1%}, FLOPs {conv_f/tf:.1%}")
-print(f"FC 층    : 파라미터 {fc_p/tp:.1%}, FLOPs {fc_f/tf:.1%}")
-print()
-print("**파라미터와 연산량이 정반대로 몰려 있다.**")
-print("  · FC 층 하나가 파라미터의 대부분을 차지한다 (해상도 1×1 인데도)")
-print("  · 연산량은 해상도가 큰 초반 합성곱 층에 몰린다")
-print()
-print("그래서 두 최적화가 서로 다른 곳을 겨냥한다:")
-print("  · 모델 크기를 줄이려면 → FC 를 전역 평균 풀링으로 대체 (NiN, ResNet)")
-print("  · 속도를 올리려면    → 초반에 빨리 다운샘플 (stem stride 2, 7×7 s2)")
 ```
+
+**파라미터와 연산량이 정반대로 몰려 있다.** FC 층 하나가 해상도 1×1 인데도 파라미터의
+`{python} f"{fc_p/tp:.0%}"` 를 차지하고, 연산량의 `{python} f"{conv_f/tf:.0%}"` 는 해상도가 큰
+합성곱 층에 몰린다. 그래서 두 최적화가 서로 다른 곳을 겨냥한다 — 모델 크기를 줄이려면 FC 를
+전역 평균 풀링으로 대체하고(NiN, ResNet), 속도를 올리려면 초반에 빨리 다운샘플한다
+(stem stride 2, 7×7 s2).
 
 ---
 
