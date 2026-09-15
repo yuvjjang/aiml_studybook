@@ -256,11 +256,11 @@ for label, n_cl, spread in [("잘 분리된 군집 3개", 3, 1.0),
         print(f"  {init:<12} {v.mean():>13.1f} {v.max():>10.1f} "
               f"{(v < best*1.02).mean():>13.0%}")
     print()
-
-print("→ k-means++ 가 나쁜 국소 최적에 덜 빠진다.")
-print("  다만 완전히 막지는 못한다 — 그래서 실무에서는 여러 번 재시작(n_init)해")
-print("  가장 낮은 inertia 를 고른다. scikit-learn 의 n_init 기본값이 그 이유다.")
 ```
+
+k-means++ 가 나쁜 국소 최적에 덜 빠진다 — 군집이 많고 가까울수록 차이가 커진다.
+다만 완전히 막지는 못한다. 그래서 실무에서는 여러 번 재시작해 가장 낮은 inertia 를 고른다.
+scikit-learn 의 `n_init` 이 그 손잡이다.
 
 ---
 
@@ -577,10 +577,8 @@ fig.add_trace(go.Scatter(x=epss, y=np.array(n_noise)/10, mode="lines+markers",
 steps = []
 for e in epss:
     lab = res[e][0]
-    xs = [Xd[lab == k, 0] for k in [-1, 0, 1, 2]]
-    ys = [Xd[lab == k, 1] for k in [-1, 0, 1, 2]]
-    steps.append((f"{e:g}", {"x": xs[:len(set(lab))] if False else
-                             [Xd[lab==-1,0], Xd[lab==0,0], Xd[lab==1,0]],
+    # 잡음(-1)과 군집 0, 1 의 세 트레이스만 갱신한다
+    steps.append((f"{e:g}", {"x": [Xd[lab==-1,0], Xd[lab==0,0], Xd[lab==1,0]],
                              "y": [Xd[lab==-1,1], Xd[lab==0,1], Xd[lab==1,1]]}))
 fig.update_layout(sliders=[viz.slider(steps, prefix="eps = ",
                                       active=epss.index(e0), pad_t=55)])
@@ -602,10 +600,10 @@ print("-" * 38)
 for e in epss:
     _, nk, nn, ari = res[e]
     print(f"{e:>7.2f} {nk:>9} {nn:>9} {ari:>8.3f}")
-print()
-print("→ eps 가 작으면 잘게 쪼개지고 잡음이 많아진다.")
-print("  크면 전부 하나로 합쳐진다. 적정 구간이 좁을 수 있다.")
 ```
+
+`eps` 가 작으면 잘게 쪼개지고 잡음이 많아진다. 크면 전부 하나로 합쳐진다.
+ARI 가 높게 유지되는 적정 구간이 좁을 수 있다.
 
 ::: {.callout-warning}
 ## DBSCAN의 약점
@@ -718,27 +716,17 @@ fig.show()
 
 ## 평가: 정답이 없을 때와 있을 때
 
-```{python}
-#| label: eval-metrics
-#| code-fold: false
+| 지표 | 종류 | 범위 | 의미 |
+|---|---|---|---|
+| 실루엣 계수 | 내부 | $[-1,1]$ | 군집 내 응집 vs 군집 간 분리 |
+| Davies-Bouldin | 내부 | $0\sim$ | 낮을수록 좋음 |
+| Calinski-Harabasz | 내부 | $0\sim$ | 높을수록 좋음 |
+| ARI | 외부 | $[-1,1]$ | 우연 보정. 무작위=0, 완벽=1 |
+| NMI | 외부 | $[0,1]$ | 상호정보 정규화 |
+| V-measure | 외부 | $[0,1]$ | 동질성·완전성의 조화평균 |
 
-rows = [
-    ("실루엣 계수", "내부", "[-1,1]", "군집 내 응집 vs 군집 간 분리"),
-    ("Davies-Bouldin", "내부", "0~", "낮을수록 좋음"),
-    ("Calinski-Harabasz", "내부", "0~", "높을수록 좋음"),
-    ("ARI", "외부", "[-1,1]", "우연 보정. 무작위=0, 완벽=1"),
-    ("NMI", "외부", "[0,1]", "상호정보 정규화"),
-    ("V-measure", "외부", "[0,1]", "동질성·완전성의 조화평균"),
-]
-print(f"{'지표':<20} {'종류':<6} {'범위':<9} {'의미'}")
-print("-" * 72)
-for r in rows:
-    print(f"{r[0]:<20} {r[1]:<6} {r[2]:<9} {r[3]}")
-print()
-print("내부 지표: 정답 없이 계산. 단, 지표가 가정하는 군집 모양에 편향됨")
-print("          (실루엣은 구형 군집을 선호 → DBSCAN 결과에 불리)")
-print("외부 지표: 정답이 있을 때만. 벤치마크·알고리즘 비교용")
-```
+**내부 지표**는 정답 없이 계산한다. 단, 지표가 가정하는 군집 모양에 편향된다.
+**외부 지표**는 정답이 있을 때만 쓸 수 있고, 벤치마크·알고리즘 비교용이다.
 
 ::: {.callout-warning}
 ## 내부 지표의 함정
@@ -778,7 +766,7 @@ $k=1$ 부터 $k=n$ 까지 inertia를 그려라. $k=n$ 에서 값이 얼마인가
 | **DBSCAN** | 밀도 연결 영역 | 임의 모양, k 불필요, 잡음 처리 | eps 민감, 밀도 차이 |
 | **계층** | 병합 트리 | 모든 k를 한 번에, 덴드로그램 | $O(n^2)$ 이상 |
 
-| 핵심 사실 | |
+| 핵심 사실 | 내용 |
 |---|---|
 | k-means 수렴 | inertia 단조 감소 (전역 최적은 아님) |
 | EM 수렴 | 로그우도 단조 증가 |
