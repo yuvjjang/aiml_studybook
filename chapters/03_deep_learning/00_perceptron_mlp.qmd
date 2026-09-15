@@ -180,12 +180,11 @@ for gap in [1.0, 0.5, 0.2, 0.1]:
         k = perceptron_updates(X, y)
         print(f"{gap:>10.1f}{gamma:>13.3f}{R:>7.2f}{(R/gamma)**2:>14.0f}"
               f"{k:>11}{n:>7}")
-
-print()
-print("실제 갱신 횟수가 언제나 (R/γ)² 상한 안에 있다.")
-print("마진이 작아질수록 상한이 제곱으로 커지고, 실제 갱신도 함께 늘어난다.")
-print("n 이 10배여도 상한은 거의 같다 — 데이터 수와 무관하다는 것이 정리의 요점이다.")
 ```
+
+실제 갱신 횟수가 언제나 $(R/\gamma)^2$ 상한 안에 있다.
+마진이 작아질수록 상한이 제곱으로 커지고, 실제 갱신도 함께 늘어난다.
+$n$ 이 10배여도 상한은 거의 같다 — 데이터 수와 무관하다는 것이 정리의 요점이다.
 
 ::: {.key-concept}
 $R/\gamma$ 라는 양이 [SVM](../02_classical_ml/05_svm_kernels.qmd)에서 다시 나온다.
@@ -231,10 +230,11 @@ def linearly_separable(X, y, grid=41):
 for name, y in targets.items():
     ok, sol = linearly_separable(X, y)
     extra = f"  예: w=({sol[0]:.1f},{sol[1]:.1f}), b={sol[2]:.1f}" if ok else ""
-    print(f"{name:<5} 선형 분리 가능? {'예' if ok else '**아니오**'}{extra}")
-print()
-print("XOR 은 대각선 두 점이 같은 클래스라, 하나의 직선으로 나눌 수 없다.")
+    print(f"{name:<5} 선형 분리 가능? {'예' if ok else '아니오'}{extra}")
 ```
+
+AND 와 OR 은 격자 탐색에서 바로 분리선이 나오는데, XOR 은 아무 $(w_1, w_2, b)$ 로도 안 된다.
+대각선 두 점이 같은 클래스라 하나의 직선으로 나눌 수 없기 때문이다.
 
 ---
 
@@ -360,13 +360,14 @@ for i in range(1, len(deep.W)):
     W_eq = W_eq @ deep.W[i]
 out_flat = X @ W_eq + b_eq
 
-print(f"5층 망 (은닉 32×3) 파라미터: {deep.n_params():,}개")
-print(f"등가 단일 선형층 파라미터   : {W_eq.size + b_eq.size}개")
+n_deep, n_flat = deep.n_params(), W_eq.size + b_eq.size
+print(f"5층 망 (은닉 32×3) 파라미터: {n_deep:,}개")
+print(f"등가 단일 선형층 파라미터   : {n_flat}개")
 print(f"두 출력의 최대 차이         : {np.abs(out_deep - out_flat).max():.3e}")
-print()
-print("→ 활성화 없이는 아무리 깊어도 4→3 선형 변환 하나와 동일하다.")
-print("  파라미터 3천 개를 15개짜리 모델로 접을 수 있다.")
 ```
+
+활성화 없이는 아무리 깊어도 $4 \to 3$ 선형 변환 하나와 동일하다.
+파라미터 `{python} f"{n_deep:,}"`개짜리 망을 `{python} f"{n_flat}"`개짜리 모델로 접을 수 있다.
 
 ---
 
@@ -535,17 +536,17 @@ for name, sizes in configs:
     _, npar, mu, sd, mn = results[name]
     print(f"{name:<26} {npar:>9,} {mu:>11.5f} {sd:>10.5f} {mn:>10.5f}")
 print()
-print(f"파라미터를 ~590개로 맞추고 시드 {N_SEEDS}개를 돌린 결과다.")
-print()
 best_shallow = min(results[configs[0][0]][4], results[configs[1][0]][4])
 best_deep = min(results[configs[2][0]][4], results[configs[3][0]][4])
+depth_gain = best_shallow / max(best_deep, 1e-9)
 print(f"최선값 비교: 얕은 쪽(1~2층) {best_shallow:.5f}  vs  깊은 쪽(3~4층) {best_deep:.5f}")
-print(f"           → {best_shallow/max(best_deep,1e-9):,.0f}배 차이")
-print()
-print("두 가지를 함께 읽어야 한다:")
-print("  · **최선값** — 깊은 망만 도달하는 낮은 오차가 있다 (표현력의 이점)")
-print("  · **표준편차** — 깊을수록 시드에 따라 실패하기도 한다 (최적화의 어려움)")
 ```
+
+파라미터를 약 590개로 맞추고 시드 `{python} f"{N_SEEDS}"`개를 돌린 결과다. 두 가지를 함께 읽어야 한다.
+
+- **최선값** — 깊은 망만 도달하는 낮은 오차가 있다. 얕은 쪽 최선과 깊은 쪽 최선의 차이가
+  `{python} f"{depth_gain:,.0f}"`배다 (표현력의 이점)
+- **표준편차** — 깊을수록 시드에 따라 실패하기도 한다 (최적화의 어려움)
 
 ::: {.key-concept}
 **ReLU 망의 조각별 선형 영역 수**
@@ -561,7 +562,7 @@ ReLU 신경망이 표현하는 함수는 **조각별 선형(piecewise linear)** 
 
 **그런데 위 실험은 이야기의 절반만 보여준다.**
 
-깊은 망의 *최선* 결과는 얕은 망보다 수천 배 낮은 오차에 도달하지만,
+깊은 망의 *최선* 결과는 얕은 망보다 `{python} f"{depth_gain:,.0f}"`배 낮은 오차에 도달하지만,
 *평균*은 훨씬 불안정하다. 같은 구조인데 시드에 따라 성공하거나 실패한다.
 
 즉 **표현할 수 있다 ≠ 학습할 수 있다.**
