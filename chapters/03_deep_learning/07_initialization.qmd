@@ -40,13 +40,15 @@ for scheme in ["zeros", "small", "he"]:
     acc = float((m.predict(X).argmax(1) == y).mean())
     print(f"{scheme:<8} 2층 그래디언트의 서로 다른 열 수: {uniq}/8   "
           f"학습 후 정확도 {acc:.3f}")
-print()
-print("0 초기화에서는 같은 층의 모든 유닛이 **똑같은 그래디언트**를 받는다.")
-print("영원히 같은 값을 유지하므로, 너비가 아무리 넓어도 유닛 1개짜리 망과 같다.")
-print("이것이 '대칭성 깨기(symmetry breaking)'가 필요한 이유다.")
-print()
-print("bias 는 0 으로 초기화해도 된다. W 가 이미 대칭을 깨기 때문이다.")
 ```
+
+0 초기화(더 일반적으로는 모든 원소가 같은 상수 초기화)에서는 같은 층의 모든 유닛이
+똑같은 입력을 받아 똑같은 출력을 내고, 따라서 **똑같은 그래디언트**를 받는다.
+갱신 뒤에도 여전히 같은 값이므로 영원히 같은 유닛으로 남는다 — 너비가 아무리 넓어도
+유닛 1개짜리 망과 같다. 이것이 '대칭성 깨기(symmetry breaking)'가 필요한 이유다.
+위 실험에서 `zeros` 는 정확도 0.5, 즉 동전 던지기에 머문다.
+
+bias 는 0 으로 초기화해도 된다. $W$ 가 이미 대칭을 깨기 때문이다.
 
 ---
 
@@ -97,7 +99,7 @@ rng = np.random.default_rng(0)
 
 z = rng.normal(0, 1.5, 2_000_000)
 print(f"E[z²]           = {np.mean(z**2):.4f}")
-print(f"E[max(0,z)²]    = {np.mean(np.maximum(0, z)**2):.4f}   ← 정확히 절반")
+print(f"E[max(0,z)²]    = {np.mean(np.maximum(0, z)**2):.4f}")
 print(f"비율            = {np.mean(np.maximum(0,z)**2)/np.mean(z**2):.4f}\n")
 
 # 깊은 망에서 계수를 빼먹으면 어떻게 되는가
@@ -116,26 +118,25 @@ print(f"\n이론 예측: 계수를 1 로 쓰면 층마다 1/√2 배 → 2^(-{de
       f"= {2.0**(-depth/2):.2e}")
 ```
 
+두 번째 모멘트의 비율은 0.5 로 정확히 절반이고, 계수를 빼먹은 Xavier 는 30층 뒤 신호가
+이론 예측과 같은 자릿수($10^{-5}$)로 사라진다.
+
+| 방법 | 표준편차 | 용도 |
+|---|---|---|
+| zeros | 0 | 대칭성 못 깸 — 절대 금지 |
+| 작은 상수 | $N(0, 0.01^2)$ | 깊으면 신호가 소실 |
+| LeCun | $\sqrt{1/n_{\text{in}}}$ | SELU, 선형층 |
+| Xavier/Glorot | $\sqrt{2/(n_{\text{in}}+n_{\text{out}})}$ | tanh, sigmoid |
+| He/Kaiming | $\sqrt{2/n_{\text{in}}}$ | ReLU 계열 — 현재 기본값 |
+| 직교 | 직교행렬 × gain | RNN, 동적 등거리성 |
+| LLM 관례 | $N(0, 0.02^2)$ + 층 스케일링 | GPT 계열 |
+
 ```{python}
 #| label: init-formulas
 #| code-fold: false
 
 import numpy as np
 
-rows = [
-    ("zeros",      "0",                        "대칭성 못 깸 — 절대 금지"),
-    ("작은 상수",   "N(0, 0.01²)",              "깊으면 신호가 소실"),
-    ("LeCun",      "√(1/n_in)",                "SELU, 선형층"),
-    ("Xavier/Glorot", "√(2/(n_in+n_out))",     "tanh, sigmoid"),
-    ("He/Kaiming", "√(2/n_in)",                "ReLU 계열 — 현재 기본값"),
-    ("직교",        "직교행렬 × gain",           "RNN, 동적 등거리성"),
-    ("LLM 관례",    "N(0, 0.02²) + 층 스케일링", "GPT 계열"),
-]
-print(f"{'방법':<16} {'표준편차':<26} {'용도'}")
-print("-" * 68)
-for r in rows:
-    print(f"{r[0]:<16} {r[1]:<26} {r[2]}")
-print()
 n_in = 512
 print(f"n_in = {n_in} 일 때 실제 값:")
 print(f"  LeCun  σ = {np.sqrt(1/n_in):.5f}")
@@ -143,6 +144,9 @@ print(f"  Xavier σ = {np.sqrt(2/(n_in+n_in)):.5f}   (n_out = n_in 가정)")
 print(f"  He     σ = {np.sqrt(2/n_in):.5f}")
 print(f"  GPT 관례 σ = 0.02  → He 대비 {0.02/np.sqrt(2/n_in):.2f}배")
 ```
+
+$n_{\text{in}} = n_{\text{out}}$ 이면 Xavier 와 LeCun 은 같은 값이 된다 — 아래 실험에서
+두 곡선이 겹치는 이유다.
 
 ---
 
@@ -206,35 +210,28 @@ print("-" * 72)
 for k, v in curves.items():
     ratio = (v[-1]/v[0])**(1/DEPTH) if v[-1] > 0 else 0.0
     print(f"{k:<18} {v[1]:>12.4f} {v[10]:>12.3e} {v[-1]:>13.3e} {ratio:>11.4f}")
-print()
-print("층당 배율이 1.0 에 가까워야 깊이를 늘릴 수 있다.")
-print(f"  He 는 {(curves['He'][-1]/curves['He'][0])**(1/DEPTH):.4f} — 이론값 1.0 에 근접")
-print(f"  σ=0.01 은 {(curves['small (σ=0.01)'][-1]/curves['small (σ=0.01)'][0])**(1/DEPTH):.4f} "
-      f"— 30층 만에 {curves['small (σ=0.01)'][-1]/curves['small (σ=0.01)'][0]:.1e} 배로 소멸")
-over = curves["He × 1.3 (과대)"]
-print(f"  He 를 1.3배만 키워도 {(over[-1]/over[0])**(1/DEPTH):.4f} → "
-      f"30층 후 {over[-1]/over[0]:.2e} 배로 폭발")
-print()
-print("**1.3배가 30층에서 수천 배가 된다.** 초기화가 예민한 이유가 이것이다.")
+
+per = lambda k: float((curves[k][-1]/curves[k][0])**(1/DEPTH))
+tot = lambda k: float(curves[k][-1]/curves[k][0])
 ```
 
+층당 배율이 1.0 에 가까워야 깊이를 늘릴 수 있다. He 는 `{python} f"{per('He'):.4f}"` 로
+이론값 1.0 에 근접하고, $\sigma=0.01$ 은 `{python} f"{per('small (σ=0.01)'):.4f}"` 라
+30층 만에 `{python} f"{tot('small (σ=0.01)'):.1e}"` 배로 소멸한다.
+He 를 1.3배만 키워도 층당 `{python} f"{per('He × 1.3 (과대)'):.4f}"`, 30층 후에는
+`{python} f"{tot('He × 1.3 (과대)'):.2e}"` 배로 폭발한다.
+**1.3배가 30층에서 천 배 이상이 된다.** 초기화가 예민한 이유가 이것이다.
+직교 초기화(× $\sqrt2$)가 He 보다도 1 에 가까운 것은 직교행렬이 벡터의 norm 을 정확히
+보존해서, 가우시안 행렬의 무작위 변동이 없기 때문이다.
+
 ::: {.key-concept}
-**He 초기화의 유도**
+**Xavier 의 분모가 $n_{\text{in}}+n_{\text{out}}$ 인 이유**
 
-ReLU는 입력의 절반을 0으로 만든다. 입력이 평균 0 대칭이라면
-
-$$\operatorname{Var}[\text{ReLU}(z)] = \tfrac{1}{2}\operatorname{Var}[z]$$
-
-층 하나를 지나면 $\operatorname{Var} \to n_{\text{in}}\sigma_w^2 \cdot \tfrac{1}{2}\operatorname{Var}$
-이므로, 유지하려면
-
-$$n_{\text{in}}\sigma_w^2 \cdot \tfrac{1}{2} = 1
-\quad\Longrightarrow\quad
-\sigma_w = \sqrt{\frac{2}{n_{\text{in}}}}$$
-
-Xavier는 순전파($n_{\text{in}}$)와 역전파($n_{\text{out}}$)를 절충해
-$2/(n_{\text{in}}+n_{\text{out}})$ 를 쓴다.
-ReLU의 1/2 손실을 고려하지 않았으므로 **ReLU 망에서는 신호가 서서히 준다.**
+순전파 분산을 유지하려면 $n_{\text{in}}\sigma_w^2 = 1$, 역전파 그래디언트 분산을 유지하려면
+$n_{\text{out}}\sigma_w^2 = 1$ 이다. 두 조건은 $n_{\text{in}} \ne n_{\text{out}}$ 이면 동시에 만족할 수
+없으므로 Xavier 는 둘의 조화평균 $\sigma_w^2 = 2/(n_{\text{in}}+n_{\text{out}})$ 로 절충한다.
+ReLU 의 1/2 손실은 고려하지 않았으므로 **ReLU 망에서는 신호가 층마다 $1/\sqrt2$ 배씩 준다** — 위 표의
+Xavier 행이 그것이다.
 :::
 
 ---
@@ -303,15 +300,17 @@ print(f"{'설정':<22} {'입력층 ‖g‖':>13} {'출력층 ‖g‖':>13} {'비
 print("-" * 70)
 for k, v in profiles.items():
     print(f"{k:<22} {v[0]:>13.3e} {v[-1]:>13.3e} {v[0]/v[-1]:>16.3e}")
-print()
-print("비가 1 에서 멀수록 층마다 학습 속도가 달라진다는 뜻이다.")
-best = min(profiles, key=lambda k: abs(np.log10(profiles[k][0]/profiles[k][-1])))
-print(f"→ 비가 1 에 가장 가까운 것: {best} "
-      f"({profiles[best][0]/profiles[best][-1]:.3f})")
-print()
-xv = profiles["Xavier (ReLU에 부족)"]
-print(f"Xavier 는 {DEPTH_B}층에서 {xv[0]/xv[-1]:.3e} 배 — ReLU 의 1/2 손실이 누적된 결과다.")
+
+ratio = lambda k: float(profiles[k][0]/profiles[k][-1])
+best_b = min(profiles, key=lambda k: abs(np.log10(ratio(k))))
 ```
+
+비가 1 에서 멀수록 입력 쪽 층과 출력 쪽 층의 학습 속도가 달라진다는 뜻이다.
+비가 1 에 가장 가까운 것은 `{python} best_b` (`{python} f"{ratio(best_b):.3f}"`)이고,
+Xavier 는 `{python} f"{DEPTH_B}"`층에서 `{python} f"{ratio('Xavier (ReLU에 부족)'):.3e}"` 배 —
+순전파에서 본 ReLU 의 1/2 손실이 역전파에도 똑같이 누적된 결과다.
+He 에 잔차를 그냥 붙이면($\alpha=1$) `{python} f"{ratio('He + 잔차'):.1e}"` 배로 오히려 폭발하는데,
+왜 그런지는 바로 다음 절의 주제다.
 
 ---
 
@@ -417,30 +416,33 @@ he_plain  = runs["ReLU + He, 잔차 없음"][-1][0]
 he_res1   = runs["ReLU + He, 잔차 α=1"][-1][0]
 he_resL   = runs["ReLU + He, 잔차 1/√L"][-1][0]
 
-print("읽어야 할 세 가지:")
-print()
-print(f"① 옛날 조합(sigmoid + Xavier)은 깊이 128 에서 그래디언트가 {sig_plain:.1e} 배 —")
-print( "   완전한 소실이다. 잔차를 붙이면 "
-      f"{sig_res:.3f} 로 **되살아난다.** 이것이 ResNet 이 푼 문제다.")
-print()
-print(f"② 그런데 ReLU + He 는 **잔차 없이도** 깊이 128 에서 {he_plain:.3f} 다.")
-print( "   초기화만 제대로 해도 그래디언트 소실은 거의 해결된다.")
-print( "   즉 잔차 연결의 가치는 '그래디언트 소실 방지'만이 아니다 —")
-print( "   최적화 지형, 특징 재사용, 층 삭제에 대한 강건성 쪽이 더 크다.")
-print()
-print(f"③ ReLU + He 에 α=1 잔차를 붙이면 오히려 {he_res1:.1e} 배로 **폭발**한다.")
-print(f"   α=1/√L 로 줄이면 {he_resL:.1f} 로 — 여전히 1 은 아니지만 "
-      f"{he_res1/he_resL:.0e} 배 개선이다.")
-print( "   잔차는 공짜가 아니라 스케일을 다시 맞춰야 하는 장치이고,")
-print( "   실전에서는 여기에 정규화 층까지 얹어서 남은 차이를 흡수한다.")
 ```
+
+읽어야 할 것이 셋이다.
+
+1. 옛날 조합(sigmoid + Xavier)은 깊이 128 에서 그래디언트가 `{python} f"{sig_plain:.1e}"` 배 —
+   완전한 소실이다. 잔차를 붙이면 `{python} f"{sig_res:.3f}"` 로 **되살아난다.** 이것이 ResNet 이 푼 문제다.
+2. 그런데 ReLU + He 는 **잔차 없이도** 깊이 128 에서 `{python} f"{he_plain:.3f}"` 다.
+   초기화만 제대로 해도 그래디언트 소실은 거의 해결된다. 즉 잔차 연결의 가치는
+   '그래디언트 소실 방지'만이 아니다 — 최적화 지형, 특징 재사용, 층 삭제에 대한 강건성 쪽이 더 크다.
+3. ReLU + He 에 $\alpha=1$ 잔차를 붙이면 오히려 `{python} f"{he_res1:.1e}"` 배로 **폭발**한다.
+   $\alpha=1/\sqrt L$ 로 줄이면 `{python} f"{he_resL:.1f}"` 로 — 여전히 1 은 아니지만
+   `{python} f"{he_res1/he_resL:.0e}"` 배 개선이다. 잔차는 공짜가 아니라 스케일을 다시 맞춰야 하는
+   장치이고, 실전에서는 여기에 정규화 층까지 얹어서 남은 차이를 흡수한다.
 
 ::: {.key-concept}
 **잔차는 만능이 아니다**
 
 잔차 연결은 그래디언트를 살리지만 **활성화 폭발**이라는 새 문제를 만든다.
-$h_{l+1} = h_l + F(h_l)$ 에서 각 항의 분산이 독립적으로 더해지므로
-$\operatorname{Var}[h_L] \propto L$ 이다.
+$h_{l+1} = h_l + F(h_l)$ 에서 두 항의 분산이 더해지는데, 얼마나 빨리 커지는지는
+분기 $F$ 가 입력 스케일을 따라가느냐에 달렸다.
+
+- 분기 앞에 정규화가 있어 $\operatorname{Var}[F(h_l)]$ 이 일정하면 $\operatorname{Var}[h_L] \propto L$ — 선형 누적
+- 정규화 없는 ReLU 블록처럼 $\operatorname{Var}[F(h_l)] \approx \operatorname{Var}[h_l]$ 이면 층마다
+  약 2배 — 위 실험의 $\alpha=1$ 행이 보여준 **지수적** 폭발
+
+$\alpha = 1/\sqrt L$ 스케일링은 전자를 정확히 상쇄하고($L \cdot \tfrac1L = 1$), 후자는
+$(1+\tfrac1L)^L \to e$ 로 완화한다 — 표에서 $1/\sqrt L$ 행이 폭발 대신 완만한 증가로 바뀐 이유다.
 
 실전의 해법은 셋 중 하나(또는 조합)다.
 
@@ -518,19 +520,32 @@ for dep in depth_list:
     else:
         span, width = "없음", 0.0
     print(f"{dep:>6} {gains[k]:>11.3f} {arr[k]:>11.4f} {span:>24} {width:>10.1f}")
-print()
-print("깊어질수록 허용 범위가 좁아진다. 이것이 '깊은 망은 초기화에 예민하다'의 실체다.")
-print(f"(3층은 탐색한 배율 {gains[0]:.2f}~{gains[-1]:.2f} 전부에서 학습됐다 —")
-print(" 실제 허용 폭은 이 격자보다 넓다. 표의 값은 하한이다.)")
-for dep in depth_list:
-    arr = np.nan_to_num(np.array(results[dep], dtype=float), nan=9e9)
-    ok = np.where(arr < np.log(2))[0]
-    print(f"  {dep}층: 성공 배율 {len(ok)}/{len(gains)} 개")
+
+n_ok = {dep: int(np.sum(np.nan_to_num(np.array(results[dep], dtype=float), nan=9e9) < np.log(2)))
+        for dep in depth_list}
 ```
+
+깊어질수록 허용 범위가 좁아진다 — 성공한 배율이 3층 `{python} f"{n_ok[3]}"`개,
+8층 `{python} f"{n_ok[8]}"`개, 16층 `{python} f"{n_ok[16]}"`개(격자 `{python} f"{len(gains)}"`개 중)다.
+이것이 '깊은 망은 초기화에 예민하다'의 실체다.
+3층은 탐색한 배율 `{python} f"{gains[0]:.2f}"`~`{python} f"{gains[-1]:.2f}"` 의 대부분에서 학습되므로
+실제 허용 폭은 이 격자보다 넓고, 표의 폭은 하한이다.
 
 ---
 
 ## 실전 초기화 관례
+
+GPT 계열의 초기화 규약은 다음과 같다.
+
+| 파라미터 | 초기화 | 이유 |
+|---|---|---|
+| 임베딩 | $N(0, 0.02^2)$ | 어휘 크기와 무관하게 고정 |
+| 어텐션 Q, K, V | $N(0, 0.02^2)$ | |
+| 어텐션 출력 투영 | $N(0, 0.02^2)\,/\sqrt{2L}$ | 잔차 누적 상쇄 |
+| FFN 첫 층 | $N(0, 0.02^2)$ | |
+| FFN 출력 투영 | $N(0, 0.02^2)\,/\sqrt{2L}$ | 잔차 누적 상쇄 |
+| LayerNorm $\gamma, \beta$ | 1, 0 | 항등에서 시작 |
+| 모든 bias | 0 | |
 
 ```{python}
 #| label: llm-init-practice
@@ -538,36 +553,22 @@ for dep in depth_list:
 
 import numpy as np
 
-print("GPT 계열의 초기화 규약")
-print()
 d_model, n_layer = 768, 12
-rows = [
-    ("임베딩",              "N(0, 0.02²)",            "어휘 크기와 무관하게 고정"),
-    ("어텐션 Q,K,V",        "N(0, 0.02²)",            ""),
-    ("어텐션 출력 투영",      "N(0, 0.02²) / √(2L)",   "잔차 누적 상쇄"),
-    ("FFN 첫 층",           "N(0, 0.02²)",            ""),
-    ("FFN 출력 투영",        "N(0, 0.02²) / √(2L)",   "잔차 누적 상쇄"),
-    ("LayerNorm γ, β",     "1, 0",                   "항등에서 시작"),
-    ("모든 bias",           "0",                      ""),
-]
-print(f"{'파라미터':<20} {'초기화':<24} {'이유'}")
-print("-" * 68)
-for r in rows:
-    print(f"{r[0]:<20} {r[1]:<24} {r[2]}")
-print()
 he = np.sqrt(2/d_model)
 print(f"d_model={d_model}, L={n_layer} 일 때")
 print(f"  He 표준편차          : {he:.5f}")
 print(f"  GPT 관례 0.02        : {0.02:.5f}  (He 의 {0.02/he:.2f}배)")
 print(f"  출력 투영 0.02/√(2L) : {0.02/np.sqrt(2*n_layer):.5f}  "
       f"(He 의 {0.02/np.sqrt(2*n_layer)/he:.2f}배)")
-print()
-print(f"잔차 블록이 2L={2*n_layer} 개 더해지므로 분산이 {2*n_layer}배가 된다.")
-print(f"각 분기를 1/√(2L) = {1/np.sqrt(2*n_layer):.4f} 로 줄이면 정확히 상쇄된다.")
-print()
-print("주의: 0.02 는 d_model 에 의존하지 않는 **관례적 상수**다.")
-print("d_model 이 커지면 He 와 어긋난다 — 그래서 muP 같은 스케일링 규칙이 나왔다.")
 ```
+
+블록마다 어텐션과 FFN 두 분기가 있으므로 잔차 스트림에는 분기가 $2L$ = `{python} f"{2*n_layer}"`개
+더해진다. GPT-2 는 pre-LN 이라 각 분기의 출력 분산이 입력 스케일과 무관하게 일정하고,
+따라서 앞 절의 '선형 누적' 경우다 — 분산이 $2L$ 배가 되므로 각 분기의 출력 투영을
+$1/\sqrt{2L}$ = `{python} f"{1/np.sqrt(2*n_layer):.4f}"` 로 줄이면 정확히 상쇄된다.
+
+주의할 점은 0.02 가 $d_{\text{model}}$ 에 의존하지 않는 **관례적 상수**라는 것이다.
+$d_{\text{model}}$ 이 커지면 He 와 어긋난다 — 그래서 muP 같은 스케일링 규칙이 나왔다.
 
 ::: {.callout-warning}
 **초기화는 정규화·옵티마이저와 함께 봐야 한다**
@@ -586,17 +587,19 @@ print("d_model 이 커지면 He 와 어긋난다 — 그래서 muP 같은 스케
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① He와 Xavier를 바꿔 쓴다**
-`propagation-numbers` 에서 ReLU 망에 Xavier를 쓰면 층별 분산이 몇 배씩 줄어드는가?
-$1/2$ 씩 줄어드는 것이 보이는가? 30층이면 최종 분산은?
+**① 활성화를 바꾸면 정답도 바뀐다**
+`fig-activation-propagation` 의 활성화를 `tanh` 로 바꿔라. 이번에는 Xavier 가 유지되고
+He 가 커지는가? 30층 뒤 표준편차를 ReLU 의 표와 나란히 놓고 설명하라.
 
-**② 순전파와 역전파가 동시에 만족되는 경우**
-`backward-numbers` 에서 $n_{\text{in}} = n_{\text{out}}$ 인 망을 만들면
-두 조건이 같아진다. 실제로 양방향 분산이 모두 유지되는가?
+**② 순전파 조건과 역전파 조건이 갈라지는 경우**
+`fig-backward-variance` 의 망은 $n_{\text{in}} = n_{\text{out}}$ 이라 두 조건이 같다.
+너비를 96 → 48 → 96 → … 으로 번갈아 바꿔 두 조건을 갈라놓고, $\sqrt{2/n_{\text{in}}}$ ·
+$\sqrt{2/n_{\text{out}}}$ · Xavier 의 층별 $\|g\|$ 를 비교하라.
 
 **③ 잔차 분기를 0으로 초기화한다**
-`residual-numbers` 에서 마지막 층 가중치를 0으로 두면 초기 출력이 항등함수가 된다.
-학습 초반의 손실 곡선이 어떻게 달라지는가?
+`depth_probe` 의 단층 분기에서 $W$ 를 0으로 두면 그래디언트 비는 정확히 1 이 되지만
+그 $W$ 자신의 그래디언트도 0 이다 — 왜인가? 분기를 2층($W_2\,\text{ReLU}(W_1 h)$)으로 만들고
+$W_2$ 만 0 으로 두면 무엇이 달라지는가? 이것이 ReZero 와 GPT-2 방식의 차이다.
 :::
 
 ## 요약
@@ -607,9 +610,9 @@ $1/2$ 씩 줄어드는 것이 보이는가? 30층이면 최종 분산은?
 | 분산 유지 조건 | $n_{\text{in}}\sigma_w^2 = 1$ (선형) |
 | Xavier | $\sqrt{2/(n_{in}+n_{out})}$ — tanh 가정 |
 | He | $\sqrt{2/n_{in}}$ — ReLU의 절반 손실 보상 |
-| 배율 민감도 | 1.3배가 30층에서 수천 배 차이 |
+| 배율 민감도 | 1.3배가 30층에서 천 배 이상 차이 |
 | 잔차 연결 | sigmoid+Xavier를 되살림. 단 ReLU+He는 잔차 없이도 견딤 |
-| 잔차의 대가 | 활성화 분산이 $\propto L$ 로 누적 |
+| 잔차의 대가 | 활성화 분산이 누적 — 정규화 없으면 지수적, 있으면 $\propto L$ |
 | 분기 스케일링 | $1/\sqrt{2L}$ — GPT 계열의 표준 |
 | 깊이와 허용 범위 | 깊어질수록 초기화 허용 폭이 좁아짐 |
 
