@@ -49,10 +49,10 @@ def knn_predict(X_train, y_train, X_query, k=5, task="classify", weights="unifor
             out[:, c] = (w * (nn_y == c)).sum(1)
         return out / out.sum(1, keepdims=True)
     return (w * nn_y).sum(1) / w.sum(1)
-
-print("학습 시간: 0초 (데이터를 저장만 한다)")
-print("예측 시간: O(n × p) — 훈련 데이터가 클수록 느려진다")
 ```
+
+학습 시간은 0 이다 — 데이터를 저장만 한다. 대신 예측이 질의 하나당 $O(np)$ 라서
+훈련 데이터가 클수록 느려진다. 비용이 학습에서 예측으로 옮겨간 모델이다.
 
 ---
 
@@ -203,21 +203,22 @@ rng = np.random.default_rng(0)
 n = 2000
 
 print(f"[0,1]^d 에 {n}개 점, 질의점 하나까지의 거리\n")
+cv_by = {}
 print(f"{'d':>6}{'최소 거리':>11}{'최대 거리':>11}{'상대 차이':>11}{'변동계수':>11}")
 for d in [1, 2, 5, 20, 100, 1000]:
     X = rng.random((n, d))
     q = rng.random(d)
     dist = np.linalg.norm(X - q, axis=1)
     lo, hi = dist.min(), dist.max()
+    cv_by[d] = (float((hi-lo)/lo), float(dist.std()/dist.mean()))
     print(f"{d:>6}{lo:>11.3f}{hi:>11.3f}{(hi-lo)/lo:>11.3f}"
           f"{dist.std()/dist.mean():>11.4f}")
-
-print()
-print("d=1 에서는 최대가 최소보다 수천 배 멀지만, d=1000 이면 12% 차이에 그친다.")
-print("변동계수가 1/√d 로 줄어드는 것이 원인이다 —")
-print("d 가 1 → 1000 (1000배) 일 때 변동계수는 0.605 → 0.017 로 약 35배 줄었고,")
-print("√1000 ≈ 31.6 이 예측한 값과 거의 같다.")
 ```
+
+$d=1$ 에서는 최대 거리가 최소의 수천 배지만, $d=1000$ 이면 `{python} f"{cv_by[1000][0]:.0%}"` 차이에 그친다.
+변동계수가 $1/\sqrt{d}$ 로 줄어드는 것이 원인이다 — $d$ 가 1 에서 1000 으로 갈 때 변동계수는
+`{python} f"{cv_by[1][1]:.3f}"` 에서 `{python} f"{cv_by[1000][1]:.3f}"` 로 약 `{python} f"{cv_by[1][1]/cv_by[1000][1]:.0f}"`배 줄었고,
+$\sqrt{1000} \approx 31.6$ 이 예측한 값과 거의 같다.
 
 ::: {.key-concept}
 **고차원에서는 모든 점이 서로 비슷하게 멀다.**
@@ -249,7 +250,7 @@ print("√1000 ≈ 31.6 이 예측한 값과 거의 같다.")
 | PQ (곱 양자화) | 벡터를 코드로 압축 | 메모리 대폭 절감, 정확도 손실 |
 | HNSW | 계층적 근접 그래프 | **현재 표준**, 빠르고 정확 |
 
-이 기법들이 곧 벡터 데이터베이스의 내부다 — 7.10 RAG에서 다시 다룬다.
+이 기법들이 곧 벡터 데이터베이스의 내부다 — [7.10 RAG](../07_language/10_rag.qmd)에서 다시 다룬다.
 
 
 ---
@@ -350,7 +351,7 @@ fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines", showlegend=False,
 
 fig.update_layout(barmode="overlay")
 fig.update_xaxes(title_text="P(y=1) 예측", row=1, col=1)
-fig.update_yaxes(title_text="빈도", row=1, col=2 if False else 1)
+fig.update_yaxes(title_text="빈도", row=1, col=1)
 fig.update_xaxes(title_text="평균 예측 확률", row=1, col=2)
 fig.update_yaxes(title_text="실제 양성 비율", row=1, col=2)
 viz.fig_defaults(fig, height=400, title="상관된 특성 12개 (나이브 가정 위반)")
@@ -373,10 +374,11 @@ print(f"{'':<16} {'정확도':>10} {'확률이 0.01 미만 또는 0.99 초과인
 print("-" * 62)
 print(f"{'나이브 베이즈':<16} {acc_nb:>10.3f} {extreme_nb:>32.1%}")
 print(f"{'로지스틱 회귀':<16} {acc_lr:>10.3f} {extreme_lr:>32.1%}")
-print()
-print("→ 정확도는 비슷한데 나이브 베이즈의 확률은 극단으로 몰려 있다.")
-print("  독립 가정 때문에 증거를 중복 계산하기 때문이다.")
 ```
+
+정확도는 비슷한데(`{python} f"{acc_nb:.3f}"` 대 `{python} f"{acc_lr:.3f}"`)
+나이브 베이즈의 확률은 `{python} f"{extreme_nb:.0%}"` 가 극단(0.01 미만 또는 0.99 초과)으로 몰려 있다.
+독립 가정 때문에 같은 증거를 중복 계산하기 때문이다.
 
 ::: {.interaction-hint}
 왼쪽에서 주황(나이브 베이즈)이 **0과 1 양끝에 쌓여 있습니다**. 오른쪽 신뢰도 다이어그램에서도 대각선에서 크게 벗어납니다 — 과신입니다. 상관된 특성 12개가 사실상 같은 증거를 12번 세기 때문입니다.
@@ -395,8 +397,8 @@ print("  독립 가정 때문에 증거를 중복 계산하기 때문이다.")
 
 $$p(x_j|y) = \frac{n_{jy} + \alpha}{n_y + \alpha V}$$
 
-$\alpha=1$ 이 관례이고, 이것은 [0.2의 베타 사전분포](../00_foundations/02_probability.qmd)를
-쓴 MAP 추정과 정확히 같다.
+$\alpha=1$ 이 관례이고, 이것은 디리클레 사전분포([0.2의 베타 사전분포](../00_foundations/02_probability.qmd)를
+$V$ 개 범주로 확장한 것)를 쓴 MAP 추정과 정확히 같다.
 
 ::: {.callout-note}
 ## 나이브 베이즈가 텍스트에서 강한 이유
