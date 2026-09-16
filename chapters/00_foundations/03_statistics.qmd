@@ -274,10 +274,16 @@ p-값은 그 정보를 버리고 하나의 숫자로 뭉쳤기 때문이다.
 
 ## G0.3.2 — 오류, 검정력, 효과 크기
 
-검정은 두 가지로 틀릴 수 있다. 효과가 없는데 있다고 하는 것이 **1종 오류**(확률 $\alpha$),
-효과가 있는데 놓치는 것이 **2종 오류**(확률 $\beta$)다.
-**검정력(power)은 효과가 실제로 있을 때 검정이 그것을 잡아낼 확률, 즉 $1-\beta$ 다.**
-관례로 0.8 이상을 요구한다 — 실제 효과를 다섯 번 중 네 번은 검출해야 한다는 뜻이다.
+검정은 두 가지로 틀릴 수 있다. 용어를 먼저 정리한다.
+
+- **1종 오류(Type I error, false positive)** — 효과가 없는데($H_0$ 참) 있다고 기각하는 것.
+  그 확률이 유의수준 $\alpha$ 다. 이 장에서 **false positive** 라고 쓰면 이것을 뜻한다.
+- **2종 오류(Type II error, false negative)** — 효과가 있는데($H_1$ 참) 놓치는 것. 그 확률이 $\beta$ 다.
+- **검정력(power)** — 효과가 실제로 있을 때 검정이 그것을 잡아낼 확률, 즉 $1-\beta$ 다.
+  관례로 0.8 이상을 요구한다 — 실제 효과를 다섯 번 중 네 번은 검출해야 한다는 뜻이다.
+- **효과 크기(effect size)** — 효과가 "있다/없다"가 아니라 **얼마나 큰가**를 표준편차 단위로 잰 것.
+  두 군 평균의 차이라면 $d = (\mu_A - \mu_B)/\sigma$ (Cohen's $d$)다. 단위가 없어 실험끼리 비교할 수 있고,
+  아래 그림의 슬라이더가 움직이는 값이 바로 이것이다.
 
 두 분포의 겹침으로 모든 것이 설명된다. 아래 그림에서 파란 분포는 $H_0$(효과 없음)가 참일 때
 검정통계량의 분포, 주황 분포는 효과가 실제로 있을 때의 분포다.
@@ -314,12 +320,12 @@ fig.add_trace(go.Scatter(x=x, y=h1_0, mode="lines", name="H₁ (효과 있음)",
 mask_a = x >= crit
 fig.add_trace(go.Scatter(x=x[mask_a], y=h0_0[mask_a], fill="tozeroy",
                          fillcolor=viz.hex_rgba(viz.ACCENT, 0.45),
-                         mode="none", name="α — 1종 오류 (거짓 양성)"))
+                         mode="none", name="α — 1종 오류 (false positive)"))
 # β 영역 (2종 오류)
 mask_b = x < crit
 fig.add_trace(go.Scatter(x=x[mask_b], y=h1_0[mask_b], fill="tozeroy",
                          fillcolor=viz.hex_rgba(viz.WARM, 0.35),
-                         mode="none", name="β — 2종 오류 (거짓 음성)"))
+                         mode="none", name="β — 2종 오류 (false negative)"))
 fig.add_vline(x=crit, line=dict(color=viz.YELLOW, dash="dash", width=2),
               annotation_text="임계값")
 
@@ -442,16 +448,19 @@ $m=20$, $\alpha=0.05$ 면 $1-0.95^{20}\approx 0.64$ — 효과가 하나도 없�
 ### Bonferroni는 합집합 상한 한 줄이다
 
 독립을 가정할 수 없을 때도 쓸 수 있는 보정이 있다.
-$A_i$ 를 "$i$ 번째 검정이 거짓 양성"이라는 사건이라 하면, 우리가 통제하려는 것은
+$A_i$ 를 "$i$ 번째 검정이 false positive"라는 사건이라 하면, 우리가 통제하려는 것은
+**FWER(family-wise error rate, 집단별 오류율)** —
 
 $$\text{FWER} = P\Big(\bigcup_{i=1}^{m} A_i\Big)
-\qquad \text{(하나라도 거짓 양성일 확률)}$$
+\qquad \text{(} m \text{개 검정 중 하나라도 false positive 일 확률)}$$
 
 여기에 합집합 상한(Boole 부등식)을 쓰면 끝이다.
 
 $$P\Big(\bigcup_i A_i\Big) \;\le\; \sum_{i=1}^{m} P(A_i) = m\alpha$$
 
-그러니 각 검정을 $\alpha/m$ 에서 하면 $\text{FWER} \le \alpha$ 가 보장된다.
+그러니 검정 하나하나의 유의수준을 $\alpha$ 대신 $\alpha/m$ 으로 낮춰 잡으면 —
+즉 $p < 0.05$ 가 아니라 $p < 0.05/m$ 일 때만 기각하면 — 각 $P(A_i) \le \alpha/m$ 이 되어
+합이 $\alpha$ 를 넘지 않고, $\text{FWER} \le \alpha$ 가 보장된다.
 **분포도 독립성도 전혀 가정하지 않았다** — 검정들이 서로 강하게 상관되어 있어도 성립한다.
 
 그 대가가 보수성이다. 상한은 검정들이 서로 배반일 때만 등호이므로,
@@ -461,11 +470,12 @@ $$P\Big(\bigcup_i A_i\Big) \;\le\; \sum_{i=1}^{m} P(A_i) = m\alpha$$
 
 $m$ 이 수천, 수만이면 Bonferroni는 사실상 아무것도 발견하지 못한다.
 그런데 탐색적 분석에서 원하는 것은 "하나도 틀리지 않기"가 아닐 때가 많다.
+그래서 다른 기준을 둔다 — **FDR(false discovery rate, 거짓 발견율)**: 기각한 것(발견) 중 false positive 의 기대 비율이다.
 
 | 기준 | 통제 대상 | 어울리는 상황 |
 |---|---|---|
-| **FWER** | 거짓 양성이 **하나라도** 있을 확률 | 확증적 연구, 임상시험, 최종 의사결정 |
-| **FDR** | 발견한 것 **중** 거짓의 비율 | 탐색적 분석, 특성 선택, 대규모 스크리닝 |
+| **FWER** (family-wise error rate) | false positive 가 **하나라도** 있을 확률 | 확증적 연구, 임상시험, 최종 의사결정 |
+| **FDR** (false discovery rate) | 발견한 것 **중** false positive 의 비율 | 탐색적 분석, 특성 선택, 대규모 스크리닝 |
 
 FDR은 "발견 100개 중 5개쯤 틀려도 괜찮다, 대신 놓치지 말자"는 태도다.
 이를 통제하는 **Benjamini-Hochberg** 절차는 정렬 한 번이면 끝난다.
@@ -518,7 +528,7 @@ print("BH: 거짓 비율을 5% 아래로 누르면서 진짜의 대부분을 건
 ```
 
 ::: {.key-concept}
-머신러닝에서 이 문제는 **하이퍼파라미터 탐색**의 얼굴로 나타난다.
+머신러닝에서는 이 다중비교 문제가 **하이퍼파라미터 탐색**이라는 형태로 나타난다.
 설정 200개를 검증셋에서 비교하고 가장 좋은 것을 고르면,
 그 성능에는 "200번 중 가장 운이 좋았던 정도"가 섞여 들어간다.
 검증 성능이 시험 성능보다 낙관적인 이유가 바로 이 운이고,
@@ -568,7 +578,7 @@ fig.add_trace(go.Histogram(x=false_pos, nbinsx=int(false_pos.max()) + 1,
 
 fig.update_xaxes(title_text="검정 횟수 m", row=1, col=1)
 fig.update_yaxes(title_text="확률 (%)", row=1, col=1)
-fig.update_xaxes(title_text="거짓 양성 개수", row=1, col=2)
+fig.update_xaxes(title_text="false positive 개수", row=1, col=2)
 fig.update_yaxes(title_text="빈도", row=1, col=2)
 viz.fig_defaults(fig, height=400, title="다중비교 문제")
 fig.update_layout(legend=dict(x=0.02, y=0.98))
@@ -580,7 +590,7 @@ fig.show()
 #| code-fold: false
 
 print(f"효과가 전혀 없는 데이터로 {M_TESTS}회 검정 × {N_SIM}회 시뮬레이션")
-print(f"  거짓 양성 평균     : {false_pos.mean():.2f}개  (기댓값 {M_TESTS*ALPHA:.1f})")
+print(f"  false positive 평균: {false_pos.mean():.2f}개  (기댓값 {M_TESTS*ALPHA:.1f})")
 print(f"  하나 이상 나온 비율 : {(false_pos > 0).mean()*100:.1f}%  "
       f"(이론 {(1-(1-ALPHA)**M_TESTS)*100:.1f}%)")
 print()
@@ -742,7 +752,7 @@ $$\big[\,2\hat\theta - \hat\theta^*_{(97.5\%)},\;\; 2\hat\theta - \hat\theta^*_{
 
 $k$-겹 CV의 $k$개 점수를 그냥 t-검정에 넣으면 안 된다.
 폴드들이 훈련 데이터를 공유하므로 양의 상관이 있고,
-그 결과 **분산이 과소추정되어 거짓 양성이 늘어난다.**
+그 결과 **분산이 과소추정되어 false positive 가 늘어난다.**
 
 대안:
 - 반복 CV + 교정된 t-검정(Nadeau-Bengio)
@@ -768,7 +778,7 @@ $k$-겹 CV의 $k$개 점수를 그냥 t-검정에 넣으면 안 된다.
 - 부분집단을 여러 개 나눠보고 하나가 걸리면 그걸 보고한다
 - 가설을 결과에 맞춰 사후에 수정한다 (HARKing)
 
-각각은 사소해 보이지만 결합하면 거짓 양성률이 60%를 넘길 수 있다.
+각각은 사소해 보이지만 결합하면 false positive 율이 60%를 넘길 수 있다.
 :::
 
 방어책은 단순하다.
