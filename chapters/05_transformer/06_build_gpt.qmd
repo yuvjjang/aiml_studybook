@@ -457,7 +457,7 @@ for temp in [0.4, 0.8, 1.2]:
     print(f"T={temp}:  {txt!r}")
 ```
 
-문자 수준 모델이 `{python} f"{model.n_params()/1e3:.0f}"`천 파라미터로 `{python} f"{train_time:.0f}"`초
+문자 수준 모델이 `{python} f"{model.n_params()/1e4:.0f}"`만 파라미터로 `{python} f"{train_time:.0f}"`초
 학습한 결과다.
 문법적으로 맞는 문장은 아니지만 — **공백 위치, 흔한 단어 조각, 문자 조합 규칙**을 배웠다.
 이것이 다음 토큰 예측만으로 얻어진다는 점이 요점이다.
