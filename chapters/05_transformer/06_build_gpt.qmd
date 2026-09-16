@@ -178,11 +178,12 @@ idx, tgt = data[:BLOCK], data[1:BLOCK + 1]
 print(f"파라미터 {model.n_params():,}개")
 print(f"로짓 shape {model.forward(idx).shape}   (T, V)")
 print()
-print(f"초기 손실       {model.loss(idx, tgt):.4f}")
+init_loss = float(model.loss(idx, tgt))
+print(f"초기 손실       {init_loss:.4f}")
 print(f"균등 예측이면    {np.log(V):.4f}   (= log V)")
-print()
-print("→ 두 값이 비슷해야 정상이다. 크게 다르면 초기화나 구현에 버그가 있다.")
 ```
+
+두 값이 비슷해야 정상이다. 크게 다르면 초기화나 구현에 버그가 있다.
 
 ::: {.key-concept}
 **초기 손실 $\approx \log V$ 는 가장 값싼 sanity check다.**
@@ -321,7 +322,7 @@ print(f"  최대   {worst:.2e}   →  {'통과' if worst < 1e-4 else '실패'}")
 ```
 
 ::: {.key-concept}
-상대오차가 $10^{-6}$ 수준이면 유도가 맞다.
+여기서 최대 상대오차는 `{python} f"{worst:.1e}"` 다. $10^{-6}$ 수준이면 유도가 맞다.
 $10^{-2}$ 이상이면 어딘가 틀렸다 — 대개 전치를 빠뜨렸거나 축을 잘못 잡은 것이다.
 
 $\epsilon$ 을 너무 작게 잡으면(예: $10^{-10}$) 부동소수점 소거 때문에 오히려 부정확해진다
@@ -456,13 +457,14 @@ for temp in [0.4, 0.8, 1.2]:
     print(f"T={temp}:  {txt!r}")
 ```
 
-문자 수준 모델이 15만 파라미터로 몇 초 학습한 결과다.
+문자 수준 모델이 `{python} f"{model.n_params()/1e3:.0f}"`천 파라미터로 `{python} f"{train_time:.0f}"`초
+학습한 결과다.
 문법적으로 맞는 문장은 아니지만 — **공백 위치, 흔한 단어 조각, 문자 조합 규칙**을 배웠다.
 이것이 다음 토큰 예측만으로 얻어진다는 점이 요점이다.
 
 ```{python}
 #| label: fig-generation
-#| fig-cap: "생성 각 스텝의 확률분포. 모델이 무엇을 후보로 두는지 보여줍니다."
+#| fig-cap: "생성 각 스텝의 확률분포 — 모델이 후보로 두는 것"
 
 import numpy as np
 import plotly.graph_objects as go
@@ -582,6 +584,7 @@ print()
 print(f"출력이 완전히 동일한가: {a == b}")
 print(f"시간   무캐시 {t_plain*1000:.0f}ms   캐시 {t_cache*1000:.0f}ms   "
       f"({t_plain/t_cache:.1f}배 빠름)")
+cache_speedup = t_plain / t_cache
 ```
 
 ::: {.key-concept}
@@ -685,10 +688,10 @@ optimizer.step()         # ← 5절의 AdamW 갱신
 |---------|-----------|
 | 문자 토크나이저 + 시프트 데이터 | — |
 | pre-LN decoder-only 3층 | 초기 손실 $\approx \log V$ |
-| 손으로 유도한 역전파 | **수치 미분과 상대오차 $10^{-6}$** |
+| 손으로 유도한 역전파 | **수치 미분과 상대오차 `{python} f"{worst:.0e}"`** |
 | AdamW + warmup/cosine + 클리핑 | 손실 감소, 클리핑 실제 작동 |
 | 온도·top-k 생성 | 온도에 따른 출력 변화 |
-| KV 캐시 | **출력 동일 + 수 배 가속** |
+| KV 캐시 | **출력 동일 + `{python} f"{cache_speedup:.1f}"`배 가속** (문맥 64 기준) |
 
 | 얻어가야 할 것 | |
 |---|---|
