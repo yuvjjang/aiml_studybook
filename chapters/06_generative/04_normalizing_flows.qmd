@@ -83,8 +83,6 @@ import numpy as np
 from src.generative import RealNVP, ring_modes
 from src import datasets
 
-print("구현 검증 — src/generative.py 의 RealNVP")
-print()
 r = np.random.default_rng(0)
 Xc = r.normal(size=(40, 2))*0.8
 fchk = RealNVP(2, n_layers=4, hidden=16, seed=1)
@@ -107,12 +105,13 @@ for k in Pc:
         worst = max(worst, abs(num - ana)/(abs(num) + abs(ana) + 1e-12))
 
 zc, _, _ = fchk.forward(Xc)
+inv_err = float(np.abs(fchk.inverse(zc) - Xc).max())
 print(f"  그래디언트 상대오차   {worst:.2e}")
-print(f"  역변환 오차 max|f⁻¹(f(x)) − x|   {np.abs(fchk.inverse(zc) - Xc).max():.2e}")
-print()
-print("**역변환 오차가 기계 정밀도다.** 근사가 아니라 정확한 역함수다.")
-print("VAE 의 인코더-디코더는 이런 보장이 없다 — 재구성 오차가 항상 남는다.")
+print(f"  역변환 오차 max|f⁻¹(f(x)) − x|   {inv_err:.2e}")
 ```
+
+`src/generative.py` 의 RealNVP 를 검증한 것이다. **역변환 오차 `{python} f"{inv_err:.0e}"` 는 기계 정밀도다.**
+근사가 아니라 정확한 역함수다. VAE 의 인코더-디코더는 이런 보장이 없다 — 재구성 오차가 항상 남는다.
 
 ---
 
@@ -126,11 +125,10 @@ print("VAE 의 인코더-디코더는 이런 보장이 없다 — 재구성 오�
 
 import numpy as np
 
-print("모델의 log p(x)  vs  수치 야코비안으로 직접 계산한 값")
-print()
 print(f"{'점':>20} {'모델 log p(x)':>16} {'수치 야코비안':>16} {'상대 차이':>12}")
 print("-" * 68)
 eps_j = 1e-5
+cov_worst = 0.0
 for x0 in r.normal(size=(6, 2)):
     lp_model = float(fchk.log_prob(x0[None])[0])
     J = np.zeros((2, 2))
@@ -141,11 +139,13 @@ for x0 in r.normal(size=(6, 2)):
     z0 = fchk.forward(x0[None])[0][0]
     lp_num = (-0.5*(z0**2).sum() - np.log(2*np.pi)
               + np.log(abs(np.linalg.det(J))))
+    cov_worst = max(cov_worst, abs(lp_model-lp_num)/abs(lp_num))
     print(f"{str(np.round(x0, 2)):>20} {lp_model:>16.6f} {lp_num:>16.6f} "
           f"{abs(lp_model-lp_num)/abs(lp_num):>12.2e}")
-print()
-print("**공식이 성립한다.** 흐름의 log|det J| = Σs 는 진짜 야코비안 행렬식이다.")
 ```
+
+모델의 $\log p(x)$ 와 수치 야코비안으로 직접 계산한 값의 상대 차이가 최대 `{python} f"{cov_worst:.0e}"` 다.
+**공식이 성립한다.** 흐름의 $\log|\det J| = \sum s$ 는 진짜 야코비안 행렬식이다.
 
 ---
 
@@ -187,29 +187,27 @@ for L, npar, tr, te, ie in DEP:
 print("-" * 58)
 gauss_nll = float(-((-0.5*(X_te**2).sum(1) - np.log(2*np.pi))).mean())
 print(f"{'N(0,I)':>6} {0:>10,} {'':>11} {gauss_nll:>12.4f}")
-print()
-print(f"**깊이를 늘릴수록 테스트 NLL 이 단조 감소한다** "
-      f"({DEP[0][3]:.3f} → {DEP[-1][3]:.3f}).")
-print(f"기준선인 표준정규는 {gauss_nll:.3f} 이니, 1층만으로도 이미 데이터를 배운다.")
-print(f"과적합도 없다 — 훈련·테스트 간극이 "
-      f"{DEP[-1][3]-DEP[-1][2]:.3f} 로 작다.")
-print(f"역변환 오차는 층을 16개 쌓아도 {DEP[-1][4]:.0e} 다.")
-print()
 
 # 밀도가 정규화되어 있는가 — 격자 적분
 gg = np.linspace(-8, 8, 500)
 GX, GY = np.meshgrid(gg, gg)
 lp_grid = FLOWS[8].log_prob(np.stack([GX.ravel(), GY.ravel()], 1))
 Z_int = float(np.exp(lp_grid).sum()*(gg[1]-gg[0])**2)
-print(f"**8층 모델의 밀도를 격자로 적분하면 ∫p(x)dx = {Z_int:.6f} 다.**")
-print("정규화 상수를 따로 계산하지 않았는데도 1 이 나온다 —")
-print("변수 변환 공식이 정규화를 **자동으로 보장**하기 때문이다.")
-print("에너지 기반 모델(EBM)이 못 하는 일이 바로 이것이다.")
+print(f"8층 모델 밀도의 격자 적분 ∫p(x)dx = {Z_int:.6f}")
+gen_gap = DEP[-1][3] - DEP[-1][2]
 ```
+
+**깊이를 늘릴수록 테스트 NLL 이 단조 감소한다** (`{python} f"{DEP[0][3]:.3f}"` → `{python} f"{DEP[-1][3]:.3f}"`).
+기준선인 표준정규는 `{python} f"{gauss_nll:.3f}"` 이니, 1층만으로도 이미 데이터를 배운다. 훈련·테스트
+간극은 `{python} f"{gen_gap:.3f}"` 로 심한 과적합은 없고, 역변환 오차는 층을 16개 쌓아도 `{python} f"{DEP[-1][4]:.0e}"` 다.
+
+**8층 모델의 밀도를 격자로 적분하면 `{python} f"{Z_int:.4f}"` 다.** 정규화 상수를 따로 계산하지 않았는데도
+1 이 나온다 — 변수 변환 공식이 정규화를 **자동으로 보장**하기 때문이다. 에너지 기반 모델(EBM)이
+못 하는 일이 바로 이것이다.
 
 ```{python}
 #| label: fig-flow-depth
-#| fig-cap: "층을 쌓을수록 가우스가 데이터 분포로 변형됩니다"
+#| fig-cap: "층을 쌓을수록 데이터 분포로 변형되는 가우스"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -288,8 +286,6 @@ import numpy as np
 fl8 = FLOWS[8]
 z_all, ld_all, _ = fl8.forward(X_tr)
 
-print("학습된 8층 흐름의 분해:  log p(x) = log N(z; 0, I) + log|det J|")
-print()
 print(f"{'':<28} {'평균':>10} {'표준편차':>10} {'최솟값':>10} {'최댓값':>10}")
 print("-" * 72)
 lp_z = -0.5*(z_all**2).sum(1) - np.log(2*np.pi)
@@ -299,18 +295,18 @@ for nm, v in [("log N(z; 0, I)  (사전분포)", lp_z),
     print(f"{nm:<28} {v.mean():>10.4f} {v.std():>10.4f} {v.min():>10.4f} "
           f"{v.max():>10.4f}")
 print()
-print(f"**부피 보정항이 사전분포 항과 맞먹는 크기다** "
-      f"(표준편차 {ld_all.std():.2f} vs {lp_z.std():.2f}).")
-print("흐름이 하는 일의 절반은 '어디를 얼마나 늘리고 줄일지' 정하는 것이다.")
-print()
-print("z 가 정말 표준정규가 되었는가 — 흐름의 목표는 이것이다")
-print(f"  z 의 평균  {np.round(z_all.mean(0), 4)}   (목표 [0, 0])")
+print("z 가 표준정규가 되었는가")
+print(f"  z 의 평균     {np.round(z_all.mean(0), 4)}   (목표 [0, 0])")
 print(f"  z 의 표준편차 {np.round(z_all.std(0), 4)}   (목표 [1, 1])")
 print(f"  z 의 상관계수 {np.corrcoef(z_all.T)[0, 1]:>7.4f}   (목표 0)")
-print()
-print("**'정규화 흐름(normalizing flow)'이라는 이름이 여기서 나왔다** —")
-print("데이터를 정규분포로 흘려보내는(flow) 변환이라는 뜻이다.")
+sd_ld, sd_lpz = float(ld_all.std()), float(lp_z.std())
 ```
+
+학습된 8층 흐름을 $\log p(x) = \log \mathcal{N}(z; 0, I) + \log|\det J|$ 로 분해한 것이다.
+**부피 보정항이 사전분포 항과 맞먹는 크기다** (표준편차 `{python} f"{sd_ld:.2f}"` vs `{python} f"{sd_lpz:.2f}"`).
+흐름이 하는 일의 절반은 '어디를 얼마나 늘리고 줄일지' 정하는 것이다. 그리고 $z$ 는 평균 0,
+표준편차 1, 상관 0 에 근접한다 — **'정규화 흐름(normalizing flow)'이라는 이름이 여기서 나왔다.**
+데이터를 정규분포로 흘려보내는(flow) 변환이라는 뜻이다.
 
 ```{python}
 #| label: fig-jacobian
@@ -392,8 +388,6 @@ CEN = ring_modes(8, 3.0)
 rr = np.random.default_rng(3)
 X_ring = CEN[rr.integers(0, 8, 3000)] + rr.normal(0, 0.2, (3000, 2))
 
-print("데이터: 반지름 3 의 원 위에 놓인 8개 모드 (σ=0.2, 서로 완전히 분리)")
-print()
 print(f"{'층 수':>6} {'파라미터':>10} {'NLL':>9} {'모드 근처':>10} "
       f"{'모드 사이 (다리)':>16}")
 print("-" * 56)
@@ -414,22 +408,11 @@ near_real = ((S_real[:, None, :] - CEN[None])**2).sum(-1).min(1) < 0.8**2
 print("-" * 56)
 print(f"{'실제 데이터':>6} {'':>10} {'':>9} {near_real.mean():>10.1%} "
       f"{1-near_real.mean():>16.1%}")
-print()
 lo, hi = min(t[4] for t in TOPO), max(t[4] for t in TOPO)
-print(f"**깊이를 {TOPO[0][0]} → {TOPO[-1][0]} 으로 5배 늘려도 다리 위 질량은 "
-      f"{lo:.1%}~{hi:.1%} 사이를 맴돈다.**")
-print(f"단조로 줄지도 않고 ({' → '.join(f'{t[4]:.1%}' for t in TOPO)}),")
-print(f"실제 데이터의 {1-near_real.mean():.1%} 로 가까워지지도 않는다.")
-print("파라미터를 4배 늘려도 나아지지 않는다면 용량 문제가 아니다.")
+bridge_txt = " → ".join(f"{t[4]:.1%}" for t in TOPO)
+par_ratio = TOPO[-1][1] / TOPO[0][1]
 print()
-print("**왜 0 이 될 수 없는지는 증명할 수 있다.**")
-print()
-print("   log p(x) = log N(f(x); 0, I) + log|det J(x)|")
-print()
-print("유한한 x 에서 f(x) 도 유한하고 log|det J| = Σs 도 유한하다 (s 는 tanh 로 묶여 있다).")
-print("따라서 **모든 유한한 x 에서 p(x) > 0 이다.** 0 을 배정할 방법이 아예 없다.")
-print()
-print("링 위·링 안쪽 네 지점에서 모델 밀도와 참 밀도를 비교한다:")
+print("링 위·링 안쪽 네 지점의 모델 밀도 vs 참 밀도")
 probe_pts = np.stack([CEN[0], (CEN[0] + CEN[1])/2,
                       1.5*CEN[0]/np.linalg.norm(CEN[0]),
                       np.array([0.0, 0.0])])
@@ -449,31 +432,41 @@ def true_logp(pt):
 for lb, pt, lpv in zip(labels, probe_pts, lp_probe):
     tl = true_logp(pt)
     print(f"  {lb:<20} {lpv:>13.2f} {tl:>12.1f} {np.exp(lpv - tl):>14.1e}")
-print()
-print("**원점을 보라.** 링의 한가운데는 데이터가 절대 오지 않는 곳이고,")
-print(f"참 밀도는 log p = {true_logp(probe_pts[3]):.0f} — 사실상 0 이다.")
-print(f"그런데 흐름은 거기에 log p = {lp_probe[3]:.1f} 를 배정한다.")
-print(f"**{np.exp(lp_probe[3] - true_logp(probe_pts[3])):.0e} 배 과잉이다.**")
-print()
-print(f"반지름 1.5 지점도 {np.exp(lp_probe[2]-true_logp(probe_pts[2])):.0e} 배 과잉이다.")
-print("반면 모드 중심과 인접 모드 중점에서는 참 밀도를 잘 맞힌다 —")
-print("**틀리는 곳이 정확히 '데이터가 없어야 하는 안쪽'이다.**")
-print("**흐름은 링을 재현하면서 가운데 구멍을 메우지 못한다** —")
-print("구멍이 있는 도넛(위상적으로 S¹×R)은 원판(R²)의 연속 변형으로 만들 수 없다.")
-print()
-print("**다른 계열은 이 제약이 없다:**")
-print("  · VAE  — 디코더가 가역일 필요가 없어 여러 z 를 같은 x 로 보낼 수 있다")
-print("  · GAN  — 생성자도 마찬가지 (6.3 에서 8/8 모드를 끊어서 덮었다)")
-print("  · 확산 — 매 단계 **잡음을 새로 더한다.** 결정론적 사상이 아니다")
-print()
-print("확률 흐름 ODE([6.6](06_score_sde.qmd))는 확산을 결정론적 사상으로 다시 쓰는데,")
-print("그러면 같은 위상 제약이 돌아온다. 다만 그 사상은 **시간에 따라 변하는**")
-print("속도장의 적분이라 결합 층보다 훨씬 유연하다 — 다리를 극단적으로 가늘게 만든다.")
+true_origin, model_origin = true_logp(probe_pts[3]), float(lp_probe[3])
+excess_origin = float(np.exp(lp_probe[3] - true_origin))
+excess_r15 = float(np.exp(lp_probe[2] - true_logp(probe_pts[2])))
 ```
+
+데이터는 반지름 3 의 원 위에 놓인 8개 모드($\sigma=0.2$, 서로 완전히 분리)다.
+**깊이를 `{python} f"{TOPO[0][0]}"` → `{python} f"{TOPO[-1][0]}"` 으로 늘려도 다리 위 질량은
+`{python} f"{lo:.1%}"`~`{python} f"{hi:.1%}"` 사이를 맴돈다.** 단조로 줄지도 않고 (`{python} bridge_txt`), 실제 데이터의
+`{python} f"{1-near_real.mean():.1%}"` 로 가까워지지도 않는다. 파라미터를 `{python} f"{par_ratio:.0f}"`배 늘려도
+나아지지 않는다면 용량 문제가 아니다.
+
+**왜 0 이 될 수 없는지는 증명할 수 있다.**
+
+$$\log p(x) = \log \mathcal{N}(f(x); 0, I) + \log|\det J(x)|$$
+
+유한한 $x$ 에서 $f(x)$ 도 유한하고 $\log|\det J| = \sum s$ 도 유한하다($s$ 는 tanh 로 묶여 있다).
+따라서 **모든 유한한 $x$ 에서 $p(x) > 0$ 이다.** 0 을 배정할 방법이 아예 없다.
+
+**원점을 보라.** 링의 한가운데는 데이터가 절대 오지 않는 곳이고, 참 밀도는 $\log p$ =
+`{python} f"{true_origin:.0f}"` — 사실상 0 이다. 그런데 흐름은 거기에 $\log p$ = `{python} f"{model_origin:.1f}"` 를
+배정한다. **`{python} f"{excess_origin:.0e}"` 배 과잉이다.** 반지름 1.5 지점도 `{python} f"{excess_r15:.0e}"` 배 과잉이다.
+반면 모드 중심에서는 참 밀도를 거의 맞히고 인접 모드 중점에서도 자릿수 수준으로 맞힌다 —
+**틀리는 곳이 정확히 '데이터가 없어야 하는 안쪽'이다.** 흐름은 링을 재현하면서 가운데 구멍을
+메우지 못한다 — 구멍이 있는 도넛(위상적으로 $S^1 \times \mathbb{R}$)은 원판($\mathbb{R}^2$)의 연속 변형으로
+만들 수 없다.
+
+**다른 계열은 이 제약이 없다.** VAE 는 디코더가 가역일 필요가 없어 여러 $z$ 를 같은 $x$ 로 보낼 수
+있고, GAN 의 생성자도 마찬가지다([6.3](03_gan.qmd)에서 8/8 모드를 끊어서 덮었다). 확산은 매 단계
+**잡음을 새로 더한다** — 결정론적 사상이 아니다. 확률 흐름 ODE([6.6](06_score_sde.qmd))는 확산을
+결정론적 사상으로 다시 쓰는데, 그러면 같은 위상 제약이 돌아온다. 다만 그 사상은 **시간에 따라
+변하는** 속도장의 적분이라 결합 층보다 훨씬 유연하다 — 다리를 극단적으로 가늘게 만든다.
 
 ```{python}
 #| label: fig-topology
-#| fig-cap: "가우스에서 8개 모드로 — 흐름은 다리를 끊지 못합니다"
+#| fig-cap: "가우스에서 8개 모드로 — 다리를 끊지 못하는 흐름"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -584,8 +577,11 @@ IAF는 조건을 z_<i로 바꿔 방향을 뒤집는다.
 확산과 만나 **flow matching** 이 되었다 (6.8).
 SD3, Flux 같은 최신 대형 모델이 그 방식으로 학습된다.
 
-CNF의 형태:
-dx/dt = v_θ(x, t),   log p 변화 = −∫ tr(∂v/∂x) dt
+CNF 의 형태는 이렇다.
+
+$$\frac{dx}{dt} = v_\theta(x, t), \qquad
+\log p(x_1) = \log p(x_0) - \int_0^1 \operatorname{tr}\!\left(\frac{\partial v_\theta}{\partial x}\right) dt$$
+
 **행렬식이 아니라 대각합(trace)이다** — 가역 구조를 설계할 필요가 없다.
 이 한 줄이 결합 층의 모든 제약을 없앤다.
 대가는 매 평가마다 ODE를 풀어야 한다는 것이었고,
@@ -597,17 +593,18 @@ flow matching이 그 대가마저 없앤다 (시뮬레이션 없는 학습).
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 변수 변환 공식을 수치로 검증한다**
-`change-of-var` 에서 표본을 히스토그램으로 그리고 공식이 예측한 밀도와 겹쳐라.
-야코비안 항을 빼면 얼마나 어긋나는가?
+**① 야코비안 항을 빼면 무엇이 어긋나는가**
+`FLOWS[8]` 의 샘플 히스토그램(2D)을 모델 밀도 $\exp(\log p)$ 와 겹쳐 그려라. 그 다음 $\log|\det J|$
+항을 빼고 $\log \mathcal{N}(f(x))$ 만으로 밀도를 그리면 어디가 어긋나는가? 격자 적분이 1 에서 얼마나
+벗어나는가?
 
-**② 위상 장벽을 만난다**
-`topology` 에서 단봉 기저분포로 링(annulus) 분포를 학습시켜라.
-중심을 지나는 얇은 다리가 남는가? 왜 없앨 수 없는가?
+**② 기저분포로 위상 장벽을 푼다**
+`RealNVP` 의 기저분포를 표준정규 대신 8개 모드 혼합 가우스로 바꿔(log_prob 와 sample 을 수정)
+링 데이터를 다시 학습시켜라. 다리 위 질량이 0 에 가까워지는가? 왜 위상 제약이 풀리는지 설명하라.
 
-**③ 깊이와 표현력**
-`depth` 의 결합 층 수를 2·8·32로 늘리며 로그가능도를 재라.
-수익이 어디서 꺾이는가?
+**③ 깊이와 너비**
+`FLOWS` 는 hidden=32 로 깊이만 바꿨다. 이번에는 4층을 고정하고 hidden 을 8·48·192 로 바꿔
+같은 파라미터 수에서 깊이와 너비 중 어느 쪽이 NLL 을 더 줄이는지 비교하라.
 :::
 
 ## 요약
@@ -618,12 +615,12 @@ flow matching이 그 대가마저 없앤다 (시뮬레이션 없는 학습).
 | 왜 어려운가 | 일반 행렬식은 $O(d^3)$ |
 | 결합 층 | 야코비안이 삼각행렬 → $\log\lvert\det J\rvert = \sum s$, $O(d)$ |
 | $s, t$ 의 자유 | 임의의 신경망 — 가역일 필요 없음 |
-| 역변환 | 닫힌 형태, 오차 $10^{-14}$ (실측) |
-| 정규화 자동 보장 | 학습된 밀도의 격자 적분 = 1.001 |
-| 깊이 효과 | two moons 테스트 NLL 2.51 → 1.77 (1층 → 16층), N(0,I)는 2.83 |
+| 역변환 | 닫힌 형태, 오차 `{python} f"{DEP[-1][4]:.0e}"` (실측) |
+| 정규화 자동 보장 | 학습된 밀도의 격자 적분 = `{python} f"{Z_int:.3f}"` |
+| 깊이 효과 | two moons 테스트 NLL `{python} f"{DEP[0][3]:.2f}"` → `{python} f"{DEP[-1][3]:.2f}"` (1층 → 16층), N(0,I)는 `{python} f"{gauss_nll:.2f}"` |
 | 부피 보정의 비중 | $\log\lvert\det J\rvert$ 의 산포가 사전분포 항과 맞먹는다 |
 | **위상 제약** | 흐름은 위상동형사상 — 연결된 지지집합을 끊을 수 없다 |
-| 측정된 대가 | 링 한가운데 밀도가 참값의 $10^{39}$ 배 — 구멍을 못 만든다 |
+| 측정된 대가 | 링 한가운데 밀도가 참값의 `{python} f"{excess_origin:.0e}"` 배 — 구멍을 못 만든다 |
 | MAF vs IAF | 밀도 1패스/샘플링 d패스 ↔ 그 반대. 둘 다는 안 된다 |
 | 오늘의 위치 | 이미지에서는 밀렸고, 밀도 추정·SBI에서는 현역 |
 | 진짜 후손 | CNF → **flow matching** (6.8) — 행렬식 대신 대각합 |
