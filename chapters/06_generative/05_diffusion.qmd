@@ -59,8 +59,6 @@ x0 = np.array([2.0, -1.0])
 N = 40000
 cur = np.repeat(x0[None], N, 0)
 
-print("한 스텝씩 200번 밟은 결과  vs  닫힌 형태 한 줄")
-print()
 print(f"{'t':>5} {'축차 평균':>20} {'닫힌형 평균':>20} "
       f"{'축차 sd':>10} {'닫힌형 sd':>11}")
 print("-" * 70)
@@ -70,13 +68,11 @@ for t in range(T):
         print(f"{t:>5} {str(np.round(cur.mean(0), 4)):>20} "
               f"{str(np.round(np.sqrt(abar[t])*x0, 4)):>20} "
               f"{cur.std(0).mean():>10.4f} {np.sqrt(1-abar[t]):>11.4f}")
-print()
-print("**소수점 셋째 자리까지 일치한다.** 닫힌 형태가 맞다.")
-print()
-print("이 성질이 없으면 확산 모델은 학습이 불가능하다 —")
-print("매 학습 스텝마다 임의의 t 를 뽑는데, 거기까지 순차적으로 가야 한다면")
-print("한 스텝의 비용이 평균 T/2 = 100 배가 된다.")
 ```
+
+한 스텝씩 `{python} f"{T}"`번 밟은 결과와 닫힌 형태 한 줄이 **소수점 셋째 자리까지 일치한다.** 닫힌
+형태가 맞다. 이 성질이 없으면 확산 모델은 학습이 불가능하다 — 매 학습 스텝마다 임의의 $t$ 를
+뽑는데, 거기까지 순차적으로 가야 한다면 한 스텝의 비용이 평균 $T/2$ = `{python} f"{T//2}"` 배가 된다.
 
 ---
 
@@ -127,33 +123,26 @@ abar_prev = np.concatenate([[1.0], abar_[:-1]])
 beta_tilde = betas_*(1-abar_prev)/(1-abar_)
 w_vlb = betas_**2/(2*np.maximum(beta_tilde, 1e-20)*alphas_*(1-abar_))
 
-print("ε-예측 손실에 붙는 VLB 가중치  vs  L_simple 의 가중치(=1)")
-print("(t=0 항은 KL 이 아니라 별도의 재구성 항 L₀ 라 표에서 뺀다)")
-print()
 print(f"{'t/T':>7} {'t':>5} {'VLB 가중치':>14} {'L_simple':>10}")
 print("-" * 42)
 IDX_W = sorted({max(1, min(int(f*(T_-1)), T_-1))
                 for f in [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0]})
 for i in IDX_W:
     print(f"{i/(T_-1):>7.3f} {i:>5} {w_vlb[i]:>14.4f} {1.0:>10.1f}")
-print()
-w_mid = w_vlb[1:]
-print("**VLB 의 가중치는 t 에 따라 극단적으로 달라진다.**")
-print(f"  가장 작은 t (t={IDX_W[0]}) 에서 {w_vlb[IDX_W[0]]:.2f}, "
-      f"가장 큰 t 에서 {w_vlb[-1]:.2f},")
-print(f"  중간 구간(t/T≈0.5)에서는 {w_vlb[T_//2]:.4f} 다.")
-print(f"  큰 t 쪽이 중간보다 {w_vlb[-1]/w_vlb[T_//2]:.0f}배, "
-      f"작은 t 쪽이 {w_vlb[IDX_W[0]]/w_vlb[T_//2]:.0f}배 무겁다 — **U 자 모양**이다.")
-print("  그 결과 **중간 구간이 사실상 무시된다.**")
-print()
-print("작은 t 는 '거의 깨끗한 이미지를 아주 조금 다듬는' 쉬운 문제이고,")
-print("우도(비트/차원)에는 그 미세한 정확도가 결정적이다.")
-print("반면 **사람이 보는 샘플 품질을 정하는 것은 중간~큰 t 의 거친 구조**다.")
-print("L_simple 은 가중치를 전부 1 로 눌러 그 구간에 무게를 되돌린다.")
-print()
-print("이것이 6.0 에서 본 '우도와 지각 품질의 불일치'가")
-print("**설계 결정으로 나타난 사례**다 — 어느 쪽을 최적화할지 고른 것이다.")
+w_small, w_big, w_mid = float(w_vlb[IDX_W[0]]), float(w_vlb[-1]), float(w_vlb[T_//2])
 ```
+
+$\varepsilon$-예측 손실에 붙는 VLB 가중치와 $L_{\text{simple}}$ 의 가중치(=1)를 비교한 표다($t=0$ 항은 KL 이
+아니라 별도의 재구성 항 $L_0$ 라 표에서 뺐다). **VLB 의 가중치는 $t$ 에 따라 극단적으로 달라진다.**
+가장 작은 $t$ 에서 `{python} f"{w_small:.2f}"`, 가장 큰 $t$ 에서 `{python} f"{w_big:.1f}"`, 중간 구간($t/T \approx 0.5$)에서는
+`{python} f"{w_mid:.4f}"` 다. 큰 $t$ 쪽이 중간보다 `{python} f"{w_big/w_mid:,.0f}"`배, 작은 $t$ 쪽이
+`{python} f"{w_small/w_mid:.0f}"`배 무겁다 — **U 자 모양**이고, 그 결과 **중간 구간이 사실상 무시된다.**
+
+작은 $t$ 는 '거의 깨끗한 이미지를 아주 조금 다듬는' 쉬운 문제이고, 우도(비트/차원)에는 그 미세한
+정확도가 결정적이다. 반면 **사람이 보는 샘플 품질을 정하는 것은 중간~큰 $t$ 의 거친 구조**다.
+$L_{\text{simple}}$ 은 가중치를 전부 1 로 눌러 그 구간에 무게를 되돌린다. 이것이
+[6.0](00_generative_overview.qmd)에서 본 '우도와 지각 품질의 불일치'가 **설계 결정으로 나타난
+사례**다 — 어느 쪽을 최적화할지 고른 것이다.
 
 ---
 
@@ -167,16 +156,6 @@ print("**설계 결정으로 나타난 사례**다 — 어느 쪽을 최적화�
 
 import numpy as np
 
-print("세 파라미터화는 서로 변환된다")
-print()
-print("   x_t = √ᾱ·x₀ + √(1−ᾱ)·ε")
-print()
-print("   ε-예측:  ε̂        → x̂₀ = (x_t − √(1−ᾱ)·ε̂)/√ᾱ")
-print("   x₀-예측: x̂₀       → ε̂  = (x_t − √ᾱ·x̂₀)/√(1−ᾱ)")
-print("   v-예측:  v̂ = √ᾱ·ε − √(1−ᾱ)·x₀")
-print()
-print("차이는 **신경망 출력의 오차가 x̂₀ 오차로 얼마나 증폭되는가**다.")
-print()
 print(f"{'t/T':>7} {'√ᾱ':>9} {'ε 오차 → x₀ 오차 증폭':>22} "
       f"{'x₀ 오차 → ε 오차 증폭':>22}")
 print("-" * 64)
@@ -184,20 +163,25 @@ for f in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0]:
     i = min(int(f*(T_-1)), T_-1)
     sa, sb = np.sqrt(abar_[i]), np.sqrt(1-abar_[i])
     print(f"{f:>7.3f} {sa:>9.5f} {sb/sa:>22.2f} {sa/sb:>22.4f}")
-print()
-print("**ε-예측은 큰 t 에서 위험하다.** √ᾱ 가 0 에 가까워 오차가 폭발한다.")
 i_last = T_-1
-print(f"  t=T 에서 ε 오차가 x₀ 오차로 "
-      f"{np.sqrt(1-abar_[i_last])/np.sqrt(abar_[i_last]):.0f}배 증폭된다.")
-print("**x₀-예측은 작은 t 에서 위험하다.** 반대 방향으로 같은 문제가 생긴다.")
-print()
-print("**v-예측(Salimans & Ho 2022)은 양쪽을 절충한다** —")
-print("SNR 이 높든 낮든 목표의 스케일이 일정하게 유지된다.")
-print("고해상도·증류·flow matching 에서 표준이 되었다.")
-print()
-print("실전 대응: **ε-예측을 쓰되 샘플링 때 x̂₀ 를 데이터 범위로 자른다.**")
-print("아래 G6.5.3 에서 이 클리핑이 없으면 무슨 일이 벌어지는지 직접 본다.")
+amp_T = float(np.sqrt(1-abar_[i_last])/np.sqrt(abar_[i_last]))
 ```
+
+세 파라미터화는 서로 변환된다. $x_t = \sqrt{\bar\alpha}\,x_0 + \sqrt{1-\bar\alpha}\,\varepsilon$ 에서
+
+$$\hat x_0 = \frac{x_t - \sqrt{1-\bar\alpha}\,\hat\varepsilon}{\sqrt{\bar\alpha}}, \qquad
+\hat\varepsilon = \frac{x_t - \sqrt{\bar\alpha}\,\hat x_0}{\sqrt{1-\bar\alpha}}, \qquad
+v = \sqrt{\bar\alpha}\,\varepsilon - \sqrt{1-\bar\alpha}\,x_0$$
+
+차이는 **신경망 출력의 오차가 $\hat x_0$ 오차로 얼마나 증폭되는가**다(위 표). **$\varepsilon$-예측은 큰
+$t$ 에서 위험하다.** $\sqrt{\bar\alpha}$ 가 0 에 가까워 오차가 폭발한다 — $t=T$ 에서 $\varepsilon$ 오차가 $x_0$
+오차로 `{python} f"{amp_T:,.0f}"`배 증폭된다. **$x_0$-예측은 작은 $t$ 에서 위험하다.** 반대 방향으로 같은
+문제가 생긴다.
+
+**$v$-예측(Salimans & Ho 2022)은 양쪽을 절충한다** — SNR 이 높든 낮든 목표의 스케일이 일정하게
+유지된다. 고해상도·증류·flow matching 에서 표준이 되었다. 실전 대응은 **$\varepsilon$-예측을 쓰되
+샘플링 때 $\hat x_0$ 를 데이터 범위로 자르는 것**이다. 아래 G6.5.3 에서 이 클리핑이 없으면 무슨 일이
+벌어지는지 직접 본다.
 
 ---
 
@@ -213,8 +197,6 @@ from src.generative import make_schedule
 _, _, AB_LIN = make_schedule(T, "linear")
 _, _, AB_COS = make_schedule(T, "cosine")
 
-print("신호 대 잡음비  SNR(t) = ᾱ_t / (1 − ᾱ_t)")
-print()
 print(f"{'t/T':>7} {'linear ᾱ':>12} {'cosine ᾱ':>12} "
       f"{'linear SNR(dB)':>16} {'cosine SNR(dB)':>16}")
 print("-" * 68)
@@ -231,20 +213,18 @@ for nm, ab in [("linear", AB_LIN), ("cosine", AB_COS)]:
     CROSS[nm] = (t_snr1, t_dead)
     print(f"  {nm:<8} SNR=1 통과 t/T={t_snr1:.2f},  "
           f"ᾱ<0.01 (사실상 순수 잡음) t/T={t_dead:.2f}")
-print()
-print(f"**linear 스케줄은 전체 구간의 "
-      f"{1-CROSS['linear'][1]:.0%} 를 낭비한다.**")
-print(f"t/T={CROSS['linear'][1]:.2f} 이후로는 이미 순수 잡음이라 "
-      f"신경망이 배울 것이 없다.")
-print(f"cosine 은 그 지점이 t/T={CROSS['cosine'][1]:.2f} 라 "
-      f"낭비가 {1-CROSS['cosine'][1]:.0%} 뿐이다.")
-print()
-print("**이 문제는 해상도가 높을수록 심해진다.**")
-print("인접 픽셀의 상관이 강할수록 같은 양의 잡음이 정보를 덜 파괴하기 때문이다.")
-print("32×32 에 맞춘 linear 스케줄을 256×256 에 쓰면 훨씬 더 많은 구간이 낭비된다.")
-print("Nichol & Dhariwal(2021)이 cosine 을 제안한 이유가 이것이고,")
-print("고해상도 모델이 **잡음 스케줄을 해상도에 따라 이동(shift)** 시키는 이유이기도 하다.")
+waste_lin, waste_cos = 1-CROSS['linear'][1], 1-CROSS['cosine'][1]
 ```
+
+신호 대 잡음비 $\text{SNR}(t) = \bar\alpha_t / (1 - \bar\alpha_t)$ 로 두 스케줄을 비교한 것이다.
+**linear 스케줄은 전체 구간의 `{python} f"{waste_lin:.0%}"` 를 낭비한다.** $t/T$ = `{python} f"{CROSS['linear'][1]:.2f}"`
+이후로는 이미 순수 잡음이라 신경망이 배울 것이 없다. cosine 은 그 지점이 $t/T$ =
+`{python} f"{CROSS['cosine'][1]:.2f}"` 라 낭비가 `{python} f"{waste_cos:.0%}"` 뿐이다.
+
+**이 문제는 해상도가 높을수록 심해진다.** 인접 픽셀의 상관이 강할수록 같은 양의 잡음이 정보를
+덜 파괴하기 때문이다. 32×32 에 맞춘 linear 스케줄을 256×256 에 쓰면 훨씬 더 많은 구간이 낭비된다.
+Nichol & Dhariwal(2021)이 cosine 을 제안한 이유가 이것이고, 고해상도 모델이 **잡음 스케줄을
+해상도에 따라 이동(shift)** 시키는 이유이기도 하다.
 
 ```{python}
 #| label: fig-schedule
@@ -360,22 +340,18 @@ for nm, S in [("실제 데이터", S_real), ("확산 (DDPM 200스텝)", S_dm),
           f"{rmin:>10.3f}")
 _, _, _, hole_d, rmin_d = report(S_dm)
 _, _, _, hole_f, rmin_f = report(S_fl)
-print()
-print(f"**확산은 링 안쪽에 샘플을 {hole_d:.2%} 둔다 — "
-      f"실제 데이터 {HOLE_R:.2%} 와 같다.**")
-print(f"흐름은 {hole_f:.2%} 를 둔다. 최소 반경도 "
-      f"실제 {np.sqrt((S_real**2).sum(1)).min():.2f} / 확산 {rmin_d:.2f} 대비 "
-      f"흐름은 {rmin_f:.2f} 로 중심까지 파고든다.")
-print()
-print("흐름이 못 한 일을 확산이 하는 이유는 구조적이다:")
-print("  · 흐름  — x = f⁻¹(z) 는 **결정론적 사상**이다. 연결된 z 공간의 상은 연결되어 있다.")
-print("  · 확산  — 매 단계 **새 잡음을 더한다.** 사상이 아니라 확률 과정이다.")
-print("            같은 x_T 에서 출발해도 매번 다른 모드에 도착할 수 있다.")
-print()
-print("바로 그 확률성이 위상 제약을 없앤다.")
-print("(6.6 의 확률 흐름 ODE 는 확산을 결정론적으로 다시 쓰는데,")
-print(" 그러면 제약이 돌아오지만 — 시간에 따라 변하는 속도장이라 훨씬 유연하다.)")
+rmin_real = float(np.sqrt((S_real**2).sum(1)).min())
 ```
+
+**확산은 링 안쪽에 샘플을 `{python} f"{hole_d:.2%}"` 둔다 — 실제 데이터 `{python} f"{HOLE_R:.2%}"` 와 같다.** 흐름은
+`{python} f"{hole_f:.2%}"` 를 둔다. 최소 반경도 실제 `{python} f"{rmin_real:.2f}"` / 확산 `{python} f"{rmin_d:.2f}"` 대비 흐름은
+`{python} f"{rmin_f:.2f}"` 로 중심까지 파고든다.
+
+흐름이 못 한 일을 확산이 하는 이유는 구조적이다. 흐름의 $x = f^{-1}(z)$ 는 **결정론적 사상**이라
+연결된 $z$ 공간의 상은 연결되어 있다. 확산은 매 단계 **새 잡음을 더한다** — 사상이 아니라 확률
+과정이고, 같은 $x_T$ 에서 출발해도 매번 다른 모드에 도착할 수 있다. 바로 그 확률성이 위상 제약을
+없앤다. ([6.6](06_score_sde.qmd)의 확률 흐름 ODE 는 확산을 결정론적으로 다시 쓰는데, 그러면
+제약이 돌아오지만 — 시간에 따라 변하는 속도장이라 훨씬 유연하다.)
 
 ```{python}
 #| label: fig-reverse
@@ -450,8 +426,6 @@ $$x_{t-1} = \sqrt{\bar\alpha_{t-1}}\,\hat{x}_0 + \sqrt{1-\bar\alpha_{t-1}}\,\hat
 import numpy as np
 from src.generative import mode_stats
 
-print("같은 학습된 모델, 다른 샘플러")
-print()
 print(f"{'샘플러':<14} {'신경망 호출':>12} {'커버':>7} {'균형도':>9} "
       f"{'모드 근처':>10}")
 print("-" * 58)
@@ -465,14 +439,13 @@ for meth, ns in [("ddpm", None), ("ddim", 200), ("ddim", 50), ("ddim", 20),
     print(f"{meth.upper():<14} {calls:>12} {c_:>4}/8 {e_:>9.2f} {n_:>10.1%}")
 print("-" * 58)
 print(f"{'실제 데이터':<14} {'—':>12} {COV_R:>4}/8 {ENT_R:>9.2f} {NEAR_R:>10.1%}")
-print()
 d200, d50, d10, d5 = SAMP[1], SAMP[2], SAMP[4], SAMP[5]
-print(f"**DDIM 은 {d200[1]}스텝({d200[3]:.2f})과 {d50[1]}스텝({d50[3]:.2f})의 "
-      f"차이가 거의 없다** — 4배 빠르다.")
-print(f"{d10[1]}스텝에서 균형도가 {d10[3]:.2f} 로 떨어지고, "
-      f"{d5[1]}스텝에서는 {d5[3]:.2f} 로 무너진다.")
-print("이 지점을 더 밀어내는 것이 6.8 의 증류·일관성 모델이다.")
 ```
+
+같은 학습된 모델에 샘플러만 바꾼 것이다. **DDIM 은 `{python} f"{d200[1]}"`스텝(균형도 `{python} f"{d200[3]:.2f}"`)과
+`{python} f"{d50[1]}"`스텝(`{python} f"{d50[3]:.2f}"`)의 차이가 거의 없다** — 4배 빠르다. `{python} f"{d10[1]}"`스텝에서 균형도가
+`{python} f"{d10[3]:.2f}"` 로 떨어지고, `{python} f"{d5[1]}"`스텝에서는 `{python} f"{d5[3]:.2f}"` 로 무너진다. 이 지점을 더
+밀어내는 것이 [6.8](08_flow_matching.qmd)의 증류·일관성 모델이다.
 
 ### 그런데 여기 함정이 하나 있다
 
@@ -483,40 +456,37 @@ print("이 지점을 더 밀어내는 것이 6.8 의 증류·일관성 모델이
 import numpy as np
 from src.generative import mode_stats
 
-print("x̂₀ 를 데이터 범위로 자르지 않으면 어떻게 되는가")
-print()
 print(f"{'샘플러':<16} {'클리핑':>8} {'커버':>7} {'균형도':>9} {'모드 근처':>10} "
       f"{'평균 반경':>10}")
 print("-" * 66)
+CLIP_NEAR = {}
 for meth, ns in [("ddpm", None), ("ddim", 50)]:
     for cl in [4.0, None]:
         S = DM.sample(3000, seed=7, method=meth, n_steps=ns, clip=cl)
         c_, e_, n_ = mode_stats(S, CEN)
+        CLIP_NEAR[(meth, cl is not None)] = n_
         print(f"{meth.upper()+' '+str(ns or DM.T):<16} "
               f"{('있음' if cl else '없음'):>8} {c_:>4}/8 {e_:>9.2f} "
               f"{n_:>10.1%} {np.sqrt((S**2).sum(1)).mean():>10.2f}")
 print("-" * 66)
 print(f"{'실제 데이터':<16} {'':>8} {COV_R:>4}/8 {ENT_R:>9.2f} {NEAR_R:>10.1%} "
       f"{np.sqrt((S_real**2).sum(1)).mean():>10.2f}")
-print()
-print("**DDPM 은 클리핑이 없어도 멀쩡한데 DDIM 은 무너진다.**")
-print()
-print("이유는 x̂₀ 의 정의에 있다:")
-print()
-print("   x̂₀ = (x_t − √(1−ᾱ_t)·ε̂) / √ᾱ_t")
-print()
-print(f"큰 t 에서 √ᾱ_t 는 {np.sqrt(abar[-1]):.2e} 다. "
-      f"ε̂ 의 오차가 **{1/np.sqrt(abar[-1]):.0e}배 증폭**된다.")
-print("  · DDPM — 매 단계 새 잡음을 더하므로 오차가 씻겨 나간다. 자기 교정이 된다.")
-print("  · DDIM — 결정론적이라 오차가 **누적된다.** 샘플이 바깥으로 밀려난다.")
-print()
-print("**모든 실전 구현이 x̂₀ 를 자르는 이유가 이것이다.**")
-print("Imagen 의 '동적 임계처리(dynamic thresholding)'는 이 클리핑의 정교한 판본이고,")
-print("v-예측이 선호되는 이유도 같다 — 애초에 증폭이 생기지 않게 만든다.")
-print()
-print("이 함정은 논문 본문에는 잘 안 나오고 코드에만 있다.")
-print("**직접 돌려보지 않으면 만날 수 없는 종류의 지식이다.**")
+sqrt_abar_T = float(np.sqrt(abar[-1]))
 ```
+
+$\hat x_0$ 를 데이터 범위로 자르지 않으면 **DDPM 은 멀쩡한데 DDIM 은 무너진다** — 모드 근처
+비율이 `{python} f"{CLIP_NEAR[('ddim', True)]:.0%}"` → `{python} f"{CLIP_NEAR[('ddim', False)]:.0%}"` 다. 이유는 $\hat x_0$ 의 정의에 있다.
+
+$$\hat x_0 = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\hat\varepsilon}{\sqrt{\bar\alpha_t}}$$
+
+큰 $t$ 에서 $\sqrt{\bar\alpha_t}$ 는 `{python} f"{sqrt_abar_T:.1e}"` 라 $\hat\varepsilon$ 의 오차가 **`{python} f"{1/sqrt_abar_T:,.0f}"`배
+증폭**된다. DDPM 은 매 단계 새 잡음을 더하므로 오차가 씻겨 나간다 — 자기 교정이 된다. DDIM 은
+결정론적이라 오차가 **누적된다.** 샘플이 바깥으로 밀려난다.
+
+**모든 실전 구현이 $\hat x_0$ 를 자르는 이유가 이것이다.** Imagen 의 '동적 임계처리(dynamic
+thresholding)'는 이 클리핑의 정교한 판본이고, $v$-예측이 선호되는 이유도 같다 — 애초에 증폭이
+생기지 않게 만든다. 이 함정은 논문 본문에는 잘 안 나오고 코드에만 있다. **직접 돌려보지 않으면
+만날 수 없는 종류의 지식이다.**
 
 ---
 
@@ -543,8 +513,7 @@ TARGET = 3
 tgt = np.full(2000, TARGET)
 real_var = float((CEN[TARGET] + rr.normal(0, 0.2, (2000, 2))).var(0).sum())
 
-print(f"조건: '모드 {TARGET} 을 생성하라' (2000 샘플)")
-print()
+print(f"조건 = 모드 {TARGET}, 2000 샘플")
 print(f"{'w':>6} {'목표 모드 적중':>14} {'샘플 분산':>12} "
       f"{'실제 분산 대비':>15} {'목표까지 거리':>14}")
 print("-" * 66)
@@ -560,28 +529,23 @@ for w in [0.0, 1.0, 2.0, 4.0, 8.0]:
 print("-" * 66)
 print(f"{'실제':>6} {'100.0%':>14} {real_var:>12.4f} {1.0:>14.2f}배 "
       f"{np.sqrt(((CEN[TARGET]+rr.normal(0,0.2,(2000,2))-CEN[TARGET])**2).sum(1)).mean():>14.4f}")
-print()
-print(f"**w=0 (무조건부): 적중률 {CFG[0][1]:.1%}, 분산 {CFG[0][2]/real_var:.0f}배** — "
-      f"8개 모드에 고루 퍼진다 (우연 수준 12.5%). 조건이 무시된다.")
-print(f"**w=1 (순수 조건부): 적중률 {CFG[1][1]:.1%}, "
-      f"분산이 실제의 {CFG[1][2]/real_var:.2f}배** — 거의 정확하다.")
-print(f"**w=2~4: 적중은 유지되는데 분산이 {CFG[2][2]/real_var:.2f}배, "
-      f"{CFG[3][2]/real_var:.2f}배로 줄어든다** — 다양성 손실이다.")
-print(f"**w=8: 분산이 실제의 {CFG[4][2]/real_var:.2f}배까지 줄어드는데")
-print(f"   목표까지의 거리는 오히려 {CFG[1][3]:.3f} → {CFG[4][3]:.3f} 로 늘어난다.**")
-print("   좁아지면서 동시에 중심에서 밀려난다 — 분포가 왜곡되고 있다는 신호다.")
-print(f"   (여기서 완전히 폭발하지 않는 것은 x̂₀ 클리핑 덕이다. "
-      f"끄면 훨씬 심해진다.)")
-print()
-print("**이것이 CFG 스케일의 정체다.**")
-print("  · w 를 키우면 조건부와 무조건부의 차이를 증폭한다")
-print("  · 조건 충실도는 오르고 **분포의 폭은 좁아진다**")
-print("  · 너무 키우면 분포 밖으로 밀려나 아티팩트가 생긴다")
-print("    (이미지에서는 채도 과포화로 나타난다)")
-print()
-print("실전 기본값이 7.5 근처인 것은 **품질을 위해 다양성을 파는 선택**이다.")
-print("6.0 의 삼중고, 6.3 의 절단 트릭과 같은 손잡이다.")
+VR = {c[0]: c[2]/real_var for c in CFG}
+HIT = {c[0]: c[1] for c in CFG}
+DIST = {c[0]: c[3] for c in CFG}
 ```
+
+**$w=0$ (무조건부)은 적중률 `{python} f"{HIT[0.0]:.1%}"`, 분산 `{python} f"{VR[0.0]:.0f}"`배** — 8개 모드에 고루 퍼진다
+(우연 수준 12.5%). 조건이 무시된다. **$w=1$ (순수 조건부)은 적중률 `{python} f"{HIT[1.0]:.1%}"`, 분산이 실제의
+`{python} f"{VR[1.0]:.2f}"`배** — 거의 정확하다. **$w$=2~4 에서는 적중은 유지되는데 분산이 `{python} f"{VR[2.0]:.2f}"`배,
+`{python} f"{VR[4.0]:.2f}"`배로 줄어든다** — 다양성 손실이다. **$w=8$ 에서는 분산이 실제의 `{python} f"{VR[8.0]:.2f}"`배까지
+줄어드는데 목표까지의 거리는 오히려 `{python} f"{DIST[1.0]:.3f}"` → `{python} f"{DIST[8.0]:.3f}"` 로 늘어난다.** 좁아지면서
+동시에 중심에서 밀려난다 — 분포가 왜곡되고 있다는 신호다. (여기서 완전히 폭발하지 않는 것은 $\hat x_0$
+클리핑 덕이다. 끄면 훨씬 심해진다.)
+
+**이것이 CFG 스케일의 정체다.** $w$ 를 키우면 조건부와 무조건부의 차이를 증폭하고, 조건 충실도는
+오르고 **분포의 폭은 좁아진다.** 너무 키우면 분포 밖으로 밀려나 아티팩트가 생긴다 (이미지에서는
+채도 과포화로 나타난다). 실전 기본값이 7.5 근처인 것은 **품질을 위해 다양성을 파는 선택**이다.
+[6.0](00_generative_overview.qmd)의 삼중고, [6.3](03_gan.qmd)의 절단 트릭과 같은 손잡이다.
 
 ```{python}
 #| label: fig-cfg
@@ -659,11 +623,13 @@ fig.show()
 
 **학습 루프는 놀랍도록 짧다.**
 
+```python
 x0 = batch
 t  = randint(0, T)
-ε  = randn_like(x0)
-xt = sqrt(abar[t])*x0 + sqrt(1-abar[t])*ε
-loss = mse(model(xt, t), ε)
+eps = randn_like(x0)
+xt = sqrt(abar[t])*x0 + sqrt(1-abar[t])*eps
+loss = mse(model(xt, t), eps)
+```
 
 다섯 줄이다. GAN의 미니맥스 균형도, VAE의 KL 균형도 없다.
 **손실이 그냥 내려가고, 내려가면 좋아진다.**
@@ -675,17 +641,19 @@ loss = mse(model(xt, t), ε)
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 스케줄을 바꿔 SNR 곡선을 본다**
-`schedules` 의 선형·코사인 스케줄에서 $\log \text{SNR}(t)$ 를 그려라.
-어느 구간에 스텝이 몰려 있는가? 그것이 왜 코사인이 나은 이유인가.
+**① 스케줄을 이동시킨다**
+`schedules` 의 $\log\text{SNR}(t)$ 에 상수를 더하는 shift 로 잡음을 더 세게(또는 약하게) 넣은
+스케줄을 만들고, 링 데이터에서 같은 스텝 수로 학습시켜 균형도·모드 근처를 비교하라.
+2차원 데이터에서는 어느 방향의 shift 가 유리한가? 이미지에서는 왜 반대가 되는가?
 
 **② 파라미터화를 바꾼다**
 `parameterization` 에서 $\epsilon$-예측과 $x_0$-예측, $v$-예측의
 암묵적 손실 가중치를 비교하라. 어느 $t$ 구간을 중시하는가?
 
-**③ CFG 스케일을 훑는다**
-`cfg` 의 guidance scale을 1·3·7·15로 바꾸며 조건 충실도와 다양성을 재라.
-과포화가 어디서 시작되는가?
+**③ 클리핑 없는 CFG**
+`DMC.sample(..., w=8, clip=None)` 으로 본문의 주장("클리핑을 끄면 훨씬 심해진다")을 확인하라.
+$w$ = 1·4·8·15 에서 목표까지의 평균 거리와 평균 반경이 어떻게 변하는가? 어디서부터 분포 밖으로
+밀려나는가?
 :::
 
 ## 요약
@@ -697,17 +665,17 @@ loss = mse(model(xt, t), ε)
 | 역방향 | $\beta_t$ 가 작으면 역방향도 가우스 → 신경망으로 근사 |
 | VLB | $T$단계 계층적 VAE의 ELBO |
 | $L_{\text{simple}}$ | VLB 가중치를 전부 1로. 우도↓ 샘플 품질↑ |
-| 가중치 차이 | VLB 가중치는 U자형 — 중간 구간이 작은 t보다 47배, 큰 t보다 31547배 가볍다 |
+| 가중치 차이 | VLB 가중치는 U자형 — 중간 구간이 작은 t보다 `{python} f"{w_small/w_mid:.0f}"`배, 큰 t보다 `{python} f"{w_big/w_mid:,.0f}"`배 가볍다 |
 | 파라미터화 | ε / x₀ / v — 대수적 동치, 오차 증폭 특성이 다름 |
-| 잡음 스케줄 | linear는 뒤쪽 1/3을 낭비 (t/T=0.67부터 순수 잡음) |
-| cosine | 낭비 구간이 6% 로 줄어든다 |
+| 잡음 스케줄 | linear는 뒤쪽 `{python} f"{waste_lin:.0%}"`를 낭비 (t/T=`{python} f"{CROSS['linear'][1]:.2f}"`부터 순수 잡음) |
+| cosine | 낭비 구간이 `{python} f"{waste_cos:.0%}"` 로 줄어든다 |
 | **위상의 벽 돌파** | 링 안쪽 샘플 비율이 실제 데이터와 일치 — 흐름은 못 했다 |
 | 이유 | 매 단계 새 잡음 → 결정론적 사상이 아니다 |
 | DDIM | 결정론적, 스텝 건너뛰기 가능. 50스텝 ≈ 200스텝 |
-| **DDIM의 함정** | x̂₀ 클리핑이 없으면 무너진다 (모드 근처 92% → 3%) |
+| **DDIM의 함정** | x̂₀ 클리핑이 없으면 무너진다 (모드 근처 `{python} f"{CLIP_NEAR[('ddim', True)]:.0%}"` → `{python} f"{CLIP_NEAR[('ddim', False)]:.0%}"`) |
 | 이유 | $1/\sqrt{\bar\alpha_t}$ 증폭이 결정론적 경로에 누적된다 |
 | CFG | $\tilde\varepsilon = \varepsilon_\varnothing + w(\varepsilon_c - \varepsilon_\varnothing)$ |
-| CFG의 대가 | w=1에서 분산이 실제와 일치, w=4에서 1/3, w=8에서 붕괴 |
+| CFG의 대가 | w=1에서 분산이 실제의 `{python} f"{VR[1.0]:.2f}"`배, w=4에서 `{python} f"{VR[4.0]:.2f}"`배, w=8에서 `{python} f"{VR[8.0]:.2f}"`배 + 중심 이탈 |
 | 학습 루프 | 다섯 줄. 균형도 게임도 없다 — **이것이 이긴 이유** |
 
 확산을 이산 마르코프 사슬로 봤다.
