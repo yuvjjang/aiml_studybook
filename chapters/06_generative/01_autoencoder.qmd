@@ -73,11 +73,11 @@ cum = np.cumsum(ev)/ev.sum()
 for i in range(8):
     print(f"{i+1:>6} {ev[i]/ev.sum():>13.4f} {cum[i]:>9.4f}")
 print()
-print(f"5개 주성분으로 {cum[4]:.1%}, 10개로 {cum[9]:.1%} 를 설명한다.")
-print("자유도가 5개인데 주성분이 5개로 안 끝나는 이유 —")
-print("**매니폴드가 휘어 있으면 선형 부분공간으로는 딱 떨어지지 않는다.**")
-print("여기서 비선형 오토인코더가 이길 여지가 생긴다.")
 ```
+
+5개 주성분으로 `{python} f"{cum[4]:.1%}"`, 10개로 `{python} f"{cum[9]:.1%}"` 를 설명한다.
+자유도가 5개인데 주성분이 5개로 안 끝나는 이유 — **매니폴드가 휘어 있으면 선형 부분공간으로는
+딱 떨어지지 않는다.** 여기서 비선형 오토인코더가 이길 여지가 생긴다.
 
 ---
 
@@ -130,11 +130,13 @@ for i, k in enumerate(KS):
     gain = res["pca"][i]/res["nonlin"][i]
     print(f"{k:>3} {res['pca'][i]:>12.6f} {res['lin'][i]:>13.6f} "
           f"{res['nonlin'][i]:>15.6f} {gain:>10.1f}배")
-print()
-print("**선형 AE 는 PCA 와 소수점 6자리까지 같다.** 정리 그대로다.")
-print("비선형 AE 는 매니폴드의 곡률을 쓸 수 있어 같은 k 로 더 잘 복원한다 —")
-print(f"k=5 에서 {res['pca'][3]/res['nonlin'][3]:.0f}배 낮은 오차.")
+lin_gap = max(abs(a-b)/a for a, b in zip(res["pca"], res["lin"]))
+gain5 = res["pca"][3]/res["nonlin"][3]
 ```
+
+**선형 AE 는 PCA 와 같다** — 재구성 MSE 의 상대 차이가 최대 `{python} f"{lin_gap:.1%}"` 이고
+$k \le 8$ 에서는 소수점 6자리까지 일치한다. 정리 그대로다. 비선형 AE 는 매니폴드의 곡률을 쓸 수
+있어 같은 $k$ 로 더 잘 복원한다 — $k=5$ 에서 `{python} f"{gain5:.0f}"`배 낮은 오차.
 
 ```{python}
 #| label: fig-bottleneck
@@ -220,28 +222,31 @@ print(f"{'디코더 행공간 ↔ PCA 부분공간 (주각)':<34} {res['ang_dec'
 print(f"{'인코더 열공간 ↔ PCA 부분공간 (주각)':<34} {res['ang_enc'][KS.index(k)]:.3f}°")
 print(f"{'||W_e W_d − P||_F':<34} {np.linalg.norm(W0 @ W1 - P):.4f}")
 print(f"{'||P||_F':<34} {np.linalg.norm(P):.4f}")
-print(f"{'데이터 위에서의 차이 ||X(W_eW_d − P)||/||X||':<34} "
-      f"{np.linalg.norm(X @ (W0@W1 - P))/np.linalg.norm(X):.6f}")
+data_gap = float(np.linalg.norm(X @ (W0@W1 - P))/np.linalg.norm(X))
+print(f"{'데이터 위에서의 차이 ||X(W_eW_d − P)||/||X||':<34} {data_gap:.6f}")
 print()
-
-print(f"**① 디코더는 PCA 부분공간을 정확히 찾는다** — 주각 {res['ang_dec'][KS.index(k)]:.3f}°.")
-print("**② 그러나 개별 축은 PCA 축이 아니다.** 디코더 각 행과 PC1~3 의 코사인:")
+print("디코더 각 행과 PC1~3 의 |코사인|:")
 for i in range(k):
     d = W1[i]/np.linalg.norm(W1[i])
     print(f"    디코더 행 {i}: {np.round(np.abs(Vk @ d), 3)}")
-print("    → 어느 행도 특정 PC 하나에 대응하지 않는다. **회전 자유도**다.")
-print("      W_e R⁻¹, R W_d 로 바꿔도 재구성은 같으므로 축은 정해지지 않는다.")
-print("      PCA 는 '분산 최대'라는 추가 조건으로 축을 고정하지만 AE 에는 그 조건이 없다.")
-print()
-print(f"**③ 인코더는 더 느슨하다.** 주각 {res['ang_enc'][KS.index(k)]:.1f}°, "
-      f"||W_eW_d − P||({np.linalg.norm(W0@W1-P):.2f})와 ||P||({np.linalg.norm(P):.2f})가 맞먹는다.")
-print(f"    그런데 **데이터 위에서의 차이는 {np.linalg.norm(X @ (W0@W1 - P))/np.linalg.norm(X):.2%}** 에 불과하다.")
-print(f"    X 의 조건수가 {S_[0]/S_[-1]:.0f} 이라 —")
-print(f"    최대 특이값 {S_[0]:.1f}, 최소 {S_[-1]:.4f} —")
-print("    데이터가 거의 차지하지 않는 방향에서는 인코더가 무엇을 하든 손실에 안 잡힌다.")
-print()
-print("**교훈: 학습된 가중치를 해석할 때는 손실이 실제로 제약하는 부분만 봐야 한다.**")
+ang_dec, ang_enc = res['ang_dec'][KS.index(k)], res['ang_enc'][KS.index(k)]
+diff_norm, P_norm = float(np.linalg.norm(W0@W1-P)), float(np.linalg.norm(P))
+cond_X = float(S_[0]/S_[-1])
 ```
+
+읽어야 할 것이 셋이다.
+
+1. **디코더는 PCA 부분공간을 정확히 찾는다** — 주각 `{python} f"{ang_dec:.3f}"`°.
+2. **그러나 개별 축은 PCA 축이 아니다.** 위 코사인 표에서 어느 행도 특정 PC 하나에 대응하지
+   않는다. **회전 자유도**다 — $W_e R^{-1}, R W_d$ 로 바꿔도 재구성은 같으므로 축은 정해지지 않는다.
+   PCA 는 '분산 최대'라는 추가 조건으로 축을 고정하지만 AE 에는 그 조건이 없다.
+3. **인코더는 더 느슨하다.** 주각 `{python} f"{ang_enc:.1f}"`°, $\|W_eW_d - P\|$
+   (`{python} f"{diff_norm:.2f}"`)와 $\|P\|$ (`{python} f"{P_norm:.2f}"`)가 맞먹는다. 그런데 **데이터 위에서의
+   차이는 `{python} f"{data_gap:.2%}"`** 에 불과하다. $X$ 의 조건수가 `{python} f"{cond_X:,.0f}"` 이라
+   (최대 특이값 `{python} f"{S_[0]:.1f}"`, 최소 `{python} f"{S_[-1]:.4f}"`) 데이터가 거의 차지하지 않는
+   방향에서는 인코더가 무엇을 하든 손실에 안 잡힌다.
+
+**교훈: 학습된 가중치를 해석할 때는 손실이 실제로 제약하는 부분만 봐야 한다.**
 
 ::: {.callout-note}
 ### 선형 AE가 PCA를 못 이긴다면 왜 쓰는가
@@ -249,7 +254,7 @@ print("**교훈: 학습된 가중치를 해석할 때는 손실이 실제로 제
 쓰지 않는다. 선형 AE는 **PCA를 SVD 대신 경사하강으로 푸는 느린 방법**일 뿐이다.
 
 오토인코더의 가치는 전부 **비선형성**에서 온다.
-위 표에서 $k=5$ 일 때 비선형 AE는 PCA 대비 10배 낮은 오차를 냈다.
+위 표에서 $k=5$ 일 때 비선형 AE는 PCA 대비 `{python} f"{gain5:.0f}"`배 낮은 오차를 냈다.
 데이터가 곡면 위에 있으면 평면으로 자르는 것보다 곡면을 따라가는 편이 낫다.
 :::
 
@@ -297,14 +302,13 @@ ae128 = OC[128]
 tr128 = float(((X - ae128.forward(X, training=False)[0])**2).mean())
 nz128 = float(((X_noise - ae128.forward(X_noise, training=False)[0])**2).mean())
 zero_nz = float((X_noise**2).mean())
-print("**k=128 (입력의 2배) 에서도 항등함수가 아니다.**")
-print(f"훈련 MSE 는 {tr128:.6f} 로 사실상 완벽하지만,")
-print(f"순수 잡음 입력의 MSE 는 {nz128:.4f} 로 "
-      f"**아무것도 안 하고 0 을 뱉는 것({zero_nz:.4f})보다도 나쁘다.**")
-print("즉 이 오토인코더는 입력을 복사하는 것이 아니라")
-print("**데이터 매니폴드로 사영하는 함수**를 배웠다.")
-print("매니폴드 밖의 입력은 매니폴드 위로 끌려오고, 그래서 원본과 오히려 멀어진다.")
 ```
+
+**$k=128$ (입력의 2배) 에서도 항등함수가 아니다.** 훈련 MSE 는 `{python} f"{tr128:.6f}"` 로 사실상
+완벽하지만, 순수 잡음 입력의 MSE 는 `{python} f"{nz128:.4f}"` 로 **아무것도 안 하고 0 을 뱉는 것
+(`{python} f"{zero_nz:.4f}"`)보다도 나쁘다.** 즉 이 오토인코더는 입력을 복사하는 것이 아니라
+**데이터 매니폴드로 사영하는 함수**를 배웠다. 매니폴드 밖의 입력은 매니폴드 위로 끌려오고,
+그래서 원본과 오히려 멀어진다.
 
 그럼 교과서 경고는 틀렸는가? 아니다 — **조건이 빠졌을 뿐이다.**
 
@@ -318,32 +322,32 @@ from src import nn
 r9 = np.random.default_rng(21)
 N_tr, N_te = r9.normal(0, 1, (1500, 64)), r9.normal(0, 1, (400, 64))
 
-print("매니폴드가 아예 없는 데이터(64차원 등방 가우스)로 학습하면?")
-print()
 print(f"{'잠재 차원 k':>11} {'훈련 MSE':>11} {'미학습 잡음 MSE':>16} {'판정'}")
 print("-" * 54)
+ID_TE = {}
 for k in [16, 64, 128]:
     ae = nn.MLP([64, k, 64], activation="relu", init="he", seed=6)
     nn.train(ae, N_tr, N_tr, loss="mse", opt=nn.Optimizer("adam", lr=0.005),
              steps=2500, seed=6)
     tr = float(((N_tr - ae.forward(N_tr, training=False)[0])**2).mean())
     te = float(((N_te - ae.forward(N_te, training=False)[0])**2).mean())
-    verdict = "**항등함수에 접근**" if te < 0.05 else "병목에 막힘"
+    verdict = "항등함수에 접근" if te < 0.05 else "병목에 막힘"
+    ID_TE[k] = te
     print(f"{k:>11} {tr:>11.6f} {te:>16.6f}  {verdict}")
 print(f"{'0 을 출력':>11} {'':>11} {float((N_te**2).mean()):>16.4f}")
-print()
-print("**결론이 갈린다.**")
-print("  · 매니폴드가 있는 데이터 → k=128 이어도 항등함수를 배우지 않는다")
-print("  · 매니폴드가 없는 데이터 → k=64 부터 항등함수를 배운다 (미학습 입력 MSE 0.005)")
-print()
-print("**'과완비 = 항등함수'는 표현 가능성의 문제이지 학습 결과가 아니다.**")
-print("경사하강은 데이터에서만 신호를 받는다. 데이터 밖에서 항등이 될 이유가 없다.")
-print("데이터가 구조를 가지면 그 구조를 배우는 쪽이 손실을 더 빨리 줄인다.")
-print()
-print("그렇다고 과완비를 마음 놓고 써도 된다는 뜻은 아니다. 진짜 문제는 다른 데 있다:")
-print("  **코드가 128차원이면 그것은 압축도 아니고 쓸 만한 표현도 아니다.**")
-print("  다음 절의 희소성 제약이 이 문제를 다룬다.")
 ```
+
+매니폴드가 아예 없는 데이터(64차원 등방 가우스)로 학습하면 **결론이 갈린다.** 매니폴드가 있는
+데이터는 $k=128$ 이어도 항등함수를 배우지 않지만, 매니폴드가 없는 데이터는 $k=64$ 부터
+항등함수를 배운다 (미학습 입력 MSE `{python} f"{ID_TE[64]:.3f}"`).
+
+**'과완비 = 항등함수'는 표현 가능성의 문제이지 학습 결과가 아니다.** 경사하강은 데이터에서만
+신호를 받는다. 데이터 밖에서 항등이 될 이유가 없다. 데이터가 구조를 가지면 그 구조를 배우는
+쪽이 손실을 더 빨리 줄인다.
+
+그렇다고 과완비를 마음 놓고 써도 된다는 뜻은 아니다. 진짜 문제는 다른 데 있다 —
+**코드가 128차원이면 그것은 압축도 아니고 쓸 만한 표현도 아니다.** 다음 절의 희소성 제약이
+이 문제를 다룬다.
 
 ---
 
@@ -404,27 +408,27 @@ for lam in LAMS:
     SP["per"].append(float((h > 1e-4).sum(1).mean()))
     SP["dead"].append(int(((h > 1e-4).sum(0) == 0).sum()))
 
-print("은닉 128차원 (입력 64차원의 2배 — 과완비)")
-print()
 print(f"{'λ':>7} {'재구성 MSE':>13} {'활성 비율':>10} {'샘플당 활성 수':>15} "
       f"{'죽은 유닛':>10}")
 print("-" * 60)
 for i, lam in enumerate(LAMS):
     print(f"{lam:>7.3f} {SP['mse'][i]:>13.6f} {SP['frac'][i]:>9.1%} "
           f"{SP['per'][i]:>15.1f} {SP['dead'][i]:>7}/128")
-print()
-print(f"λ=0 이면 128개 중 {SP['per'][0]:.0f}개가 켜진다 — 코드가 조밀하고 해석 불가능하다.")
-print(f"λ=0.01 이면 {SP['per'][3]:.1f}개만 켜지는데 MSE 는 {SP['mse'][3]:.4f} —")
-print(f"  **λ=0 대비 활성 수 {SP['per'][0]/SP['per'][3]:.0f}배 감소, 오차는 여전히 데이터 분산의 "
-      f"{SP['mse'][3]/float((X**2).mean()):.1%}.**")
-print(f"λ=0.05 에서는 전부 죽는다 (활성 0개, MSE {SP['mse'][-1]:.4f} = 평균만 출력).")
-print()
-print("**희소성은 공짜가 아니다 — λ 를 키우면 유닛이 죽는다.**")
-print(f"  λ=0.002 에서 이미 {SP['dead'][1]}/128 이 죽었고, λ=0.03 에서 {SP['dead'][5]}/128 이다.")
-print("  실전에서는 죽은 유닛 재활성화(resampling)나 TopK 제약으로 대응한다.")
-print("  이 구조가 그대로 **희소 오토인코더(SAE) 해석가능성 연구**로 이어진다 —")
-print("  LLM 내부 활성을 과완비·희소 코드로 분해해 '특징'을 찾는 기법이다.")
+sp_ratio = SP['per'][0]/SP['per'][3]
+sp_share = SP['mse'][3]/float((X**2).mean())
 ```
+
+은닉은 128차원(입력 64차원의 2배 — 과완비)이다. $\lambda=0$ 이면 128개 중
+`{python} f"{SP['per'][0]:.0f}"`개가 켜진다 — 코드가 조밀하고 해석 불가능하다. $\lambda=0.01$ 이면
+`{python} f"{SP['per'][3]:.1f}"`개만 켜지는데 MSE 는 `{python} f"{SP['mse'][3]:.4f}"` — **$\lambda=0$ 대비 활성 수
+`{python} f"{sp_ratio:.0f}"`배 감소, 오차는 여전히 데이터 분산의 `{python} f"{sp_share:.1%}"`.**
+$\lambda=0.05$ 에서는 전부 죽는다 (활성 0개, MSE `{python} f"{SP['mse'][-1]:.4f}"` = 평균만 출력).
+
+**희소성은 공짜가 아니다 — $\lambda$ 를 키우면 유닛이 죽는다.** $\lambda=0.002$ 에서 이미
+`{python} f"{SP['dead'][1]}"`/128 이 죽었고, $\lambda=0.03$ 에서 `{python} f"{SP['dead'][5]}"`/128 이다.
+실전에서는 죽은 유닛 재활성화(resampling)나 TopK 제약으로 대응한다. 이 구조가 그대로
+**희소 오토인코더(SAE) 해석가능성 연구**로 이어진다 — LLM 내부 활성을 과완비·희소 코드로
+분해해 '특징'을 찾는 기법이다.
 
 ```{python}
 #| label: fig-sparse
@@ -508,21 +512,20 @@ def tweedie_check(sig, xt):
     Ex = (post*mu_post).sum(1)                             # E[x | x̃]
     return Ex - xt, sig**2*score
 
-print("Tweedie 항등식 수치 검증 —  r*(x̃) − x̃  vs  σ²·∇log p_σ(x̃)")
-print()
 print(f"{'σ':>6} {'최대 절대오차':>16}")
 print("-" * 26)
 xs = np.linspace(-5, 5, 201)
 for sig in [0.2, 0.5, 1.0, 2.0]:
     a, b = tweedie_check(sig, xs)
     print(f"{sig:>6.1f} {np.abs(a-b).max():>16.3e}")
-print()
-print("**부동소수점 오차 수준으로 정확히 일치한다.** 근사가 아니라 항등식이다.")
 ```
+
+$r^*(\tilde x) - \tilde x$ 와 $\sigma^2 \nabla \log p_\sigma(\tilde x)$ 가 **부동소수점 오차 수준으로 정확히
+일치한다.** 근사가 아니라 항등식이다.
 
 ```{python}
 #| label: fig-dae-score
-#| fig-cap: "잡음제거 잔차가 곧 스코어 함수입니다"
+#| fig-cap: "잡음제거 잔차 = 스코어 함수"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -602,22 +605,22 @@ for s_tr in [0.0, 0.1, 0.3, 0.6]:
     DAE["noisy"].append(m(X_te_noisy))
     DAE["jac"].append(J)
     print(f"{s_tr:>8.1f} {m(X_te):>13.6f} {m(X_te_noisy):>17.6f} {J:>20.3f}")
-print()
-print(f"**σ=0.3 으로 학습하면 잡음 입력 오차가 {DAE['noisy'][0]:.4f} → "
-      f"{DAE['noisy'][2]:.4f}, {DAE['noisy'][0]/DAE['noisy'][2]:.0f}배 줄어든다.**")
-print(f"대신 깨끗한 입력의 오차는 {DAE['clean'][0]:.6f} → {DAE['clean'][2]:.4f} 로 "
-      f"늘어난다 — 견고성의 대가다.")
-print(f"σ=0.6 은 과하다: 잡음 입력 성능마저 나빠진다 "
-      f"({DAE['noisy'][2]:.4f} → {DAE['noisy'][3]:.4f}).")
-print()
-print("**자코비안 norm이 단조 감소한다 ("
-      + " → ".join(f"{j:.2f}" for j in DAE["jac"]) + ").**")
-print("잡음제거 학습은 명시적으로 요구하지 않았는데도 **인코더를 수축시킨다** —")
-print("입력이 흔들려도 코드가 덜 변하게 만드는 것이 잡음을 이기는 방법이기 때문이다.")
-print("수축 오토인코더(CAE)는 이 자코비안 norm을 **직접** 페널티로 넣는다:")
-print("   L = ‖x − x̂‖² + λ‖∂h/∂x‖²_F")
-print("**DAE 는 CAE 를 암묵적으로 수행한다** — 위 표가 그 증거다.")
+dae_gain = DAE['noisy'][0]/DAE['noisy'][2]
+jac_txt = " → ".join(f"{j:.2f}" for j in DAE["jac"])
 ```
+
+**$\sigma=0.3$ 으로 학습하면 잡음 입력 오차가 `{python} f"{DAE['noisy'][0]:.4f}"` → `{python} f"{DAE['noisy'][2]:.4f}"`,
+`{python} f"{dae_gain:.0f}"`배 줄어든다.** 대신 깨끗한 입력의 오차는 `{python} f"{DAE['clean'][0]:.6f}"` →
+`{python} f"{DAE['clean'][2]:.4f}"` 로 늘어난다 — 견고성의 대가다. $\sigma=0.6$ 은 과하다: 잡음 입력 성능마저
+나빠진다 (`{python} f"{DAE['noisy'][2]:.4f}"` → `{python} f"{DAE['noisy'][3]:.4f}"`).
+
+**자코비안 norm 이 단조 감소한다 (`{python} jac_txt`).** 잡음제거 학습은 명시적으로 요구하지
+않았는데도 **인코더를 수축시킨다** — 입력이 흔들려도 코드가 덜 변하게 만드는 것이 잡음을 이기는
+방법이기 때문이다. 수축 오토인코더(CAE)는 이 자코비안 norm 을 **직접** 페널티로 넣는다.
+
+$$\mathcal{L} = \|x - \hat x\|^2 + \lambda \left\|\frac{\partial h}{\partial x}\right\|_F^2$$
+
+**DAE 는 CAE 를 암묵적으로 수행한다** — 위 표가 그 증거다.
 
 ---
 
@@ -662,8 +665,7 @@ def ring_dec(Z):
 
 
 rec = ring_ae.forward(X_ring, training=False)[0]
-print(f"재구성 MSE {((X_ring-rec)**2).mean():.6f} — 원을 1차원 코드로 잘 표현했다")
-print()
+ring_mse = float(((X_ring-rec)**2).mean())
 
 i0 = int(np.argmin(np.abs(th - 0.3)))
 i1 = int(np.argmin(np.abs(th - np.pi)))
@@ -681,18 +683,20 @@ for t_, a_, b_ in zip(ts, off_lat, off_lin):
     print(f"{t_:>5.1f} {a_:>15.4f} {b_:>22.4f}{mark}")
 print("-" * 46)
 print(f"{'평균':>5} {off_lat.mean():>15.4f} {off_lin.mean():>22.4f}")
-print()
-print(f"**잠재 보간이 데이터 직선보다 {off_lin.mean()/off_lat.mean():.1f}배 매니폴드에 붙어 있다.**")
-print(f"직선 보간은 t=0.5 에서 원 중심 쪽으로 {off_lin[5]:.2f} 만큼 파고든다 — 존재하지 않는 데이터다.")
-print()
-print(f"**그런데 잠재 경로도 완전하지는 않다: t={ts[np.argmax(off_lat)]:.1f} 에서 "
-      f"{off_lat.max():.4f} 만큼 튄다.**")
-print("우연이 아니다. **원(S¹)은 직선(ℝ¹)에 위상적으로 끼워 넣을 수 없다.**")
-print("어딘가에서 반드시 잘라야 하고, 잠재 직선이 그 절단면을 지나면 점프가 생긴다.")
-print()
-print("**교훈: 잠재 차원의 크기만이 아니라 위상(topology)이 맞아야 한다.**")
-print("이 문제는 VAE 에서도, 확산 모델의 잠재 공간에서도 그대로 남는다.")
+interp_ratio = float(off_lin.mean()/off_lat.mean())
+t_jump, jump = float(ts[np.argmax(off_lat)]), float(off_lat.max())
 ```
+
+재구성 MSE 가 `{python} f"{ring_mse:.6f}"` 로 원을 1차원 코드로 잘 표현했고, **잠재 보간이 데이터 직선보다
+`{python} f"{interp_ratio:.1f}"`배 매니폴드에 붙어 있다.** 직선 보간은 $t=0.5$ 에서 원 중심 쪽으로
+`{python} f"{off_lin[5]:.2f}"` 만큼 파고든다 — 존재하지 않는 데이터다.
+
+**그런데 잠재 경로도 완전하지는 않다: $t$ = `{python} f"{t_jump:.1f}"` 에서 `{python} f"{jump:.2f}"` 만큼 튄다.**
+우연이 아니다. **원($S^1$)은 직선($\mathbb{R}^1$)에 위상적으로 끼워 넣을 수 없다.** 어딘가에서 반드시
+잘라야 하고, 잠재 직선이 그 절단면을 지나면 점프가 생긴다.
+
+**교훈: 잠재 차원의 크기만이 아니라 위상(topology)이 맞아야 한다.** 이 문제는 VAE 에서도,
+확산 모델의 잠재 공간에서도 그대로 남는다.
 
 ```{python}
 #| label: fig-latent
@@ -835,21 +839,21 @@ for K in [4, 16, 64, 256, 1024]:
           f"{len(np.unique(a)):>9}/{K}")
 print("-" * 60)
 print(f"{'연속 8D':>9} {'256.0':>10} {cont_mse:>13.6f} {1.0:>9.2f}배")
-print()
-print(f"**10비트(1024 코드)로 256비트 연속 잠재의 {cont_mse/VQ['mse'][-1]:.0%} 품질에 도달한다.**")
-print(f"  비트는 {256/10:.0f}배 줄었는데 MSE 는 {VQ['mse'][-1]/cont_mse:.2f}배만 늘었다.")
-print()
-print("**코드북이 전부 쓰이고 있다 (죽은 코드 0개).** 실전에서는 이게 잘 안 된다 —")
-print("코드북 붕괴(codebook collapse)로 일부 코드만 쓰이는 문제가 흔하고,")
-print("EMA 갱신·코드 재시작(restart)·낮은 차원 코드북으로 대응한다.")
-print()
-print("이산 잠재가 중요한 이유:")
-for s in ["자기회귀 모델을 잠재 위에 얹을 수 있다 (VQ-VAE + PixelCNN, DALL·E 1)",
-          "오디오 코덱의 핵심 (SoundStream, EnCodec — 8.x 장에서 다룬다)",
-          "언어모델의 토큰과 같은 인터페이스가 된다 (이미지를 '토큰'으로)",
-          "비트레이트를 정확히 제어할 수 있다"]:
-    print(f"  · {s}")
+vq_quality = cont_mse/VQ['mse'][-1]
+vq_used_all = all(u == k for u, k in zip(VQ["used"], VQ["K"]))
 ```
+
+**10비트(1024 코드)로 256비트 연속 잠재의 `{python} f"{vq_quality:.0%}"` 품질에 도달한다.** 비트는
+`{python} f"{256/10:.0f}"`배 줄었는데 MSE 는 `{python} f"{VQ['mse'][-1]/cont_mse:.2f}"`배만 늘었다.
+
+여기서는 코드북이 전부 쓰이고 있지만(죽은 코드 `{python} "0개" if vq_used_all else "있음"`), 실전에서는
+이게 잘 안 된다 — 코드북 붕괴(codebook collapse)로 일부 코드만 쓰이는 문제가 흔하고,
+EMA 갱신·코드 재시작(restart)·낮은 차원 코드북으로 대응한다. 이산 잠재가 중요한 이유는 넷이다.
+
+- 자기회귀 모델을 잠재 위에 얹을 수 있다 (VQ-VAE + PixelCNN, DALL·E 1)
+- 오디오 코덱의 핵심 (SoundStream, EnCodec — Part 8 에서 다룬다)
+- 언어모델의 토큰과 같은 인터페이스가 된다 (이미지를 '토큰'으로)
+- 비트레이트를 정확히 제어할 수 있다
 
 ```{python}
 #| label: fig-vq
@@ -925,17 +929,19 @@ fig.show()
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 선형 오토인코더가 PCA로 수렴하는 것**
-`pca-vs-ae` 에서 학습된 가중치의 열공간과 PCA 부분공간의 주각(principal angle)을 재라.
-0에 수렴하는가? 개별 축은 왜 일치하지 않는가?
+**① 인코더 주각이 왜 52° 나 되는가**
+`subspace-detail` 의 인코더 주각을 $k$ = 1, 2, 3, 5, 8 에 대해 그리고, 조건수가 큰 데이터를
+화이트닝($X \to X\Sigma^{-1/2}$)해 다시 학습시켜라. 주각이 줄어드는가? 왜 그런지 손실이
+제약하는 방향으로 설명하라.
 
-**② 과완비에서 항등함수를 막는다**
-`overcomplete` 에 잡음(DAE)이나 희소성(sparse AE)을 넣어라.
-어느 쪽이 항등함수 붕괴를 확실히 막는가?
+**② 매니폴드 없는 데이터에서 항등함수를 막는다**
+`identity-test` 의 등방 가우스 데이터에 $k=128$ 로 잡음(DAE, $\sigma=0.3$)이나 희소성($\lambda=0.01$)을
+넣어라. 미학습 잡음 MSE 가 여전히 0.005 로 내려가는가? 어느 쪽이 항등함수를 확실히 막는가?
 
-**③ Tweedie 항등식을 검증한다**
-`tweedie` 에서 잡음 수준을 바꾸며 DAE의 잔차가 스코어 $\nabla\log p$ 에
-비례하는지 확인하라. 이것이 [6.6](06_score_sde.qmd)의 다리다.
+**③ 학습된 DAE 의 잔차가 스코어인지 확인한다**
+`DAE_MODELS[0.3]` 의 잔차 $r(\tilde x) - \tilde x$ 를, 훈련 데이터로 만든 가우스 커널 밀도 추정
+($\sigma=0.3$)의 $\sigma^2 \nabla \log p_\sigma$ 와 비교하라. 코사인 유사도가 얼마인가? 잔차의 크기
+비율은? 이것이 [6.6](06_score_sde.qmd)의 다리다.
 :::
 
 ## 요약
@@ -944,19 +950,19 @@ fig.show()
 |------|------|
 | 오토인코더 | $\hat{x} = g(f(x))$, 손실 = 재구성 오차, 레이블 불필요 |
 | 병목 | $k < d$ 가 압축을 강제한다 |
-| 선형 AE = PCA | $k \le 8$ 에서 재구성 MSE가 소수점 6자리까지 일치 |
+| 선형 AE = PCA | 재구성 MSE 상대 차이 최대 `{python} f"{lin_gap:.1%}"`, $k \le 8$ 에서 소수점 6자리까지 일치 |
 | 단, 축은 다르다 | 회전 자유도 — 디코더 행이 특정 PC에 대응하지 않음 |
-| 인코더의 자유도 | 데이터가 분산을 안 갖는 방향에서는 제약 없음 (주각 52°, 데이터 위 차이 0.4%) |
-| 비선형 이득 | $k{=}5$ 에서 PCA 대비 오차 10배 감소 |
+| 인코더의 자유도 | 데이터가 분산을 안 갖는 방향에서는 제약 없음 (주각 `{python} f"{ang_enc:.0f}"`°, 데이터 위 차이 `{python} f"{data_gap:.1%}"`) |
+| 비선형 이득 | $k{=}5$ 에서 PCA 대비 오차 `{python} f"{gain5:.0f}"`배 감소 |
 | 과완비 | **매니폴드가 있으면 항등함수를 배우지 않는다** (실측) |
-| 항등함수가 되는 조건 | 데이터에 구조가 없을 때 ($k{\ge}64$, 미학습 MSE 0.005) |
-| 희소 AE | λ=0.01로 활성 66개 → 6.1개, MSE 0.0011 |
-| 희소성의 대가 | 유닛이 죽는다 (λ=0.03에서 126/128) |
-| DAE | σ=0.3 학습 → 잡음 입력 오차 10배 감소 |
-| DAE = 암묵적 CAE | 자코비안 norm 6.39 → 2.73으로 자동 수축 |
+| 항등함수가 되는 조건 | 데이터에 구조가 없을 때 ($k{\ge}64$, 미학습 MSE `{python} f"{ID_TE[64]:.3f}"`) |
+| 희소 AE | λ=0.01로 활성 `{python} f"{SP['per'][0]:.0f}"`개 → `{python} f"{SP['per'][3]:.1f}"`개, MSE `{python} f"{SP['mse'][3]:.4f}"` |
+| 희소성의 대가 | 유닛이 죽는다 (λ=0.03에서 `{python} f"{SP['dead'][5]}"`/128) |
+| DAE | σ=0.3 학습 → 잡음 입력 오차 `{python} f"{dae_gain:.0f}"`배 감소 |
+| DAE = 암묵적 CAE | 자코비안 norm `{python} f"{DAE['jac'][0]:.2f}"` → `{python} f"{DAE['jac'][-1]:.2f}"`으로 자동 수축 |
 | Tweedie | $r^*(\tilde x) - \tilde x = \sigma^2\nabla\log p_\sigma$ — 확산의 씨앗 |
-| 보간의 함정 | 잠재 경로가 직선보다 7배 낫지만 위상이 안 맞으면 튄다 |
-| VQ | 10비트로 256비트 연속 잠재의 85% 품질 |
+| 보간의 함정 | 잠재 경로가 직선보다 `{python} f"{interp_ratio:.0f}"`배 낫지만 위상이 안 맞으면 튄다 |
+| VQ | 10비트로 256비트 연속 잠재의 `{python} f"{vq_quality:.0%}"` 품질 |
 | 직통 추정기 | `argmin` 을 우회하는 편향된 그래디언트 |
 
 ---
