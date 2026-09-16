@@ -98,8 +98,6 @@ import numpy as np
 r = np.random.default_rng(0)
 NS = 40000
 
-print("두 추정량의 표준편차 (샘플 1개 기준)")
-print()
 print(f"{'σ':>5} {'μ':>5} {'해석해':>8} {'재파라미터화':>14} {'스코어 함수':>13} "
       f"{'분산 비율':>11}")
 print("-" * 62)
@@ -114,27 +112,29 @@ for sig in [0.5, 1.0, 2.0]:
         VAR_TABLE.append((sig, mu, g_rep.std(), g_sf.std(), ratio))
         print(f"{sig:>5.1f} {mu:>5.1f} {2*mu:>8.2f} {g_rep.std():>14.4f} "
               f"{g_sf.std():>13.4f} {ratio:>10.1f}배")
-print()
-print("두 추정량 모두 **평균은 맞다** (불편추정량):")
 eps = r.normal(size=(4000, 64))
 z = 1.0 + 1.0*eps
 a, b = (2*z).mean(1), ((z**2)*(z-1.0)/1.0).mean(1)
-print(f"  n=64 미니배치 기준")
-print(f"    재파라미터화: 평균 {a.mean():.4f} (참값 2.0), 표준오차 {a.std():.4f}")
-print(f"    스코어 함수 : 평균 {b.mean():.4f} (참값 2.0), 표준오차 {b.std():.4f}")
-print(f"    → 표준오차 {b.std()/a.std():.1f}배 차이. "
-      f"같은 정밀도를 얻으려면 샘플이 {(b.std()/a.std())**2:.0f}배 필요하다.")
 print()
-print("**왜 이런 차이가 나는가**")
-print("  스코어 함수 추정량은 f 를 **블랙박스로** 다룬다 — f 의 값만 쓴다.")
-print("  재파라미터화는 f 의 **그래디언트**를 쓴다 — 훨씬 많은 정보다.")
-print("  대신 재파라미터화는 z 가 μ, σ 의 **미분 가능한 함수**여야 쓸 수 있다.")
-print("  이산 잠재변수에는 못 쓴다 → Gumbel-softmax 나 REINFORCE 로 우회한다.")
+print(f"n=64 미니배치 (σ=1, μ=1):")
+print(f"  재파라미터화: 평균 {a.mean():.4f} (참값 2.0), 표준오차 {a.std():.4f}")
+print(f"  스코어 함수 : 평균 {b.mean():.4f} (참값 2.0), 표준오차 {b.std():.4f}")
+se_ratio = float(b.std()/a.std())
+var_lo, var_hi = min(t[4] for t in VAR_TABLE), max(t[4] for t in VAR_TABLE)
 ```
+
+표는 샘플 1개 기준 두 추정량의 표준편차다. 두 추정량 모두 **평균은 맞다**(불편추정량)지만
+표준오차가 `{python} f"{se_ratio:.1f}"`배 차이 나고, 같은 정밀도를 얻으려면 스코어 함수 쪽은 샘플이
+`{python} f"{se_ratio**2:.0f}"`배 필요하다. 분산 비율은 $\mu$ 가 클수록 벌어져 `{python} f"{var_lo:.1f}"`~`{python} f"{var_hi:.0f}"`배에 이른다.
+
+**왜 이런 차이가 나는가.** 스코어 함수 추정량은 $f$ 를 **블랙박스로** 다룬다 — $f$ 의 값만 쓴다.
+재파라미터화는 $f$ 의 **그래디언트**를 쓴다 — 훨씬 많은 정보다. 대신 재파라미터화는 $z$ 가
+$\mu, \sigma$ 의 **미분 가능한 함수**여야 쓸 수 있다. 이산 잠재변수에는 못 쓴다 → Gumbel-softmax 나
+REINFORCE 로 우회한다.
 
 ```{python}
 #| label: fig-reparam
-#| fig-cap: "재파라미터화는 확률 노드를 그래디언트 경로 밖으로 빼냅니다"
+#| fig-cap: "확률 노드를 그래디언트 경로 밖으로 빼내는 재파라미터화"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -216,16 +216,19 @@ REAL_SHARP = sharpness(X_raw)
 
 print(f"데이터 {X.shape} — 실제 자유도 {Z_true.shape[1]}개, 잠재 차원 k={K}")
 print()
-print("구현 검증 — 유한차분 그래디언트 검사 (ε 고정)")
+print("유한차분 그래디언트 검사 (ε 고정)")
 print(f"{'잠재 k':>7} {'β':>6} {'상대오차':>12}")
 print("-" * 28)
+gc_worst = 0.0
 for k in [1, 4, 8]:
     for beta in [0.0, 1.0, 4.0]:
         m = VAE(64, 32, k, seed=1)
-        print(f"{k:>7} {beta:>6.1f} {vae_grad_check(m, X[:200], beta=beta, n_sample=4):>12.2e}")
-print()
-print("역전파가 정확하다. 이제 실험할 수 있다.")
+        e = vae_grad_check(m, X[:200], beta=beta, n_sample=4)
+        gc_worst = max(gc_worst, e)
+        print(f"{k:>7} {beta:>6.1f} {e:>12.2e}")
 ```
+
+최대 상대오차 `{python} f"{gc_worst:.1e}"` — 역전파가 정확하다. 이제 실험할 수 있다.
 
 ::: {.callout-note collapse="true"}
 ### `src/generative.py` 의 VAE 역전파 핵심
@@ -283,26 +286,23 @@ for i, b in enumerate(BETAS):
           f"{BS['au'][i]:>7}/{K} {BS['mse'][i]:>12.6f} {BS['sharp'][i]:>17.4f}")
 print("-" * 72)
 print(f"{'실제 데이터':>7} {'':>10} {'':>10} {'':>10} {'':>12} {REAL_SHARP:>17.4f}")
-print()
-print("**β 를 키우면 KL 이 줄고 재구성이 나빠진다** — 정확히 예상대로다.")
-print(f"  β=0:  KL {BS['kl'][0]:.1f},  MSE {BS['mse'][0]:.6f}")
-print(f"  β=20: KL {BS['kl'][5]:.1f},  MSE {BS['mse'][5]:.6f} "
-      f"({BS['mse'][5]/BS['mse'][0]:.0f}배 악화)")
-print()
-print("**흥미로운 것은 마지막 열이다 — 사전분포에서 뽑은 샘플의 선명도.**")
-print(f"  실제 데이터: {REAL_SHARP:.4f}")
-for i in [0, 2, 3, 5]:
-    b = BETAS[i]
-    d = BS['sharp'][i]/REAL_SHARP
-    tag = ("너무 날카롭다 (고주파 잡음)" if d > 1.3 else
-           "너무 흐릿하다" if d < 0.85 else "**실제와 비슷하다**")
-    print(f"  β={b:<5}     {BS['sharp'][i]:.4f}  ({d:.2f}배) — {tag}")
-print()
-print("β=0 은 오토인코더다. 잠재에 아무 제약이 없으니")
-print("N(0,I) 에서 뽑은 z 는 인코더가 실제로 쓰는 영역 밖에 떨어진다.")
-print("디코더가 본 적 없는 입력을 받고 **고주파 쓰레기**를 뱉는다 — 선명도가 2배 넘게 튄다.")
-print("β 가 너무 크면 반대로 흐릿해진다. **중간 어딘가가 맞다.**")
+sharp_ratio = {b: BS['sharp'][i]/REAL_SHARP for i, b in enumerate(BETAS)}
+ok_betas = [b for b in BETAS if 0.85 <= sharp_ratio[b] <= 1.3]
+mse_worse = BS['mse'][5]/BS['mse'][0]
 ```
+
+**$\beta$ 를 키우면 KL 이 줄고 재구성이 나빠진다** — 정확히 예상대로다. $\beta=0$ 에서 KL
+`{python} f"{BS['kl'][0]:.1f}"`, MSE `{python} f"{BS['mse'][0]:.6f}"` 이던 것이 $\beta=20$ 에서 KL
+`{python} f"{BS['kl'][5]:.1f}"`, MSE `{python} f"{BS['mse'][5]:.6f}"` (`{python} f"{mse_worse:.0f}"`배 악화)다.
+
+**흥미로운 것은 마지막 열이다 — 사전분포에서 뽑은 샘플의 선명도.** 실제 데이터의
+`{python} f"{REAL_SHARP:.4f}"` 에 대해 $\beta=0$ 은 `{python} f"{sharp_ratio[0.0]:.2f}"`배로 너무 날카롭고(고주파 잡음),
+$\beta=20$ 은 `{python} f"{sharp_ratio[20.0]:.2f}"`배로 너무 흐릿하며, 그 사이
+$\beta$ = `{python} ", ".join(f"{b:g}" for b in ok_betas)` 에서 실제와 비슷하다.
+
+$\beta=0$ 은 오토인코더다. 잠재에 아무 제약이 없으니 $\mathcal{N}(0,I)$ 에서 뽑은 $z$ 는 인코더가
+실제로 쓰는 영역 밖에 떨어진다. 디코더가 본 적 없는 입력을 받고 **고주파 쓰레기**를 뱉는다.
+$\beta$ 가 너무 크면 반대로 흐릿해진다. **중간 어딘가가 맞다.**
 
 ```{python}
 #| label: fig-beta
@@ -381,8 +381,6 @@ KL이 0으로 가고, 디코더는 $z$ 를 무시한다.
 import numpy as np
 from src.generative import VAE
 
-print("가설 A: 디코더 폭을 키우면 붕괴한다")
-print()
 print(f"{'디코더 폭':>10} {'KL항':>9} {'활성 잠재':>10} {'테스트 MSE':>12} "
       f"{'z 를 섞었을 때':>16}")
 print("-" * 62)
@@ -398,16 +396,14 @@ for hdim in [4, 16, 48, 128]:
     mse_p = float(((X_te - m.decode(c["mu"][perm])[1])**2).mean())
     CW.append((hdim, kl, au, mse, mse_p))
     print(f"{hdim:>10} {kl:>9.3f} {au:>7}/{K} {mse:>12.6f} {mse_p:>16.6f}")
-print()
-print("**가설 A 는 재현되지 않았다.**")
-print("디코더 폭을 4 → 128 로 32배 키워도 KL 은 8.1 근처에서 안정적이고,")
-print(f"활성 잠재도 {CW[-1][2]}/{K} 로 유지된다. z 를 섞으면 MSE 가 "
-      f"{CW[1][4]/CW[1][3]:.0f}~{CW[-1][4]/CW[-1][3]:.0f}배 나빠진다 —")
-print("디코더는 여전히 z 를 **적극적으로 쓰고 있다.**")
-print()
-print("(오히려 폭 4 에서 KL 이 4.0 으로 낮은데, 이건 붕괴가 아니라")
-print(" **디코더가 너무 약해서** 잠재 정보를 다 못 쓰는 경우다.)")
+shuf_lo, shuf_hi = CW[1][4]/CW[1][3], CW[-1][4]/CW[-1][3]
 ```
+
+**가설 A(디코더 폭을 키우면 붕괴한다)는 재현되지 않았다.** 디코더 폭을 4 → 128 로 32배 키워도
+KL 은 `{python} f"{CW[-1][1]:.1f}"` 근처에서 안정적이고, 활성 잠재도 `{python} f"{CW[-1][2]}"`/`{python} f"{K}"` 로 유지된다.
+$z$ 를 섞으면 MSE 가 `{python} f"{shuf_lo:.0f}"`~`{python} f"{shuf_hi:.0f}"`배 나빠진다 — 디코더는 여전히 $z$ 를
+**적극적으로 쓰고 있다.** (오히려 폭 4 에서 KL 이 `{python} f"{CW[0][1]:.1f}"` 로 낮은데, 이건 붕괴가 아니라
+**디코더가 너무 약해서** 잠재 정보를 다 못 쓰는 경우다.)
 
 왜 재현되지 않았을까. 이 디코더에게는 **$z$ 말고 다른 정보원이 없기 때문이다.**
 $z$ 를 버리면 재구성을 포기해야 한다.
@@ -464,8 +460,6 @@ class ARVae(VAE):
         return rec + beta*kl, g, (rec, kl)
 
 
-print("가설 B: 디코더에게 z 말고 다른 정보원을 주면 붕괴한다")
-print()
 print(f"{'디코더':<26} {'KL항':>9} {'활성 잠재':>10} {'재구성 MSE':>13} "
       f"{'z 를 섞었을 때':>16}")
 print("-" * 80)
@@ -485,31 +479,25 @@ for nm, use_ar in [("MLP 만 (z 가 유일한 정보)", False),
     mse_p = float(((X_te - (m.decode(c["mu"][perm])[1] + ar_t))**2).mean())
     AR_RES[use_ar] = (kl, au, mse, mse_p, var)
     print(f"{nm:<26} {kl:>9.4f} {au:>7}/{K} {mse:>13.6f} {mse_p:>16.6f}")
-print()
-print("**가설 B 는 완벽하게 재현되었다.**")
 k0, a0, m0, p0, _ = AR_RES[False]
 k1, a1, m1, p1, _ = AR_RES[True]
-print(f"  KL:        {k0:.4f} → {k1:.4f}  ({k0/k1:.0f}배 감소)")
-print(f"  활성 잠재:  {a0}/{K} → {a1}/{K}")
-print(f"  z 를 섞었을 때 MSE: {p0:.6f} → {p1:.6f}")
-print(f"    ← **z 를 완전히 무작위로 바꿔도 재구성이 전혀 안 변한다** "
-      f"({m1:.6f} vs {p1:.6f})")
-print(f"  그런데 재구성 성능은 그대로다 ({m0:.6f} vs {m1:.6f}).")
-print("  AR 항이 일을 다 하고 z 는 놀고 있다.")
-print()
-print("**결론: 사후 붕괴의 원인은 디코더의 '용량'이 아니라**")
-print("**'z 없이도 데이터를 설명할 수 있는 경로가 있는가'다.**")
-print("텍스트 VAE 가 특히 잘 붕괴하는 이유가 이것이다 —")
-print("LSTM·Transformer 디코더는 그 자체로 훌륭한 언어모델이다.")
-print()
-print("대응책:")
-for s in ["KL 어닐링(warm-up) — β 를 0 에서 서서히 1 로 올린다",
-          "자유 비트(free bits) — 차원마다 KL 하한 λ 를 두어 그 아래로는 벌하지 않는다",
-          "디코더 약화 — 단어 드롭아웃, 문맥 창 제한",
-          "δ-VAE — q 의 분산에 하한을 두어 구조적으로 붕괴를 막는다",
-          "이산 잠재 (VQ-VAE) — KL 항 자체가 없어 붕괴하지 않는다"]:
-    print(f"  · {s}")
 ```
+
+**가설 B(디코더에게 $z$ 말고 다른 정보원을 주면 붕괴한다)는 완벽하게 재현되었다.** KL 이
+`{python} f"{k0:.4f}"` → `{python} f"{k1:.4f}"` 로 `{python} f"{k0/k1:.0f}"`배 줄고, 활성 잠재가
+`{python} f"{a0}"`/`{python} f"{K}"` → `{python} f"{a1}"`/`{python} f"{K}"` 이다. $z$ 를 완전히 무작위로 바꿔도 재구성이 전혀 안
+변한다 (`{python} f"{m1:.6f}"` vs `{python} f"{p1:.6f}"`). 그런데 재구성 성능은 그대로다
+(`{python} f"{m0:.6f}"` vs `{python} f"{m1:.6f}"`) — AR 항이 일을 다 하고 $z$ 는 놀고 있다.
+
+**결론: 사후 붕괴의 원인은 디코더의 '용량'이 아니라 '$z$ 없이도 데이터를 설명할 수 있는
+경로가 있는가'다.** 텍스트 VAE 가 특히 잘 붕괴하는 이유가 이것이다 — LSTM·Transformer 디코더는
+그 자체로 훌륭한 언어모델이다. 대응책은 다섯이다.
+
+- KL 어닐링(warm-up) — $\beta$ 를 0 에서 서서히 1 로 올린다
+- 자유 비트(free bits) — 차원마다 KL 하한 $\lambda$ 를 두어 그 아래로는 벌하지 않는다
+- 디코더 약화 — 단어 드롭아웃, 문맥 창 제한
+- δ-VAE — $q$ 의 분산에 하한을 두어 구조적으로 붕괴를 막는다
+- 이산 잠재 (VQ-VAE) — KL 항 자체가 없어 붕괴하지 않는다
 
 ```{python}
 #| label: collapse-beta
@@ -518,8 +506,6 @@ for s in ["KL 어닐링(warm-up) — β 를 0 에서 서서히 1 로 올린다",
 import numpy as np
 from src.generative import VAE
 
-print("가설 C: β 를 키우면 붕괴한다 (KL 항이 재구성을 이긴다)")
-print()
 print(f"{'β':>8} {'KL항':>11} {'활성 잠재':>10} {'테스트 MSE':>13} "
       f"{'z 를 섞었을 때':>16}")
 print("-" * 62)
@@ -538,12 +524,12 @@ for beta in [1.0, 20.0, 100.0, 500.0]:
 mean_mse = float((X_te**2).mean())
 print("-" * 62)
 print(f"{'평균 출력':>8} {'':>11} {'0/8':>10} {mean_mse:>13.6f}")
-print()
-print("**가설 C 도 재현되었다.** β=100 에서 완전 붕괴다 —")
-print(f"  KL {CB[2][1]:.5f} ≈ 0, 활성 잠재 0/{K},")
-print(f"  테스트 MSE {CB[2][3]:.6f} 가 **평균만 출력하는 모델({mean_mse:.6f})과 같다.**")
-print("  디코더가 입력을 완전히 무시하고 데이터 평균 하나만 뱉고 있다.")
 ```
+
+**가설 C($\beta$ 를 키우면 KL 항이 재구성을 이겨 붕괴한다)도 재현되었다.** $\beta=100$ 에서 완전
+붕괴다 — KL `{python} f"{CB[2][1]:.5f}"` ≈ 0, 활성 잠재 `{python} f"{CB[2][2]}"`/`{python} f"{K}"`, 테스트 MSE
+`{python} f"{CB[2][3]:.6f}"` 가 **평균만 출력하는 모델(`{python} f"{mean_mse:.6f}"`)과 같다.** 디코더가 입력을
+완전히 무시하고 데이터 평균 하나만 뱉고 있다.
 
 ### 어떤 차원이 살아남는가
 
@@ -558,8 +544,6 @@ _, mu_te, lv_te = m.encode(X_te)
 kl_dim = 0.5*(mu_te**2 + np.exp(lv_te) - 1 - lv_te).mean(0)
 order = np.argsort(kl_dim)[::-1]
 
-print("β=1 모델의 잠재 차원별 상태")
-print()
 print(f"{'차원':>5} {'KL':>9} {'Var[μ]':>10} {'평균 σ':>9} {'상태'}")
 print("-" * 46)
 for j in order:
@@ -567,16 +551,14 @@ for j in order:
     print(f"{j:>5} {kl_dim[j]:>9.4f} {mu_te[:, j].var():>10.4f} "
           f"{np.exp(0.5*lv_te[:, j]).mean():>9.4f}  "
           f"{'살아있음' if alive else '붕괴 (사전분포 그대로)'}")
-print()
 n_alive = int((kl_dim > 0.05).sum())
-print(f"**{n_alive}개 차원이 살아있다.** 데이터의 실제 자유도는 "
-      f"{Z_true.shape[1]}개였다.")
-print("VAE 가 아무도 알려주지 않은 내재 차원을 스스로 찾아낸 것이다.")
-print()
-print("붕괴한 차원은 μ≈0, σ≈1 — 정확히 사전분포 N(0,1) 이다.")
-print("KL 항 입장에서 이것이 최선이고, 쓰지 않을 차원은 여기로 수렴한다.")
-print("**이것은 버그가 아니라 자동 차원 선택이다** (β-VAE 의 분리 학습이 기대는 성질).")
 ```
+
+$\beta=1$ 모델에서 **`{python} f"{n_alive}"`개 차원이 살아있다.** 데이터의 실제 자유도는
+`{python} f"{Z_true.shape[1]}"`개였다. VAE 가 아무도 알려주지 않은 내재 차원을 스스로 찾아낸 것이다.
+붕괴한 차원은 $\mu \approx 0$, $\sigma \approx 1$ — 정확히 사전분포 $\mathcal{N}(0,1)$ 이다. KL 항 입장에서
+이것이 최선이고, 쓰지 않을 차원은 여기로 수렴한다. **이것은 버그가 아니라 자동 차원 선택이다**
+($\beta$-VAE 의 분리 학습이 기대는 성질).
 
 ---
 
@@ -609,36 +591,34 @@ nn.train(net, c_in[:, None], x_out[:, None], loss="mse",
 grid = np.linspace(-1, 1, 9)
 pred = net.forward(grid[:, None], training=False)[0].ravel()
 
-print("데이터: 조건 c 와 무관하게 x 는 −1 또는 +1 (각 50%)")
-print(f"  실제 x 의 분포: 평균 {x_out.mean():.3f}, "
+print(f"실제 x 의 분포: 평균 {x_out.mean():.3f}, "
       f"봉우리 {np.percentile(x_out, 25):.2f} 와 {np.percentile(x_out, 75):.2f}")
 print()
 print(f"{'c':>7} {'MSE 학습 예측':>14} {'가장 가까운 봉우리까지':>22}")
 print("-" * 46)
 for c_, p_ in zip(grid, pred):
     print(f"{c_:>7.2f} {p_:>14.4f} {min(abs(p_-1), abs(p_+1)):>22.4f}")
-print()
-print(f"**모든 예측이 0 근처다 — 데이터에는 존재하지 않는 값이다.**")
-print(f"평균 |예측| = {np.abs(pred).mean():.4f}, 실제 |x| ≈ 1.0")
-print()
-print("이미지에서 이것이 '흐릿함'으로 나타난다.")
-print("  · 어떤 z 가 '왼쪽을 보는 얼굴'과 '오른쪽을 보는 얼굴' 둘 다에 대응하면")
-print("  · 디코더는 두 얼굴의 픽셀 평균 — 유령 같은 이미지 — 을 낸다")
-print()
-print("**해결책은 모두 '조건부 평균을 내지 않게' 하는 방향이다:**")
-for s in ["GAN 손실 — 판별자가 '평균 이미지'를 바로 잡아낸다 (VAE-GAN)",
-          "이산화 로그우도 — PixelCNN 디코더로 픽셀 분포를 다봉으로 (PixelVAE)",
-          "계층적 잠재 — z 를 더 세분화해 조건부 분포를 좁힌다 (NVAE, VDVAE)",
-          "확산 — 한 번에 평균을 내지 않고 여러 단계로 나눠 샘플링한다"]:
-    print(f"  · {s}")
-print()
-print("**마지막 항목이 결정적이다.** 확산 모델은 각 단계에서 조건부 평균을 예측하지만,")
-print("매 단계 잡음을 다시 더해 **분포를 유지한다.** 그래서 흐려지지 않는다.")
+mean_abs_pred = float(np.abs(pred).mean())
 ```
+
+데이터는 조건 $c$ 와 무관하게 $x$ 가 $-1$ 또는 $+1$ (각 50%)이다. **모든 예측이 0 근처다 —
+데이터에는 존재하지 않는 값이다.** 평균 $|\text{예측}|$ = `{python} f"{mean_abs_pred:.3f}"`, 실제 $|x| \approx 1$.
+
+이미지에서 이것이 '흐릿함'으로 나타난다. 어떤 $z$ 가 '왼쪽을 보는 얼굴'과 '오른쪽을 보는 얼굴'
+둘 다에 대응하면, 디코더는 두 얼굴의 픽셀 평균 — 유령 같은 이미지 — 을 낸다.
+**해결책은 모두 '조건부 평균을 내지 않게' 하는 방향이다.**
+
+- GAN 손실 — 판별자가 '평균 이미지'를 바로 잡아낸다 (VAE-GAN)
+- 이산화 로그우도 — PixelCNN 디코더로 픽셀 분포를 다봉으로 (PixelVAE)
+- 계층적 잠재 — $z$ 를 더 세분화해 조건부 분포를 좁힌다 (NVAE, VDVAE)
+- 확산 — 한 번에 평균을 내지 않고 여러 단계로 나눠 샘플링한다
+
+**마지막 항목이 결정적이다.** 확산 모델은 각 단계에서 조건부 평균을 예측하지만, 매 단계 잡음을
+다시 더해 **분포를 유지한다.** 그래서 흐려지지 않는다.
 
 ```{python}
 #| label: fig-blurry
-#| fig-cap: "MSE 최적해는 두 봉우리의 평균 — 데이터에 없는 값입니다"
+#| fig-cap: "MSE 최적해는 두 봉우리의 평균 — 데이터에 없는 값"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -707,12 +687,12 @@ _, Z_vae, _ = vae.encode(X)
 print("인코더가 실제로 쓰는 잠재 영역 (차원별 평균)")
 print(f"{'모델':<8} {'평균 |μ|':>10} {'평균 sd':>10} {'사전분포 N(0,1) 과의 거리'}")
 print("-" * 58)
+LAT_SD = {}
 for nm, Z in [("AE", Z_ae), ("VAE", Z_vae)]:
     gap = float(np.abs(Z.std(0) - 1).mean())
+    LAT_SD[nm] = float(Z.std(0).mean())
     print(f"{nm:<8} {np.abs(Z.mean(0)).mean():>10.4f} {Z.std(0).mean():>10.4f} "
           f"{gap:>18.4f}")
-print()
-print("AE 의 잠재는 표준편차 0.22 — N(0,1) 에서 뽑으면 대부분 **훈련 영역 밖**이다.")
 print()
 
 
@@ -723,8 +703,7 @@ def nearest_dist(S, ref):
 
 
 zp = np.random.default_rng(5).normal(size=(400, K))
-print("z ~ N(0, I) 에서 400개를 뽑아 디코딩한 결과")
-print()
+print("z ~ N(0, I) 에서 400개를 뽑아 디코딩")
 print(f"{'출처':<22} {'가장 가까운 실데이터까지 거리':>26} {'선명도':>10}")
 print("-" * 62)
 rows = [("실제 데이터 (홀드아웃)", X_te[:400]),
@@ -736,16 +715,17 @@ for nm, S in rows:
     print(f"{nm:<22} {D[nm]:>26.4f} {sharpness(S + MU):>10.4f}")
 print("-" * 62)
 print(f"{'(실제 데이터 선명도)':<22} {'':>26} {REAL_SHARP:>10.4f}")
-print()
-print(f"**AE 사전 샘플은 실제 데이터에서 {D['AE 사전 샘플']/D['실제 데이터 (홀드아웃)']:.1f}배 멀다.**")
-print(f"  실제 데이터끼리의 거리      {D['실제 데이터 (홀드아웃)']:.4f}  ← 기준선")
-print(f"  VAE 사전 샘플              {D['VAE 사전 샘플']:.4f}  ← 기준선의 "
-      f"{D['VAE 사전 샘플']/D['실제 데이터 (홀드아웃)']:.2f}배")
-print(f"  AE 사전 샘플               {D['AE 사전 샘플']:.4f}  ← 완전히 다른 것")
-print()
-print("**VAE 는 실제로 생성 모델이 되었다.** KL 항이 한 일이다.")
-print("대신 재구성은 AE 보다 나쁘다 — ELBO 가 두 항의 타협이기 때문이다.")
+ae_far = D['AE 사전 샘플']/D['실제 데이터 (홀드아웃)']
+vae_far = D['VAE 사전 샘플']/D['실제 데이터 (홀드아웃)']
 ```
+
+AE 의 잠재는 표준편차 `{python} f"{LAT_SD['AE']:.2f}"` — $\mathcal{N}(0,1)$ 에서 뽑으면 대부분 **훈련 영역
+밖**이다. 그래서 **AE 사전 샘플은 실제 데이터에서 `{python} f"{ae_far:.1f}"`배 멀다.** 실제 데이터끼리의
+거리 `{python} f"{D['실제 데이터 (홀드아웃)']:.4f}"` 가 기준선인데 VAE 사전 샘플은 그 `{python} f"{vae_far:.2f}"`배이고,
+AE 사전 샘플은 `{python} f"{D['AE 사전 샘플']:.4f}"` 로 완전히 다른 것이다.
+
+**VAE 는 실제로 생성 모델이 되었다.** KL 항이 한 일이다. 대신 재구성은 AE 보다 나쁘다 —
+ELBO 가 두 항의 타협이기 때문이다.
 
 ```{python}
 #| label: fig-vae-ae
@@ -804,33 +784,23 @@ fig.show()
 
 ## 변형들
 
+| 변형 | 무엇을 바꾸나 | 얻는 것 | 비고 |
+|---|---|---|---|
+| β-VAE | KL 항에 $\beta$ 배 | 분리(disentanglement) 유도 | $\beta$ 클수록 분리↑ 재구성↓ — 위 실험에서 확인 |
+| 조건부 VAE (CVAE) | 인코더·디코더에 조건 $c$ 주입 | 레이블별 생성 | $q(z\mid x,c)$, $p(x\mid z,c)$ |
+| VQ-VAE | 잠재를 이산 코드북으로 | **KL 항 없음 → 붕괴 없음** | [6.1](01_autoencoder.qmd)에서 다룸, PixelCNN 을 잠재에 얹음 |
+| 계층적 VAE | $z$ 를 여러 층으로 (NVAE, VDVAE) | 표현력↑, 흐릿함↓ | 확산과 성능이 비슷해짐 |
+| IWAE | 중요도 가중 다중 샘플 하한 | 더 조인 하한 | $K$ 샘플이면 $\log \frac1K \sum$ 형태 |
+| Gumbel-softmax | 이산 잠재를 연속 완화 | 재파라미터화를 이산에 | 온도 $\tau \to 0$ 이면 원-핫 |
+
+**Gumbel-softmax** 는 이산 잠재에도 재파라미터화를 쓰는 방법이다.
+
+$$y = \text{softmax}\!\left(\frac{\log \pi + g}{\tau}\right), \qquad g \sim \text{Gumbel}(0, 1)$$
+
 ```{python}
 #| label: variants
 #| code-fold: false
 
-rows_v = [
-    ("β-VAE", "KL 항에 β 배", "분리(disentanglement) 유도",
-     "β 클수록 분리↑ 재구성↓ — 위 실험에서 확인"),
-    ("조건부 VAE (CVAE)", "인코더·디코더에 조건 c 주입",
-     "레이블별 생성", "q(z|x,c), p(x|z,c)"),
-    ("VQ-VAE", "잠재를 이산 코드북으로", "**KL 항 없음 → 붕괴 없음**",
-     "6.1 에서 다룸, PixelCNN 을 잠재에 얹음"),
-    ("계층적 VAE", "z 를 여러 층으로 (NVAE, VDVAE)",
-     "표현력↑, 흐릿함↓", "확산과 성능이 비슷해짐"),
-    ("IWAE", "중요도 가중 다중 샘플 하한", "더 조인 하한",
-     "K 샘플이면 log(1/K)Σ 형태"),
-    ("Gumbel-softmax", "이산 잠재를 연속 완화",
-     "재파라미터화를 이산에", "온도 τ→0 이면 원-핫"),
-]
-print(f"{'변형':<20} {'무엇을 바꾸나':<32} {'얻는 것':<24} {'비고'}")
-print("-" * 108)
-for r_ in rows_v:
-    print(f"{r_[0]:<20} {r_[1]:<32} {r_[2]:<24} {r_[3]}")
-print()
-print("**Gumbel-softmax** — 이산 잠재에도 재파라미터화를 쓰는 방법")
-print()
-print("   y = softmax( (log π + g) / τ ),   g ~ Gumbel(0,1)")
-print()
 import numpy as np
 rg = np.random.default_rng(3)
 logits = np.log(np.array([0.6, 0.3, 0.1]))
@@ -845,11 +815,11 @@ for tau in [5.0, 1.0, 0.5, 0.1]:
                                             else "중간")
     print(f"{tau:>8.1f} {y.max(1).mean():>12.4f} {str(np.round(cnt, 3)):>26} {note}")
 print(f"{'(참값)':>8} {'1.0000':>12} {str(np.round([0.6, 0.3, 0.1], 3)):>26}")
-print()
-print("**τ→0 이면 진짜 argmax 샘플링과 같아지지만 그래디언트가 폭발한다.**")
-print("실전에서는 τ 를 1.0 에서 0.1 쪽으로 어닐링한다.")
-print("τ 가 커도 argmax 분포는 참값을 유지한다 — 편향은 '얼마나 원-핫이냐'에 있다.")
 ```
+
+**$\tau \to 0$ 이면 진짜 argmax 샘플링과 같아지지만 그래디언트가 폭발한다.** 실전에서는 $\tau$ 를
+1.0 에서 0.1 쪽으로 어닐링한다. $\tau$ 가 커도 argmax 분포는 참값을 유지한다 — 편향은
+'얼마나 원-핫이냐'에 있다.
 
 ---
 
@@ -857,12 +827,12 @@ print("τ 가 커도 argmax 분포는 참값을 유지한다 — 편향은 '얼�
 ## 직접 해보기
 
 **① 재파라미터화 없이 학습해 본다**
-`reparam-variance` 의 score-function 추정기로 같은 모델을 학습시켜라.
-분산이 몇 배 크고, 수렴이 얼마나 느린가?
+`src.generative.VAE` 의 인코더 그래디언트를 스코어 함수 추정량으로 바꿔 $\beta=1$ 모델을 다시
+학습시켜라. 같은 스텝 수에서 ELBO 가 얼마나 뒤처지는가? 미니배치를 몇 배 키워야 따라잡는가?
 
 **② 붕괴를 세 방법으로 막는다**
-`collapse-beta` 에서 β 워밍업, free bits, 디코더 약화를 각각 적용하고
-활성 차원 수(`active-dims`)를 비교하라.
+가설 B 의 `ARVae`(자기회귀 항이 있는 디코더)에 $\beta$ 워밍업, free bits, 자기회귀 항 드롭아웃을
+각각 적용하고 KL 과 활성 차원 수를 비교하라. 어느 방법이 재구성을 가장 덜 해치는가?
 
 **③ 흐릿함의 원인을 분리한다**
 디코더 출력 분포를 가우시안에서 이산화 로지스틱으로 바꾸면 선명해지는가?
@@ -878,16 +848,16 @@ print("τ 가 커도 argmax 분포는 참값을 유지한다 — 편향은 '얼�
 | ELBO | $\mathbb{E}_q[\log p(x\vert z)] - D_{KL}(q\|p)$ |
 | 하한의 간극 | $\log p(x) - \mathcal{L} = D_{KL}(q_\phi \| p_\theta(z\vert x))$ |
 | 재파라미터화 | $z = \mu + \sigma\varepsilon$ — 확률성을 그래디언트 경로 밖으로 |
-| 분산 이득 | 스코어 함수 대비 분산 3.7~456배 낮음 (μ가 클수록 격차↑) |
+| 분산 이득 | 스코어 함수 대비 분산 `{python} f"{var_lo:.1f}"`~`{python} f"{var_hi:.0f}"`배 낮음 (μ가 클수록 격차↑) |
 | KL 닫힌 형태 | $\frac12\sum(\mu^2+\sigma^2-1-\log\sigma^2)$ |
 | β 의 역할 | β↑ → KL↓, 재구성↓, 활성 잠재↓ |
-| β 의 최적점 | 사전 샘플 선명도가 실제 데이터와 맞는 지점 (여기선 β≈0.2~1) |
+| β 의 최적점 | 사전 샘플 선명도가 실제 데이터와 맞는 지점 (여기선 β = `{python} ", ".join(f"{b:g}" for b in ok_betas)`) |
 | 사후 붕괴 원인 | **디코더 용량이 아니다** (폭 32배 키워도 재현 안 됨) |
-| 진짜 원인 | z 없이 데이터를 설명할 경로 (자기회귀 디코더) — KL 8.13 → 0.001 |
+| 진짜 원인 | z 없이 데이터를 설명할 경로 (자기회귀 디코더) — KL `{python} f"{k0:.2f}"` → `{python} f"{k1:.3f}"` |
 | 또 다른 원인 | β 과대 (β=100에서 완전 붕괴, MSE = 평균 출력과 동일) |
-| 자동 차원 선택 | β=1에서 5개 차원 생존 = 데이터의 실제 자유도 5 |
+| 자동 차원 선택 | β=1에서 `{python} f"{n_alive}"`개 차원 생존 = 데이터의 실제 자유도 `{python} f"{Z_true.shape[1]}"` |
 | 흐릿함의 정체 | 가우스 우도 = MSE → 최적해가 조건부 평균 |
-| AE 대비 | AE 사전 샘플은 실데이터에서 10배 먼데 VAE는 1.17배 |
+| AE 대비 | AE 사전 샘플은 실데이터에서 `{python} f"{ae_far:.0f}"`배 먼데 VAE는 `{python} f"{vae_far:.2f}"`배 |
 
 VAE는 잠재 공간을 길들였지만 흐릿함을 남겼다.
 다음 장은 정반대 접근을 본다 — **손실함수 자체를 학습하는 것**이다.
