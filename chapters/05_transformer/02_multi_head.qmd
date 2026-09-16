@@ -157,7 +157,7 @@ fig.show()
 
 ```{python}
 #| label: fig-head-patterns
-#| fig-cap: "같은 문장, 서로 다른 헤드. 헤드를 바꿔가며 비교하세요."
+#| fig-cap: "같은 문장을 보는 서로 다른 헤드"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -263,9 +263,9 @@ $W_O^{(i)}$ 는 "이 헤드가 읽어온 정보를 잔차 스트림의 어느 �
 | 적음 (1~4) | 큼 | 헤드마다 표현력 충분 | 포착 가능한 관계 종류가 적음 |
 | 많음 (16~64) | 작음 | 다양한 관계 동시 포착 | 헤드가 너무 좁아 유사도가 부실 |
 
-실무에서는 $d_k = 64$ 를 맞추는 것이 관례다 (원 논문 이래로).
-GPT-3의 $d_{\text{model}}=12288$, 헤드 96개 → $d_k = 128$.
-LLaMA-2 70B는 $d_{\text{model}}=8192$, 헤드 64개 → $d_k = 128$.
+실무에서는 헤드 수보다 $d_k$ 를 먼저 정한다. 원 논문은 $d_k = 64$ 였고, 현대 대형 모델은
+대개 64~128 이다 — GPT-3는 $d_{\text{model}}=12288$, 헤드 96개로 $d_k = 128$,
+LLaMA-2 70B는 $d_{\text{model}}=8192$, 헤드 64개로 $d_k = 128$ 이다.
 
 ### 헤드는 상당수가 중복이다
 
@@ -274,7 +274,7 @@ LLaMA-2 70B는 $d_{\text{model}}=8192$, 헤드 64개 → $d_k = 128$.
 
 ```{python}
 #| label: fig-head-pruning
-#| fig-cap: "헤드 중요도는 매우 불균등하다 (일반적으로 관찰되는 형태)"
+#| fig-cap: "헤드 중요도의 불균등 (문헌에서 관찰되는 형태를 합성 분포로 재현)"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -312,6 +312,9 @@ viz.fig_defaults(fig, height=390,
 fig.show()
 ```
 
+위 분포는 실측이 아니라 파레토 분포로 만든 합성값이다. 문헌(Michel et al. 2019, Voita et al. 2019)이
+보고한 것은 "대부분의 헤드를 지워도 성능이 거의 안 떨어진다"는 정성적 결과이고, 그 모양을 재현한 것이다.
+
 ::: {.interaction-hint}
 이 불균등이 [11.4 프루닝](../11_systems/04_efficiency.qmd)의 근거입니다. 다만 "지워도 되는 헤드"는 학습이 끝난 뒤에 정해지는 것이고, **학습 중에는 많은 헤드가 필요합니다** — 어느 헤드가 유용해질지 미리 알 수 없기 때문입니다.
 :::
@@ -336,7 +339,7 @@ $$\text{KV 캐시 크기} = 2 \times n_{\text{layers}} \times n_{\text{heads}} \
 
 ```{python}
 #| label: fig-kv-cache
-#| fig-cap: "KV 캐시 메모리: 문맥이 길어질수록 모델 가중치를 압도합니다"
+#| fig-cap: "문맥이 길어질수록 모델 가중치를 압도하는 KV 캐시 메모리"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -370,10 +373,15 @@ fig.update_layout(xaxis_title="문맥 길이 (토큰)", xaxis_type="log",
 viz.fig_defaults(fig, height=420,
                  title=f"70B급 모델, 배치 {batch} 기준 KV 캐시")
 fig.show()
+per_token_mb = 2 * n_layers * n_heads * d_k * batch * bytes_per / 1024**2   # MHA, 배치 전체
+cross_len = int(weights_gb * 1024 / per_token_mb)
 ```
 
+배치 `{python} f"{batch}"`에서 MHA 는 토큰 하나당 `{python} f"{per_token_mb:.0f}"`MB 를 캐시하므로,
+문맥 약 `{python} f"{cross_len:,}"` 토큰이면 캐시가 모델 가중치 `{python} f"{weights_gb:.0f}"`GB 와 같아진다.
+
 ::: {.interaction-hint}
-MHA(파랑)는 문맥 3만 토큰 정도에서 이미 **모델 가중치보다 큰 메모리**를 먹습니다. GQA는 같은 지점을 8배 뒤로 밀어냅니다 — 그래서 최근 모델은 거의 전부 GQA를 씁니다. 자세한 서빙 최적화는 [7.14 추론 최적화](../07_language/14_inference_optimization.qmd)에서 다룹니다.
+MHA(파랑)는 문맥 1만 토큰이 되기 전에 이미 **모델 가중치보다 큰 메모리**를 먹습니다. GQA는 같은 지점을 8배 뒤로 밀어냅니다 — 그래서 최근 모델은 거의 전부 GQA를 씁니다. 자세한 서빙 최적화는 [7.14 추론 최적화](../07_language/14_inference_optimization.qmd)에서 다룹니다.
 :::
 
 ---
@@ -386,8 +394,9 @@ MHA(파랑)는 문맥 3만 토큰 정도에서 이미 **모델 가중치보다 �
 무엇이 달라지는가? $h=d$ 면 헤드 차원이 1 인데 점수가 의미가 있는가?
 
 **② 헤드를 잘라 본다**
-학습된 모델에서 헤드 하나의 출력을 0으로 만들고 성능 변화를 재라.
-많은 헤드가 제거해도 무해하다는 보고와 맞는가?
+`fig-head-patterns` 의 다섯 헤드에 무작위 $V$ 와 $W_O$ 를 붙여 MHA 출력을 만들고, 헤드를 하나씩
+0 으로 만들 때 출력 변화의 norm 을 재라. 어느 헤드의 몫이 가장 큰가? 그 답이 $V$·$W_O$ 에
+따라 달라지는 이유를 $\sum_i \text{head}_i W_O^{(i)}$ 로 설명하라.
 
 **③ MQA/GQA의 KV 캐시 절감을 계산한다**
 헤드 32개, 차원 128, 길이 4096 일 때 MHA·GQA(8그룹)·MQA의
