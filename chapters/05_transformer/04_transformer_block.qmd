@@ -30,7 +30,7 @@ $$
 
 ```{mermaid}
 %%| label: fig-block-topology
-%%| fig-cap: "pre-LN 블록. 굵은 세로선이 잔차 스트림이고, 두 서브층은 거기에 더할 값을 계산할 뿐입니다."
+%%| fig-cap: "pre-LN 블록 — 굵은 세로선이 잔차 스트림이고, 두 서브층은 거기에 더할 값을 계산한다"
 flowchart TB
   IN["입력 x"] --> N1["Norm"]
   N1 --> MHA["Multi-Head<br/>Attention"]
@@ -164,7 +164,7 @@ $$\text{FFN}(x) = \sum_{i=1}^{4d} \underbrace{\sigma(\langle x, k_i\rangle)}_{\t
 
 ```{python}
 #| label: fig-param-budget
-#| fig-cap: "모델 크기에 따른 파라미터 분포. 임베딩 비중은 커질수록 줄어듭니다."
+#| fig-cap: "모델 크기에 따른 파라미터 분포 — 커질수록 줄어드는 임베딩 비중"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -220,14 +220,16 @@ print("-" * 72)
 for (name, d_, L_, V_), (_, a, f, e, t) in zip(models, rows):
     print(f"{name:<12} {d_:>6} {L_:>4} {a/1e6:>9.1f}M {f/1e6:>9.1f}M "
           f"{e/1e6:>9.1f}M {t/1e6:>9.1f}M")
-
-print()
-print("주의: 12d²L 은 원 논문 구조 기준 근사다. LLaMA-2 70B 는 SwiGLU(행렬 3개)를")
-print("      쓰므로 실제 파라미터가 이 추정보다 크다 — 위 70B 행이 64.7B 로 나오는 이유.")
+emb_share_small = rows[0][3] / rows[0][4]
+emb_share_big = rows[-1][3] / rows[-1][4]
+total_70b = rows[-1][4] / 1e9
 ```
 
+$12d^2L$ 은 원 논문 구조 기준 근사다. LLaMA-2 70B 는 SwiGLU(행렬 3개)와 GQA 를 쓰므로
+실제 파라미터가 이 추정과 다르다 — 위 70B 행이 `{python} f"{total_70b:.1f}"`B 로 나오는 이유다.
+
 ::: {.interaction-hint}
-작은 모델에서는 임베딩이 전체의 30% 이상을 차지하지만, 70B에서는 1% 미만입니다. 그래서 큰 모델의 파라미터는 **거의 전부 $12d^2L$** 로 근사됩니다 — 스케일링 법칙에서 쓰는 그 공식입니다.
+작은 모델에서는 임베딩이 전체의 `{python} f"{emb_share_small:.0%}"` 를 차지하지만, 70B에서는 `{python} f"{emb_share_big:.1%}"` 입니다. 그래서 큰 모델의 파라미터는 **거의 전부 $12d^2L$** 로 근사됩니다 — 스케일링 법칙에서 쓰는 그 공식입니다.
 :::
 
 ---
@@ -289,31 +291,45 @@ rng = np.random.default_rng(1)
 d, n = 128, 16
 depths = np.arange(1, 61)
 
+def layer_norm_backward(x, dy, eps=1e-5):
+    """y = (x-μ)/σ 의 역전파: dx = (dy - mean(dy) - y·mean(dy·y)) / σ"""
+    mu = x.mean(-1, keepdims=True)
+    sigma = np.sqrt(x.var(-1, keepdims=True) + eps)
+    y = (x - mu) / sigma
+    return (dy - dy.mean(-1, keepdims=True) - y * (dy * y).mean(-1, keepdims=True)) / sigma
+
 def simulate(mode, sublayer_gain=0.35):
-    """서브층을 '입력에 비례하는 잡음을 더하는 연산'으로 단순화해 전파를 본다"""
+    """서브층을 '무작위 선형 사상'으로 단순화해 순전파 norm 과 역전파 그래디언트 norm 을 잰다.
+    그래디언트는 마지막 층 출력에서 무작위 방향으로 시작해 입력 쪽으로 실제로 역전파한다."""
     x = rng.normal(size=(n, d))
-    norms, grads = [], []
-    g = 1.0                                   # 그래디언트 배율 누적
-    for _ in depths:
+    Ws = [rng.normal(size=(d, d)) / np.sqrt(d) for _ in depths]
+    norms, cache = [], []
+    for W in Ws:
         if mode == "pre":
-            h = layer_norm(x)
-            x = x + sublayer_gain * h @ rng.normal(size=(d, d)) / np.sqrt(d)
-            # 잔차 경로가 정규화를 거치지 않아 그래디언트가 그대로 통과
-            g *= 1.0
+            cache.append(x)
+            x = x + sublayer_gain * layer_norm(x) @ W
         else:                                  # post
-            h = x + sublayer_gain * x @ rng.normal(size=(d, d)) / np.sqrt(d)
+            h = x + sublayer_gain * x @ W
+            cache.append(h)
             x = layer_norm(h)
-            # 매 층 정규화가 스케일을 되돌려 그래디언트가 감쇠
-            g *= 0.93
         norms.append(np.linalg.norm(x, axis=-1).mean())
-        grads.append(g)
+    g = rng.normal(size=(n, d)); g /= np.linalg.norm(g)
+    grads = [None] * len(Ws)
+    for l in range(len(Ws) - 1, -1, -1):
+        if mode == "pre":
+            g = g + layer_norm_backward(cache[l], sublayer_gain * g @ Ws[l].T)
+        else:
+            dh = layer_norm_backward(cache[l], g)
+            g = dh + sublayer_gain * dh @ Ws[l].T
+        grads[l] = np.linalg.norm(g)           # 층 l 의 입력에 도달한 그래디언트 크기
     return np.array(norms), np.array(grads)
 
 pre_n, pre_g = simulate("pre")
 post_n, post_g = simulate("post")
+ratio_pre, ratio_post = float(pre_g[0]), float(post_g[0])
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("층별 잔차 스트림 크기", "역전파 그래디언트 배율"))
+                    subplot_titles=("층별 잔차 스트림 크기", "각 층 입력에 도달한 그래디언트 크기"))
 
 for name, nrm, grd, c in [("pre-LN", pre_n, pre_g, viz.ACCENT),
                           ("post-LN", post_n, post_g, viz.WARM)]:
@@ -325,25 +341,39 @@ for name, nrm, grd, c in [("pre-LN", pre_n, pre_g, viz.ACCENT),
 
 fig.update_xaxes(title_text="층")
 fig.update_yaxes(title_text="‖x‖ 평균", row=1, col=1)
-fig.update_yaxes(title_text="입력층까지 전달되는 배율", type="log", row=1, col=2)
+fig.update_yaxes(title_text="층 입력에 도달한 ‖g‖ (출력 = 1)", type="log", row=1, col=2)
 viz.fig_defaults(fig, height=400,
                  title="정규화 위치가 신호·그래디언트 전파를 바꾼다 (단순화 모델)")
 fig.update_layout(legend=dict(x=0.02, y=0.98))
 fig.show()
 ```
 
+왼쪽이 분명한 차이다. pre-LN 은 잔차 스트림에 서브층 출력이 계속 더해져 norm 이
+`{python} f"{pre_n[0]:.0f}"` 에서 `{python} f"{pre_n[-1]:.0f}"` 로 자라고, post-LN 은 매 층 정규화되어
+`{python} f"{post_n[-1]:.0f}"` 에 고정된다. 오른쪽은 마지막 층 출력의 단위 그래디언트가 각 층 입력에
+도달했을 때의 크기인데, 60층을 거슬러도 pre-LN `{python} f"{ratio_pre:.2f}"`, post-LN
+`{python} f"{ratio_post:.2f}"` 로 **둘 다 소실되지 않는다.** 이 선형 토이에서는 post-LN 의 LayerNorm 이
+$1/\sigma$ 로 줄이는 만큼 서브층 분기가 더해 주어 상쇄되기 때문이다.
+
+그렇다면 post-LN 이 warmup 없이 발산하는 이유는 무엇인가? Xiong et al.(2020)의 분석은
+잔차 스트림이 아니라 **파라미터 그래디언트**를 본다. post-LN 은 서브층 출력이 정규화 *앞*에
+놓여 초기화 시 위층 파라미터의 그래디언트가 층 수와 무관하게 크고, pre-LN 은 잔차 norm 이
+$\sqrt{\ell}$ 로 자라 그 앞의 정규화가 나눠 주므로 위층 그래디언트가 $1/\sqrt{L}$ 로 작아진다.
+큰 학습률로 시작할 때 전자는 첫 스텝에서 위층을 망가뜨리고 후자는 견딘다.
+
 ::: {.callout-warning}
 ## 위 시뮬레이션은 단순화 모델입니다
 
-서브층을 "무작위 행렬 곱"으로 대체해 **전파 경향만** 재현한 것이며,
-실제 학습된 Transformer의 측정값이 아닙니다.
-정성적 결론(pre-LN은 잔차 norm이 누적되고 그래디언트가 잘 전달됨, post-LN은 그 반대)은
-문헌과 일치하지만, 구체적 수치는 의미가 없습니다.
+서브층을 "무작위 선형 사상"으로 대체해 **잔차 norm 의 누적 경향**을 재현한 것이며, 그래디언트는
+이 단순화 모델을 실제로 역전파한 값입니다. 실제 학습된 Transformer 의 측정값이 아니고,
+warmup 의 필요성을 가르는 파라미터 그래디언트의 층별 스케일(위 문단)은 이 선형 토이로는
+재현되지 않습니다 — 원 분석은 Xiong et al.(2020) 을 보세요.
 :::
 
 | | post-LN (원 논문) | pre-LN (현대 표준) |
 |---|---|---|
-| 그래디언트 전파 | 층마다 정규화를 통과 → 감쇠 | 잔차 경로로 직통 |
+| 잔차 스트림 | 매 층 재정규화 | 누적되어 norm 이 자람 |
+| 초기화 시 위층 그래디언트 | 층 수와 무관하게 큼 → 큰 lr 에 취약 | $1/\sqrt L$ 로 작음 → 견딤 |
 | **warmup** | **필수** (없으면 발산) | 없어도 학습됨 |
 | 깊이 한계 | 12~24층에서 불안정 | 100층 이상 가능 |
 | 최종 성능 | 잘 학습되면 약간 유리하다는 보고 | 안정성이 압도적 |
@@ -424,8 +454,8 @@ $d=768$, $d_{ff}=3072$ 인 블록의 파라미터 수를 어텐션·FFN으로 �
 `param-table` 과 맞는가? FFN이 왜 2/3를 차지하는가?
 
 **② FFN을 없애 본다**
-`block-forward` 에서 FFN을 항등함수로 바꾸고 간단한 과제를 학습시켜라.
-어텐션만으로 무엇을 못 하는가?
+[5.6](06_build_gpt.qmd)의 학습 코드에서 FFN 을 항등함수로 바꿔 같은 과제를 학습시켜라.
+손실이 어디서 멈추는가? 어텐션만으로 무엇을 못 하는지 키-값 메모리 관점으로 설명하라.
 
 **③ SwiGLU의 공정 비교**
 `swiglu-params` 처럼 파라미터를 맞추려면 $d_{ff}$ 를 $\tfrac23$ 로 줄여야 한다.
