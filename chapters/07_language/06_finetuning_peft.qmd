@@ -9,9 +9,11 @@ jupyter: ai-ml-study
 - 가중치 140 GB (bf16)
 - 그래디언트 140 GB
 - Adam 상태 560 GB (fp32 모멘텀 2개)
-- **합계 840 GB** — H100 80GB 열 장 이상
+- fp32 마스터 가중치 280 GB
+- **합계 1,120 GB** — H100 80GB 열네 장
 
-LoRA는 이 숫자를 **1 GB 아래로** 내렸다. 그리고 원리는 한 줄이다.
+LoRA 는 이 중 **학습에 딸린 부분(그래디언트·옵티마이저·마스터)을 1~2 GB 로** 내렸다.
+그리고 원리는 한 줄이다.
 
 $$W' = W + BA, \qquad B \in \mathbb{R}^{d\times r},\ A \in \mathbb{R}^{r\times d},\ r \ll d$$
 
@@ -84,14 +86,13 @@ B0 = ppl(BASE, XB_TE, YB_TE)
 W0 = [w.copy() for w in BASE.W]
 N_W = sum(w.size for w in BASE.W)
 
-print(f"사전학습 모델 — 도메인 A 로 {len(X_A):,} 토큰 학습")
-print(f"  가중치 파라미터 {N_W:,}")
-print(f"  도메인 A PPL {A0:.3f}   도메인 B PPL {B0:.3f}")
-print()
-print(f"적응 데이터: 도메인 B, {len(X_B):,} 토큰 (사전학습의 "
-      f"{len(X_B)/len(X_A):.0%})")
-print("**목표: B 를 잘하게 만들면서 A 를 잊지 않는 것.**")
+ADAPT_SHARE = len(X_B)/len(X_A)
 ```
+
+사전학습 모델은 도메인 A 로 `{python} f"{len(X_A):,}"` 토큰을 학습한 것이다 —
+가중치 파라미터 `{python} f"{N_W:,}"`, 도메인 A PPL `{python} f"{A0:.3f}"`, 도메인 B PPL `{python} f"{B0:.3f}"`.
+적응 데이터는 도메인 B `{python} f"{len(X_B):,}"` 토큰(사전학습의 `{python} f"{ADAPT_SHARE:.0%}"`)이다.
+**목표: B 를 잘하게 만들면서 A 를 잊지 않는 것.**
 
 ---
 
@@ -110,11 +111,7 @@ FULL = copy.deepcopy(BASE)
 nn.train(FULL, onehot(X_B), Y_B, loss="softmax_ce",
          opt=nn.Optimizer("adam", lr=1e-3), steps=1500, batch_size=256, seed=1)
 
-print(f"전체 미세조정 후: A PPL {ppl(FULL, XA_TE, YA_TE):.3f}, "
-      f"B PPL {ppl(FULL, XB_TE, YB_TE):.3f}")
-print()
-print("ΔW 의 특이값 분포 — 유효 랭크는 exp(엔트로피)로 잰다")
-print()
+FULL_A, FULL_B = ppl(FULL, XA_TE, YA_TE), ppl(FULL, XB_TE, YB_TE)
 print(f"{'층':<6} {'모양':<14} {'최대 랭크':>9} {'유효 랭크':>10} "
       f"{'상위4':>8} {'상위8':>8} {'상위16':>8}")
 print("-" * 68)
@@ -140,24 +137,29 @@ for shape in [(W*V, HID), (HID, HID), (HID, V)]:
     ef = float(np.exp(-(e*np.log(e + 1e-300)).sum()))
     RAND[shape] = ef
     print(f"{str(shape):<14} {ef:>10.2f} {ef/min(shape):>9.1%}")
-print()
-print("**결과가 통념보다 미묘하다.**")
 mid = [s for s in SPEC if s[1] == (HID, HID)][0]
-print(f"  가장 큰 층 W1({HID}×{HID}): 유효 랭크 {mid[3]:.1f} "
-      f"vs 무작위 {RAND[(HID, HID)]:.1f}")
-print(f"  → 무작위보다 **{RAND[(HID,HID)]/mid[3]:.1f}배 낮다.** 저계수 경향은 분명하다.")
-print()
-print(f"  **그런데 상위 4개 특이값이 설명하는 비율은 {mid[4][:4].sum():.1%} 에 불과하다.**")
-print(f"  상위 8개로도 {mid[4][:8].sum():.1%}, 16개로 {mid[4][:16].sum():.1%} 다.")
-print()
-print("**즉 'ΔW 는 랭크 4 로 근사된다'는 서술은 이 실험에서 성립하지 않는다.**")
-print("그렇다면 LoRA 는 왜 작동하는가? 다음 절에서 답한다 —")
-print("**핵심은 ΔW 를 재현하는 것이 아니라 성능에 도달하는 것**이기 때문이다.")
+EFF_MID, EFF_RAND = mid[3], RAND[(HID, HID)]
+LOW_RANK_RATIO = EFF_RAND/EFF_MID
+TOP4, TOP8, TOP16 = mid[4][:4].sum(), mid[4][:8].sum(), mid[4][:16].sum()
 ```
+
+전체 미세조정 후 A PPL `{python} f"{FULL_A:.3f}"`, B PPL `{python} f"{FULL_B:.3f}"` 다.
+첫 표는 $\Delta W$ 의 특이값 분포이고 유효 랭크는 $\exp(\text{엔트로피})$ 로 쟀다.
+둘째 표는 같은 크기의 **무작위** 행렬이다.
+
+**결과가 통념보다 미묘하다.** 가장 큰 층 W1(`{python} f"{HID}"`×`{python} f"{HID}"`)의 유효 랭크는
+`{python} f"{EFF_MID:.1f}"` vs 무작위 `{python} f"{EFF_RAND:.1f}"` —
+무작위보다 **`{python} f"{LOW_RANK_RATIO:.1f}"`배 낮다.** 저계수 경향은 분명하다.
+**그런데 상위 4개 특이값이 설명하는 비율은 `{python} f"{TOP4:.1%}"` 에 불과하다.**
+상위 8개로도 `{python} f"{TOP8:.1%}"`, 16개로 `{python} f"{TOP16:.1%}"` 다.
+
+**즉 "$\Delta W$ 는 랭크 4 로 근사된다"는 서술은 이 실험에서 성립하지 않는다.**
+그렇다면 LoRA 는 왜 작동하는가? 다음 절에서 답한다 —
+**핵심은 $\Delta W$ 를 재현하는 것이 아니라 성능에 도달하는 것**이기 때문이다.
 
 ```{python}
 #| label: fig-spectrum
-#| fig-cap: "ΔW의 특이값은 무작위보다 빠르게 감쇠하지만 상위 몇 개로 끝나지는 않습니다"
+#| fig-cap: "ΔW 의 특이값 스펙트럼과 누적 설명 비율 — 무작위 행렬과 비교"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -285,8 +287,6 @@ def ppl_lora(m, X, y):
                                         1e-300)).mean())
 
 
-print("파라미터 수 계산 — 왜 이렇게 줄어드는가")
-print()
 print(f"{'층':<8} {'모양':<14} {'전체 W':>10} " +
       " ".join(f"{'r='+str(r):>9}" for r in [1, 4, 16]))
 print("-" * 62)
@@ -298,10 +298,11 @@ print("-" * 62)
 print(f"{'합계':<8} {'':<14} {N_W:>10,} " +
       " ".join(f"{sum(r*(w.shape[0]+w.shape[1]) for w in BASE.W):>9,}"
                for r in [1, 4, 16]))
-print()
-print("**d×d 행렬 하나가 2dr 로 줄어든다.** d=128, r=4 면 16,384 → 1,024 (16배).")
-print("실제 LLM 은 d=4096 이라 16,777,216 → 32,768 (512배)다.")
 ```
+
+파라미터가 왜 이렇게 줄어드는지 세어 본 표다. **$d \times d$ 행렬 하나가 $2dr$ 로 줄어든다.**
+$d = 128$, $r = 4$ 면 `{python} f"{HID*HID:,}"` → `{python} f"{2*HID*4:,}"` (`{python} f"{HID//8}"`배).
+실제 LLM 은 $d = 4096$ 이라 `{python} f"{4096*4096:,}"` → `{python} f"{2*4096*4:,}"` (`{python} f"{4096//8}"`배)다.
 
 ```{python}
 #| label: rank-sweep
@@ -310,7 +311,6 @@ print("실제 LLM 은 d=4096 이라 16,777,216 → 32,768 (512배)다.")
 import numpy as np
 
 print("LoRA rank 를 바꿔가며 — 학습률은 5e-3 로 통일")
-print()
 print(f"{'방법':<16} {'학습 파라미터':>14} {'비율':>8} {'B PPL':>9} "
       f"{'A PPL':>9} {'A 망각':>9}")
 print("-" * 70)
@@ -347,55 +347,45 @@ for lr in [1e-4, 5e-4, 1e-3, 5e-3]:
     FULL_ROWS.append((lr, b_, a_, a_/A0))
     print(f"{'전체 FT lr='+f'{lr:.0e}':<16} {N_W:>14,} {1.0:>7.1%} "
           f"{b_:>9.3f} {a_:>9.3f} {a_/A0:>8.2f}x")
-print()
-
 best_lora = min(LORA_ROWS, key=lambda r: r[2])
 best_full = min(FULL_ROWS, key=lambda f: f[1])
 same_lr = [f for f in FULL_ROWS if f[0] == 5e-3][0]
-
-print(f"**같은 학습률(5e-3)에서 비교하면 LoRA 가 낫다:**")
-print(f"  전체 미세조정: B {same_lr[1]:.3f}, 망각 {same_lr[3]:.2f}x "
-      f"(파라미터 {N_W:,})")
-print(f"  LoRA r={best_lora[0]}:     B {best_lora[2]:.3f}, "
-      f"망각 {best_lora[4]:.2f}x (파라미터 {best_lora[1]:,}, "
-      f"{best_lora[1]/N_W:.1%})")
-print()
-print("**그런데 이 비교는 공정하지 않다 — 전체 FT 에 나쁜 학습률을 준 것이다.**")
-print(f"  각자의 최적 설정에서 다시 보면:")
-print(f"    전체 미세조정 (lr={best_full[0]:.0e}): "
-      f"B {best_full[1]:.3f}, 망각 {best_full[3]:.2f}x")
-print(f"    LoRA r={best_lora[0]}:              "
-      f"B {best_lora[2]:.3f}, 망각 {best_lora[4]:.2f}x")
-print()
-print("**전체 미세조정이 B 도 더 좋고 망각도 더 적다.**")
-print("  프론티어(아래 그림 오른쪽)를 보면 전체 FT 곡선이 LoRA 곡선 안쪽에 있다.")
-print()
-print("**즉 이 실험에서 LoRA 의 이점은 품질이 아니다.**")
-print(f"  파라미터 {N_W/best_lora[1]:.0f}배, 옵티마이저 상태까지 치면 그 이상 적게 쓰면서")
-print("  **품질을 거의 잃지 않는 것** — 그것이 LoRA 의 주장이고, 여기서 확인된 것이다.")
-print("  (LoRA 논문도 '동등하거나 더 낫다' 를 말하지 '항상 낫다' 를 말하지 않는다.)")
-print()
-print("  우리 모델은 22,784 파라미터짜리 장난감이라 전체 FT 가 부담이 아니다.")
-print("  70B 에서는 840 GB vs 1 GB 다. **그 규모에서 선택지는 하나뿐이다.**")
-print()
-print("**그런데 rank 가 클수록 좋은 것이 아니다:**")
-for r, npar, b_, a_, f_ in LORA_ROWS:
-    mark = "  ← 최적" if r == best_lora[0] else ""
-    print(f"  r={r:<3} B PPL {b_:.3f}, 망각 {f_:.2f}x{mark}")
-print()
-print(f"**r={best_lora[0]} 에서 가장 좋고 그 뒤로는 나빠진다.**")
-print(f"  적응 데이터가 {len(X_B):,} 토큰뿐이라 rank 가 크면 과적합한다.")
-print("  **rank 는 용량 손잡이이자 정규화 손잡이다.**")
-print("  '클수록 좋다'가 아니라 '데이터 양에 맞춰야 한다'가 맞다.")
-print()
-print("그리고 망각이 rank 와 함께 단조 증가한다 —")
-print(f"  r=1 에서 {LORA_ROWS[0][4]:.2f}x, r=32 에서 {LORA_ROWS[-1][4]:.2f}x")
-print("  갱신할 수 있는 방향이 많을수록 원래 능력을 더 많이 덮어쓴다.")
+BEST_R, BEST_R_NP, BEST_R_B, BEST_R_F = best_lora[0], best_lora[1], best_lora[2], best_lora[4]
+PARAM_RATIO = N_W/BEST_R_NP
+FORGET_MONO = all(a[4] <= b[4] for a, b in zip(LORA_ROWS, LORA_ROWS[1:]))
 ```
+
+**같은 학습률(5e-3)에서 비교하면 LoRA 가 낫다.**
+전체 미세조정은 B `{python} f"{same_lr[1]:.3f}"`, 망각 `{python} f"{same_lr[3]:.2f}"`배(파라미터 `{python} f"{N_W:,}"`)인데
+LoRA $r =$ `{python} f"{BEST_R}"` 는 B `{python} f"{BEST_R_B:.3f}"`, 망각 `{python} f"{BEST_R_F:.2f}"`배
+(파라미터 `{python} f"{BEST_R_NP:,}"`, `{python} f"{BEST_R_NP/N_W:.1%}"`)다.
+
+**그런데 이 비교는 공정하지 않다 — 전체 FT 에 나쁜 학습률을 준 것이다.**
+각자의 최적 설정에서 다시 보면 전체 미세조정(lr=`{python} f"{best_full[0]:.0e}"`)은
+B `{python} f"{best_full[1]:.3f}"`, 망각 `{python} f"{best_full[3]:.2f}"`배이고
+LoRA $r =$ `{python} f"{BEST_R}"` 는 B `{python} f"{BEST_R_B:.3f}"`, 망각 `{python} f"{BEST_R_F:.2f}"`배다.
+**전체 미세조정이 B 도 더 좋고 망각도 더 적다.**
+프론티어(아래 그림 오른쪽)를 보면 전체 FT 곡선이 LoRA 곡선 안쪽에 있다.
+
+**즉 이 실험에서 LoRA 의 이점은 품질이 아니다.**
+파라미터를 `{python} f"{PARAM_RATIO:.0f}"`배, 옵티마이저 상태까지 치면 그 이상 적게 쓰면서
+**품질을 거의 잃지 않는 것** — 그것이 LoRA 의 주장이고, 여기서 확인된 것이다.
+(LoRA 논문도 "동등하거나 더 낫다"를 말하지 "항상 낫다"를 말하지 않는다.)
+우리 모델은 `{python} f"{N_W:,}"` 파라미터짜리 장난감이라 전체 FT 가 부담이 아니다.
+70B 에서는 그 차이가 수백 GB 다 (다음 절). **그 규모에서 선택지는 하나뿐이다.**
+
+**그런데 rank 가 클수록 좋은 것이 아니다.** $r =$ `{python} f"{BEST_R}"` 에서 가장 좋고 그 뒤로는 나빠진다.
+적응 데이터가 `{python} f"{len(X_B):,}"` 토큰뿐이라 rank 가 크면 과적합한다.
+**rank 는 용량 손잡이이자 정규화 손잡이다.**
+"클수록 좋다"가 아니라 "데이터 양에 맞춰야 한다"가 맞다.
+
+그리고 망각이 rank 와 함께 단조 증가한다 (`{python} f"{FORGET_MONO}"`) —
+$r = 1$ 에서 `{python} f"{LORA_ROWS[0][4]:.2f}"`배, $r = 32$ 에서 `{python} f"{LORA_ROWS[-1][4]:.2f}"`배.
+갱신할 수 있는 방향이 많을수록 원래 능력을 더 많이 덮어쓴다.
 
 ```{python}
 #| label: fig-frontier
-#| fig-cap: "적응 성능과 망각의 프론티어 — LoRA가 더 좋은 지점을 준다"
+#| fig-cap: "rank 에 따른 적응 성능·망각과 전체 미세조정 대비 프론티어"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -449,8 +439,6 @@ fig.show()
 #| label: memory
 #| code-fold: false
 
-print("70B 모델을 조정할 때의 메모리 (bf16 가중치, Adam 기준)")
-print()
 N = 70e9
 
 
@@ -486,23 +474,27 @@ print("-" * 60)
 for nm, g_ in rows:
     print(f"{nm:<22} {g_:>9,.0f} GB {g_/rows[0][1]:>9.1%} "
           f"{int(np.ceil(g_/80)):>6}장")
-print()
-print(f"**LoRA 파라미터는 {n_lora/1e6:.0f}M — 70B 의 "
-      f"{n_lora/N:.3%} 다.**")
-print("그런데 메모리는 그만큼 줄지 않는다 — **동결 가중치가 여전히 140 GB** 이기 때문이다.")
-print()
-print("**QLoRA 가 그 지점을 친다.** 동결 가중치를 4비트로 저장한다:")
-for s in ["**NF4** — 정규분포에 최적화된 4비트 양자화 (정보이론적으로 균등보다 낫다)",
-          "**이중 양자화** — 양자화 상수 자체를 다시 양자화 (파라미터당 0.37비트 절약)",
-          "**페이지드 옵티마이저** — 메모리 스파이크를 CPU 로 넘긴다",
-          "계산 시에는 bf16 으로 되돌린다 (저장만 4비트)"]:
-    print(f"  · {s}")
-print()
-print("여기 계산에 **없는 것이 하나 있다: 활성화 메모리.**")
-print("  배치·시퀀스 길이에 비례하며, 긴 문맥에서는 이것이 지배적일 수 있다.")
-print("  그래디언트 체크포인팅으로 줄인다 (계산을 다시 해서 메모리를 산다).")
-print("  **LoRA 도 활성화는 저장해야 한다** — 역전파가 동결 층을 통과하기 때문이다.")
+MEM_FULL, MEM_LORA, MEM_QLORA = rows[0][1], rows[1][1], rows[2][1]
+LORA_M, LORA_SHARE = n_lora/1e6, n_lora/N
+FROZEN_GB = gb(2*N)
 ```
+
+70B 모델을 조정할 때의 메모리다 (bf16 가중치, Adam 기준).
+**LoRA 파라미터는 `{python} f"{LORA_M:.0f}"`M — 70B 의 `{python} f"{LORA_SHARE:.3%}"` 다.**
+그런데 메모리는 그만큼 줄지 않는다 (`{python} f"{MEM_FULL:,.0f}"` → `{python} f"{MEM_LORA:,.0f}"` GB) —
+**동결 가중치가 여전히 `{python} f"{FROZEN_GB:.0f}"` GB** 이기 때문이다.
+
+**QLoRA 가 그 지점을 친다.** 동결 가중치를 4비트로 저장해 `{python} f"{MEM_QLORA:,.0f}"` GB 로 내린다:
+
+- **NF4** — 정규분포에 최적화된 4비트 양자화 (정보이론적으로 균등보다 낫다)
+- **이중 양자화** — 양자화 상수 자체를 다시 양자화 (파라미터당 0.37비트 절약)
+- **페이지드 옵티마이저** — 메모리 스파이크를 CPU 로 넘긴다
+- 계산 시에는 bf16 으로 되돌린다 (저장만 4비트)
+
+여기 계산에 **없는 것이 하나 있다: 활성화 메모리.**
+배치·시퀀스 길이에 비례하며, 긴 문맥에서는 이것이 지배적일 수 있다.
+그래디언트 체크포인팅으로 줄인다 (계산을 다시 해서 메모리를 산다).
+**LoRA 도 활성화는 저장해야 한다** — 역전파가 동결 층을 통과하기 때문이다.
 
 ---
 
@@ -522,7 +514,7 @@ print("  **LoRA 도 활성화는 저장해야 한다** — 역전파가 동결 �
 
 **LoRA가 이긴 결정적 이유: 병합할 수 있다.**
 
-W' = W + (α/r)·BA   ← 학습 후 한 번 계산해 W' 로 저장
+$$W' = W + \frac{\alpha}{r}\,BA \qquad \text{학습 후 한 번 계산해 } W' \text{ 로 저장}$$
 
 그러면 추론 시 구조가 원본과 **완전히 동일**하다. 지연이 0이다.
 어댑터는 층을 추가하므로 그럴 수 없다.
@@ -571,10 +563,10 @@ W' = W + (α/r)·BA   ← 학습 후 한 번 계산해 W' 로 저장
 - **과제 수행 절차** (7.4에서 본 대로, 능력은 이미 있고 꺼내는 법을 가르친다)
 
 **소량 고품질 가설 (LIMA)**
-Zhou et al.(2023): 지시 조정에 **1,000개의 잘 만든 예시**면 충분하다는 주장
-근거 — 능력은 사전학습에서 나오고, 조정은 형식을 정할 뿐이다
-단서 — 이 주장은 '일반 대화' 에 대한 것이고,
-전문 과제나 안전 정렬에서는 훨씬 많은 데이터가 필요하다
+
+- Zhou et al.(2023): 지시 조정에 **1,000개의 잘 만든 예시**면 충분하다는 주장
+- 근거 — 능력은 사전학습에서 나오고, 조정은 형식을 정할 뿐이다
+- 단서 — 이 주장은 "일반 대화"에 대한 것이고, 전문 과제나 안전 정렬에서는 훨씬 많은 데이터가 필요하다
 
 
 ---
@@ -582,13 +574,13 @@ Zhou et al.(2023): 지시 조정에 **1,000개의 잘 만든 예시**면 충분�
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 갱신의 rank를 실제로 잰다**
-`rank-check` 에서 전체 미세조정한 $\Delta W$ 의 특이값을 그려라.
-상위 몇 개가 에너지의 90%를 차지하는가? LoRA의 전제가 맞는가?
+**① 데이터가 많으면 갱신은 고랭크가 되는가**
+`setup` 의 적응 데이터 `X_B` 를 6,000 에서 60,000 토큰으로 늘리고 `rank-check` 를 다시 돌려라.
+$\Delta W$ 의 유효 랭크와 상위 4개 설명 비율이 어떻게 변하는가?
 
-**② rank를 훑는다**
-`rank-sweep` 의 $r$ 을 1·4·16·64로 바꾸며 성능과 메모리를 재라.
-수익이 꺾이는 지점이 과제에 따라 달라지는가?
+**② 최적 rank 는 데이터 양을 따라가는가**
+같은 60,000 토큰으로 `rank-sweep` 을 다시 돌려라. B PPL 이 최소가 되는 $r$ 이 4 에서 이동하는가?
+"rank 는 데이터 양에 맞춰야 한다"는 주장을 검증하라.
 
 **③ α/r 스케일을 고정한다**
 LoRA의 $\alpha$ 를 바꾸면 사실상 학습률을 바꾸는 것이다.
@@ -599,18 +591,18 @@ $\alpha/r$ 를 고정하고 $r$ 만 바꾼 실험과, $\alpha$ 를 고정한 실
 
 | 개념 | 핵심 |
 |------|------|
-| 전체 FT 비용 | 70B 기준 840 GB (가중치+그래디언트+Adam) |
+| 전체 FT 비용 | 70B 기준 `{python} f"{MEM_FULL:,.0f}"` GB (가중치+그래디언트+Adam+fp32 마스터) |
 | LoRA 원리 | $W' = W + BA$, $B$ 를 0으로 초기화해 항등에서 출발 |
-| **저계수 전제 검증** | ΔW 유효 랭크가 무작위의 1/2.6 — 저계수 경향은 있다 |
-| **그런데** | 상위 4개 특이값이 설명하는 비율은 30% 남짓 |
+| **저계수 전제 검증** | ΔW 유효 랭크가 무작위의 1/`{python} f"{LOW_RANK_RATIO:.1f}"` — 저계수 경향은 있다 |
+| **그런데** | 상위 4개 특이값이 설명하는 비율은 `{python} f"{TOP4:.0%}"` 남짓 |
 | 결론 | "ΔW는 rank 4로 근사된다"는 서술은 성립하지 않았다 |
 | 그럼 왜 되는가 | **ΔW 재현이 아니라 성능 도달이 목표**이기 때문 |
-| 측정된 성능 | r=4가 파라미터 10%로 전체 FT와 **비슷한** B PPL |
+| 측정된 성능 | r=`{python} f"{BEST_R}"`가 파라미터 `{python} f"{BEST_R_NP/N_W:.0%}"`로 전체 FT와 **비슷한** B PPL |
 | rank는 정규화 | r을 키우면 오히려 나빠진다 — 데이터 양에 맞춰야 한다 |
-| 망각 | rank와 함께 단조 증가 (r=1에서 3.8배, r=32에서 15.1배) |
+| 망각 | rank와 함께 단조 증가 (r=1에서 `{python} f"{LORA_ROWS[0][4]:.1f}"`배, r=32에서 `{python} f"{LORA_ROWS[-1][4]:.1f}"`배) |
 | 공정 비교 | 각자 최적 설정에선 **전체 FT가 근소 우위** — LoRA의 이점은 비용이다 |
 | 병합 | $W' = W + (\alpha/r)BA$ → **추론 지연 0**. LoRA가 이긴 이유 |
-| QLoRA | 동결 가중치를 NF4 4비트로 — 메모리의 지배항을 친다 |
+| QLoRA | 동결 가중치를 NF4 4비트로 — 메모리의 지배항을 친다 (`{python} f"{MEM_LORA:,.0f}"` → `{python} f"{MEM_QLORA:,.0f}"` GB) |
 | 빠진 항목 | 활성화 메모리는 LoRA도 줄이지 못한다 |
 | 하이퍼파라미터 | rank 8~64, alpha≈2r, 모든 선형층, lr은 전체 FT의 10배 |
 | 흔한 실수 | **지식을 넣으려고 미세조정** — 검색이 싸고 정확하다 |
