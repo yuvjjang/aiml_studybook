@@ -7,7 +7,7 @@ jupyter: ai-ml-study
 [7.2](02_language_models.qmd)는 이렇게 끝났다.
 
 > n-gram의 문맥은 **칸**이었고, 신경 LM의 문맥은 **벡터**였다.
-> 문맥 5에서 n-gram은 PPL 4.66, 신경 LM은 8,844개 파라미터로 3.62.
+> 문맥이 길어지자 n-gram 은 무너졌고, 파라미터를 공유하는 신경 LM 은 버텼다.
 
 그 벡터를 어떻게 만드느냐가 이 장이다.
 
@@ -75,26 +75,29 @@ PMI_T = np.log(PWC_T/(PW[:, None]*PWC_T.sum(0, keepdims=True)))
 d1 = PMI_T[W2I["왕_여"]] - PMI_T[W2I["왕_남"]]
 d2 = PMI_T[W2I["의사_여"]] - PMI_T[W2I["의사_남"]]
 
-print(f"단어 {NW}개 (역할 {len(ROLES)} × 성별 2), 문맥 {NC}개")
-print()
-print("설계가 유추를 함의하는가 — 참 확률의 PMI 로 확인")
-print()
-print("  (왕_여 − 왕_남)  vs  (의사_여 − 의사_남)")
-print(f"    두 차이 벡터의 차의 표준편차: {np.std(d1-d2):.3e}")
-print(f"    두 차이 벡터의 차의 평균    : {np.mean(d1-d2):.6f}")
-print(f"    이론상 상수항 (logZ 차이)   : "
-      f"{(LOGZ[4,1]-LOGZ[4,0])-(LOGZ[0,1]-LOGZ[0,0]):.6f}")
-print()
-print("**표준편차가 기계 정밀도의 0 이다.**")
-print("두 차이 벡터는 **상수 벡터 하나만큼만** 다르다 — 방향이 정확히 같다.")
-print()
-print("유도: PMI(r,g;c) = a_r[c] + b_g[c] − logZ(r,g) − log p(c) 이므로")
-print("  PMI(r,여;·) − PMI(r,남;·) = (b_여 − b_남) − [logZ(r,여)−logZ(r,남)]·1")
-print("  첫 항은 r 과 무관하고, 둘째 항은 **모든 좌표에 같은 값**이다.")
-print()
-print("**즉 유추는 '분포가 로그 가법적으로 분해되면' 따라 나오는 성질이다.**")
-print("실제 언어가 그렇다는 보장은 없다 — 그래서 실제 유추 정확도는 100%가 아니다.")
+DIFF_SD, DIFF_MEAN = float(np.std(d1-d2)), float(np.mean(d1-d2))
+DIFF_THEORY = float((LOGZ[4, 1]-LOGZ[4, 0])-(LOGZ[0, 1]-LOGZ[0, 0]))
+print("(왕_여 − 왕_남)  vs  (의사_여 − 의사_남)")
+print(f"  두 차이 벡터의 차의 표준편차: {DIFF_SD:.3e}")
+print(f"  두 차이 벡터의 차의 평균    : {DIFF_MEAN:.6f}")
+print(f"  이론상 상수항 (logZ 차이)   : {DIFF_THEORY:.6f}")
 ```
+
+단어 `{python} f"{NW}"`개(역할 `{python} f"{len(ROLES)}"` × 성별 2), 문맥 `{python} f"{NC}"`개다.
+설계가 정말 유추를 함의하는지 참 확률의 PMI 로 확인했다.
+**표준편차가 `{python} f"{DIFF_SD:.1e}"` — 기계 정밀도의 0 이다.**
+두 차이 벡터는 **상수 벡터 하나만큼만** 다르다 — 방향이 정확히 같다.
+그 상수는 이론값 `{python} f"{DIFF_THEORY:.6f}"` 과 일치한다.
+
+유도는 한 줄이다. $\text{PMI}(r,g;c) = a_r[c] + b_g[c] - \log Z(r,g) - \log p(c)$ 이므로
+
+$$\text{PMI}(r,\text{여};\cdot) - \text{PMI}(r,\text{남};\cdot)
+= (b_\text{여} - b_\text{남}) - \big[\log Z(r,\text{여}) - \log Z(r,\text{남})\big]\,\mathbf{1}$$
+
+첫 항은 $r$ 과 무관하고, 둘째 항은 **모든 좌표에 같은 값**이다.
+
+**즉 유추는 "분포가 로그 가법적으로 분해되면" 따라 나오는 성질이다.**
+실제 언어가 그렇다는 보장은 없다 — 그래서 실제 유추 정확도는 100%가 아니다.
 
 ---
 
@@ -124,28 +127,27 @@ PMI = np.log(np.maximum(P, 1e-12)
              / (P.sum(1, keepdims=True)*P.sum(0, keepdims=True)))
 PPMI = np.maximum(PMI, 0)
 
-print(f"동시출현 쌍 {len(WI):,}개로 {NW}×{NC} 행렬을 만든다")
-print()
-print("**PMI (점별 상호정보량)**")
-print()
-print("   PMI(w, c) = log [ p(w, c) / (p(w)·p(c)) ]")
-print("             = log [ p(c | w) / p(c) ]")
-print()
-print("**'이 문맥이 이 단어 뒤에서 평균보다 몇 배 더 자주 나오는가'** 의 로그다.")
-print("빈도 자체가 아니라 **기대 대비 초과**를 잰다 — 흔한 문맥의 영향을 지운다.")
-print()
 print(f"{'지표':<24} {'값'}")
 print("-" * 50)
 print(f"{'PMI 범위':<24} [{PMI[CO>0].min():.2f}, {PMI[CO>0].max():.2f}]")
 print(f"{'동시출현 0인 칸':<24} {(CO==0).mean():.1%}")
 print(f"{'PMI 음수인 칸':<24} {(PMI<0).mean():.1%}")
 print(f"{'PPMI 에서 0이 되는 칸':<24} {(PPMI==0).mean():.1%}")
-print()
-print("**PPMI (양의 PMI)**: 음수를 0으로 자른다.")
-print("  이유 — 음의 PMI 는 추정이 불안정하다 (드문 조합의 '안 나옴'은 정보가 적다)")
-print(f"  대가 — 이 행렬의 {(PPMI==0).mean():.0%} 가 0 이 된다. **정보를 버린다.**")
-print("  뒤에서 이 클리핑이 얼마나 손해인지 측정한다.")
+ZERO_SHARE = float((PPMI == 0).mean())
 ```
+
+동시출현 쌍 `{python} f"{len(WI):,}"`개로 `{python} f"{NW}"`×`{python} f"{NC}"` 행렬을 만들었다.
+**PMI(점별 상호정보량)**는
+
+$$\text{PMI}(w, c) = \log\frac{p(w, c)}{p(w)\,p(c)} = \log\frac{p(c \mid w)}{p(c)}$$
+
+로, **"이 문맥이 이 단어 뒤에서 평균보다 몇 배 더 자주 나오는가"**의 로그다.
+빈도 자체가 아니라 **기대 대비 초과**를 잰다 — 흔한 문맥의 영향을 지운다.
+
+**PPMI(양의 PMI)**는 음수를 0 으로 자른다.
+이유는 음의 PMI 의 추정이 불안정하기 때문이다 (드문 조합의 "안 나옴"은 정보가 적다).
+대가는 이 행렬의 `{python} f"{ZERO_SHARE:.0%}"` 가 0 이 된다는 것 — **정보를 버린다.**
+뒤에서 이 클리핑이 얼마나 손해인지 측정한다.
 
 ```{python}
 #| label: svd
@@ -170,18 +172,17 @@ def nearest(E, w, k=3):
                    for j in range(NW) if j != i), reverse=True)[:k]
 
 
-print(f"SVD 로 {NC}차원 → {D}차원 압축")
-print(f"  PMI  상위 {D}개 특이값이 {S_M[:D].sum()/S_M.sum():.1%} 설명")
-print(f"  PPMI 상위 {D}개 특이값이 {S_P[:D].sum()/S_P.sum():.1%} 설명")
-print()
+EXPL_PMI, EXPL_PPMI = S_M[:D].sum()/S_M.sum(), S_P[:D].sum()/S_P.sum()
 print("최근접 이웃 (PMI + SVD)")
 for w in ["왕_남", "왕_여", "의사_남"]:
     print(f"  {w:<8} → " +
           ", ".join(f"{n} ({s:.3f})" for s, n in nearest(E_PMI, w)))
-print()
-print("**같은 역할의 다른 성별이 가장 가깝게 나온다.**")
-print("문맥 분포만 세었을 뿐인데 '역할'이라는 축이 드러났다 — 분포 가설이다.")
 ```
+
+SVD 로 `{python} f"{NC}"`차원을 `{python} f"{D}"`차원으로 압축했다 — 상위 `{python} f"{D}"`개 특이값이
+PMI 에서는 `{python} f"{EXPL_PMI:.1%}"`, PPMI 에서는 `{python} f"{EXPL_PPMI:.1%}"` 를 설명한다.
+**같은 역할의 다른 성별이 가장 가깝게 나온다.**
+문맥 분포만 세었을 뿐인데 "역할"이라는 축이 드러났다 — 분포 가설이다.
 
 ---
 
@@ -249,18 +250,17 @@ def train_sgns(wi, ci, d=16, k=5, steps=12000, lr=0.5, batch=4096, seed=0):
 K_NEG = 5
 W_SG, C_SG = train_sgns(WI, CI, d=D, k=K_NEG, seed=0)
 
-print(f"SGNS 학습 완료 (차원 {D}, 음성 샘플 {K_NEG}개)")
-print(f"  단어 벡터 평균 norm {np.linalg.norm(W_SG, axis=1).mean():.3f}")
-print()
 print("최근접 이웃 (SGNS)")
 for w in ["왕_남", "왕_여", "의사_남"]:
     print(f"  {w:<8} → " +
           ", ".join(f"{n} ({s:.3f})" for s, n in nearest(W_SG, w)))
-print()
-print("**구현 주의: 그래디언트를 배치 크기로 나눠야 한다.**")
-print("  한 배치에 같은 단어가 수백 번 나오는데 np.add.at 이 전부 더한다.")
-print("  나누지 않으면 갱신이 폭발해 몇 스텝 만에 NaN 이 된다 — 실제로 겪었다.")
 ```
+
+차원 `{python} f"{D}"`, 음성 샘플 `{python} f"{K_NEG}"`개로 학습한 SGNS 도 같은 이웃 구조를 낸다.
+
+**구현 주의: 그래디언트를 배치 크기로 나눠야 한다.**
+한 배치에 같은 단어가 수백 번 나오는데 `np.add.at` 이 전부 더한다.
+나누지 않으면 갱신이 폭발해 몇 스텝 만에 NaN 이 된다.
 
 ---
 
@@ -294,8 +294,6 @@ x, y = TARGET[MASK], M_SG[MASK]
 r = float(np.corrcoef(x, y)[0, 1])
 slope, intercept = np.polyfit(x, y, 1)
 
-print("학습된 v_w·u_c  vs  이론값 PMI(w,c) − log k")
-print()
 print(f"{'항목':<28} {'측정값':>12} {'이론값':>10}")
 print("-" * 54)
 print(f"{'비교한 칸 수':<28} {int(MASK.sum()):>12,} {'':>10}")
@@ -303,29 +301,31 @@ print(f"{'상관계수':<28} {r:>12.4f} {1.0:>10.1f}")
 print(f"{'회귀 기울기':<28} {slope:>12.4f} {1.0:>10.1f}")
 print(f"{'회귀 절편':<28} {intercept:>12.4f} {0.0:>10.1f}")
 print(f"{'평균 절대 오차':<28} {float(np.abs(x-y).mean()):>12.4f} {0.0:>10.1f}")
-print()
-print(f"**상관 {r:.3f}, 기울기 {slope:.3f} — 정리가 성립한다.**")
-print("SGNS 는 PMI 행렬을 명시적으로 만든 적이 없다.")
-print("쌍을 하나씩 보며 확률적 경사하강을 했을 뿐인데, 결과가 PMI 분해다.")
-print()
-print("**남는 오차의 출처:**")
-for s in ["차원 제약 — 16차원으로는 완전한 PMI 행렬을 담을 수 없다",
-          "유한 학습 — 수렴이 완전하지 않다",
-          f"희소한 칸 — 동시출현이 적으면 PMI 추정 자체가 흔들린다 "
-          f"(그래서 20회 이상만 비교했다)"]:
-    print(f"  · {s}")
-print()
-print("**이 정리가 주는 것:**")
-for s in ["Word2Vec 의 '마법'이 사라진다 — 셀 수 있는 통계량의 분해다",
-          "PPMI+SVD 와 SGNS 가 왜 비슷한 성능을 내는지 설명된다",
-          "**하이퍼파라미터의 의미가 드러난다** — k 는 이동량, 차원은 랭크",
-          "Levy et al.(2015)은 '성능 차이의 대부분은 하이퍼파라미터'라고 결론지었다"]:
-    print(f"  · {s}")
+LG_MAE = float(np.abs(x-y).mean())
+LG_R, LG_SLOPE = r, slope
 ```
+
+학습된 $v_w \cdot u_c$ 와 이론값 $\text{PMI}(w,c) - \log k$ 를 비교한 표다.
+**상관 `{python} f"{r:.3f}"`, 기울기 `{python} f"{slope:.3f}"` — 정리가 성립한다.**
+SGNS 는 PMI 행렬을 명시적으로 만든 적이 없다.
+쌍을 하나씩 보며 확률적 경사하강을 했을 뿐인데, 결과가 PMI 분해다.
+
+**남는 오차의 출처:**
+
+- 차원 제약 — `{python} f"{D}"`차원으로는 완전한 PMI 행렬을 담을 수 없다
+- 유한 학습 — 수렴이 완전하지 않다
+- 희소한 칸 — 동시출현이 적으면 PMI 추정 자체가 흔들린다 (그래서 20회 이상인 칸만 비교했다)
+
+**이 정리가 주는 것:**
+
+- Word2Vec 의 "마법"이 사라진다 — 셀 수 있는 통계량의 분해다
+- PPMI+SVD 와 SGNS 가 왜 비슷한 성능을 내는지 설명된다
+- **하이퍼파라미터의 의미가 드러난다** — $k$ 는 이동량, 차원은 랭크
+- Levy et al.(2015)은 "성능 차이의 대부분은 하이퍼파라미터"라고 결론지었다
 
 ```{python}
 #| label: fig-levy
-#| fig-cap: "SGNS가 학습한 내적이 이론값 PMI − log k를 그대로 따라갑니다"
+#| fig-cap: "SGNS 가 학습한 내적과 이론값 PMI − log k 의 비교"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -381,9 +381,6 @@ def analogy_acc(E):
     return ok, tot
 
 
-print("성별 유추 정확도 — 90개 쌍 (역할 10개의 순서쌍)")
-print("  'r1_남 → r1_여' 관계를 'r2_남 → ?' 에 적용해 r2_여 를 맞히는가")
-print()
 print(f"{'방법':<26} {'정확도':>14}")
 print("-" * 44)
 ACC = {}
@@ -397,26 +394,27 @@ for nm, E in [("PMI + SVD", E_PMI), ("PPMI + SVD", E_PPMI), ("SGNS", W_SG)]:
     print(f"  {nm:<14} " +
           ", ".join(f"{n} ({s:.3f})" for s, n in
                     analogy_top(E, "왕_남", "왕_여", "의사_남")))
-print()
-print("**PMI 와 SGNS 는 100%, PPMI 는 크게 떨어진다.**")
-print(f"  PMI  {ACC['PMI + SVD']:.1%}  →  PPMI {ACC['PPMI + SVD']:.1%}")
-print()
-print(f"차이는 하나뿐이다 — PPMI 가 음수를 0 으로 자른다.")
-print(f"이 행렬에서는 그것이 **{(PPMI==0).mean():.0%} 의 칸**이다.")
-print()
-print("**음의 PMI 도 정보다.** '이 문맥은 이 단어와 잘 안 붙는다'는 사실이")
-print("가법 구조의 일부인데, 클리핑이 그것을 통째로 지운다.")
-print("그러면 차이 벡터가 더 이상 평행하지 않다.")
-print()
-print("**PPMI 를 쓰는 이유는 성능이 아니라 희소성이다** —")
-print("실제 어휘에서는 행렬이 거대해서 0 을 많이 만들어야 저장·계산이 가능하다.")
-print("여기서는 어휘가 작아 그 이득이 없고 손해만 남았다.")
-print("**기법의 이유를 알아야 언제 쓰지 말아야 할지 안다.**")
+N_PAIRS = len(ROLES)*(len(ROLES)-1)
 ```
+
+성별 유추 정확도다 — 역할 `{python} f"{len(ROLES)}"`개의 순서쌍 `{python} f"{N_PAIRS}"`개에 대해
+'r1_남 → r1_여' 관계를 'r2_남 → ?' 에 적용해 r2_여 를 맞히는지 셌다.
+**PMI 와 SGNS 는 `{python} f"{ACC['PMI + SVD']:.0%}"`, PPMI 는 `{python} f"{ACC['PPMI + SVD']:.1%}"` 로 크게 떨어진다.**
+
+차이는 하나뿐이다 — PPMI 가 음수를 0 으로 자른다.
+이 행렬에서는 그것이 **`{python} f"{ZERO_SHARE:.0%}"` 의 칸**이다.
+**음의 PMI 도 정보다.** "이 문맥은 이 단어와 잘 안 붙는다"는 사실이
+가법 구조의 일부인데, 클리핑이 그것을 통째로 지운다.
+그러면 차이 벡터가 더 이상 평행하지 않다.
+
+**PPMI 를 쓰는 이유는 성능이 아니라 희소성이다** —
+실제 어휘에서는 행렬이 거대해서 0 을 많이 만들어야 저장·계산이 가능하다.
+여기서는 어휘가 작아 그 이득이 없고 손해만 남았다.
+**기법의 이유를 알아야 언제 쓰지 말아야 할지 안다.**
 
 ```{python}
 #| label: fig-analogy
-#| fig-cap: "성별 차이 벡터가 모든 역할에서 같은 방향을 가리킵니다"
+#| fig-cap: "임베딩 공간의 성별 차이 벡터와 그 방향 일치도"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -505,10 +503,7 @@ def train_glove(X, d=16, xmax=100, alpha=0.75, steps=3000, lr=0.05, seed=0):
 W_GV, C_GV, GV_LOSS = train_glove(CO)
 ok_gv, tot_gv = analogy_acc(W_GV)
 
-print(f"GloVe 학습 완료 (차원 {D})")
-print(f"  최종 가중 제곱 손실 {GV_LOSS:.4f}")
-print(f"  성별 유추 정확도 {ok_gv}/{tot_gv} = {ok_gv/tot_gv:.1%}")
-print()
+ACC["GloVe"] = ok_gv/tot_gv
 print("최근접 이웃 (GloVe)")
 for w in ["왕_남", "의사_남"]:
     print(f"  {w:<8} → " +
@@ -516,39 +511,39 @@ for w in ["왕_남", "의사_남"]:
 print()
 print(f"{'':<16} {'유추 정확도':>12}")
 print("-" * 32)
-for nm, a in [("PMI + SVD", ACC["PMI + SVD"]), ("PPMI + SVD", ACC["PPMI + SVD"]),
-              ("SGNS", ACC["SGNS"]), ("GloVe", ok_gv/tot_gv)]:
-    print(f"{nm:<16} {a:>12.1%}")
-print()
-print("**세 방법이 같은 곳에 도착한다.**")
-print("  SGNS  — 쌍 단위 확률적 갱신, 암묵적 PMI 분해")
-print("  GloVe — 행렬 단위 가중 최소제곱, log X 를 직접 맞춤")
-print("  SVD   — PMI 행렬의 명시적 저랭크 근사")
-print()
-print("**셋 다 '동시출현 통계의 저랭크 구조를 찾는다'는 같은 일을 한다.**")
-print("차이는 손실 함수의 형태와 드문 조합을 어떻게 다루느냐다.")
-print()
-print("실무적 차이:")
-for s in ["SGNS — 스트리밍 학습 가능, 거대 말뭉치에 유리",
-          "GloVe — 행렬을 한 번 만들면 재학습이 빠름, 병렬화 쉬움",
-          "SVD — 결정론적, 하이퍼파라미터가 적음. 큰 어휘에서는 비쌈"]:
-    print(f"  · {s}")
+for nm in ["PMI + SVD", "PPMI + SVD", "SGNS", "GloVe"]:
+    print(f"{nm:<16} {ACC[nm]:>12.1%}")
 ```
+
+차원 `{python} f"{D}"` 로 학습한 GloVe 의 최종 가중 제곱 손실은 `{python} f"{GV_LOSS:.3f}"`,
+성별 유추 정확도는 `{python} f"{ACC['GloVe']:.1%}"` 다.
+**세 방법이 같은 곳에 도착한다.**
+
+- SGNS — 쌍 단위 확률적 갱신, 암묵적 PMI 분해
+- GloVe — 행렬 단위 가중 최소제곱, $\log X$ 를 직접 맞춤
+- SVD — PMI 행렬의 명시적 저랭크 근사
+
+**셋 다 "동시출현 통계의 저랭크 구조를 찾는다"는 같은 일을 한다.**
+차이는 손실 함수의 형태와 드문 조합을 어떻게 다루느냐다.
+
+실무적 차이:
+
+- SGNS — 스트리밍 학습 가능, 거대 말뭉치에 유리
+- GloVe — 행렬을 한 번 만들면 재학습이 빠름, 병렬화 쉬움
+- SVD — 결정론적, 하이퍼파라미터가 적음. 큰 어휘에서는 비쌈
 
 ---
 
 ## fastText: 모르는 단어를 다루기
 
+Word2Vec / GloVe 의 공통 약점은 **어휘에 없는 단어는 벡터가 없다**는 것이다.
+fastText 의 해법은 단어를 부분 문자열(character n-gram)의 합으로 보는 것이다.
+
+$$v(\text{where}) = v(\text{<wh}) + v(\text{whe}) + v(\text{her}) + v(\text{ere}) + v(\text{re>}) + v(\text{<where>})$$
+
 ```{python}
 #| label: fasttext
 #| code-fold: false
-
-print("Word2Vec / GloVe 의 공통 약점: **어휘에 없는 단어는 벡터가 없다.**")
-print()
-print("fastText 의 해법 — 단어를 부분 문자열(character n-gram)의 합으로 본다")
-print()
-print("   v(where) = v(<wh) + v(whe) + v(her) + v(ere) + v(re>) + v(<where>)")
-print()
 
 
 def char_ngrams(w, lo=3, hi=5):
@@ -566,25 +561,24 @@ print()
 a, b = set(char_ngrams("토크나이저")), set(char_ngrams("토크나이징"))
 print(f"'토크나이저' 와 '토크나이징' 의 n-gram 겹침: "
       f"{len(a & b)}/{len(a | b)} = {len(a & b)/len(a | b):.1%}")
-print("**학습에 '토크나이징' 이 없어도 조각으로 벡터를 조립할 수 있다.**")
-print()
-print(f"{'상황':<26} {'Word2Vec/GloVe':<18} {'fastText'}")
-print("-" * 74)
-for a_, b_, c_ in [
-    ("미등록 단어", "벡터 없음 (실패)", "**부분 문자열로 조립**"),
-    ("오타 'tokeniser'", "완전히 다른 토큰", "대부분의 n-gram 공유"),
-    ("교착어 활용형", "각각 별도 벡터 필요", "어간 n-gram 공유"),
-    ("모델 크기", "어휘 × 차원", "n-gram 해시 버킷 × 차원"),
-    ("드문 단어 품질", "나쁨 (데이터 부족)", "**조각을 공유해 개선**"),
-]:
-    print(f"{a_:<26} {b_:<18} {c_}")
-print()
-print("**한국어처럼 교착어에서 특히 유효하다** ([7.0](00_text_representation.qmd)) —")
-print("'학교에', '학교에서', '학교에서도' 가 '학교' n-gram 을 공유한다.")
-print()
-print("(오늘날 이 역할은 서브워드 토크나이저가 대신한다 — [7.1](01_tokenization.qmd).")
-print(" 토큰 자체를 조각으로 나누면 임베딩 층에서 따로 처리할 필요가 없다.)")
+OVERLAP = len(a & b)/len(a | b)
 ```
+
+'토크나이저'와 '토크나이징'은 n-gram 의 `{python} f"{OVERLAP:.0%}"` 를 공유한다.
+**학습에 '토크나이징'이 없어도 조각으로 벡터를 조립할 수 있다.**
+
+| 상황 | Word2Vec/GloVe | fastText |
+|---|---|---|
+| 미등록 단어 | 벡터 없음 (실패) | **부분 문자열로 조립** |
+| 오타 'tokeniser' | 완전히 다른 토큰 | 대부분의 n-gram 공유 |
+| 교착어 활용형 | 각각 별도 벡터 필요 | 어간 n-gram 공유 |
+| 모델 크기 | 어휘 × 차원 | n-gram 해시 버킷 × 차원 |
+| 드문 단어 품질 | 나쁨 (데이터 부족) | **조각을 공유해 개선** |
+
+**한국어처럼 교착어에서 특히 유효하다** ([7.0](00_text_representation.qmd)) —
+'학교에', '학교에서', '학교에서도'가 '학교' n-gram 을 공유한다.
+오늘날 이 역할은 서브워드 토크나이저가 대신한다 ([7.1](01_tokenization.qmd)) —
+토큰 자체를 조각으로 나누면 임베딩 층에서 따로 처리할 필요가 없다.
 
 ---
 
@@ -602,14 +596,10 @@ u_b, s_b, vt_b = np.linalg.svd(DIFFS, full_matrices=False)
 AXIS = DIFFS.mean(0)
 AXIS /= np.linalg.norm(AXIS)
 
-print("성별 차이 벡터 10개가 한 방향에 모이는가")
-print(f"  차이 벡터들의 1주성분 설명력 {s_b[0]**2/(s_b**2).sum():.1%}")
-print(f"  (중심화하지 않았다 — 중심화하면 찾으려는 공통 방향이 지워진다)")
+PC1_SHARE = float(s_b[0]**2/(s_b**2).sum())
 sims = [cos(DIFFS[i], DIFFS[j]) for i in range(len(ROLES))
         for j in range(i+1, len(ROLES))]
-print(f"  차이 벡터 쌍 45개의 평균 코사인 유사도 {np.mean(sims):.3f} "
-      f"(최소 {min(sims):.3f})")
-print()
+SIM_MEAN, SIM_MIN = float(np.mean(sims)), float(min(sims))
 print("성별 축에 투영한 값")
 print(f"  {'단어':<10} {'투영':>10}")
 print("  " + "-"*24)
@@ -619,36 +609,38 @@ male = float(np.mean([E_PMI[W2I[f"{r}_남"]]@AXIS for r in ROLES]))
 fem = float(np.mean([E_PMI[W2I[f"{r}_여"]]@AXIS for r in ROLES]))
 print(f"  {'남성 평균':<10} {male:>10.4f}")
 print(f"  {'여성 평균':<10} {fem:>10.4f}")
-print()
-print("**축 하나가 성별을 깔끔하게 분리한다.**")
-print()
-print("여기서는 우리가 성별을 **설계에 넣었으니** 당연한 결과다.")
-print("실제 임베딩에서 문제가 되는 것은 넣지 않은 것이 나올 때다:")
-print()
-print(f"{'보고된 현상':<40} {'출처'}")
-print("-" * 76)
-for a_, b_ in [
-    ("man:programmer :: woman:homemaker", "Bolukbasi et al. 2016"),
-    ("직업 단어의 성별 축 투영이 실제 성비와 상관", "Garg et al. 2018"),
-    ("인종·민족 이름에 대한 감정가 차이", "Caliskan et al. 2017 (WEAT)"),
-    ("시대별 임베딩이 사회 고정관념의 변화를 추적", "Garg et al. 2018"),
-]:
-    print(f"{a_:<40} {b_}")
-print()
-print("**핵심: 편향은 알고리즘이 아니라 말뭉치에서 온다.**")
-print("  분포 가설을 충실히 따르면 말뭉치의 연관을 그대로 학습한다.")
-print("  '편향 없는 임베딩'은 '편향 없는 말뭉치'와 같은 문제다.")
-print()
-print("완화 기법과 그 한계:")
-for s in ["**하드 디바이싱** — 성별 축 성분을 제거 (Bolukbasi 2016)",
-          "  → Gonen & Goldberg(2019): 축만 지웠을 뿐 군집 구조는 그대로 남는다",
-          "데이터 증강 — 성별을 바꾼 문장을 추가",
-          "다운스트림 제약 — 최종 과제에서 공정성 제약을 건다",
-          "**측정 먼저** — WEAT, SEAT 등으로 재지 않으면 고쳤는지 알 수 없다"]:
-    print(f"  · {s}")
-print()
-print("Part 12 (신뢰성) 에서 다시 다룬다.")
 ```
+
+성별 차이 벡터 `{python} f"{len(ROLES)}"`개가 한 방향에 모이는가 — 1주성분 설명력이
+`{python} f"{PC1_SHARE:.1%}"` 이고 (중심화하지 않았다 — 중심화하면 찾으려는 공통 방향이 지워진다),
+차이 벡터 쌍 `{python} f"{len(sims)}"`개의 평균 코사인 유사도는 `{python} f"{SIM_MEAN:.3f}"`
+(최소 `{python} f"{SIM_MIN:.3f}"`)다. 그 평균 방향을 성별 축으로 잡고 투영하면
+남성 평균 `{python} f"{male:.2f}"`, 여성 평균 `{python} f"{fem:.2f}"` —
+**축 하나가 성별을 깔끔하게 분리한다.**
+
+여기서는 우리가 성별을 **설계에 넣었으니** 당연한 결과다.
+실제 임베딩에서 문제가 되는 것은 넣지 않은 것이 나올 때다:
+
+| 보고된 현상 | 출처 |
+|---|---|
+| man:programmer :: woman:homemaker | Bolukbasi et al. 2016 |
+| 직업 단어의 성별 축 투영이 실제 성비와 상관 | Garg et al. 2018 |
+| 인종·민족 이름에 대한 감정가 차이 | Caliskan et al. 2017 (WEAT) |
+| 시대별 임베딩이 사회 고정관념의 변화를 추적 | Garg et al. 2018 |
+
+**핵심: 편향은 알고리즘이 아니라 말뭉치에서 온다.**
+분포 가설을 충실히 따르면 말뭉치의 연관을 그대로 학습한다.
+"편향 없는 임베딩"은 "편향 없는 말뭉치"와 같은 문제다.
+
+완화 기법과 그 한계:
+
+- **하드 디바이싱** — 성별 축 성분을 제거 (Bolukbasi 2016).
+  Gonen & Goldberg(2019): 축만 지웠을 뿐 군집 구조는 그대로 남는다
+- 데이터 증강 — 성별을 바꾼 문장을 추가
+- 다운스트림 제약 — 최종 과제에서 공정성 제약을 건다
+- **측정 먼저** — WEAT, SEAT 등으로 재지 않으면 고쳤는지 알 수 없다
+
+Part 12 (신뢰성)에서 다시 다룬다.
 
 ---
 
@@ -691,9 +683,6 @@ def build_embed(ratio, seed=7):
     return Uq[:, :5]*np.sqrt(Sq[:5])
 
 
-print("'배' 는 과일이기도 하고 선박이기도 하다.")
-print("정적 임베딩은 **벡터를 하나만** 준다. 어디에 놓이는가?")
-print()
 print(f"{'과일 뜻 비율':>12} {'배 ↔ 과일류':>13} {'배 ↔ 선박류':>13} "
       f"{'둘 중 나쁜 쪽':>14}")
 print("-" * 58)
@@ -714,30 +703,29 @@ ss = float(np.mean([cos(E2[2], E2[3]), cos(E2[2], E2[4])]))
 best = max(p[3] for p in POLY)
 print("-" * 58)
 print(f"{'참고: 같은 뜻끼리':>12} {ff:>13.3f} {ss:>13.3f}")
-print()
-print(f"**어떤 비율에서도 두 뜻 모두에 가까울 수 없다.**")
-print(f"  '둘 중 나쁜 쪽'의 최댓값이 {best:.3f} 다 — 같은 뜻끼리의 "
-      f"{min(ff, ss):.3f} 에 한참 못 미친다.")
-print()
-print(f"두 뜻 중심 사이의 코사인 유사도: "
-      f"{cos(E2[0]+E2[1], E2[2]+E2[3]+E2[4]):.3f}")
-print("**두 뜻이 서로 반대 방향이라, 한 점이 둘 다 가까울 방법이 없다.**")
-print("기하학적으로 불가능한 것이지 학습이 부족한 것이 아니다.")
-print()
-print("정적 임베딩의 한계 정리:")
-for s in ["**다의어** — 한 벡터가 여러 뜻을 담을 수 없다 (위 실험)",
-          "**문맥 부재** — '배가 아프다' 와 '배가 출항했다' 가 같은 벡터",
-          "**어순 무시** — 동시출현만 세므로 문법을 모른다",
-          "**합성 불가** — '뜨거운 감자' 의 관용적 의미를 못 만든다"]:
-    print(f"  · {s}")
-print()
-print("**해결책은 '문맥에 따라 벡터를 만드는 것'이다.**")
-print("  ELMo(2018) — 양방향 LSTM 의 은닉 상태를 벡터로")
-print("  BERT(2018)  — Transformer 인코더, 문맥별 표현")
-print("  → 같은 '배' 라도 문장마다 다른 벡터가 나온다")
-print()
-print("Part 5 의 어텐션이 정확히 이 문제를 푼 도구다.")
+SAME_MIN = min(ff, ss)
+CENTER_COS = cos(E2[0]+E2[1], E2[2]+E2[3]+E2[4])
 ```
+
+'배'는 과일이기도 하고 선박이기도 하다. 정적 임베딩은 **벡터를 하나만** 준다. 어디에 놓이는가?
+**어떤 비율에서도 두 뜻 모두에 가까울 수 없다.**
+"둘 중 나쁜 쪽"의 최댓값이 `{python} f"{best:.3f}"` 다 — 같은 뜻끼리의
+`{python} f"{SAME_MIN:.3f}"` 에 한참 못 미친다.
+두 뜻 중심 사이의 코사인 유사도가 `{python} f"{CENTER_COS:.3f}"` 로 음수다 —
+**두 뜻이 서로 등을 돌리고 있어, 한 점이 둘 다 가까울 방법이 없다.**
+기하학적으로 불가능한 것이지 학습이 부족한 것이 아니다.
+
+정적 임베딩의 한계 정리:
+
+- **다의어** — 한 벡터가 여러 뜻을 담을 수 없다 (위 실험)
+- **문맥 부재** — '배가 아프다'와 '배가 출항했다'가 같은 벡터
+- **어순 무시** — 동시출현만 세므로 문법을 모른다
+- **합성 불가** — '뜨거운 감자'의 관용적 의미를 못 만든다
+
+**해결책은 "문맥에 따라 벡터를 만드는 것"이다.**
+ELMo(2018)는 양방향 LSTM 의 은닉 상태를, BERT(2018)는 Transformer 인코더의 문맥별 표현을
+벡터로 쓴다 — 같은 '배'라도 문장마다 다른 벡터가 나온다.
+Part 5 의 어텐션이 정확히 이 문제를 푼 도구다.
 
 ---
 
@@ -756,15 +744,16 @@ print("Part 5 의 어텐션이 정확히 이 문제를 푼 도구다.")
 | 임베딩 API | 2022~ | LLM 백본에서 추출 | 문장 · 다국어 |
 
 **분포 가설은 계속 살아 있다.**
-Word2Vec  — 주변 단어로 중심 단어를 예측
-BERT      — 가려진 토큰을 문맥으로 예측
-E5/BGE    — 관련 있는 문장 쌍을 가깝게, 아닌 쌍을 멀게
 
-**전부 '함께 나타나는 것은 비슷하다'의 변주다.**
-바뀐 것은 '문맥'의 정의와 규모지, 원리가 아니다.
+- Word2Vec — 주변 단어로 중심 단어를 예측
+- BERT — 가려진 토큰을 문맥으로 예측
+- E5/BGE — 관련 있는 문장 쌍을 가깝게, 아닌 쌍을 멀게
 
-그리고 [6.3](../06_generative/03_gan.qmd)의 대조 손실과도 같은 구조다 —
-SGNS의 '양성 쌍은 끌어당기고 음성 쌍은 밀어낸다'가
+**전부 "함께 나타나는 것은 비슷하다"의 변주다.**
+바뀐 것은 "문맥"의 정의와 규모지, 원리가 아니다.
+
+그리고 [3.3](../03_deep_learning/03_losses.qmd)의 대조 손실과도 같은 구조다 —
+SGNS 의 "양성 쌍은 끌어당기고 음성 쌍은 밀어낸다"가
 현대 대조학습(InfoNCE)의 원형이다.
 
 
@@ -773,17 +762,19 @@ SGNS의 '양성 쌍은 끌어당기고 음성 쌍은 밀어낸다'가
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① PMI를 직접 만들고 SVD 한다**
-`pmi` 로 행렬을 만든 뒤 `svd` 로 100차원 벡터를 얻어라.
-`sgns` 로 학습한 것과 유사어 목록이 얼마나 겹치는가?
+**① 차원을 줄여 본다**
+`svd` 의 `D` 를 2·4·8·16·32 로 바꾸며 `analogy` 의 유추 정확도를 재라.
+몇 차원부터 100% 가 되는가? 설계상 필요한 최소 랭크가 몇인지 논하라
+(역할 성분 + 성별 성분 + 상수).
 
 **② Levy-Goldberg 등식을 확인한다**
-`levy-goldberg` 에서 SGNS가 shifted PMI를 인수분해한다는 주장을
-음성 표본 수 $k$ 를 바꿔 가며 확인하라. 이동량이 $\log k$ 인가?
+`sgns` 의 `K_NEG` 를 1·5·20 으로 바꿔 다시 학습하고 `levy-goldberg` 의 회귀 절편을 보라.
+이동량이 정말 $-\log k$ 만큼 움직이는가?
 
-**③ FastText로 미등록어를 처리한다**
-`fasttext` 에서 학습에 없던 한국어 조어를 넣어 이웃을 보라.
-subword가 유의미한 벡터를 주는가?
+**③ n-gram 범위를 바꾼다**
+`fasttext` 의 `char_ngrams(w, lo, hi)` 를 (2,3)·(3,5)·(4,6) 으로 바꾸며
+'토크나이저/토크나이징'과 오타 '토크나이자'의 겹침률을 재라.
+짧은 n-gram 이 오타에 강한 대신 무엇을 잃는가?
 :::
 
 ## 요약
@@ -793,22 +784,22 @@ subword가 유의미한 벡터를 주는가?
 | 분포 가설 | "단어는 함께 나타나는 단어들로 알 수 있다" (Firth 1957) |
 | PMI | $\log \frac{p(c\mid w)}{p(c)}$ — 빈도가 아니라 **기대 대비 초과** |
 | 검증 장치 | 로그 가법 분해를 설계에 넣은 합성 언어 |
-| 유추의 근거 | 참 확률의 PMI 차이 벡터가 **상수 벡터만큼만** 다름 (std 5.9e-16) |
+| 유추의 근거 | 참 확률의 PMI 차이 벡터가 **상수 벡터만큼만** 다름 (std `{python} f"{DIFF_SD:.1e}"`) |
 | 함의 | 유추는 "분포가 로그 가법적이면" 따라 나온다 — 언어가 그렇다는 보장은 없다 |
 | SGNS | 양성 쌍은 당기고 $k$개 음성 쌍은 민다 |
 | 구현 주의 | 그래디언트를 배치로 나누지 않으면 **NaN으로 발산** |
 | **Levy & Goldberg** | $v_w \cdot u_c \approx \text{PMI} - \log k$ |
-| 검증 결과 | 상관 **0.981**, 회귀 기울기 0.967 (이론 1), MAE 0.229 |
+| 검증 결과 | 상관 **`{python} f"{LG_R:.3f}"`**, 회귀 기울기 `{python} f"{LG_SLOPE:.3f}"` (이론 1), MAE `{python} f"{LG_MAE:.3f}"` |
 | 의미 | Word2Vec의 '마법'은 행렬 분해였다 |
-| 유추 정확도 | PMI+SVD 100%, SGNS 100%, GloVe 100% |
-| **PPMI의 대가** | 65.6% — 음수 클리핑이 71% 칸을 지워 가법 구조를 깬다 |
+| 유추 정확도 | PMI+SVD `{python} f"{ACC['PMI + SVD']:.0%}"`, SGNS `{python} f"{ACC['SGNS']:.0%}"`, GloVe `{python} f"{ACC['GloVe']:.0%}"` |
+| **PPMI의 대가** | `{python} f"{ACC['PPMI + SVD']:.1%}"` — 음수 클리핑이 `{python} f"{ZERO_SHARE:.0%}"` 칸을 지워 가법 구조를 깬다 |
 | 교훈 | PPMI는 성능이 아니라 **희소성**을 위한 것 |
 | GloVe | $\log X_{wc}$ 에 대한 가중 최소제곱, 편향이 빈도를 흡수 |
 | 세 방법의 관계 | 전부 동시출현의 저랭크 구조를 찾는 같은 일 |
 | fastText | 부분 문자열의 합 → 미등록어·오타·교착어 대응 |
 | 편향 | 알고리즘이 아니라 **말뭉치**에서 온다 |
 | 디바이싱의 한계 | 축을 지워도 군집은 남는다 (Gonen & Goldberg 2019) |
-| **다의어의 벽** | 어떤 비율에서도 두 뜻 모두에 가까울 수 없다 (최선 −0.073) |
+| **다의어의 벽** | 어떤 비율에서도 두 뜻 모두에 가까울 수 없다 (최선 `{python} f"{best:.3f}"`) |
 | 이유 | 두 뜻 중심의 코사인이 음수 — **기하학적으로 불가능** |
 | 해결 | 문맥에 따라 벡터를 만든다 → ELMo, BERT, Transformer |
 
