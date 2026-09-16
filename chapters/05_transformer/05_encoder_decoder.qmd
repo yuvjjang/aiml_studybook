@@ -23,7 +23,7 @@ BERT, GPT, T5는 서로 다른 모델처럼 보이지만 **같은 부품으로 �
 
 ```{mermaid}
 %%| label: fig-encdec
-%%| fig-cap: "인코더-디코더. 디코더 블록만 서브층이 셋이고, 크로스 어텐션의 K·V 가 인코더에서 옵니다."
+%%| fig-cap: "인코더-디코더 — 디코더 블록만 서브층이 셋이고, 크로스 어텐션의 K·V 는 인코더에서 온다"
 flowchart LR
   SRC["소스 문장"] --> ENC
   subgraph ENC["인코더 × N"]
@@ -66,7 +66,7 @@ $$
 
 ```{python}
 #| label: fig-family-masks
-#| fig-cap: "같은 블록, 다른 마스크. 이것이 BERT·GPT·T5를 가르는 전부입니다."
+#| fig-cap: "같은 블록, 다른 마스크 — BERT·GPT·T5 를 가르는 전부"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -170,14 +170,13 @@ print(f"시퀀스 길이 T = {T}\n")
 print(f"{'':<26}{'볼 수 있는 쌍':>16}{'예측 과제 수':>14}")
 print(f"{'양방향 (encoder-only)':<26}{T*T:>16,}{int(0.15*T):>14,}")
 print(f"{'인과 (decoder-only)':<26}{T*(T+1)//2:>16,}{T:>14,}")
-
-print()
-print(f"문맥 범위:  인과 / 양방향 = {(T*(T+1)//2)/(T*T):.2f}")
-print(f"신호 밀도:  인과 / MLM   = {T/(0.15*T):.1f}")
-print()
-print("한 축에서 2배 손해, 다른 축에서 6.7배 이득이다.")
-print("데이터와 연산이 충분해지면 뒤쪽이 이긴다 — 이것이 역전의 산술적 근거다.")
+ctx_ratio = (T*(T+1)//2)/(T*T)
+signal_ratio = T/(0.15*T)
 ```
+
+문맥 범위는 인과가 양방향의 `{python} f"{ctx_ratio:.2f}"`배, 신호 밀도는 인과가 MLM 의
+`{python} f"{signal_ratio:.1f}"`배다. 한 축에서 2배 손해, 다른 축에서 약 7배 이득이다.
+데이터와 연산이 충분해지면 뒤쪽이 이긴다 — 이것이 역전의 산술적 근거다.
 
 ::: {.callout-note}
 ## 인과 마스크가 표현력을 절반으로 깎지는 않는다
@@ -266,13 +265,15 @@ def flops_per_token(ctx):
 dec_only = np.cumsum([flops_per_token(n_in + t) for t in out_lens])
 
 # encoder-decoder: 셀프어텐션은 생성분만, 크로스어텐션은 고정 입력 참조
-#   (인코더는 한 번만 실행 → 상수 비용)
+#   (인코더는 한 번만 실행 → 상수 비용, 디코더 블록은 크로스 어텐션 4d² 가 더 있어 16d²)
 enc_cost = 2 * 12 * d * d * L * n_in
 enc_dec = enc_cost + np.cumsum(
-    [2 * 12 * d * d * L + 2 * 2 * t * d * L + 2 * 2 * n_in * d * L for t in out_lens])
+    [2 * 16 * d * d * L + 2 * 2 * t * d * L + 2 * 2 * n_in * d * L for t in out_lens])
 
-# KV 캐시 없이 매번 전체 재계산하면
-no_cache = np.cumsum([flops_per_token(n_in + t) * (n_in + t) / 8 for t in out_lens])
+# KV 캐시 없이 매번 전체 재계산하면: 문맥 전체(n_in + t 토큰)를 다시 순전파
+no_cache = np.cumsum([(n_in + t) * 2 * 12 * d * d * L + 2 * 2 * (n_in + t) ** 2 * d * L
+                      for t in out_lens])
+cache_gain = float(no_cache[-1] / dec_only[-1])
 
 fig = make_subplots(rows=1, cols=2,
                     subplot_titles=("계열별 누적 연산량", "KV 캐시의 효과 (decoder-only)"))
@@ -310,7 +311,9 @@ fig.show()
 인과 마스크 덕분에 **과거 토큰의 $K$·$V$ 는 절대 변하지 않는다.**
 새 토큰을 생성할 때 이전 것을 다시 계산할 필요가 없다 — 캐시해두고 이어붙이면 된다.
 
-오른쪽 그림에서 캐시 유무의 차이가 수십 배다.
+오른쪽 그림에서 `{python} f"{out_lens[-1]:,}"` 토큰을 생성했을 때 캐시 유무의 차이가
+`{python} f"{cache_gain:.0f}"`배다 — 캐시가 없으면 매 스텝 문맥 전체를 다시 계산하므로 비용이
+생성 길이의 제곱으로 자란다.
 이것이 [7.14 추론 최적화](../07_language/14_inference_optimization.qmd) 전체의 출발점이고,
 [5.2에서 본 GQA](02_multi_head.qmd)가 필요한 이유이기도 하다.
 :::
@@ -359,9 +362,10 @@ fig.show()
 BERT 류로 자기회귀 생성을 하려면 무엇이 문제인가?
 마스크만 바꾸면 되는지, 학습 목표까지 바꿔야 하는지 논하라.
 
-**③ 접두 LM 마스크를 만든다**
-앞 $k$ 토큰은 양방향, 이후는 인과인 마스크를 구현하라.
-`mask-counting` 을 확장해 세 구조의 중간임을 보여라.
+**③ prefix LM 과 encoder-decoder 를 수로 비교한다**
+`fig-family-masks` 의 두 마스크는 패턴이 같고 파라미터 공유만 다르다. 소스 길이 $n$, 타깃 길이 $m$ 일 때
+볼 수 있는 (질의, 키) 쌍의 수와 파라미터 수를 각각 식으로 쓰고, `mask-counting` 을 확장해
+$n \gg m$ 과 $n \ll m$ 에서 어느 쪽이 유리한지 논하라.
 :::
 
 ## 요약
