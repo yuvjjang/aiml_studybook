@@ -79,7 +79,7 @@ $$Q = XW_Q, \quad K = XW_K, \quad V = XW_V$$
 
 ```{python}
 #| label: fig-attention-steps
-#| fig-cap: "쿼리 하나가 값들의 가중 평균을 만들기까지. 슬라이더로 쿼리 위치를 바꾸세요."
+#| fig-cap: "쿼리 하나가 값들의 가중 평균을 만들기까지의 세 단계"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -211,7 +211,7 @@ $\sqrt{d_k}$ 로 나누면 분산이 다시 1로 돌아온다.
 
 ```{python}
 #| label: fig-scaling
-#| fig-cap: "차원이 커질 때 스케일링 유무가 만드는 차이. 슬라이더로 d_k를 바꾸세요."
+#| fig-cap: "차원이 커질 때 스케일링 유무가 만드는 차이"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -277,7 +277,7 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-$d_k$ 를 키워보세요. 주황(스케일링 없음)은 최대 가중치가 1로 붙어버립니다 — 사실상 argmax가 되어 그래디언트가 사라집니다. 파랑(÷√d_k)은 차원과 무관하게 분포를 유지합니다.
+슬라이더로 $d_k$ 를 키워보세요. 주황(스케일링 없음)은 최대 가중치가 1로 붙어버립니다 — 사실상 argmax가 되어 그래디언트가 사라집니다. 파랑(÷√d_k)은 차원과 무관하게 분포를 유지합니다.
 :::
 
 ::: {.callout-note}
@@ -418,10 +418,10 @@ fig.add_trace(go.Scatter(x=lengths, y=mem_gb, mode="lines+markers", showlegend=F
                          fill="tozeroy", fillcolor=viz.hex_rgba(viz.PINK, 0.12)),
               row=1, col=2)
 
-# 두 항이 뒤집히는 지점: n²d = 4nd²  →  n = 4d
-cross = 4 * d_model
+# 두 항이 뒤집히는 지점: 어텐션 2n²d = 사영 4nd²  →  n = 2d
+cross = 2 * d_model
 fig.add_vline(x=cross, line=dict(color=viz.GREEN, dash="dash"),
-              annotation_text=f"n = 4d = {cross}<br>여기서 역전", row=1, col=1)
+              annotation_text=f"n = 2d = {cross}<br>여기서 역전", row=1, col=1)
 
 fig.update_xaxes(title_text="시퀀스 길이 n", type="log", row=1, col=1)
 fig.update_yaxes(title_text="FLOPs", type="log", row=1, col=1)
@@ -431,10 +431,14 @@ fig.update_yaxes(title_text="GB (float32, 32헤드)", type="log", row=1, col=2)
 viz.fig_defaults(fig, height=420,
                  title=f"d_model = {d_model}, 헤드 {n_heads}개 기준")
 fig.show()
+mem_last_tb = mem_gb[-1] / 1024
 ```
 
+사영은 $Q, K, V, O$ 네 행렬이라 $4nd^2$, 어텐션은 $QK^\top$ 과 가중합이라 $2n^2 d$ 다.
+둘이 같아지는 지점은 $n = 2d$ = `{python} f"{cross:,}"` 이다.
+
 ::: {.interaction-hint}
-짧은 시퀀스에서는 사영(파랑)이 지배적이고, $n = 4d$ 를 넘어서면 이차항(주황)이 역전합니다. 오른쪽은 어텐션 행렬만의 메모리 — 12만 토큰이면 수백 GB입니다.
+짧은 시퀀스에서는 사영(파랑)이 지배적이고, $n = 2d$ 를 넘어서면 이차항(주황)이 역전합니다. 오른쪽은 어텐션 행렬만의 메모리 — `{python} f"{lengths[-1]:,}"` 토큰이면 `{python} f"{mem_last_tb:.1f}"` TB입니다.
 :::
 
 이 그림이 지난 몇 년간의 연구 방향을 설명한다.
@@ -470,9 +474,9 @@ $\kappa(q,k) = \exp(q^\top k/\sqrt{d_k})$ 를 커널로 두면 정확히 같은 
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 온도를 손으로 조절한다**
-`attention-3lines` 에서 $\sqrt{d_k}$ 대신 1로 나눠 보라. $d_k=64$ 일 때
-어텐션 분포의 엔트로피가 얼마나 줄어드는가? 사실상 argmax가 되는가?
+**① 엔트로피로 포화를 잰다**
+`fig-scaling` 은 `raw_ent`·`scaled_ent` 를 계산만 하고 그리지 않는다. $d_k$ 에 대해 그려라.
+$d_k=64$ 에서 스케일링 없는 쪽의 엔트로피는 균등 분포($\log 12$)의 몇 %인가? 사실상 argmax가 되는가?
 
 **② 어텐션을 평균으로 퇴화시킨다**
 쿼리를 0 벡터로 두면 모든 점수가 같아진다. 출력이 값 벡터의 단순 평균이 되는가?
@@ -493,7 +497,7 @@ $\kappa(q,k) = \exp(q^\top k/\sqrt{d_k})$ 를 커널로 두면 정확히 같은 
 | Value | $V = XW_V$ | 무엇을 전달하는가 (주는 쪽 내용) |
 | 스케일링 | $\div\sqrt{d_k}$ | 내적 분산이 $d_k$ 라서. 없으면 softmax 포화 → 그래디언트 소실 |
 | 어텐션 행렬 | $(n, n)$, 행 합 = 1 | 축복(경로 길이 1)이자 저주(이차 비용) |
-| 복잡도 | 연산 $O(n^2 d)$, 메모리 $O(n^2)$ | $n = 4d$ 부터 이차항이 지배 |
+| 복잡도 | 연산 $O(n^2 d)$, 메모리 $O(n^2)$ | $n = 2d$ 부터 이차항이 지배 |
 
 여기까지는 $Q, K, V$ 가 어디서 오는지 말하지 않았다.
 셋이 **모두 같은 시퀀스에서** 나올 때 무슨 일이 벌어지는지 — 그리고 마스크 한 장이
