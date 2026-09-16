@@ -62,7 +62,7 @@ $$\text{SelfAttn}(PX) = P \cdot \text{SelfAttn}(X)$$
 
 ```{python}
 #| label: fig-permutation
-#| fig-cap: "토큰 순서를 섞어도 각 토큰의 출력 벡터는 그대로 따라옵니다."
+#| fig-cap: "토큰 순서를 섞어도 그대로 따라오는 각 토큰의 출력 벡터"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -119,10 +119,9 @@ fig.show()
 print(f"원래 순서 : {tokens}")
 print(f"섞은 순서 : {[tokens[i] for i in perm]}")
 print(f"되돌린 출력과 원본의 최대 차이: {max_diff:.3e}")
-print()
-print("→ 순서 정보가 계산에 전혀 반영되지 않는다.")
-print("  위치 인코딩 없이는 어순이 다른 문장을 구별할 수 없다.")
 ```
+
+순서 정보가 계산에 전혀 반영되지 않는다. 위치 인코딩 없이는 어순이 다른 문장을 구별할 수 없다.
 
 ::: {.key-concept}
 이것이 [5.3 위치 인코딩](03_positional_encoding.qmd)이 **필수**인 이유다.
@@ -156,7 +155,7 @@ $e^{-\infty} = 0$ 이므로 그 자리는 남은 항들끼리 정규화된다 �
 
 ```{python}
 #| label: fig-masks
-#| fig-cap: "마스크 행렬만으로 모델 계열이 구분됩니다. 노란색 = 참조 가능, 검정 = 차단."
+#| fig-cap: "모델 계열을 가르는 마스크 행렬 (노란색 = 참조 가능, 검정 = 차단)"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -296,12 +295,13 @@ fig.show()
 import numpy as np
 
 upper = attn_causal[np.triu_indices(n, k=1)]
-print(f"미래 위치 가중치 최댓값 : {upper.max():.2e}   (정확히 0)")
+print(f"미래 위치 가중치 최댓값 : {upper.max():.2e}")
 print(f"각 행의 합               : {np.round(attn_causal.sum(axis=1), 6)}")
-print()
-print("첫 토큰은 자기 자신만 볼 수 있으므로 가중치가 1.0 하나뿐이다:")
-print(f"  {np.round(attn_causal[0], 3)}")
+print(f"첫 행                    : {np.round(attn_causal[0], 3)}")
 ```
+
+미래 위치의 가중치는 정확히 0 이고 행 합은 여전히 1 이다. 첫 토큰은 자기 자신만 볼 수 있으므로
+가중치가 1.0 하나뿐이다.
 
 ::: {.interaction-hint}
 왼쪽에서는 "고양이"가 뒤쪽 "먹었"을 참조합니다. 오른쪽에서는 그 칸이 0이 되고, 대신 왼쪽 항들의 가중치가 커집니다 — **합이 1로 유지되도록 재분배**되기 때문입니다.
@@ -322,10 +322,11 @@ scores = scores.masked_fill(mask, float("-inf"))
 attn = softmax(scores)    # 남은 항끼리 정규화되어 합 = 1
 ```
 
-실무에서는 `-inf` 대신 `-1e9` 같은 큰 음수를 쓰기도 한다.
-fp16에서 `-inf` 가 `NaN` 을 만드는 경우가 있어서다
-([0.5 수치 컴퓨팅](../00_foundations/05_numerical_computing.qmd)).
-단, 한 행이 **전부** 마스킹되면 `-inf` 는 `NaN` 을 만든다 — 패딩 처리에서 실제로 겪는 버그다.
+실무에서는 `-inf` 대신 dtype 의 최솟값(`torch.finfo(dtype).min`)이나 `-1e4` 같은 큰 음수를
+쓰기도 한다. `-inf` 끼리 빼면 `NaN` 이 나오고, fp16 에서는 `-1e9` 조차 표현 범위(최대 65504)를
+넘어 `-inf` 가 되기 때문이다([0.5 수치 컴퓨팅](../00_foundations/05_numerical_computing.qmd)).
+어느 쪽이든 한 행이 **전부** 마스킹되면 softmax 가 `NaN` 이나 균등 분포를 만든다 —
+패딩 처리에서 실제로 겪는 버그다.
 :::
 
 ---
@@ -381,7 +382,7 @@ fig.show()
 | | 경로 길이 | 층당 복잡도 | 병렬화 |
 |---|---|---|---|
 | RNN | $O(n)$ | $O(n d^2)$ | **불가** (순차 의존) |
-| CNN | $O(\log_k n)$ | $O(k n d^2)$ | 가능 |
+| CNN (팽창) | $O(\log_k n)$ | $O(k n d^2)$ | 가능 |
 | 셀프 어텐션 | $O(1)$ | $O(n^2 d)$ | 가능 |
 
 ::: {.key-concept}
@@ -421,12 +422,12 @@ fig.show()
 ## 직접 해보기
 
 **① 순열 등변성을 깨뜨린다**
-`perm-numbers` 에 위치 인코딩을 더한 뒤 같은 검사를 하라.
-출력이 더 이상 순열과 교환되지 않는 것을 확인하라.
+`self_attn` 의 입력에 `attention.sinusoidal_encoding` 을 더한 뒤 같은 검사를 하라.
+`max_diff` 가 더 이상 0 이 아닌 것을 확인하라.
 
 **② 마스크를 하나 어긋나게 한다**
-`causal-check` 의 마스크를 `k <= q` 대신 `k <= q+1` 로 바꾸면
-검증이 어떤 방식으로 실패하는가? 이것이 실무에서 가장 흔한 누출이다.
+`attention.causal_mask(n)` 대신 `j > i + 1` 을 차단하는 마스크를 직접 만들어 `causal-check` 를
+다시 돌려라. 검증이 어떤 방식으로 실패하는가? 이것이 실무에서 가장 흔한 누출이다.
 
 **③ 어텐션 행렬의 rank를 잰다**
 길이 $n$, 헤드 차원 $d_h$ 일 때 $QK^\top$ 의 rank 상한은 $d_h$ 다.
