@@ -103,7 +103,8 @@ SSM은 **같은 파라미터로 둘 다** 할 수 있다.
 
 $\bar{\mathbf{A}}$ 를 아무렇게나 초기화하면 SSM은 학습되지 않는다.
 $\bar{\mathbf{A}}^k$ 가 지수적으로 사라지거나 폭발하기 때문이다 —
-[0.0 선형대수](../00_foundations/00_linear_algebra.qmd)에서 본 고유값 거듭제곱 문제다.
+[0.0 선형대수](../00_foundations/00_linear_algebra.qmd)의 고유값 거듭제곱이고,
+[4.2 RNN](../04_architectures/02_rnn.qmd)에서 스펙트럼 반지름 $\sigma^T$ 로 측정한 바로 그 문제다.
 
 HiPPO는 **과거를 다항식 기저로 압축하는** 특정 $\mathbf{A}$ 를 유도한다.
 그 행렬로 초기화하면 상태가 "지금까지의 입력 전체를 근사하는 계수"가 된다.
@@ -161,7 +162,7 @@ $\Delta_t$ 는 이산화 간격으로, 사실상 **게이트**다.
 
 ```{python}
 #| label: fig-selective
-#| fig-cap: "선택적 게이트가 특정 구간의 정보만 상태에 반영합니다"
+#| fig-cap: "특정 구간의 정보만 상태에 반영하는 선택적 게이트"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -243,7 +244,7 @@ SSM 계열의 가장 명확한 이점이 이것이다.
 
 ```{python}
 #| label: fig-inference-memory
-#| fig-cap: "문맥이 길어질 때 KV 캐시는 선형으로 늘고, SSM 상태는 일정합니다."
+#| fig-cap: "문맥이 길어질 때 선형으로 느는 KV 캐시와 일정한 SSM 상태"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -281,10 +282,11 @@ print(f"{'문맥 길이':>12} {'KV 캐시':>12} {'SSM 상태':>12} {'비율'}")
 print("-" * 50)
 for l, k, s in zip(lens, kv_gb, ssm_gb):
     print(f"{l:>12,} {k:>10.3f}GB {s:>10.3f}GB {k/s:>8.0f}x")
+kv_1m_gb, ssm_mb = float(kv_gb[-1]), float(ssm_gb[0] * 1024)
 ```
 
 ::: {.interaction-hint}
-100만 토큰에서 KV 캐시는 GPU 한 장을 넘어서지만, SSM 상태는 여전히 수 MB입니다. 이것이 SSM 계열이 긴 시퀀스에서 주목받는 근본 이유입니다.
+100만 토큰에서 KV 캐시는 `{python} f"{kv_1m_gb:.0f}"`GB 로 GPU 한 장을 넘어서지만, SSM 상태는 여전히 `{python} f"{ssm_mb:.0f}"`MB입니다. 이것이 SSM 계열이 긴 시퀀스에서 주목받는 근본 이유입니다.
 :::
 
 ---
@@ -399,12 +401,14 @@ $$y_t = \sum_{s \le t} \alpha(t, s)\, v_s$$
 수치 차이가 얼마나 벌어지는가? 어느 쪽이 학습에, 어느 쪽이 추론에 유리한가?
 
 **② 상태 크기와 기억 길이**
-`memory-numbers` 의 상태 차원 $N$ 을 8·64·256으로 바꾸며
-복사 과제의 최대 거리를 재라. 선형으로 늘어나는가?
+`ssm_recurrent` 로 복사 과제를 만들어라 — 길이 $T$ 의 무작위 입력을 넣고 마지막 상태 $h_T$ 에서
+$u_{T-k}$ 를 최소제곱으로 복원할 때(무작위 시퀀스 여러 개로 회귀), 상태 차원 $N$ = 8·64·256 에서
+복원 오차가 거리 $k$ 에 따라 어떻게 커지는가? "정확한 회상" 이 왜 어려운지 이 곡선으로 설명하라.
 
-**③ 어텐션과 하이브리드로 섞는다**
-층의 1/4만 어텐션으로 바꾸면 복사·검색 과제 성능이 어떻게 되는가?
-왜 순수 SSM이 in-context retrieval에 약한지 설명하라.
+**③ 하이브리드를 직접 만든다**
+[5.6](06_build_gpt.qmd)의 MiniGPT 3층 중 앞 2층을 `ssm_gated` 류의 선택적 SSM 층으로 바꿔라
+(역전파는 순환을 그대로 미분하면 된다). 같은 텍스트에 학습시켜 손실과 생성 시 캐시 크기를
+원본과 비교하라. 어텐션 층 하나가 왜 회상을 상당 부분 되살리는지 설명하라.
 :::
 
 ## 요약
