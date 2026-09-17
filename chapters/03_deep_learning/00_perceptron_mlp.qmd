@@ -1,34 +1,37 @@
 ---
-title: "3.0 퍼셉트론에서 MLP까지"
-subtitle: "선형 유닛의 쌓기와 비선형성 — 표현력은 어디서 오는가"
+title: "3.0 perceptron에서 MLP까지"
+subtitle: "선형 unit 쌓기와 비선형성 — 표현력은 어디서 오는가"
 jupyter: ai-ml-study
 ---
 
 [Part 2](../02_classical_ml/00_learning_problem.qmd)의 모델들은 사람이 특성을 설계했다.
-다항 항을 넣고, 커널을 고르고, 상호작용을 만들었다.
+다항 항을 넣고, kernel을 고르고, interaction을 만들었다.
 
 신경망의 발상은 다르다. **특성 자체를 학습한다.**
 
-그런데 여기에 미묘한 함정이 있다. 선형 층을 아무리 쌓아도 여전히 선형이다.
+그런데 여기에 미묘한 함정이 있다. 선형 층(layer — 입력에 행렬을 곱하고 벡터를 더하는 한 단계)을 아무리 쌓아도 여전히 선형이다.
 표현력은 층을 쌓는 데서 오는 게 아니라 **비선형을 끼워 넣는 데서** 온다.
 
 이 장은 그 이유를 증명하고, 왜 깊이가 너비보다 효율적인지까지 본다.
 
 ---
 
-## 퍼셉트론: 60년 된 출발점
+## perceptron: 60년 된 출발점
+
+**perceptron**(perceptron)은 가중합의 부호로 예/아니오를 답하는 가장 단순한 신경망이다.
 
 $$\hat{y} = \text{sign}(\mathbf{w}^\top\mathbf{x} + b)$$
 
-[로지스틱 회귀](../02_classical_ml/04_logistic_regression.qmd)와 형태가 같지만
+[logistic regression](../02_classical_ml/04_logistic_regression.qmd)과 형태가 같지만
 출력이 확률이 아니라 부호다. 학습 규칙도 다르다 — **틀린 샘플을 만날 때만** 갱신한다.
+문지기가 잘못 들여보낸 손님을 볼 때마다 기준선을 그 손님 쪽으로 조금 밀어 옮기는 것이다.
 
 $$\text{if } y_i(\mathbf{w}^\top\mathbf{x}_i+b) \le 0: \quad
 \mathbf{w} \leftarrow \mathbf{w} + \eta\, y_i\mathbf{x}_i$$
 
 ---
 
-## G3.0.1 — 퍼셉트론이 경계를 찾아가는 과정
+## G3.0.1 — perceptron이 경계를 찾아가는 과정
 
 ```{python}
 #| label: fig-perceptron
@@ -66,7 +69,7 @@ def line(w, b):
 
 steps_idx = list(range(0, len(snaps), 4))
 fig = make_subplots(rows=1, cols=2, column_widths=[0.6, 0.4],
-                    subplot_titles=("결정경계", "오분류 개수"))
+                    subplot_titles=("decision boundary", "오분류 개수"))
 k0 = steps_idx[3]
 w0, b0, i0, mis0 = snaps[k0]
 for c, col in [(-1, viz.ACCENT), (1, viz.WARM)]:
@@ -75,7 +78,7 @@ for c, col in [(-1, viz.ACCENT), (1, viz.WARM)]:
                              marker=dict(size=9, color=col,
                                          line=dict(width=1, color="black"))),
                   row=1, col=1)
-fig.add_trace(go.Scatter(x=gx, y=line(w0, b0), mode="lines", name="결정경계",
+fig.add_trace(go.Scatter(x=gx, y=line(w0, b0), mode="lines", name="decision boundary",
                          line=dict(color=viz.GREEN, width=3)), row=1, col=1)
 fig.add_trace(go.Scatter(x=[X[i0,0]], y=[X[i0,1]], mode="markers",
                          name="지금 보는 점",
@@ -97,25 +100,25 @@ fig.update_xaxes(title_text="x₁", range=[-4, 4], row=1, col=1)
 fig.update_yaxes(title_text="x₂", range=[-4, 4], row=1, col=1)
 fig.update_xaxes(title_text="스텝", row=1, col=2)
 fig.update_yaxes(title_text="오분류 수", row=1, col=2)
-viz.fig_defaults(fig, height=430, title="퍼셉트론 학습 규칙")
+viz.fig_defaults(fig, height=430, title="perceptron 학습 규칙")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```
 
 ::: {.key-concept}
-**퍼셉트론 수렴 정리**: 데이터가 선형 분리 가능하면 **유한 번의 갱신 안에** 완벽히 분리하는 해를 찾는다.
+**perceptron 수렴 정리**: 데이터가 linearly separable(직선 하나로 나눌 수 있음)하면 **유한 번의 갱신 안에** 완벽히 분리하는 해를 찾는다.
 
-강력해 보이지만 조건이 치명적이다. **선형 분리 가능해야 한다.**
+강력해 보이지만 조건이 치명적이다. **linearly separable해야 한다.**
 아니면 영원히 진동한다 — 수렴하지 않을 뿐 아니라, 언제 멈춰야 할지도 모른다.
 
 그리고 [SVM](../02_classical_ml/05_svm_kernels.qmd)과 달리 **아무 분리선이나** 찾는다.
-마진을 최대화하지 않으므로 일반화 보장이 약하다.
+margin을 최대화하지 않으므로 generalization 보장이 약하다.
 :::
 
 ### 몇 번이면 끝나는가: Novikoff 경계
 
-"유한 번"이 얼마인지도 계산할 수 있고, 그 답에 **마진**이 등장한다.
-분리하는 단위벡터 $\mathbf{w}^\star$ 가 있어 모든 샘플이 마진 $\gamma$ 이상 떨어져 있다고 하자.
+"유한 번"이 얼마인지도 계산할 수 있고, 그 답에 **margin**이 등장한다.
+분리하는 단위벡터 $\mathbf{w}^\star$ 가 있어 모든 샘플이 margin $\gamma$ 이상 떨어져 있다고 하자.
 그리고 모든 입력의 크기가 $R$ 이하라고 하자.
 
 $$y_i\,\mathbf{w}^{\star\top}\mathbf{x}_i \ge \gamma > 0, \qquad \|\mathbf{x}_i\| \le R$$
@@ -130,7 +133,7 @@ $$\mathbf{w}_k^\top\mathbf{w}^\star = \mathbf{w}_{k-1}^\top\mathbf{w}^\star + y_
 \quad\Longrightarrow\quad
 \mathbf{w}_k^\top\mathbf{w}^\star \ge k\gamma$$
 
-코시-슈바르츠에 의해 $\|\mathbf{w}_k\| \ge \mathbf{w}_k^\top\mathbf{w}^\star \ge k\gamma$ 다.
+Cauchy–Schwarz 부등식(내적은 두 길이의 곱을 넘지 못한다)에 의해 $\|\mathbf{w}_k\| \ge \mathbf{w}_k^\top\mathbf{w}^\star \ge k\gamma$ 다.
 
 **② 위에서**: 크기 자체는 천천히 자란다. 갱신은 **틀렸을 때만** 일어나므로
 $y_i\mathbf{w}_{k-1}^\top\mathbf{x}_i \le 0$ 이고, 따라서
@@ -145,7 +148,7 @@ $$\|\mathbf{w}_k\|^2 = \|\mathbf{w}_{k-1}\|^2 + 2\underbrace{y_i\mathbf{w}_{k-1}
 $$\boxed{\ k \;\le\; \left(\frac{R}{\gamma}\right)^{2}\ }$$
 
 갱신 횟수가 **데이터 수와 무관**하고 오직 $R/\gamma$ 에만 의존한다.
-백만 개든 열 개든, 마진이 같으면 갱신 횟수의 상한이 같다.
+백만 개든 열 개든, margin이 같으면 갱신 횟수의 상한이 같다. 두 마을 사이 길이 넓으면 몇 번만 헤매도 길을 찾는다.
 
 ```{python}
 #| label: novikoff
@@ -167,7 +170,7 @@ def perceptron_updates(X, y, max_iter=200_000):
         k += 1
     return None
 
-print(f"{'요청 간격':>10}{'실제 마진 γ':>13}{'R':>7}{'(R/γ)² 상한':>14}"
+print(f"{'요청 간격':>10}{'실제 margin γ':>14}{'R':>7}{'(R/γ)² 상한':>14}"
       f"{'실제 갱신':>11}{'n':>7}")
 for gap in [1.0, 0.5, 0.2, 0.1]:
     for n in [50, 500]:
@@ -176,32 +179,32 @@ for gap in [1.0, 0.5, 0.2, 0.1]:
         X = np.c_[y * (gap + np.abs(rng.normal(0, 0.5, n))),
                   rng.normal(0, 1, n)]
         R = float(np.linalg.norm(X, axis=1).max())
-        gamma = float((y * X[:, 0]).min())        # w* = e1 기준 마진
+        gamma = float((y * X[:, 0]).min())        # w* = e1 기준 margin
         k = perceptron_updates(X, y)
         print(f"{gap:>10.1f}{gamma:>13.3f}{R:>7.2f}{(R/gamma)**2:>14.0f}"
               f"{k:>11}{n:>7}")
 ```
 
 실제 갱신 횟수가 언제나 $(R/\gamma)^2$ 상한 안에 있다.
-마진이 작아질수록 상한이 제곱으로 커지고, 실제 갱신도 함께 늘어난다.
+margin이 작아질수록 상한이 제곱으로 커지고, 실제 갱신도 함께 늘어난다.
 $n$ 이 10배여도 상한은 거의 같다 — 데이터 수와 무관하다는 것이 정리의 요점이다.
 
 ::: {.key-concept}
 $R/\gamma$ 라는 양이 [SVM](../02_classical_ml/05_svm_kernels.qmd)에서 다시 나온다.
-거기서는 **마진을 최대화**하는 것이 목적이었고, 여기서는 마진이
+거기서는 **margin을 최대화**하는 것이 목적이었고, 여기서는 margin이
 **수렴 속도를 결정**한다. 같은 양이 두 역할을 한다.
 
-퍼셉트론이 아무 분리선이나 찾는 것도 이 증명이 설명한다 —
-경계는 "언젠가 멈춘다"만 보장할 뿐, 멈춘 곳의 마진에 대해서는 아무 말도 하지 않는다.
-마진이 큰 해를 원하면 목적함수에 그렇게 적어 넣어야 하고, 그것이 SVM이다.
+perceptron이 아무 분리선이나 찾는 것도 이 증명이 설명한다 —
+경계는 "언젠가 멈춘다"만 보장할 뿐, 멈춘 곳의 margin에 대해서는 아무 말도 하지 않는다.
+margin이 큰 해를 원하면 목적함수에 그렇게 적어 넣어야 하고, 그것이 SVM이다.
 :::
 
 ---
 
 ## XOR: 첫 번째 벽
 
-1969년 민스키와 페퍼트가 지적한 문제다.
-가장 단순한 논리 함수 중 하나인 XOR을 퍼셉트론이 학습할 수 없다.
+1969년 Minsky와 Papert가 지적한 문제다.
+가장 단순한 논리 함수 중 하나인 XOR(둘 중 하나만 참일 때 참)을 perceptron이 학습할 수 없다.
 
 ```{python}
 #| label: xor-proof
@@ -230,22 +233,22 @@ def linearly_separable(X, y, grid=41):
 for name, y in targets.items():
     ok, sol = linearly_separable(X, y)
     extra = f"  예: w=({sol[0]:.1f},{sol[1]:.1f}), b={sol[2]:.1f}" if ok else ""
-    print(f"{name:<5} 선형 분리 가능? {'예' if ok else '아니오'}{extra}")
+    print(f"{name:<5} linearly separable? {'예' if ok else '아니오'}{extra}")
 ```
 
-AND 와 OR 은 격자 탐색에서 바로 분리선이 나오는데, XOR 은 아무 $(w_1, w_2, b)$ 로도 안 된다.
-대각선 두 점이 같은 클래스라 하나의 직선으로 나눌 수 없기 때문이다.
+AND와 OR은 격자 탐색에서 바로 분리선이 나오는데, XOR은 아무 $(w_1, w_2, b)$ 로도 안 된다.
+대각선 두 점이 같은 클래스라 하나의 직선으로 나눌 수 없기 때문이다 — 체스판의 검은 칸과 흰 칸을 직선 하나로 가를 수 없는 것과 같다.
 
 ---
 
-## G3.0.2 — 은닉층이 공간을 다시 그린다
+## G3.0.2 — hidden layer가 공간을 다시 그린다
 
 XOR을 푸는 방법은 **입력 공간을 바꾸는 것**이다.
-은닉층이 그 일을 한다.
+**hidden layer**(hidden layer — 입력과 출력 사이에 끼운 중간 층)가 그 일을 한다. 종이를 접어 두 점이 겹치게 만든 뒤 한 번에 자르는 셈이다.
 
 ```{python}
 #| label: fig-xor-hidden
-#| fig-cap: "은닉층이 XOR을 선형 분리 가능한 공간으로 옮깁니다."
+#| fig-cap: "hidden layer가 XOR을 linearly separable한 공간으로 옮깁니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -270,7 +273,7 @@ GX, GY = np.meshgrid(g, g)
 G = np.c_[GX.ravel(), GY.ravel()]
 P = model.predict(G)[:, 1].reshape(GX.shape)
 
-# 은닉 표현
+# hidden representation
 _, cache = model.forward(Xtr, training=False)
 H = cache["a"][0]
 _, cache_pts = model.forward(Xx, training=False)
@@ -278,7 +281,7 @@ Hpts = cache_pts["a"][0]
 
 fig = make_subplots(rows=1, cols=2,
                     subplot_titles=("입력 공간 — 곡선 경계 필요",
-                                    "은닉 공간 — 직선으로 분리됨"))
+                                    "hidden 공간 — 직선으로 분리됨"))
 fig.add_trace(go.Heatmap(x=g, y=g, z=np.round(P, 3), colorscale="RdBu", zmid=0.5,
                          showscale=False, opacity=0.8), row=1, col=1)
 for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
@@ -299,17 +302,17 @@ for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
 
 fig.update_xaxes(title_text="x₁", row=1, col=1)
 fig.update_yaxes(title_text="x₂", row=1, col=1)
-fig.update_xaxes(title_text="은닉 유닛 1", row=1, col=2)
-fig.update_yaxes(title_text="은닉 유닛 2", row=1, col=2)
+fig.update_xaxes(title_text="hidden unit 1", row=1, col=2)
+fig.update_yaxes(title_text="hidden unit 2", row=1, col=2)
 viz.fig_defaults(fig, height=420,
-                 title=f"은닉 유닛 2개로 XOR 해결 · 정확도 "
+                 title=f"hidden unit 2개로 XOR 해결 · 정확도 "
                        f"{(model.predict(Xx).argmax(1)==yx).mean():.0%}")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-왼쪽 입력 공간에서는 두 파란 점이 대각선에 있어 직선으로 못 나눕니다. 오른쪽 은닉 공간에서는 **같은 클래스끼리 뭉쳐** 직선 하나로 갈립니다. 은닉층이 한 일은 좌표계를 다시 그린 것입니다.
+왼쪽 입력 공간에서는 두 파란 점이 대각선에 있어 직선으로 못 나눕니다. 오른쪽 hidden 공간에서는 **같은 클래스끼리 뭉쳐** 직선 하나로 갈립니다. hidden layer가 한 일은 좌표계를 다시 그린 것입니다.
 :::
 
 ::: {.key-concept}
@@ -317,18 +320,18 @@ fig.show()
 
 $$\text{신경망} = \underbrace{\phi_\theta(\mathbf{x})}_{\text{학습된 특성 변환}} \;\to\; \underbrace{\text{선형 분류기}}_{\text{마지막 층}}$$
 
-마지막 층은 [로지스틱 회귀](../02_classical_ml/04_logistic_regression.qmd)와 같다.
+마지막 층은 [logistic regression](../02_classical_ml/04_logistic_regression.qmd)과 같다.
 달라진 것은 **$\phi$ 를 사람이 설계하지 않고 학습한다**는 점뿐이다.
 
-[2.5의 커널](../02_classical_ml/05_svm_kernels.qmd)도 같은 일을 하지만,
-커널은 **고정된** 변환이고 신경망은 **데이터에 맞춰 바뀌는** 변환이다.
+[2.5의 kernel](../02_classical_ml/05_svm_kernels.qmd)도 같은 일을 하지만,
+kernel은 **고정된** 변환이고 신경망은 **데이터에 맞춰 바뀌는** 변환이다.
 :::
 
 ---
 
-## 활성화가 없으면 층은 무의미하다
+## activation이 없으면 층은 무의미하다
 
-이것이 이 장의 핵심 정리다.
+이것이 이 장의 핵심 정리다. **activation**(activation 함수)은 각 층의 출력에 끼우는 비선형 함수(ReLU, tanh 등)다.
 
 $$\begin{aligned}
 \mathbf{h}_1 &= W_1\mathbf{x} + \mathbf{b}_1 \\
@@ -336,7 +339,8 @@ $$\begin{aligned}
 &= \tilde{W}\mathbf{x} + \tilde{\mathbf{b}}
 \end{aligned}$$
 
-**$L$ 개 층을 쌓아도 단일 선형 변환과 정확히 같다.** 행렬곱이 닫혀 있기 때문이다.
+**$L$ 개 층을 쌓아도 단일 선형 변환과 정확히 같다.** 행렬끼리 곱해도 행렬이기 때문이다.
+원화를 달러로, 다시 유로로 바꾸는 것은 결국 환율 하나로 원화를 유로로 바꾸는 것과 같다.
 
 ```{python}
 #| label: linear-collapse
@@ -361,24 +365,24 @@ for i in range(1, len(deep.W)):
 out_flat = X @ W_eq + b_eq
 
 n_deep, n_flat = deep.n_params(), W_eq.size + b_eq.size
-print(f"5층 망 (은닉 32×3) 파라미터: {n_deep:,}개")
+print(f"5층 망 (hidden 32×3) 파라미터: {n_deep:,}개")
 print(f"등가 단일 선형층 파라미터   : {n_flat}개")
 print(f"두 출력의 최대 차이         : {np.abs(out_deep - out_flat).max():.3e}")
 ```
 
-활성화 없이는 아무리 깊어도 $4 \to 3$ 선형 변환 하나와 동일하다.
+activation 없이는 아무리 깊어도 $4 \to 3$ 선형 변환 하나와 동일하다.
 파라미터 `{python} f"{n_deep:,}"`개짜리 망을 `{python} f"{n_flat}"`개짜리 모델로 접을 수 있다.
 
 ---
 
-## 보편 근사 정리
+## universal approximation theorem
 
-은닉층 하나에 유닛을 충분히 많이 두면, **임의의 연속함수를 원하는 정밀도로 근사**할 수 있다
-(Cybenko 1989, Hornik 1991).
+**universal approximation theorem**(보편 근사 정리): hidden layer 하나에 unit(유닛 — 층을 이루는 뉴런 하나)을 충분히 많이 두면, **임의의 연속함수를 원하는 정밀도로 근사**할 수 있다
+(Cybenko 1989, Hornik 1991). 레고 블록이 충분히 많으면 어떤 모양이든 만들 수 있다는 말이다.
 
 ```{python}
 #| label: fig-universal-approx
-#| fig-cap: "은닉 유닛을 늘려가며 복잡한 함수를 근사합니다."
+#| fig-cap: "hidden unit을 늘려가며 복잡한 함수를 근사합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -403,7 +407,7 @@ for wdt in widths:
     n_params.append(m.n_params())
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.6, 0.4],
-                    subplot_titles=("근사 결과", "은닉 유닛 수와 오차"))
+                    subplot_titles=("근사 결과", "hidden unit 수와 오차"))
 w0 = 8
 fig.add_trace(go.Scatter(x=x, y=f_true, mode="lines", name="참 함수",
                          line=dict(color="rgba(255,255,255,0.5)", width=3, dash="dash")),
@@ -414,27 +418,27 @@ fig.add_trace(go.Scatter(x=widths, y=errs_w, mode="lines+markers", showlegend=Fa
                          line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
 
 steps = [(str(w), {"y": [f_true, fits[w], errs_w]}) for w in widths]
-fig.update_layout(sliders=[viz.slider(steps, prefix="은닉 유닛 = ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="hidden unit = ",
                                       active=widths.index(w0), pad_t=55)])
 fig.update_xaxes(title_text="x", row=1, col=1)
 fig.update_yaxes(title_text="f(x)", row=1, col=1)
-fig.update_xaxes(title_text="은닉 유닛 수", type="log", row=1, col=2)
+fig.update_xaxes(title_text="hidden unit 수", type="log", row=1, col=2)
 fig.update_yaxes(title_text="MSE", type="log", row=1, col=2)
-viz.fig_defaults(fig, height=420, title="보편 근사 (은닉층 1개, tanh)")
+viz.fig_defaults(fig, height=420, title="universal approximation (hidden layer 1개, tanh)")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```
 
 ::: {.callout-warning}
-## 보편 근사 정리가 말하지 않는 것
+## universal approximation theorem이 말하지 않는 것
 
-정리는 **존재**만 보장한다. 실무에서 중요한 것들은 전부 빠져 있다.
+정리는 **존재**만 보장한다. 블록이 몇 개 필요한지, 어떻게 조립하는지는 말해 주지 않는다. 실무에서 중요한 것들은 전부 빠져 있다.
 
-1. **얼마나 많은 유닛이 필요한지** — 지수적으로 많을 수 있다.
-2. **찾을 수 있는지** — 경사하강이 그 해에 도달한다는 보장이 없다.
-3. **일반화하는지** — 훈련 데이터를 근사하는 것과 새 데이터에서 잘하는 것은 다르다
+1. **얼마나 많은 unit이 필요한지** — 지수적으로 많을 수 있다.
+2. **찾을 수 있는지** — gradient descent가 그 해에 도달한다는 보장이 없다.
+3. **generalization하는지** — 훈련 데이터를 근사하는 것과 새 데이터에서 잘하는 것은 다르다
    ([2.1](../02_classical_ml/01_bias_variance.qmd)).
-4. **깊이가 왜 필요한지** — 정리대로면 은닉층 하나면 충분한데, 실제로는 깊게 쌓는다.
+4. **깊이가 왜 필요한지** — 정리대로면 hidden layer 하나면 충분한데, 실제로는 깊게 쌓는다.
 
 네 번째가 특히 중요하다. 답은 **효율**에 있다.
 :::
@@ -446,7 +450,7 @@ fig.show()
 같은 함수를 표현하는 데 필요한 **파라미터 수**가 다르다.
 
 얕은 망은 함수의 복잡도에 대해 **지수적으로** 커져야 하지만,
-깊은 망은 층마다 조각을 **곱셈적으로** 늘릴 수 있다.
+깊은 망은 층마다 조각을 **곱셈적으로** 늘릴 수 있다. 종이를 한 번 더 접을 때마다 주름 수가 두 배가 되는 것과 같다.
 
 ```{python}
 #| label: fig-depth-vs-width
@@ -458,7 +462,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import nn, viz
 
-# 접힘이 많은 함수 (삼각파) — 조각별 선형 표현력을 요구한다
+# 접힘이 많은 함수 (삼각파) — piecewise linear 표현력을 요구한다
 x = np.linspace(0, 1, 400)
 def triangle_wave(t, k=4):
     """k번 접은 삼각파 — 깊이의 이점이 드러나는 고전 예제"""
@@ -549,9 +553,9 @@ print(f"최선값 비교: 얕은 쪽(1~2층) {best_shallow:.5f}  vs  깊은 쪽(
 - **표준편차** — 깊을수록 시드에 따라 실패하기도 한다 (최적화의 어려움)
 
 ::: {.key-concept}
-**ReLU 망의 조각별 선형 영역 수**
+**ReLU 망의 piecewise linear 영역 수**
 
-ReLU 신경망이 표현하는 함수는 **조각별 선형(piecewise linear)** 이다.
+ReLU 신경망이 표현하는 함수는 **piecewise linear**(piecewise linear — 구간마다 직선인 꺾은선)다.
 그 조각의 개수가 표현력의 척도인데,
 
 - 너비 $n$, 깊이 1 → 조각 수가 $n$ 에 **선형**
@@ -567,16 +571,16 @@ ReLU 신경망이 표현하는 함수는 **조각별 선형(piecewise linear)** 
 
 즉 **표현할 수 있다 ≠ 학습할 수 있다.**
 깊이는 표현력을 주지만 동시에 최적화를 어렵게 만든다.
-그 최적화 문제를 푸는 것이 [3.4 옵티마이저](04_optimizers.qmd),
-[3.5 정규화 층](05_normalization.qmd), [3.7 초기화와 잔차 연결](07_initialization.qmd)의 주제이고,
+그 최적화 문제를 푸는 것이 [3.4 optimizer](04_optimizers.qmd),
+[3.5 normalization 층](05_normalization.qmd), [3.7 초기화와 residual connection](07_initialization.qmd)의 주제이고,
 그것들이 해결되기 전까지 깊은 망은 실제로 학습되지 않았다.
 :::
 
 ---
 
-## 순전파를 행렬로
+## forward pass를 행렬로
 
-실제 구현은 배치 전체를 한 번에 처리한다.
+**forward pass**(순전파 — 입력에서 출력까지 층을 차례로 통과시키기)의 실제 구현은 batch(한 번에 처리하는 샘플 묶음) 전체를 한 번에 처리한다.
 
 ```{python}
 #| label: forward-shapes
@@ -596,7 +600,7 @@ print("-" * 46)
 print(f"{'입력 X':<26} {str(X.shape):>16}")
 for i, (w, b) in enumerate(zip(model.W, model.b)):
     print(f"{f'  @ W{i} {w.shape} + b{i}':<26} {str(cache['z'][i].shape):>16}")
-print(f"{'출력 (로짓)':<26} {str(out.shape):>16}")
+print(f"{'출력 (logit)':<26} {str(out.shape):>16}")
 print()
 print(f"총 파라미터 {model.n_params():,}개")
 print(f"  = {d_in}×{h1}+{h1} + {h1}×{h2}+{h2} + {h2}×{K}+{K}")
@@ -616,9 +620,9 @@ $xW^\top$ 을 계산한다 — 결과는 이 책과 같다.
 
 ---
 
-## 은닉 표현은 층마다 달라진다
+## hidden representation은 층마다 달라진다
 
-깊은 망에서 각 층이 데이터를 어떻게 변형하는지 본다.
+깊은 망에서 각 층이 데이터를 어떻게 변형하는지 본다. 각 층의 출력을 그 층의 **hidden representation**(은닉 표현)이라 한다.
 
 ```{python}
 #| label: fig-layer-representations
@@ -650,7 +654,7 @@ def separability(P, y):
     s = np.sqrt(0.5*(a.var(0).sum() + b.var(0).sum()))
     return d / (s + 1e-12)
 
-layers = [("입력", X)] + [(f"은닉 {i+1}", cache["a"][i]) for i in range(3)]
+layers = [("입력", X)] + [(f"hidden {i+1}", cache["a"][i]) for i in range(3)]
 fig = make_subplots(rows=1, cols=len(layers),
                     subplot_titles=[n for n, _ in layers],
                     horizontal_spacing=0.03)
@@ -667,14 +671,14 @@ for c, (name, A) in enumerate(layers, start=1):
     fig.update_yaxes(showticklabels=False, row=1, col=c)
 
 viz.fig_defaults(fig, height=310,
-                 title="층별 표현 (2D PCA 사영) — 점점 선형 분리 가능해진다")
+                 title="층별 표현 (2D PCA projection) — 점점 linearly separable 해진다")
 fig.update_layout(margin=dict(l=30, r=25, t=85, b=30))
 fig.update_annotations(font_size=11)
 fig.show()
 ```
 
 ::: {.interaction-hint}
-입력에서는 초승달 두 개가 얽혀 있습니다. 층을 지날수록 **분리도가 커지고**, 마지막 은닉층에서는 두 덩어리가 확실히 갈립니다. 마지막 선형 층은 그 위에 직선 하나만 그으면 됩니다.
+입력에서는 초승달 두 개가 얽혀 있습니다. 층을 지날수록 **분리도가 커지고**, 마지막 hidden layer에서는 두 덩어리가 확실히 갈립니다. 마지막 선형 층은 그 위에 직선 하나만 그으면 됩니다.
 :::
 
 ---
@@ -683,36 +687,36 @@ fig.show()
 ## 직접 해보기
 
 **① Novikoff 경계를 실제 반복 수와 비교한다**
-`novikoff` 에서 마진 $\gamma$ 를 절반으로 줄이는 데이터를 만들어라.
+`novikoff` 에서 margin $\gamma$ 를 절반으로 줄이는 데이터를 만들어라.
 경계 $(R/\gamma)^2$ 는 4배가 되는데, 실제 갱신 횟수도 4배인가?
 
 **② XOR을 특성 하나로 푼다**
-`xor-proof` 의 입력에 $x_1x_2$ 를 세 번째 특성으로 추가하면 퍼셉트론이 수렴하는가?
-이것이 [2.5의 커널](../02_classical_ml/05_svm_kernels.qmd)과 같은 아이디어임을 확인하라.
+`xor-proof` 의 입력에 $x_1x_2$ 를 세 번째 특성으로 추가하면 perceptron이 수렴하는가?
+이것이 [2.5의 kernel](../02_classical_ml/05_svm_kernels.qmd)과 같은 아이디어임을 확인하라.
 
-**③ 선형 붕괴를 직접 본다**
+**③ linear collapse를 직접 본다**
 `linear-collapse` 에서 층을 10개로 늘려도 등가 행렬의 rank가 그대로인가?
-활성함수를 하나만 넣으면 rank가 어떻게 되는가?
+activation을 하나만 넣으면 rank가 어떻게 되는가?
 :::
 
 ## 요약
 
 | 개념 | 핵심 | 이어지는 곳 |
 |------|------|-------------|
-| 퍼셉트론 | 틀린 샘플에만 갱신, 수렴 정리 | 마진 보장 없음 |
-| XOR 문제 | 단층은 선형 분리만 가능 | 첫 AI 겨울 |
-| 은닉층 | **입력 공간을 다시 그린다** | 특성 학습 |
-| 선형 붕괴 | 활성화 없으면 $L$ 층 = 1층 | **비선형이 필수** |
-| 보편 근사 | 은닉층 1개로 임의 함수 근사 가능 | 존재만 보장 |
-| 깊이의 효율 | 조각 수가 $n^L$ 로 지수적 | 왜 깊게 쌓는가 |
-| 신경망 = $\phi$ + 선형 | 마지막 층은 로지스틱 회귀 | [2.4](../02_classical_ml/04_logistic_regression.qmd) |
-| 층별 표현 | 갈수록 선형 분리 가능해짐 | 표현 학습 |
+| perceptron | 틀린 샘플에만 갱신 — 문지기의 기준선 밀기, 수렴 정리 | margin 보장 없음 |
+| XOR 문제 | 단층은 linearly separable만 가능 — 체스판 칸 가르기 | 첫 AI 겨울 |
+| hidden layer | **입력 공간을 다시 그린다** — 종이 접어 자르기 | 특성 학습 |
+| linear collapse | activation 없으면 $L$ 층 = 1층 — 환율 두 번 = 한 번 | **비선형이 필수** |
+| universal approximation | hidden layer 1개로 임의 함수 근사 가능 — 레고 블록 | 존재만 보장 |
+| 깊이의 효율 | 종이 접기처럼 조각 수가 $n^L$ 로 지수적 | 왜 깊게 쌓는가 |
+| 신경망 = $\phi$ + 선형 | 마지막 층은 logistic regression | [2.4](../02_classical_ml/04_logistic_regression.qmd) |
+| 층별 표현 | 갈수록 linearly separable해짐 | representation learning |
 
 표현력은 확인했다. 이제 **어떻게 학습시키는가** — 다음 장은 이 책 전체에서
-가장 중요한 알고리즘인 역전파를 다룬다.
+가장 중요한 알고리즘인 backpropagation을 다룬다.
 
 ---
 
-**다음**: [3.1 역전파](01_backpropagation.qmd) — 연쇄법칙의 효율적 구현
+**다음**: [3.1 backpropagation](01_backpropagation.qmd) — chain rule의 효율적 구현
 
 **이전**: [2.12 실전에서 무너지는 지점](../02_classical_ml/12_practical_issues.qmd)
