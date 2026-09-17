@@ -4,11 +4,13 @@ subtitle: "분포·기댓값·베이즈 — 불확실성을 다루는 문법"
 jupyter: ai-ml-study
 ---
 
-머신러닝 모델은 대부분 **확률분포**다.
+머신러닝 모델은 대부분 **확률분포**다. 즉 모델이 내놓는 답은 "이것이다"라는 값 하나가 아니라
+"이럴 확률이 얼마, 저럴 확률이 얼마"라는 **확률의 목록**이다.
 
-분류기가 출력하는 것은 조건부확률 $p(y|x)$ 이고,
-손실함수는 음의 로그우도이며([0.4 정보이론](04_information_theory.qmd)),
-생성 모델은 데이터 분포 $p(x)$ 자체를 학습한다.
+분류기가 출력하는 것은 "입력이 $x$ 일 때 정답이 $y$ 일 확률", 즉 조건부확률 $p(y|x)$ 이고,
+손실함수는 negative log-likelihood(negative log-likelihood — 모델이 정답에 준 확률에 로그를 씌우고 부호를 뒤집은 값,
+[0.4 정보이론](04_information_theory.qmd))이며,
+생성 모델은 데이터가 어떤 모양으로 퍼져 있는지, 즉 데이터 분포 $p(x)$ 자체를 학습한다.
 
 그래서 "확률을 안다"는 것은 공식을 외우는 게 아니라
 **모델이 무엇을 주장하고 있는지 읽을 줄 아는 것**이다.
@@ -18,25 +20,33 @@ jupyter: ai-ml-study
 
 ## 확률변수와 분포
 
-확률변수 $X$ 는 무작위 결과에 숫자를 붙이는 함수다.
-그 숫자가 어떻게 퍼져 있는지가 **분포**다.
+확률변수 $X$ 는 무작위 결과에 숫자를 붙이는 함수다. 주사위를 던져 나온 눈, 내일의 기온,
+사용자가 광고를 클릭하면 1 아니면 0 — 결과마다 숫자 하나가 정해진다.
+그 숫자가 **어떤 값 근처에 얼마나 자주 떨어지는지 그린 지도**가 **분포**(distribution)다.
+다트를 수천 번 던지고 과녁의 자국을 보면 어디에 몰리는지 보이듯,
+분포는 확률변수를 아주 많이 뽑았을 때 값들이 쌓이는 모양이다.
+
+분포를 적는 방법은 확률변수가 띄엄띄엄한 값(이산)을 갖느냐, 이어진 값(연속)을 갖느냐에 따라 다르다.
 
 | 종류 | 기술 방법 | 성질 |
 |------|-----------|------|
-| 이산 | 확률질량함수 $P(X=x)$ | 각 값에 확률, 합이 1 |
-| 연속 | 확률밀도함수 $p(x)$ | **한 점의 확률은 0**, 적분이 1 |
-| 공통 | 누적분포함수 $F(x) = P(X\le x)$ | 단조증가, 0에서 1로 |
+| 이산 (주사위 눈, 클릭 여부) | probability mass function(PMF, 확률질량함수) $P(X=x)$ | 값 하나하나에 확률을 붙인다. 전부 더하면 1 |
+| 연속 (키, 기온) | probability density function(PDF, 확률밀도함수) $p(x)$ | **딱 한 점일 확률은 0**이고, 구간 위의 넓이가 확률. 전체 넓이가 1 |
+| 공통 | cumulative distribution function(CDF, 누적분포함수) $F(x) = P(X\le x)$ | "$x$ 이하일 확률". 오른쪽으로 갈수록 0에서 1까지 올라가기만 한다 |
 
 ::: {.callout-note}
 ## 밀도는 확률이 아니다
 
 연속분포에서 $p(x) = 2.5$ 같은 값이 나올 수 있다. 확률이 1을 넘을 수는 없는데?
 
-밀도는 **단위 길이당 확률**이다. 확률은 넓이 $p(x)\,dx$ 에서 나온다.
-좁은 구간에 몰려 있으면 밀도가 1을 넘을 수 있다.
+밀도는 확률이 아니라 **단위 길이당 확률**이다. 인구밀도를 떠올리면 된다.
+서울의 인구밀도는 1km²당 1만 명이 넘지만, 그것이 "어느 한 지점에 1만 명이 서 있다"는 뜻은 아니다.
+넓이를 곱해야 사람 수가 나온다. 확률밀도도 마찬가지로, 구간의 길이 $dx$ 를 곱한 넓이 $p(x)\,dx$ 가 비로소 확률이다.
+확률 1 전체가 아주 좁은 구간에 몰려 있으면 그 구간의 밀도는 얼마든지 1을 넘을 수 있다.
 
-이 구분이 실무에서 중요해지는 지점: 연속 분포의 로그우도는 **양수가 될 수 있다.**
-정규화 흐름이나 VAE에서 손실이 음수로 나오는 것이 버그가 아닌 경우가 있다.
+이 구분이 실무에서 중요해지는 지점: 밀도가 1을 넘을 수 있으니 거기에 로그를 씌운 log-likelihood(log-likelihood)는 **양수가 될 수 있다.**
+[6.4 normalizing flow](../06_generative/04_normalizing_flows.qmd)나 [6.2 VAE](../06_generative/02_vae.qmd)처럼
+연속 데이터의 밀도를 학습하는 모델에서 손실(negative log-likelihood)이 음수로 나오는 것이 버그가 아닌 경우가 있다.
 :::
 
 ---
@@ -104,7 +114,7 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-**베타 분포**를 보세요 — $[0,1]$ 위의 분포라 "확률에 대한 확률"을 표현합니다. $\alpha=\beta=1$ 이면 균등, $(2,5)$ 면 낮은 쪽으로 치우칩니다. 베이즈 추론에서 이항분포의 켤레사전분포로 쓰입니다.
+**베타 분포**를 보세요 — $[0,1]$ 위의 분포라 "확률에 대한 확률"을 표현합니다. $\alpha=\beta=1$ 이면 균등, $(2,5)$ 면 낮은 쪽으로 치우칩니다. 베이즈 추론에서 이항분포의 conjugate prior로 쓰입니다(아래 참조).
 :::
 
 ### 어떤 분포를 언제 쓰는가
@@ -117,18 +127,23 @@ fig.show()
 | 포아송 | 단위 시간당 사건 수 | 카운트 데이터, 대기열 |
 | 정규 | 많은 작은 요인의 합 | 회귀 잡음, 가중치 초기화 |
 | 지수 | 사건까지 대기 시간 | 생존 분석, 지연 모델링 |
-| 베타 | $[0,1]$ 사이 비율의 불확실성 | 확률의 사전분포 |
-| 감마 | 양수 값, 분산의 사전분포 | 베이지안 모델링 |
+| 베타 | $[0,1]$ 사이 비율의 불확실성 | 확률 자체에 대한 prior |
+| 감마 | 양수 값, 분산에 대한 prior | 베이지안 모델링 |
 
 ---
 
 ## 기댓값과 분산
 
+기댓값 $\mathbb{E}[X]$ 는 확률변수를 아주 많이 뽑아 평균 낸 값이고,
+분산 $\mathrm{Var}(X)$ 는 그 값들이 평균에서 얼마나 멀리 흩어지는지를 "평균과의 거리의 제곱"의 평균으로 잰 것이다.
+기댓값이 다트 자국들의 중심이라면 분산은 자국이 퍼진 정도다.
+
 $$\mathbb{E}[X] = \sum_x x\,P(x) \quad\text{또는}\quad \int x\,p(x)\,dx$$
 
 $$\mathrm{Var}(X) = \mathbb{E}[(X-\mathbb{E}[X])^2] = \mathbb{E}[X^2] - (\mathbb{E}[X])^2$$
 
-두 번째 식의 등호는 선형성만으로 나온다. $\mu = \mathbb{E}[X]$ 라 두면
+두 번째 식의 등호(분산을 "제곱의 평균 빼기 평균의 제곱"으로 쓸 수 있다는 것)는
+기댓값의 linearity(선형성) — 합의 기댓값은 기댓값의 합이고, 상수는 밖으로 나온다 — 만으로 나온다. $\mu = \mathbb{E}[X]$ 라 두면
 
 $$\mathbb{E}[(X-\mu)^2] = \mathbb{E}[X^2 - 2\mu X + \mu^2]
 = \mathbb{E}[X^2] - 2\mu\,\mathbb{E}[X] + \mu^2 = \mathbb{E}[X^2] - \mu^2$$
@@ -136,23 +151,26 @@ $$\mathbb{E}[(X-\mu)^2] = \mathbb{E}[X^2 - 2\mu X + \mu^2]
 $\mu$ 는 상수라 기댓값 밖으로 나온다는 것이 전부다.
 계산할 때 거의 항상 오른쪽 형태를 쓴다 — 데이터를 한 번만 훑으면 되기 때문이다.
 
-실무에서 계속 쓰는 성질 두 가지.
+실무에서 계속 쓰는 성질 두 가지. 하나는 조건이 없고 하나는 조건이 있다는 것이 핵심이다.
 
 | 성질 | 식 | 조건 |
 |------|-----|------|
-| 기댓값의 선형성 | $\mathbb{E}[aX+bY] = a\mathbb{E}[X]+b\mathbb{E}[Y]$ | **독립 불필요** |
-| 분산의 가법성 | $\mathrm{Var}(X+Y) = \mathrm{Var}(X)+\mathrm{Var}(Y)$ | **독립 필요** |
+| 기댓값의 linearity(선형성): 합의 평균은 평균의 합 | $\mathbb{E}[aX+bY] = a\mathbb{E}[X]+b\mathbb{E}[Y]$ | **독립 불필요** |
+| 분산의 additivity(가법성): 합의 분산은 분산의 합 | $\mathrm{Var}(X+Y) = \mathrm{Var}(X)+\mathrm{Var}(Y)$ | **독립 필요** |
 
 ::: {.key-concept}
 분산이 독립을 요구한다는 점은 자주 놓친다.
-일반적으로는
+두 확률변수가 함께 움직이는 경향, 즉 covariance(covariance) $\mathrm{Cov}(X,Y)=\mathbb{E}[(X-\mu_X)(Y-\mu_Y)]$
+— $X$ 가 평균보다 클 때 $Y$ 도 평균보다 크면 양수, 반대로 움직이면 음수 — 가 0이 아니면 그만큼이 남아서, 일반적으로는
 
 $$\mathrm{Var}(X+Y) = \mathrm{Var}(X) + \mathrm{Var}(Y) + 2\,\mathrm{Cov}(X,Y)$$
 
-[2.7 앙상블](../02_classical_ml/07_ensembles.qmd)이 작동하는 이유가 정확히 이 식이다.
-모델 $M$ 개를 평균 내면 분산이 $\frac{1}{M}\mathrm{Var}$ 로 줄어드는데,
-**모델들의 오차가 상관되어 있으면** 공분산 항이 남아 그만큼 덜 줄어든다.
-그래서 배깅은 일부러 모델을 서로 다르게 만든다.
+[2.7 ensemble](../02_classical_ml/07_ensembles.qmd)이 작동하는 이유가 정확히 이 식이다.
+서로 독립인 모델 $M$ 개의 예측을 평균 내면 분산이 $\frac{1}{M}\mathrm{Var}$ 로 줄어드는데,
+**모델들이 같은 방향으로 함께 틀리면**(오차가 상관되어 있으면) covariance 항이 남아 그만큼 덜 줄어든다.
+심사위원 열 명의 점수를 평균 내는 것과 같다. 열 명이 제각기 다른 이유로 실수하면 평균은 꽤 정확하지만,
+열 명이 같은 편견을 공유하면 평균을 내도 그 편견은 사라지지 않는다.
+그래서 bagging은 각 모델에 서로 다른 데이터를 뽑아 주어 일부러 모델을 서로 다르게 만든다.
 :::
 
 ### 왜 분산만 독립을 요구하는가
@@ -163,23 +181,24 @@ $\mu_X, \mu_Y$ 를 각각의 평균이라 두고 제곱을 펼치면
 $$\mathrm{Var}(X+Y) = \mathbb{E}\big[((X-\mu_X)+(Y-\mu_Y))^2\big]
 = \mathrm{Var}(X) + \mathrm{Var}(Y) + 2\underbrace{\mathbb{E}[(X-\mu_X)(Y-\mu_Y)]}_{\mathrm{Cov}(X,Y)}$$
 
-교차항이 남는다. 독립이면 $\mathbb{E}[XY]=\mathbb{E}[X]\mathbb{E}[Y]$ 이므로 이 항이 0이 되어 사라진다.
+가운데의 교차항(두 편차의 곱의 평균, 즉 covariance)이 남는다. 독립이면 $\mathbb{E}[XY]=\mathbb{E}[X]\mathbb{E}[Y]$ 이므로 이 항이 0이 되어 사라진다.
 기댓값에는 애초에 제곱이 없어 교차항이 생기지 않는다 — 그래서 선형성은 조건이 없다.
 
 ::: {.callout-warning}
-## 공분산 0은 독립이 아니다
+## covariance 0은 독립이 아니다
 
-방향이 한쪽으로만 성립한다. **독립 ⟹ 공분산 0**이지만 **역은 거짓**이다.
+방향이 한쪽으로만 성립한다. **독립 ⟹ covariance 0**이지만 **역은 거짓**이다.
 
 $X \sim \mathcal{U}(-1,1)$ 이고 $Y = X^2$ 이라 하자. $Y$ 는 $X$ 로 완전히 결정되므로
 이보다 강하게 의존할 수 없는데, 대칭성 때문에 $\mathbb{E}[XY]=\mathbb{E}[X^3]=0=\mathbb{E}[X]\mathbb{E}[Y]$ 라
-공분산은 정확히 0이다.
+covariance는 정확히 0이다.
 
-공분산은 **선형** 의존만 잡아낸다. 상관계수가 0인 두 특성을 보고
-"관계가 없다"고 결론 내리는 것이 흔한 실수다.
-비선형 의존까지 보려면 상호정보량이 필요하다([0.4 정보이론](04_information_theory.qmd)).
+covariance는 "한쪽이 커질 때 다른 쪽도 커지는가"라는 **직선 모양의 의존**만 잡아낸다.
+$Y=X^2$ 처럼 U자로 휘어진 관계는 왼쪽 절반에서는 반대로, 오른쪽 절반에서는 같이 움직여서 서로 상쇄되어 0이 된다.
+상관계수가 0인 두 특성을 보고 "관계가 없다"고 결론 내리는 것이 흔한 실수다.
+휘어진 의존까지 보려면 mutual information(상호정보량)이 필요하다([0.4 정보이론](04_information_theory.qmd)).
 
-예외가 하나 있다. **결합분포가 다변량 정규이면** 공분산 0이 독립과 동치다.
+예외가 하나 있다. **두 변수를 함께 본 joint distribution(joint distribution)이 multivariate normal(multivariate normal, 아래 절)이면** covariance 0이 독립과 같은 말이다.
 정규분포를 다룰 때 생기는 편한 습관이 일반 분포로 잘못 옮겨가는 경우가 많다.
 :::
 
@@ -195,17 +214,21 @@ $$\mathrm{Var}(\bar{X}_n) = \mathrm{Var}\!\left(\frac{1}{n}\sum_i X_i\right)
 
 $$\boxed{\ \text{추정 오차} \propto \frac{1}{\sqrt{n}}\ }$$
 
-이 한 줄이 실무에서 계속 돌아온다. **데이터를 4배 모아야 오차가 절반**이 되고,
-A/B 테스트의 필요 표본 수가 효과 크기의 제곱에 반비례하며([1.5 실험 설계](../01_data_science/05_experiment_design.qmd)),
-아래 중심극한정리에 $\sqrt{n}$ 이 등장하는 것도 전부 이 식이다.
+이 한 줄이 실무의 여러 곳에서 똑같이 나타난다. 여론조사에서 1,000명에게 물으면 오차가 약 ±3%p 인데,
+이것을 ±1.5%p로 줄이려면 2,000명이 아니라 4,000명이 필요하다 — **데이터를 4배 모아야 오차가 절반**이 되고,
+A/B 테스트의 필요 표본 수가 effect size(효과 크기 — 두 집단 차이의 크기)의 제곱에 반비례하며([1.5 실험 설계](../01_data_science/05_experiment_design.qmd)),
+아래 central limit theorem에 $\sqrt{n}$ 이 등장하는 것도 전부 이 식이다.
 
 ---
 
 ## 베이즈 정리: 믿음을 갱신하기
 
-$$\underbrace{p(\theta \mid D)}_{\text{사후}} = \frac{\overbrace{p(D \mid \theta)}^{\text{우도}} \; \overbrace{p(\theta)}^{\text{사전}}}{\underbrace{p(D)}_{\text{증거}}}$$
+$$\underbrace{p(\theta \mid D)}_{\text{posterior}} = \frac{\overbrace{p(D \mid \theta)}^{\text{likelihood}} \; \overbrace{p(\theta)}^{\text{prior}}}{\underbrace{p(D)}_{\text{evidence}}}$$
 
-읽는 법: **관측 전의 믿음(사전)에 데이터가 말해주는 것(우도)을 곱하면 관측 후의 믿음(사후)이 된다.**
+읽는 법: **관측 전의 믿음(prior)에 데이터가 말해주는 것(likelihood)을 곱하면 관측 후의 믿음(posterior)이 된다.**
+
+탐정의 추리와 같다. 사건 현장에 가기 전 용의자별로 가진 심증이 prior, 현장의 증거가 각 용의자를
+얼마나 잘 설명하는지가 likelihood, 증거를 본 뒤 갱신된 심증이 posterior다.
 
 우리가 손에 쥔 지식은 대개 **원인에서 결과로** 향한다.
 동전의 앞면 확률이 $\theta$ 라면 $n$ 번 중 $k$ 번 앞면이 나올 확률은 계산할 수 있고,
@@ -214,35 +237,35 @@ $$\underbrace{p(\theta \mid D)}_{\text{사후}} = \frac{\overbrace{p(D \mid \the
 $k$ 번 앞면을 봤으니 $\theta$ 는 얼마쯤인가, 양성이 나왔으니 병일 확률은 얼마인가.
 **베이즈 정리는 이 방향을 뒤집는 장치다.**
 
-뒤집는 대가로 하나를 내놓아야 한다. 사전분포 $p(\theta)$ 다.
+뒤집는 대가로 하나를 내놓아야 한다. prior(prior) $p(\theta)$ — 데이터를 보기 전에 $\theta$ 가 어떤 값일지에 대해 갖고 있는 믿음이다.
 $\theta$ 를 "값은 모르지만 고정된 미지수"가 아니라 **분포를 갖는 확률변수**로 취급하고,
 데이터를 보기 전의 믿음을 그 분포에 적어 둔 다음, 데이터가 도착하면 갱신한다.
-뒤에 나올 [최대우도추정](#최대우도추정)이 "가장 그럴듯한 $\theta$ 하나를 고른다"면,
+뒤에 나올 [maximum likelihood estimation](#maximum-likelihood-estimation-mle)이 "가장 그럴듯한 $\theta$ 하나를 고른다"면,
 베이즈는 "$\theta$ 에 대한 분포를 통째로 들고 다닌다".
 
 ### 네 항목이 각각 무엇인가
 
 | 항목 | 기호 | 읽는 법 |
 |------|------|---------|
-| **사전** (prior) | $p(\theta)$ | 데이터를 보기 전에 $\theta$ 에 대해 갖고 있던 믿음 |
-| **우도** (likelihood) | $p(D \mid \theta)$ | $\theta$ 가 참이라면 지금 이 데이터가 나올 확률 |
-| **증거** (evidence) | $p(D)$ | 가능한 모든 $\theta$ 를 통틀어 이 데이터가 나올 확률 |
-| **사후** (posterior) | $p(\theta \mid D)$ | 데이터를 본 뒤로 갱신된 믿음 |
+| **prior** (prior) | $p(\theta)$ | 데이터를 보기 전에 $\theta$ 에 대해 갖고 있던 믿음 |
+| **likelihood** (우도) | $p(D \mid \theta)$ | $\theta$ 가 참이라면 지금 이 데이터가 나올 확률 |
+| **evidence** (증거) | $p(D)$ | 가능한 모든 $\theta$ 를 통틀어 이 데이터가 나올 확률 |
+| **posterior** (posterior) | $p(\theta \mid D)$ | 데이터를 본 뒤로 갱신된 믿음 |
 
 세 가지를 덧붙여야 오해가 없다.
 
-**우도는 $\theta$ 에 대한 확률분포가 아니다.** 기호가 $p(D \mid \theta)$ 라 확률처럼 보이지만,
+**likelihood는 $\theta$ 에 대한 확률분포가 아니다.** 기호가 $p(D \mid \theta)$ 라 확률처럼 보이지만,
 $D$ 를 고정해 놓고 $\theta$ 를 움직이며 읽는 **$\theta$ 의 함수**다.
-$\theta$ 로 적분해도 1이 되지 않는다. 우도 하나만으로는 분포가 되지 못하고,
-사전을 곱하고 증거로 나눈 뒤에야 $\theta$ 에 대한 분포가 된다.
+$\theta$ 로 적분해도 1이 되지 않는다. likelihood 하나만으로는 분포가 되지 못하고,
+prior를 곱하고 evidence로 나눈 뒤에야 $\theta$ 에 대한 분포가 된다.
 
-**증거는 우도를 사전으로 평균낸 값이다.** 바로 다음 절에서 보듯
-$\theta$ 가 연속이면 적분, 이산이면 합이다. 주변우도(marginal likelihood)라고도 부른다.
+**evidence는 likelihood를 prior로 가중평균 낸 값이다.** 바로 다음 절에서 보듯
+$\theta$ 가 연속이면 적분, 이산이면 합이다. marginal likelihood(marginal likelihood)라고도 부른다.
 
-**사후는 다음 관측의 사전이 된다.** $D_1$ 로 갱신한 결과에 $D_2$ 가 도착하면
-그 사후를 사전 자리에 놓고 다시 곱하면 된다.
+**posterior는 다음 관측의 prior가 된다.** $D_1$ 로 갱신한 결과에 $D_2$ 가 도착하면
+그 posterior를 prior 자리에 놓고 다시 곱하면 된다.
 데이터를 한꺼번에 처리하든 나눠서 처리하든 결과가 같다는 뜻이고,
-베이즈 추론이 온라인 학습과 잘 맞는 이유다.
+베이즈 추론이 데이터가 하나씩 도착하는 online learning(온라인 학습)과 잘 맞는 이유다.
 
 숫자 하나로 붙잡아 두면 이렇다. 유병률이 1%인 병이 있고,
 병이 있으면 99%로 양성이 뜨지만 건강해도 5%로 양성이 뜨는 검사가 있다.
@@ -254,13 +277,16 @@ $$p(\text{양성}) = \underbrace{0.99 \times 0.01}_{\text{병인 경우}}
 
 $$p(\text{병} \mid \text{양성}) = \frac{0.99 \times 0.01}{0.0594} \approx 0.167$$
 
-사전 1%가 사후 16.7%로 올라갔다. 검사는 분명히 정보를 줬지만
-**그래도 여전히 병이 아닐 가능성이 훨씬 크다** — 사전이 그만큼 작았기 때문이다.
-분모에 쓴 저 덧셈이 바로 증거이고, 다음 절의 적분은 $\theta$ 가 연속일 때의 같은 계산이다.
+prior 1%가 posterior 16.7%로 올라갔다. 검사는 분명히 정보를 줬지만
+**그래도 여전히 병이 아닐 가능성이 훨씬 크다** — prior가 그만큼 작았기 때문이다.
+1만 명 중 병자는 100명이고 그중 99명이 양성이지만, 건강한 9,900명 중에서도 5%인 495명이 양성이 나온다.
+양성 594명 중 진짜 병자는 99명뿐이다.
+분모에 쓴 저 덧셈이 바로 evidence이고, 다음 절의 적분은 $\theta$ 가 연속일 때의 같은 계산이다.
 
 ### 유도는 두 줄이다
 
-결합확률을 두 방향으로 분해하면 끝난다. 곱 규칙에 따라
+$\theta$ 와 $D$ 가 함께 일어날 확률, 즉 joint probability(결합확률) $p(\theta, D)$ 를 두 방향으로 분해하면 끝난다.
+"둘 다 일어날 확률 = 하나가 일어날 확률 × 그것이 일어났을 때 다른 하나가 일어날 확률"이라는 product rule(곱 규칙)에 따라
 
 $$p(\theta, D) = p(D \mid \theta)\,p(\theta), \qquad p(\theta, D) = p(\theta \mid D)\,p(D)$$
 
@@ -268,16 +294,18 @@ $$p(\theta, D) = p(D \mid \theta)\,p(\theta), \qquad p(\theta, D) = p(\theta \mi
 **새로운 공리가 필요 없다** — 조건부확률의 정의에서 곧바로 나온다.
 정리 자체는 사소하고, 어려운 것은 항상 $p(D)$ 다.
 
-### 증거 $p(D)$ 는 주변화다
+### evidence $p(D)$ 는 marginalization이다
 
-분모는 $\theta$ 를 모두 훑어 없앤 것이다.
+분모는 $\theta$ 를 모두 훑어 더해서(적분해서) 없앤 것이다.
+이렇게 한 변수를 모든 값에 대해 더해 없애는 것을 marginalization(주변화)이라 한다 —
+표의 행마다 합을 내어 표 가장자리(margin)에 적던 데서 온 이름이다.
 
 $$p(D) = \int p(D \mid \theta)\,p(\theta)\,d\theta$$
 
 이름은 거창하지만 **데이터 $D$ 가 정해지는 순간 값이 확정되는 숫자 하나**다.
 $\theta$ 가 들어갈 자리를 적분이 없애 버렸으니, $\theta$ 를 아무리 바꿔도 이 값은 변하지 않는다.
 
-사후분포를 $\theta$ 의 함수로 볼 때 이것이 뜻하는 바는 하나다.
+posterior를 $\theta$ 의 함수로 볼 때 이것이 뜻하는 바는 하나다.
 분자 $p(D \mid \theta)\,p(\theta)$ 는 $\theta$ 마다 높이가 달라지는 **곡선**이고,
 분모는 그 곡선 전체를 세로로 같은 비율만큼 줄이는 **눈금자**다.
 상수로 나누어도 봉우리의 위치, 곡선의 폭, 두 지점의 높이 비는 그대로다.
@@ -292,15 +320,15 @@ $$\frac{p(\theta_1 \mid D)}{p(\theta_2 \mid D)}
 
 $$p(\theta \mid D) \;\propto\; p(D \mid \theta)\,p(\theta)$$
 
-로 쓰고, 정규화는 마지막에 한 번 맞춘다.
+로 쓰고, 넓이를 1로 맞추는 일(normalization, 정규화)은 마지막에 한 번 한다.
 
 이 생략이 단순한 편의가 아닌 이유는, 실제로 하는 계산의 대부분이 분자만으로 끝나기 때문이다.
-사후 최빈값을 찾는 일은 $\arg\max_\theta\, p(D \mid \theta)\,p(\theta)$ 이고,
+posterior의 봉우리(mode, 최빈값)를 찾는 일은 $\arg\max_\theta\, p(D \mid \theta)\,p(\theta)$ 이고,
 상수로 나누어도 최댓값의 위치는 움직이지 않는다.
-경사법을 쓸 때도 $\nabla_\theta \log p(\theta \mid D) = \nabla_\theta \log\big[p(D \mid \theta)\,p(\theta)\big]$ 다 —
+gradient descent를 쓸 때도 $\nabla_\theta \log p(\theta \mid D) = \nabla_\theta \log\big[p(D \mid \theta)\,p(\theta)\big]$ 다 —
 $\log p(D)$ 는 $\theta$ 로 미분하면 0으로 사라진다.
-MCMC의 채택 확률 역시 두 지점의 비라서 같은 이유로 약분된다.
-**정규화 상수를 끝까지 모르는 채로도 사후분포에서 표본을 뽑을 수 있다**는 성질이 여기서 나온다.
+MCMC(Markov chain Monte Carlo — 표본을 연쇄적으로 뽑아 분포를 근사하는 방법)의 acceptance probability(채택 확률) 역시 두 지점의 비라서 같은 이유로 약분된다.
+**normalizing constant(normalizing constant — 넓이를 1로 맞추는 수)를 끝까지 모르는 채로도 posterior에서 표본을 뽑을 수 있다**는 성질이 여기서 나온다.
 
 "마지막에 한 번"이라는 말도 짚어 둘 만하다. $\propto$ 로 넘어가는 순간 버리는 것은 $p(D)$ 만이 아니다.
 $\theta$ 와 무관한 상수는 **전부** 버린다. 그래도 되는 이유는 마지막에
@@ -315,7 +343,7 @@ $\theta$ 와 무관한 상수는 **전부** 버린다. 그래도 되는 이유�
 import numpy as np
 from scipy.special import beta as Bf, comb
 
-a, b, n, k = 2, 2, 10, 7                              # 사전 Beta(2,2)
+a, b, n, k = 2, 2, 10, 7                              # prior Beta(2,2)
 th = np.linspace(1e-9, 1 - 1e-9, 200001)
 
 f = th ** (a + k - 1) * (1 - th) ** (b + n - k - 1)   # 상수를 전부 버린 분자
@@ -326,44 +354,44 @@ pD = comb(n, k) * Bf(a + k, b + n - k) / Bf(a, b)     # 진짜 증거 p(D)
 i1, i2 = np.abs(th - 0.7).argmin(), np.abs(th - 0.4).argmin()
 print(f"최빈값        f {th[f.argmax()]:.4f}   "
       f"10000f {th[(10000 * f).argmax()]:.4f}   "
-      f"사후 {th[post.argmax()]:.4f}")
+      f"posterior {th[post.argmax()]:.4f}")
 print(f"0.7 대 0.4 높이비  f {f[i1] / f[i2]:.4f}      "
-      f"사후 {post[i1] / post[i2]:.4f}")
+      f"posterior {post[i1] / post[i2]:.4f}")
 print()
 print(f"증거       p(D) = {pD:.6f}")
-print(f"정규화 상수   Z = {Z:.8f}   ← 다른 숫자인데 둘 다 맞다")
+print(f"normalizing constant   Z = {Z:.8f}   ← 다른 숫자인데 둘 다 맞다")
 ```
 
 곡선을 1만 배로 부풀려도 최빈값과 높이 비는 꿈쩍하지 않는다.
 그리고 마지막에 나눈 $Z$ 는 증거 $p(D)$ 와 다른 숫자다 — $Z$ 에는 도중에 버린 상수들이
-함께 섞여 들어갔기 때문인데, 어느 쪽으로 나누든 나오는 사후분포는 하나뿐이다.
+함께 섞여 들어갔기 때문인데, 어느 쪽으로 나누든 나오는 posterior는 하나뿐이다.
 
 그렇다면 $p(D)$ 는 그냥 무시해도 되는 것인가. $\propto$ 는 문제를 없앤 것이 아니라 **미룬 것**이고,
 미뤄 둔 값은 **분포에서 실제 숫자를 꺼내는 순간 청구된다.**
-사후평균, 신용구간, 예측분포가 전부 이 꼴이기 때문이다.
+posterior의 평균, credible interval(신용구간 — posterior 확률의 95%가 들어 있는 구간), 예측분포가 전부 이 꼴이기 때문이다.
 
 $$\mathbb{E}[g(\theta) \mid D]
 = \frac{\int g(\theta)\,p(D \mid \theta)\,p(\theta)\,d\theta}{\int p(D \mid \theta)\,p(\theta)\,d\theta}$$
 
 분모를 피할 방법이 없다. 위 동전처럼 $\theta$ 가 1차원이면 격자에 올려 적분하면 그만이지만,
 $\theta$ 가 신경망 가중치처럼 수백만 차원이면 격자를 놓는 것 자체가 불가능하다.
-이 적분은 대개 닫힌 형태가 없고 수치적으로도 감당이 안 된다.
+이 적분은 대개 closed form(닫힌 형태 — 공식 한 줄로 딱 떨어지는 답)이 없고 수치적으로도 감당이 안 된다.
 **베이즈 추론의 실질적 어려움 전부가 이 적분 하나에 있다.**
 그래서 우회로가 발달했다 — 비율만 써서 표본으로 근사하거나(MCMC),
-다루기 쉬운 분포로 갈아끼우거나(변분추론).
+다루기 쉬운 분포로 갈아끼우거나(variational inference, 변분추론).
 [6.2 VAE](../06_generative/02_vae.qmd)의 ELBO가 바로 두 번째 길이고,
 거기서 최대화하는 하한이 이 $\log p(D)$ 다.
 
 거꾸로 $p(D)$ 자체가 답인 경우도 있다. 모델을 비교할 때다.
-"모델 A 냐 B 냐"를 물으면 답은 $p(D \mid A) / p(D \mid B)$ 라는 베이즈 인자이고,
+"모델 A 냐 B 냐"를 물으면 답은 $p(D \mid A) / p(D \mid B)$ 라는 Bayes factor(베이즈 인자)이고,
 모양에 관여하지 않아 버려도 됐던 그 상수가 여기서는 유일한 관심사가 된다.
 **어느 $\theta$ 냐를 물을 때는 무시해도 되고, 어느 모델이냐를 물을 때는 그것이 곧 답이다.**
 
-### 켤레사전분포: 사후가 사전과 같은 family 로 남는 경우
+### conjugate prior: posterior가 prior와 같은 family로 남는 경우
 
 특별한 궁합에서는 적분을 피할 수 있다. 방금 쓴 동전 문제가 정확히 그 경우다.
 
-사전을 베타분포로 두고 $n$ 번 중 $k$ 번 앞면이 나왔다고 하자.
+prior를 베타분포로 두고 $n$ 번 중 $k$ 번 앞면이 나왔다고 하자.
 
 $$p(\theta) \propto \theta^{a-1}(1-\theta)^{b-1}, \qquad
 p(D \mid \theta) \propto \theta^{k}(1-\theta)^{n-k}$$
@@ -374,36 +402,37 @@ $$p(\theta \mid D) \;\propto\; \theta^{a+k-1}(1-\theta)^{b+n-k-1}
 \;=\; \mathrm{Beta}(a+k,\; b+n-k)$$
 
 **적분 없이 파라미터 덧셈으로 갱신이 끝난다.**
-사전이 베타였는데 사후도 베타다 — 분포의 종류는 그대로이고
-모수만 $(a,\,b)$ 에서 $(a+k,\; b+n-k)$ 로 움직였다.
-이렇게 같은 형태를 공유하며 모수만 다른 분포들의 모임을 family 라 하고,
-사후를 사전과 같은 family 안에 남겨 주는 사전을 켤레사전분포(conjugate prior)라 한다.
+prior가 베타였는데 posterior도 베타다 — 분포의 종류는 그대로이고
+파라미터만 $(a,\,b)$ 에서 $(a+k,\; b+n-k)$ 로 움직였다.
+이렇게 같은 형태를 공유하며 파라미터만 다른 분포들의 모임을 family라 하고,
+posterior를 prior와 같은 family 안에 남겨 주는 prior를 conjugate prior(켤레사전분포)라 한다.
+갱신을 해도 같은 양식지에 숫자만 고쳐 적으면 되는 셈이다.
 
 앞에서 수치적분으로 구했던 $Z$ 도 여기서는 구할 필요가 없다.
-지수의 모양을 보고 베타분포임을 알아본 순간 정규화 상수는 이미 알려져 있는 값이다.
-"정규화는 마지막에 한 번"이 가장 싸게 끝나는 경우가 켤레다.
+지수의 모양을 보고 베타분포임을 알아본 순간 normalizing constant는 이미 알려져 있는 값이다.
+"정규화는 마지막에 한 번"이 가장 싸게 끝나는 경우가 conjugate다.
 
-여기서 사전분포를 읽는 직관도 나온다. $\mathrm{Beta}(a,b)$ 는
+여기서 prior를 읽는 직관도 나온다. $\mathrm{Beta}(a,b)$ 는
 **앞면 $a-1$ 번, 뒷면 $b-1$ 번을 미리 본 것**과 같은 효과다.
-사후평균을 정리하면 그 구조가 드러난다.
+posterior의 평균을 정리하면 그 구조가 드러난다.
 
 $$\mathbb{E}[\theta \mid D] = \frac{a+k}{a+b+n}
 \;\xrightarrow[\;n \to \infty\;]{}\; \frac{k}{n}$$
 
-데이터가 쌓이면 분자·분모 모두 $n$ 이 지배해 **사전의 영향이 씻겨 나간다.**
-아래 그림에서 서로 다른 사전으로 시작해도 관측이 늘면 같은 곳으로 모이는 것이 이 때문이다.
-반대로 $n$ 이 작을 때는 사전이 결과를 좌우한다 — 데이터가 적을수록 사전 선택이 정직하게 드러난다.
+데이터가 쌓이면 분자·분모 모두 $n$ 이 지배해 **prior의 영향이 씻겨 나간다.**
+아래 그림에서 서로 다른 prior로 시작해도 관측이 늘면 같은 곳으로 모이는 것이 이 때문이다.
+반대로 $n$ 이 작을 때는 prior가 결과를 좌우한다 — 데이터가 적을수록 prior 선택이 정직하게 드러난다.
 
 ---
 
-## G0.2.2 — 사전분포가 데이터를 만나면
+## G0.2.2 — prior가 데이터를 만나면
 
 동전의 앞면 확률 $\theta$ 를 추정하는 상황이다.
-관측이 쌓이면서 사후분포가 어떻게 좁아지는지 본다.
+관측이 쌓이면서 posterior가 어떻게 좁아지는지 본다.
 
 ```{python}
 #| label: fig-bayes-update
-#| fig-cap: "관측이 늘수록 사전분포의 영향이 줄고 사후분포가 좁아집니다."
+#| fig-cap: "관측이 늘수록 prior의 영향이 줄고 posterior가 좁아집니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -424,7 +453,7 @@ priors = {
 }
 n_obs = [0, 1, 3, 5, 10, 25, 50, 100, 200]
 
-# 베타-이항 켤레: 사후 = Beta(a + 앞면수, b + 뒷면수)
+# 베타-이항 conjugate: posterior = Beta(a + 앞면수, b + 뒷면수)
 curves = {}
 for pname, (a, b) in priors.items():
     for n in n_obs:
@@ -446,46 +475,49 @@ for n in n_obs:
 
 fig.update_layout(sliders=[viz.slider(steps, prefix="관측 횟수 = ",
                                       active=n_obs.index(n0), pad_t=55)],
-                  xaxis_title="θ (앞면 확률)", yaxis_title="사후 밀도",
+                  xaxis_title="θ (앞면 확률)", yaxis_title="posterior 밀도",
                   legend=dict(x=0.02, y=0.98))
 viz.fig_defaults(fig, height=430,
-                 title="베타-이항 켤레 사후분포 (참값 0.7 인 동전)")
+                 title="베타-이항 conjugate posterior (참값 0.7 인 동전)")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-관측 0에서는 네 곡선이 완전히 다릅니다(각자의 사전분포). 관측이 늘수록 **모두 참값 0.7로 수렴**합니다. 다만 "강한 공정 믿음"(빨강)은 사전이 세서 가장 느리게 움직입니다 — 사전분포는 가상의 관측 데이터처럼 작동합니다.
+관측 0에서는 네 곡선이 완전히 다릅니다(각자의 prior). 관측이 늘수록 **모두 참값 0.7로 수렴**합니다. 다만 "강한 공정 믿음"(빨강)은 prior가 세서 가장 느리게 움직입니다 — prior는 미리 본 가상의 관측 데이터처럼 작동합니다.
 :::
 
 ::: {.key-concept}
-**정규화는 사전분포다.**
+**regularization은 prior다.**
 
-[2.3 Ridge/Lasso](../02_classical_ml/03_regularization.qmd)의 정규화 항이
-사실 베이즈 사전분포와 정확히 대응한다.
+[2.3 Ridge/Lasso](../02_classical_ml/03_regularization.qmd)의 regularization 항(가중치가 커지는 것을 벌하는 항)이
+사실 베이즈 prior와 정확히 대응한다. "가중치는 아마 0 근처일 것"이라는 믿음을 미리 적어 두는 것과,
+큰 가중치에 벌점을 매기는 것이 수식으로는 같은 일이다.
 
-| 정규화 | 사전분포 | 왜 |
+| regularization | prior | 왜 |
 |--------|----------|-----|
 | L2 (Ridge) | 가우스 $\mathcal{N}(0,\tau^2)$ | $-\log p(\theta) \propto \|\theta\|^2$ |
-| L1 (Lasso) | 라플라스 | $-\log p(\theta) \propto \|\theta\|_1$ |
-| 없음 | 균등(무정보) | 순수 최대우도 |
+| L1 (Lasso) | Laplace | $-\log p(\theta) \propto \|\theta\|_1$ |
+| 없음 | 균등(uninformative, 무정보) | 순수 maximum likelihood |
 
-MAP 추정 $\arg\max_\theta p(D|\theta)p(\theta)$ 를 로그 취하면
-"음의 로그우도 + 정규화 항"이 그대로 나온다.
+MAP(maximum a posteriori — posterior가 가장 높은 $\theta$ 하나를 고르는 것) 추정 $\arg\max_\theta p(D|\theta)p(\theta)$ 에 로그를 취하면
+"negative log-likelihood + regularization 항"이 그대로 나온다.
 :::
 
 ---
 
-## 큰 수의 법칙과 중심극한정리
+## law of large numbers와 central limit theorem
 
 두 정리가 통계적 추론 전체를 떠받친다.
 
-**큰 수의 법칙(LLN)**: 표본평균이 참 평균으로 수렴한다.
+**law of large numbers(LLN, 큰 수의 법칙)**: 표본을 많이 뽑을수록 표본평균이 참 평균에 가까워진다.
+동전을 10번 던지면 앞면이 7번 나오는 일이 흔하지만, 10,000번 던지면 앞면 비율은 0.5 근처를 벗어나기 어렵다.
 $$\bar{X}_n \to \mathbb{E}[X] \quad (n\to\infty)$$
 
-**중심극한정리(CLT)**: 원 분포가 무엇이든, 표본평균의 분포는 정규분포로 수렴한다.
+**central limit theorem(CLT, CLT)**: 원래 분포가 무엇이든, 표본평균을 여러 번 구해 그 값들의 분포를 그리면 정규분포(종 모양)로 수렴한다.
 $$\frac{\bar{X}_n - \mu}{\sigma/\sqrt{n}} \to \mathcal{N}(0,1)$$
 
-두 번째가 놀랍다. **원 분포의 모양과 무관하다.**
+두 번째가 놀랍다. **원래 분포의 모양과 무관하다.** 사람의 키가 대략 종 모양으로 분포하는 것도
+키가 수많은 작은 요인(유전, 영양, …)의 합이기 때문이라고 설명된다.
 
 ::: {.callout-note}
 ## LLN에서 "수렴한다"는 말의 뜻
@@ -499,7 +531,7 @@ $\bar{X}_{100}$ 도 100개 나온다. 그러니 하나의 수열이 한 점으�
 
 여기서 흔한 오해가 하나 갈라져 나온다.
 **나중 관측이 앞의 편차를 보상해 주는 것이 아니다.** 앞에서 앞면이 몰려 나왔다고
-뒤에 뒷면이 더 나올 이유는 없다 — 독립이므로 그럴 수가 없다(도박사의 오류).
+뒤에 뒷면이 더 나올 이유는 없다 — 독립이므로 그럴 수가 없다(gambler's fallacy, 도박사의 오류).
 수렴하는 진짜 이유는 나눗셈에 있다. 편차의 합 $\sum_i (X_i - \mu)$ 는 $n$ 이 커지면
 **오히려 커진다** — CLT에 따라 $\sqrt{n}$ 규모다.
 다만 표본평균은 그것을 $n$ 으로 나누므로 $\sqrt{n}/n = 1/\sqrt{n}$ 으로 줄어든다.
@@ -510,15 +542,16 @@ $\bar{X}_{100}$ 도 100개 나온다. 그러니 하나의 수열이 한 점으�
 표본평균은 어디로도 수렴하지 않는다.
 :::
 
-### LLN은 체비쇼프 부등식 세 줄이면 나온다
+### LLN은 Chebyshev 부등식 세 줄이면 나온다
 
 약한 형태는 앞에서 구한 $\mathrm{Var}(\bar{X}_n)=\sigma^2/n$ 만 있으면 증명된다.
-출발점은 마르코프 부등식이다. 음이 아닌 확률변수 $Z$ 와 $t>0$ 에 대해
+출발점은 Markov 부등식이다. 음이 아닌 확률변수 $Z$ 와 $t>0$ 에 대해
 
 $$P(Z \ge t) \le \frac{\mathbb{E}[Z]}{t}$$
 
-($Z$ 가 $t$ 이상인 부분만으로도 기댓값이 $t\,P(Z\ge t)$ 이상이기 때문이다.)
-$Z=(X-\mu)^2$, $t=\varepsilon^2$ 을 넣으면 **체비쇼프 부등식**이 된다.
+($Z$ 가 $t$ 이상인 부분만으로도 기댓값이 $t\,P(Z\ge t)$ 이상이기 때문이다.
+반 평균이 10점이면 50점 이상인 학생은 전체의 20%를 넘을 수 없다는 것과 같은 말이다.)
+$Z=(X-\mu)^2$, $t=\varepsilon^2$ 을 넣으면 **Chebyshev 부등식**이 된다.
 
 $$P(|X-\mu| \ge \varepsilon) \le \frac{\mathrm{Var}(X)}{\varepsilon^2}$$
 
@@ -526,7 +559,7 @@ $$P(|X-\mu| \ge \varepsilon) \le \frac{\mathrm{Var}(X)}{\varepsilon^2}$$
 
 $$P(|\bar{X}_n - \mu| \ge \varepsilon) \le \frac{\sigma^2}{n\varepsilon^2} \;\xrightarrow[\;n\to\infty\;]{}\; 0$$
 
-임의의 $\varepsilon$ 에 대해 확률이 0으로 간다 — 이것이 **약한 큰 수의 법칙**이다.
+임의의 $\varepsilon$ 에 대해 확률이 0으로 간다 — 이것이 **weak law of large numbers(약한 LLN)**이다.
 필요한 가정은 유한한 분산뿐이고, 분포의 모양은 전혀 쓰지 않았다.
 
 ::: {.callout-note}
@@ -536,15 +569,16 @@ $$P(|\bar{X}_n - \mu| \ge \varepsilon) \le \frac{\sigma^2}{n\varepsilon^2} \;\xr
 
 | | 진술 | 뜻 |
 |---|---|---|
-| **약한 LLN** | 각 $n$ 마다 $P(\lvert\bar{X}_n-\mu\rvert\ge\varepsilon)\to 0$ | 확률수렴. "특정 시점에 빗나갈 확률이 작다" |
-| **강한 LLN** | $P(\lim_{n\to\infty}\bar{X}_n = \mu)=1$ | 거의 확실한 수렴. "수열 자체가 수렴한다" |
+| **약한 LLN** | 각 $n$ 마다 $P(\lvert\bar{X}_n-\mu\rvert\ge\varepsilon)\to 0$ | convergence in probability(확률수렴). "특정 시점에 빗나갈 확률이 작다" |
+| **강한 LLN** | $P(\lim_{n\to\infty}\bar{X}_n = \mu)=1$ | almost sure convergence(거의 확실한 수렴). "수열 자체가 수렴한다" |
 
-강한 법칙은 분산 없이 **평균만 존재하면** 성립한다(콜모고로프).
+강한 법칙은 분산 없이 **평균만 존재하면** 성립한다(Kolmogorov).
 차이가 실감 나는 경우는 드물지만, 약한 법칙은 "언젠가 다시 크게 빗나갈" 가능성을
 배제하지 않는 반면 강한 법칙은 배제한다는 점이 다르다.
 :::
 
-체비쇼프 상한은 분포를 전혀 쓰지 않은 대가로 매우 헐겁다. 직접 비교해 보면 드러난다.
+Chebyshev 상한은 분포를 전혀 쓰지 않은 대가로 매우 헐겁다.
+분포를 모르는 채 최악의 경우를 상정한 보험 같은 것이라, 실제 분포를 알면 훨씬 좋은 값이 나온다. 직접 비교해 보면 드러난다.
 
 ```{python}
 #| label: chebyshev
@@ -558,7 +592,7 @@ eps = 0.5
 # 표준정규(σ=1)의 표본평균은 정확히 N(0, 1/n) 이라 꼬리확률을 정확히 계산할 수 있다.
 print(f"표본평균이 μ 로부터 {eps} 이상 벗어날 확률 (σ = 1)")
 print()
-print(f"{'n':>6}  {'정확한 값':>13}  {'체비쇼프 상한':>14}  {'헐거운 정도':>12}")
+print(f"{'n':>6}  {'정확한 값':>13}  {'Chebyshev 상한':>14}  {'헐거운 정도':>12}")
 for n in [10, 30, 100, 300, 1000]:
     exact = 2 * stats.norm.sf(eps * np.sqrt(n))     # P(|X̄| ≥ ε)
     bound = min(1.0 / (n * eps ** 2), 1.0)          # σ²/(n ε²)
@@ -566,7 +600,7 @@ for n in [10, 30, 100, 300, 1000]:
 
 print()
 print("상한은 1/n 로 천천히 줄지만 실제 확률은 지수적으로 줄어든다.")
-print("체비쇼프는 '분산만 아는' 최악의 분포를 상정하기 때문이다 —")
+print("Chebyshev 는 '분산만 아는' 최악의 분포를 상정하기 때문이다 —")
 print("느슨한 대신 어떤 분포에도 성립한다. 정규분포라는 정보를 쓰면 훨씬 날카로워진다.")
 ```
 
@@ -578,7 +612,7 @@ LLN은 $\bar{X}_n$ 이 $\mu$ 로 간다고만 한다. CLT는 **어떤 속도로,
 
 $$\bar{X}_n \;\approx\; \mathcal{N}\!\left(\mu,\; \frac{\sigma^2}{n}\right) \quad (n \text{ 이 충분히 클 때})$$
 
-신뢰구간이 $\bar{x} \pm 1.96\,s/\sqrt{n}$ 인 것도, 표준오차라는 말이 $\sigma/\sqrt{n}$ 을 가리키는 것도
+confidence interval(신뢰구간)이 $\bar{x} \pm 1.96\,s/\sqrt{n}$ 인 것도, standard error(표준오차)라는 말이 $\sigma/\sqrt{n}$ 을 가리키는 것도
 전부 이 식에서 나온다([0.3 통계](03_statistics.qmd)).
 
 ::: {.callout-warning}
@@ -586,7 +620,7 @@ $$\bar{X}_n \;\approx\; \mathcal{N}\!\left(\mu,\; \frac{\sigma^2}{n}\right) \qua
 
 - **중심에 대한 진술이지 꼬리에 대한 진술이 아니다.** 정규 근사는 분포의 가운데에서 좋고
   극단으로 갈수록 나빠진다. $p$ 값이 $10^{-8}$ 처럼 아주 작은 영역에서 정규 근사를 믿는 것은
-  위험하다 — 그쪽은 대편차 이론의 영역이다.
+  위험하다 — 그쪽은 large deviation theory(대편차 이론)의 영역이다.
 - **$n \ge 30$ 은 규칙이 아니라 어림이다.** 필요한 $n$ 은 원 분포의 치우침에 따라 달라진다.
   대칭이면 $n$ 이 10이어도 충분하고, 극단적으로 치우쳐 있으면 수천도 모자랄 수 있다.
 - **표본평균에 대한 진술이지 개별 관측에 대한 진술이 아니다.** 원 데이터가 정규분포가 되는 것이 아니다.
@@ -594,7 +628,7 @@ $$\bar{X}_n \;\approx\; \mathcal{N}\!\left(\mu,\; \frac{\sigma^2}{n}\right) \qua
 
 ---
 
-## G0.2.3 — 중심극한정리 직접 확인
+## G0.2.3 — CLT 직접 확인
 
 기괴한 분포에서 표본을 뽑아 평균을 내면 정말 정규분포가 되는지 본다.
 
@@ -653,7 +687,7 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="표본 크기 n = ",
                                       active=ns.index(n0), pad_t=55)])
 fig.update_xaxes(range=[-4, 4], title_text="표준화된 표본평균")
 fig.update_yaxes(title_text="밀도", row=1, col=1)
-viz.fig_defaults(fig, height=380, title="중심극한정리 (표본평균 1200회)")
+viz.fig_defaults(fig, height=380, title="CLT (표본평균 1200회)")
 fig.update_layout(margin=dict(l=50, r=25, t=70, b=95), legend=dict(x=0.01, y=1.18))
 fig.show()
 ```
@@ -665,53 +699,59 @@ $n=1$ 에서는 원 분포 모양 그대로입니다 — 이봉분포는 봉우�
 ::: {.callout-warning}
 ## CLT가 통하지 않는 경우
 
-1. **분산이 무한한 분포** — 코시 분포에서는 표본평균이 아무리 커도 수렴하지 않는다.
-2. **강한 의존성** — i.i.d. 가정이 깨지면(시계열, 군집 데이터) 유효 표본 수가 $n$ 보다 작다.
+1. **분산이 무한한 분포** — Cauchy 분포에서는 표본평균이 아무리 커도 수렴하지 않는다.
+2. **강한 의존성** — i.i.d. 가정이 깨지면(시계열, 군집 데이터) effective sample size(유효 표본 수 — 독립인 표본으로 환산했을 때의 개수)가 $n$ 보다 작다.
 3. **극단적 치우침 + 작은 $n$** — 이론적으로는 수렴하지만 $n=30$ 으로 부족할 수 있다.
 
 세 번째가 실무에서 자주 문제가 된다. 클릭률처럼 0이 대부분인 데이터에서는
-$n$ 이 수천이어도 정규 근사가 부실할 수 있어, [부트스트랩](03_statistics.qmd)을 쓰는 편이 안전하다.
+$n$ 이 수천이어도 정규 근사가 부실할 수 있어, [bootstrap(부트스트랩)](03_statistics.qmd)을 쓰는 편이 안전하다.
 :::
 
 ---
 
-## 다변량 정규분포
+## multivariate normal(multivariate normal)
+
+변수가 여러 개인 정규분포다. 키와 몸무게처럼 함께 움직이는 값들을 한꺼번에 다룰 때 쓴다.
+평균은 벡터 $\boldsymbol\mu$ 가 되고, 분산은 각 변수의 분산과 변수 쌍의 covariance를 모은
+행렬 $\Sigma$ (covariance matrix, covariance matrix)가 된다.
 
 $$p(\mathbf{x}) = \frac{1}{\sqrt{(2\pi)^d|\Sigma|}}\exp\!\left(-\tfrac{1}{2}(\mathbf{x}-\boldsymbol\mu)^\top\Sigma^{-1}(\mathbf{x}-\boldsymbol\mu)\right)$$
 
 지수 안의 $(\mathbf{x}-\boldsymbol\mu)^\top\Sigma^{-1}(\mathbf{x}-\boldsymbol\mu)$ 가
-**마할라노비스 거리 제곱**이다 — 공분산을 고려한 거리.
+**Mahalanobis distance(Mahalanobis distance)의 제곱**이다 — 분포가 넓게 퍼진 방향으로는 멀리 가도 "가깝다"고 치고,
+좁은 방향으로는 조금만 벗어나도 "멀다"고 치는, covariance를 고려한 거리.
 
-그리고 $\Sigma$ 는 대칭 양정치이므로 [0.0의 스펙트럼 정리](00_linear_algebra.qmd)가 적용된다.
-**고유벡터가 등고선 타원의 축, 고유값의 제곱근이 축의 길이**다.
+그리고 $\Sigma$ 는 symmetric positive definite(대칭이고 모든 eigenvalue가 양수)이므로 [0.0의 spectral theorem](00_linear_algebra.qmd)이 적용된다.
+밀도가 같은 점을 이으면 타원이 되는데, **eigenvector가 그 타원의 축 방향, eigenvalue의 제곱근이 축의 길이**다.
 
-### 모든 다변량 정규는 표준정규를 아핀 변환한 것이다
+### 모든 multivariate normal은 표준정규를 affine 변환한 것이다
 
 밀도식을 외우는 것보다 이 관점이 훨씬 많은 것을 설명한다.
-$\Sigma$ 를 $\Sigma = LL^\top$ 로 분해하고($L$ 은 촐레스키 인자) 표준정규 $\mathbf{z}\sim\mathcal{N}(\mathbf{0},I)$ 에서 출발하면
+$\Sigma$ 를 $\Sigma = LL^\top$ 로 분해하고($L$ 은 Cholesky factor — 아래쪽 삼각형 모양의 행렬) 표준정규 $\mathbf{z}\sim\mathcal{N}(\mathbf{0},I)$ 에서 출발하면
 
 $$\mathbf{x} = \boldsymbol\mu + L\mathbf{z} \;\sim\; \mathcal{N}(\boldsymbol\mu, \Sigma)$$
 
-공분산이 맞는지는 한 줄로 확인된다. 선형변환의 공분산은 $\mathrm{Cov}(A\mathbf{z}) = A\,\mathrm{Cov}(\mathbf{z})\,A^\top$ 이므로
+동그란 반죽(표준정규)을 $L$ 로 잡아 늘리고 기울인 뒤 $\boldsymbol\mu$ 만큼 옮겨 놓은 것이 $\mathcal{N}(\boldsymbol\mu, \Sigma)$ 다.
+covariance가 맞는지는 한 줄로 확인된다. 선형변환의 covariance는 $\mathrm{Cov}(A\mathbf{z}) = A\,\mathrm{Cov}(\mathbf{z})\,A^\top$ 이므로
 
 $$\mathrm{Cov}(L\mathbf{z}) = L\,I\,L^\top = LL^\top = \Sigma$$
 
 이 관점이 밀도식의 두 부분을 각각 설명한다.
 
-**① 정규화 상수의 $|\Sigma|^{1/2}$ 은 변수변환의 야코비안이다.**
+**① normalizing constant의 $|\Sigma|^{1/2}$ 은 변수변환의 Jacobian(부피가 몇 배로 늘었는가)이다.**
 $\mathbf{x}=\boldsymbol\mu+L\mathbf{z}$ 는 부피를 $|\det L|$ 배 늘리고,
 $\det\Sigma = \det(LL^\top) = (\det L)^2$ 이므로 $|\det L| = |\Sigma|^{1/2}$ 다.
-[0.0에서 본 "행렬식은 부피 배율"](00_linear_algebra.qmd)이 여기서 바로 쓰인다 —
+[0.0에서 본 "determinant는 부피 배율"](00_linear_algebra.qmd)이 여기서 바로 쓰인다 —
 공간을 늘린 만큼 밀도를 나눠 줘야 적분이 1로 유지된다.
 
-**② 지수 안의 이차형식은 되돌린 뒤의 유클리드 거리다.**
+**② 지수 안의 quadratic form(이차형식)은 늘리기를 되돌린 뒤 잰 보통(Euclidean) 거리다.**
 관계를 뒤집으면 $\mathbf{z} = L^{-1}(\mathbf{x}-\boldsymbol\mu)$ 이고
 
 $$\|\mathbf{z}\|^2 = (\mathbf{x}-\boldsymbol\mu)^\top L^{-\top}L^{-1}(\mathbf{x}-\boldsymbol\mu)
 = (\mathbf{x}-\boldsymbol\mu)^\top \Sigma^{-1}(\mathbf{x}-\boldsymbol\mu)$$
 
-즉 **마할라노비스 거리는 백색화(whitening)한 좌표에서 잰 보통 거리**다.
-"공분산을 고려한 거리"라는 말의 정확한 뜻이 이것이다.
+즉 **Mahalanobis distance는 whitening(whitening — 늘리고 기울인 것을 되돌려 다시 동그랗게 만드는 것)한 좌표에서 잰 보통 거리**다.
+"covariance를 고려한 거리"라는 말의 정확한 뜻이 이것이다.
 
 ```{python}
 #| label: mvn-affine
@@ -727,36 +767,37 @@ Sigma = np.array([[4.0, 2.4],
 
 L = np.linalg.cholesky(Sigma)              # Σ = L Lᵀ
 Z = rng.normal(size=(200_000, 2))          # 표준정규
-X = mu + Z @ L.T                           # 아핀 변환 한 번
+X = mu + Z @ L.T                           # affine 변환 한 번
 
 print(f"L Lᵀ = Σ ?           {np.allclose(L @ L.T, Sigma)}")
 print(f"표본 평균            {np.round(X.mean(0), 3)}   목표 {mu}")
-print(f"표본 공분산          {np.round(np.cov(X.T), 2).tolist()}")
+print(f"표본 covariance          {np.round(np.cov(X.T), 2).tolist()}")
 print(f"목표                 {Sigma.tolist()}")
 print()
 print(f"|Σ|^(1/2) = {np.sqrt(np.linalg.det(Sigma)):.4f}"
       f"   det(L) = {np.prod(np.diag(L)):.4f}   ← 같다 (부피 배율)")
 
-# 백색화: 되돌리면 공분산이 항등행렬이 된다
+# whitening: 되돌리면 covariance 가 단위행렬 I 가 된다
 W = np.linalg.solve(L, (X - mu).T).T
-print(f"백색화 후 공분산     {np.round(np.cov(W.T), 3).tolist()}   ← I")
+print(f"whitening 후 covariance {np.round(np.cov(W.T), 3).tolist()}   ← I")
 ```
 
 ::: {.key-concept}
 "단순한 분포에서 뽑아 변환한다"는 이 구조가 생성 모델의 원형이다.
-$L$ 이라는 선형변환을 **신경망**으로 바꾸고 야코비안 항을 제대로 추적하면
-[6.4 정규화 흐름](../06_generative/04_normalizing_flows.qmd)이 되고,
-변환을 잡음 제거 과정으로 바꾸면 [6.5 확산 모델](../06_generative/05_diffusion.qmd)이 된다.
+$L$ 이라는 linear transformation을 **신경망**으로 바꾸고 Jacobian 항을 제대로 추적하면
+[6.4 normalizing flow](../06_generative/04_normalizing_flows.qmd)가 되고,
+변환을 잡음 제거 과정으로 바꾸면 [6.5 diffusion model](../06_generative/05_diffusion.qmd)이 된다.
 VAE가 $\mathbf{z}\sim\mathcal{N}(0,I)$ 에서 출발하는 것도 같은 이유다.
 
-한편 정규분포에서만 성립하는 편의도 있다. 다변량 정규에서는
-**공분산이 0이면 독립**이고(앞의 경고에서 본 예외), 주변분포와 조건부분포가 모두 다시 정규분포다.
-이 성질들이 가우스 과정과 칼만 필터를 닫힌 형태로 풀리게 만든다.
+한편 정규분포에서만 성립하는 편의도 있다. multivariate normal에서는
+**covariance가 0이면 독립**이고(앞의 경고에서 본 예외), 일부 변수만 남긴 marginal distribution(주변분포)과
+일부 변수를 고정한 conditional distribution(조건부분포)이 모두 다시 정규분포다.
+이 성질들이 Gaussian process와 Kalman filter를 closed form으로 풀리게 만든다.
 :::
 
 ```{python}
 #| label: fig-mvn
-#| fig-cap: "상관계수가 타원을 기울입니다. 화살표는 공분산 행렬의 고유벡터입니다."
+#| fig-cap: "상관계수가 타원을 기울입니다. 화살표는 covariance matrix 의 eigenvector 입니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -784,7 +825,7 @@ fig.add_trace(go.Contour(x=g, y=g, z=dens[r0], colorscale="Blues", showscale=Fal
 v, s = arrows[r0]
 for k in range(2):
     fig.add_trace(go.Scatter(x=[0, 2 * s[k] * v[0, k]], y=[0, 2 * s[k] * v[1, k]],
-                             mode="lines+markers", name=f"고유벡터 {k+1}",
+                             mode="lines+markers", name=f"eigenvector {k+1}",
                              line=dict(color=[viz.WARM, viz.GREEN][k], width=3),
                              marker=dict(size=[0, 9])))
 
@@ -801,49 +842,54 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="상관계수 ρ = ",
                                       active=rhos.index(r0), pad_t=55)],
                   xaxis=dict(title="x₁", scaleanchor="y"), yaxis=dict(title="x₂"),
                   legend=dict(x=0.01, y=0.99))
-viz.fig_defaults(fig, height=470, title="2차원 정규분포의 등고선과 주축")
+viz.fig_defaults(fig, height=470, title="2차원 정규분포: 밀도가 같은 선과 주축")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-$\rho=0$ 이면 원, 상관이 커질수록 대각선 방향으로 늘어난 타원이 됩니다. 화살표(고유벡터)가 타원의 축과 정확히 일치하며, $\rho=0.98$ 에서는 한 축이 거의 사라집니다 — 이것이 [PCA](../02_classical_ml/10_dimensionality_reduction.qmd)가 찾는 주성분이고, [다중공선성](../02_classical_ml/02_linear_regression.qmd)의 기하학적 정체입니다.
+$\rho=0$ 이면 원, 상관이 커질수록 대각선 방향으로 늘어난 타원이 됩니다. 화살표(eigenvector)가 타원의 축과 정확히 일치하며, $\rho=0.98$ 에서는 한 축이 거의 사라집니다 — 이것이 [PCA](../02_classical_ml/10_dimensionality_reduction.qmd)가 찾는 principal component(주성분)이고, [multicollinearity(다중공선성)](../02_classical_ml/02_linear_regression.qmd)의 기하학적 정체입니다.
 :::
 
 ---
 
-## 최대우도추정
+## maximum likelihood estimation (MLE)
 
-데이터를 가장 그럴듯하게 만드는 파라미터를 찾는다.
+**maximum likelihood estimation**(maximum likelihood estimation, MLE)은 "지금 관측된 데이터가 나올 확률(likelihood)이
+가장 높아지는 파라미터"를 고르는 방법이다. 용의자 여러 명 가운데 현장의 증거를 가장 잘 설명하는
+사람을 지목하는 것과 같다 — prior 없이 증거만 본다.
 
 $$\hat{\theta}_{\text{MLE}} = \arg\max_\theta \prod_i p(x_i|\theta)
 = \arg\max_\theta \sum_i \log p(x_i|\theta)$$
 
 로그를 취하는 이유는 두 가지다. 곱이 합이 되어 미분이 쉬워지고,
-확률의 곱이 언더플로하는 것을 막는다([0.5 수치 컴퓨팅](05_numerical_computing.qmd)).
+확률을 수백 개 곱하면 컴퓨터가 표현할 수 없을 만큼 작아지는 underflow를 막는다([0.5 수치 컴퓨팅](05_numerical_computing.qmd)).
 
 ::: {.key-concept}
 **손실함수를 고르는 것은 잡음 분포를 가정하는 것이다.**
 
-| 가정한 잡음 | 음의 로그우도 | 우리가 부르는 이름 |
+$y_i = \hat{y}_i + \epsilon_i$ 로 놓고 잡음 $\epsilon_i$ 가 어떤 분포를 따른다고 가정한 뒤 MLE를 쓰면,
+최소화해야 할 negative log-likelihood가 곧 우리가 늘 쓰는 손실함수가 된다.
+
+| 가정한 잡음 | negative log-likelihood | 우리가 부르는 이름 |
 |-------------|---------------|---------------------|
 | 가우스 | $\frac{1}{2\sigma^2}\sum(y_i-\hat{y}_i)^2$ | **MSE** |
-| 라플라스 | $\frac{1}{b}\sum\|y_i-\hat{y}_i\|$ | **MAE** |
-| 베르누이 | $-\sum[y\log\hat{p} + (1-y)\log(1-\hat{p})]$ | **이진 교차엔트로피** |
-| 범주형 | $-\sum \log \hat{p}_{y_i}$ | **교차엔트로피** |
+| Laplace | $\frac{1}{b}\sum\|y_i-\hat{y}_i\|$ | **MAE** |
+| 베르누이 | $-\sum[y\log\hat{p} + (1-y)\log(1-\hat{p})]$ | **binary cross-entropy** |
+| 범주형 | $-\sum \log \hat{p}_{y_i}$ | **cross-entropy** |
 
-MSE를 쓴다는 것은 "잡음이 가우스이고 등분산"이라고 주장하는 것이다.
-이상치가 많은 데이터에서 MSE가 무너지는 이유가 여기 있다 —
-가우스는 꼬리가 얇아서 이상치를 "거의 불가능한 사건"으로 보고 크게 벌한다.
+MSE를 쓴다는 것은 "잡음이 가우스이고, 어느 점에서나 크기가 같다(homoscedastic, 등분산)"라고 주장하는 것이다.
+outlier(outlier — 대부분의 데이터에서 동떨어진 값)가 많은 데이터에서 MSE가 무너지는 이유가 여기 있다 —
+가우스는 꼬리가 얇아서 outlier를 "거의 불가능한 사건"으로 보고 크게 벌한다.
 :::
 
 ### MSE가 가우스 가정에서 나오는 과정
 
 위 표의 첫 줄을 실제로 유도해 보면 무엇이 가정되고 있는지가 분명해진다.
-$y_i = \hat{y}_i + \epsilon_i$, $\epsilon_i \sim \mathcal{N}(0,\sigma^2)$ 이라 하면 한 점의 로그우도는
+$y_i = \hat{y}_i + \epsilon_i$, $\epsilon_i \sim \mathcal{N}(0,\sigma^2)$ 이라 하면 한 점의 log-likelihood는
 
 $$\log p(y_i \mid \hat{y}_i) = -\frac{(y_i-\hat{y}_i)^2}{2\sigma^2} - \log\sigma - \tfrac{1}{2}\log 2\pi$$
 
-부호를 뒤집어 전부 더하면 음의 로그우도가 된다.
+부호를 뒤집어 전부 더하면 negative log-likelihood가 된다.
 
 $$-\log p(\mathbf{y}) = \underbrace{\frac{1}{2\sigma^2}\sum_i (y_i-\hat{y}_i)^2}_{\text{MSE}}
 + \underbrace{n\log\sigma + \tfrac{n}{2}\log 2\pi}_{\hat{y} \text{ 와 무관}}$$
@@ -853,15 +899,15 @@ $\sigma$ 가 **상수로 고정**되어 있으면 뒤의 두 항은 $\hat{y}$ �
 
 가정이 어디에 쓰였는지 보이는 것이 이 유도의 목적이다.
 
-- $\sigma$ 가 모든 점에서 같다고 했다 — **등분산 가정**. 점마다 잡음 크기가 다르면
-  각 항에 $1/\sigma_i^2$ 라는 서로 다른 가중치가 붙어야 하고, 그것이 가중최소제곱이다.
+- $\sigma$ 가 모든 점에서 같다고 했다 — **homoscedasticity(등분산) 가정**. 점마다 잡음 크기가 다르면
+  각 항에 $1/\sigma_i^2$ 라는 서로 다른 가중치가 붙어야 하고, 그것이 weighted least squares(가중최소제곱)이다.
 - $\sigma$ 를 함께 추정하려면 $n\log\sigma$ 항이 살아나 MSE와 갈라진다.
-  모델이 분산까지 출력하는 경우(이분산 회귀, 확률적 예측)에 실제로 이 항을 써야 한다.
-- 잡음이 독립이라고 했다 — 그래서 로그우도가 단순한 합이 되었다.
+  모델이 분산까지 출력하는 경우(heteroscedastic 회귀 — 잡음 크기가 점마다 다른 회귀, 확률적 예측)에 실제로 이 항을 써야 한다.
+- 잡음이 독립이라고 했다 — 그래서 log-likelihood가 단순한 합이 되었다.
 
 ### MLE는 왜 분산을 과소추정하는가
 
-아래 코드가 보여주는 편향에는 짧은 이유가 있다.
+아래 코드가 보여주는 bias(편향 — 추정값의 평균이 참값에서 체계적으로 벗어나는 것)에는 짧은 이유가 있다.
 정규분포의 MLE는 $\hat{\mu}=\bar{x}$, $\hat{\sigma}^2 = \frac{1}{n}\sum_i (x_i-\bar{x})^2$ 인데,
 제곱합을 참 평균 $\mu$ 기준으로 다시 쓰면 항이 하나 빠진다.
 
@@ -874,29 +920,31 @@ $$\mathbb{E}\Big[\sum_i (x_i-\bar{x})^2\Big] = n\sigma^2 - \sigma^2 = (n-1)\sigm
 \mathbb{E}[\hat{\sigma}^2_{\text{MLE}}] = \frac{n-1}{n}\sigma^2$$
 
 $\bar{x}$ 는 **데이터에서 추정한** 값이라 데이터에 이미 맞춰져 있고,
-그만큼 편차가 실제보다 작게 나온다. 잃어버린 자유도 하나가 정확히 $\sigma^2$ 만큼이다.
-$n-1$ 로 나누는 보정(베셀 보정)이 여기서 나온다.
+그만큼 편차가 실제보다 작게 나온다. 자기 반 평균을 기준으로 잰 점수 편차가 전국 평균을 기준으로 잰 편차보다
+작게 나오는 것과 같다 — 기준점 자체가 그 데이터에 맞춰 움직였기 때문이다.
+이렇게 잃어버린 degree of freedom(자유도) 하나가 정확히 $\sigma^2$ 만큼이다.
+$n-1$ 로 나누는 보정(Bessel's correction)이 여기서 나온다.
 
 ::: {.callout-note}
 ## MLE의 성질과 그 대가
 
-MLE가 널리 쓰이는 것은 큰 표본에서의 보장 때문이다. 다만 **점근적** 보장이라는 점이 중요하다.
+MLE가 널리 쓰이는 것은 큰 표본에서의 보장 때문이다. 다만 **asymptotic(점근적 — $n$ 이 무한히 커질 때에만 성립하는)** 보장이라는 점이 중요하다.
 
 | 성질 | 내용 | 조건 |
 |---|---|---|
-| 일치성 | $n\to\infty$ 에서 참값으로 수렴 | 모형이 옳고, 식별 가능해야 |
-| 점근 정규성 | $\hat\theta \approx \mathcal{N}(\theta, I(\theta)^{-1}/n)$ | 정칙 조건 |
-| 점근 효율성 | 분산이 크라메르-라오 하한에 도달 | 위와 같음 |
-| 불변성 | $\widehat{g(\theta)} = g(\hat\theta)$ | 없음 (유한 표본에서도 성립) |
+| consistency(일치성) | $n\to\infty$ 에서 참값으로 수렴 | 모형이 옳고, 서로 다른 $\theta$ 가 서로 다른 분포를 만들어야(identifiable) |
+| asymptotic normality(점근 정규성) | $n$ 이 크면 추정값이 참값 주위에 정규분포로 퍼진다: $\hat\theta \approx \mathcal{N}(\theta, I(\theta)^{-1}/n)$ | regularity 조건(미분 가능 등) |
+| asymptotic efficiency(점근 효율성) | 분산이 Cramér–Rao lower bound(어떤 추정량도 넘을 수 없는 분산의 하한)에 도달 | 위와 같음 |
+| invariance(불변성) | $\theta$ 의 MLE를 알면 $g(\theta)$ 의 MLE는 그냥 $g(\hat\theta)$ | 없음 (유한 표본에서도 성립) |
 
 대가는 두 가지다. **유한 표본에서는 편향될 수 있고**(방금 본 $\sigma^2$ 가 그 예다),
 **모형이 틀리면 보장이 모두 무너진다.** 위의 표가 말하는 것도 결국 같은 이야기다 —
 MSE를 쓰는 순간 "잡음이 가우스"라는 모형을 세운 것이고,
 그 모형이 틀리면 MLE의 좋은 성질은 근거를 잃는다.
 
-사전분포를 곱해 사후를 최대화하면 MAP가 되고, 이는 벌점항이 붙은 MLE와 같다 —
-가우스 사전이 L2 정규화, 라플라스 사전이 L1 정규화다
-([2.3 정규화](../02_classical_ml/03_regularization.qmd)).
+prior를 곱해 posterior를 최대화하면 MAP가 되고, 이는 벌점항이 붙은 MLE와 같다 —
+가우스 prior가 L2 regularization, Laplace prior가 L1 regularization이다
+([2.3 regularization](../02_classical_ml/03_regularization.qmd)).
 :::
 
 ```{python}
@@ -908,16 +956,16 @@ import numpy as np
 rng = np.random.default_rng(0)
 data = rng.normal(5.0, 2.0, 500)
 
-# 정규분포 MLE 는 닫힌 해가 있다
+# 정규분포 MLE 는 closed form 해가 있다
 mu_hat = data.mean()
-sigma_hat = data.std(ddof=0)          # MLE 는 n 으로 나눈다 (편향 추정량)
-sigma_unbiased = data.std(ddof=1)     # 불편 추정량은 n-1
+sigma_hat = data.std(ddof=0)          # MLE 는 n 으로 나눈다 (biased 추정량)
+sigma_unbiased = data.std(ddof=1)     # unbiased 추정량은 n-1
 
 print(f"참값        μ=5.000  σ=2.000")
 print(f"MLE         μ={mu_hat:.3f}  σ={sigma_hat:.3f}   (n 으로 나눔)")
-print(f"불편 추정량            σ={sigma_unbiased:.3f}   (n-1 로 나눔)")
+print(f"unbiased 추정량        σ={sigma_unbiased:.3f}   (n-1 로 나눔)")
 print()
-print("→ MLE 는 분산을 약간 과소추정한다 (편향). n 이 크면 차이가 사라진다.")
+print("→ MLE 는 분산을 약간 과소추정한다 (bias). n 이 크면 차이가 사라진다.")
 print(f"   n={len(data)} 에서 차이: {abs(sigma_unbiased-sigma_hat):.5f}")
 ```
 
@@ -926,34 +974,34 @@ print(f"   n={len(data)} 에서 차이: {abs(sigma_unbiased-sigma_hat):.5f}")
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 사전분포를 이겨 본다**
-G0.2.2에서 아주 강한 사전분포(예: $\mathrm{Beta}(50,50)$)를 주고,
-관측을 몇 번쯤 해야 사후평균이 참값 쪽으로 절반 이상 이동하는가.
+**① prior를 이겨 본다**
+G0.2.2에서 아주 강한 prior(예: $\mathrm{Beta}(50,50)$)를 주고,
+관측을 몇 번쯤 해야 posterior의 평균이 참값 쪽으로 절반 이상 이동하는가.
 $\mathbb{E}[\theta\mid D]=\frac{a+k}{a+b+n}$ 로 **먼저 계산**한 뒤 그림으로 확인하라.
 
 **② CLT가 느리게 오는 경우를 만든다**
 `fig-clt` 의 분포에 극단적으로 치우친 것(예: 지수분포)을 추가하고,
 $n=30$ 에서 정규 곡선에 붙는지 본다. 붙지 않으면 $n$ 을 얼마까지 올려야 하는가.
 
-**③ 백색화를 손으로 확인한다**
+**③ whitening을 손으로 확인한다**
 `mvn-affine` 에서 $\Sigma$ 를 거의 특이한 행렬(예: 상관 0.999)로 바꾸면
-촐레스키 인자와 백색화가 어떻게 되는가. [0.5의 조건수](05_numerical_computing.qmd)와 연결해 설명해 보라.
+Cholesky factor와 whitening이 어떻게 되는가. [0.5의 condition number](05_numerical_computing.qmd)와 연결해 설명해 보라.
 :::
 
 ## 요약
 
 | 개념 | 핵심 | 이어지는 곳 |
 |------|------|-------------|
-| 밀도 ≠ 확률 | 밀도는 1을 넘을 수 있다 | 연속 우도가 양수인 경우 |
-| 기댓값 선형성 | 독립 불필요 | 어디서나 |
-| 분산 가법성 | **독립 필요** | 앙상블이 통하는 이유 |
-| 베이즈 정리 | 사전 × 우도 ∝ 사후 | 정규화의 확률적 해석 |
-| 켤레사전분포 | 베타-이항 등, 계산이 닫힌다 | 베이지안 추론 |
-| LLN | 표본평균 → 참 평균 | 몬테카를로 |
-| **CLT** | 원 분포 무관, 표본평균은 정규 | 신뢰구간, 가설검정 |
-| CLT 실패 | 무한 분산, 의존성, 극단 치우침 | 부트스트랩을 쓸 때 |
-| 다변량 정규 | $\Sigma$ 의 고유벡터 = 타원 축 | PCA, 마할라노비스 거리 |
-| MLE | 로그우도 최대화 | **손실함수의 출처** |
+| 밀도 ≠ 확률 | 밀도는 "단위 길이당 확률"(인구밀도처럼)이라 1을 넘을 수 있다 | 연속 데이터의 log-likelihood가 양수인 경우 |
+| 기댓값의 linearity | 합의 평균은 평균의 합. 독립 불필요 | 어디서나 |
+| 분산의 additivity | 합의 분산은 분산의 합. **독립 필요** — 같은 편견을 가진 심사위원은 평균 내도 소용없다 | ensemble이 통하는 이유 |
+| 베이즈 정리 | prior × likelihood ∝ posterior. 심증에 증거를 곱해 심증을 갱신한다 | regularization = prior |
+| conjugate prior | posterior가 prior와 같은 family — 베타-이항처럼 파라미터 덧셈으로 갱신이 끝난다 | 베이지안 추론 |
+| LLN | 표본평균 → 참 평균. 편차가 사라지는 것이 아니라 $n$ 으로 나뉘어 희석된다 | Monte Carlo |
+| **CLT** | 원래 분포와 무관하게 표본평균은 종 모양. 오차는 $\sigma/\sqrt{n}$ | confidence interval, 가설검정 |
+| CLT 실패 | 무한 분산, 의존성, 극단 치우침 + 작은 $n$ | bootstrap을 쓸 때 |
+| multivariate normal | 동그란 표준정규를 $L$ 로 늘리고 기울인 것. $\Sigma$ 의 eigenvector = 타원 축 | PCA, Mahalanobis distance |
+| MLE | 관측된 데이터가 가장 잘 설명되는 파라미터 — log-likelihood 최대화 | **손실함수의 출처** |
 
 확률은 "모델이 무엇을 주장하는가"를 다뤘다.
 다음 장은 그 주장을 데이터로 **검증**하는 절차를 세운다.
