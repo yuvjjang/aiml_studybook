@@ -1,17 +1,18 @@
 ---
-title: "1.1 탐색적 데이터 분석"
-subtitle: "분포·관계·이상치 — 모델을 만들기 전에 데이터를 만나는 법"
+title: "1.1 EDA: 탐색적 데이터 분석"
+subtitle: "분포·관계·outlier — 모델을 만들기 전에 데이터를 만나는 법"
 jupyter: ai-ml-study
 ---
 
-EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 **신호인지 데이터 수집 사고인지**
-끝까지 알 수 없다.
+**EDA**(exploratory data analysis, 탐색적 데이터 분석)는 모델을 만들기 전에 데이터를 이리저리 그려 보고 요약해 보는 일이다.
+이것을 건너뛰고 모델을 돌리면, 모델이 학습한 것이 **신호인지 데이터 수집 사고인지**
+끝까지 알 수 없다. 요리사가 재료를 씻고 냄새를 맡아 보지 않고 바로 조리하는 것과 같다.
 
 [1.0](00_data_and_types.qmd)에서 데이터가 어떻게 왜곡될 수 있는지 봤다.
 이 장은 그것을 **찾아내는 도구**를 다룬다.
 
 그런데 도구 자체가 거짓말을 한다.
-같은 데이터가 히스토그램 구간 폭에 따라 단봉으로도 이봉으로도 보이고,
+같은 데이터가 히스토그램 구간 폭에 따라 봉우리 하나(unimodal)로도 둘(bimodal)로도 보이고,
 요약통계가 완전히 같은데 그림은 전혀 다른 네 데이터셋이 존재한다.
 
 **그래서 EDA의 핵심 기술은 "여러 각도로 보고 일치하는 것만 믿는 것"이다.**
@@ -20,7 +21,11 @@ EDA를 건너뛰고 모델을 돌리면, 모델이 학습한 것이 **신호인�
 
 ## 1변량 요약: 숫자 네 개로 분포를 알 수 있는가
 
-평균·표준편차·왜도·첨도 네 숫자로 분포의 모양을 얼마나 알 수 있는지, 모양이 전혀 다른 다섯 분포로 확인한다.
+사람을 키·몸무게·나이·성별 네 숫자로 묘사하면 전혀 다른 두 사람이 같은 숫자를 가질 수 있다.
+분포도 마찬가지다. 평균·표준편차·**skewness**(왜도 — 분포가 한쪽으로 기울어진 정도. 오른쪽 꼬리가 길면 양수)·
+**kurtosis**(첨도 — 꼬리가 얼마나 두꺼운가, 극단값이 얼마나 자주 나오는가) 네 숫자로
+분포의 모양을 얼마나 알 수 있는지, 모양이 전혀 다른 다섯 분포로 확인한다.
+아래의 excess kurtosis(초과첨도)는 정규분포의 kurtosis를 0으로 놓고 잰 값이다.
 
 ```{python}
 #| label: shape-stats
@@ -36,34 +41,35 @@ sets = {
     "정규":            rng.normal(0, 1, N),
     "로그정규":         rng.lognormal(0, 0.6, N),
     "균등":            rng.uniform(-2, 2, N),
-    "이봉 (대칭)":      np.concatenate([rng.normal(-2, 0.5, N//2),
+    "bimodal (대칭)":      np.concatenate([rng.normal(-2, 0.5, N//2),
                                      rng.normal(2, 0.5, N//2)]),
     "t(3) 두꺼운 꼬리":  rng.standard_t(3, N),
 }
 
-print(f"{'분포':<18} {'평균':>8} {'중앙값':>9} {'표준편차':>9} {'왜도':>8} {'초과첨도':>10}")
+print(f"{'분포':<18} {'평균':>8} {'중앙값':>9} {'표준편차':>9} {'skew':>8} {'ex.kurt':>10}")
 print("-" * 68)
 for k, v in sets.items():
     print(f"{k:<18} {v.mean():>8.3f} {np.median(v):>9.3f} {v.std():>9.3f} "
           f"{stats.skew(v):>8.3f} {stats.kurtosis(v):>10.3f}")
 
 sk_uni = float(stats.skew(sets["균등"]))
-sk_bi = float(stats.skew(sets["이봉 (대칭)"]))
+sk_bi = float(stats.skew(sets["bimodal (대칭)"]))
 ku_uni = float(stats.kurtosis(sets["균등"]))
-ku_bi = float(stats.kurtosis(sets["이봉 (대칭)"]))
+ku_bi = float(stats.kurtosis(sets["bimodal (대칭)"]))
 kt = float(stats.kurtosis(sets["t(3) 두꺼운 꼬리"]))
 ```
 
-**왜도가 0 이라고 정규분포인 것이 아니다.**
-균등분포의 왜도는 `{python} f"{sk_uni:+.3f}"`, 이봉분포는 `{python} f"{sk_bi:+.3f}"` — 둘 다 0 근처지만 모양이 전혀 다르다.
-이 둘을 가르는 것은 초과첨도다 (균등 `{python} f"{ku_uni:.2f}"`, 이봉 `{python} f"{ku_bi:.2f}"`, 정규는 0).
+**skewness가 0이라고 정규분포인 것이 아니다.** 좌우 대칭이면 무엇이든 0이다.
+균등분포의 skewness는 `{python} f"{sk_uni:+.3f}"`, bimodal 분포는 `{python} f"{sk_bi:+.3f}"` — 둘 다 0 근처지만 모양이 전혀 다르다.
+이 둘을 가르는 것은 excess kurtosis다 (균등 `{python} f"{ku_uni:.2f}"`, bimodal `{python} f"{ku_bi:.2f}"`, 정규는 0).
 
-그런데 t(3) 의 표본 초과첨도는 `{python} f"{kt:.1f}"` 로 터무니없이 크다.
-t(3) 은 **4차 적률이 존재하지 않으므로 모첨도가 정의되지 않는다.**
-표본 첨도는 극단값 몇 개에 좌우되어 표본마다 크게 흔들린다 —
-**꼬리가 두꺼운 데이터에서 첨도 숫자를 믿으면 안 된다.**
+그런데 t(3) 의 표본 excess kurtosis는 `{python} f"{kt:.1f}"` 로 터무니없이 크다.
+kurtosis는 편차의 **4제곱**의 평균이라 극단값 하나가 값을 좌우한다 — 억만장자 한 명이 동네 평균 소득을 흔드는 것보다 훨씬 심하다.
+t(3) 은 **4차 moment(적률 — 4제곱의 평균)가 존재하지 않으므로 모집단 kurtosis 자체가 정의되지 않는다.**
+표본 kurtosis는 극단값 몇 개에 좌우되어 표본마다 크게 흔들린다 —
+**꼬리가 두꺼운 데이터에서 kurtosis 숫자를 믿으면 안 된다.**
 
-산포도 마찬가지다. 이상치에 강건한 지표를 함께 봐야 한다.
+흩어진 정도(spread, 산포)도 마찬가지다. outlier(outlier — 나머지와 동떨어진 값)에 robust(robust — 몇 개가 이상해도 크게 흔들리지 않는)한 지표를 함께 봐야 한다.
 
 ```{python}
 #| label: shape-spread
@@ -78,11 +84,14 @@ for k, v in sets.items():
 ```
 
 정규분포에서는 셋이 거의 일치하지만, 꼬리가 두꺼우면 표준편차만 크게 부푼다.
-(1.4826 이라는 상수가 어디서 오는지는 [뒤](#mad와-1.4826이라는-상수)에서 유도한다.)
+(1.4826이라는 상수가 어디서 오는지는 [뒤](#mad와-1.4826이라는-상수)에서 유도한다.)
 
 ---
 
 ## G1.1.1 — 히스토그램 구간 폭의 함정
+
+히스토그램은 값의 범위를 같은 폭의 칸(bin)으로 나누고 칸마다 개수를 세어 막대로 그린 것이다.
+칸의 폭은 지도의 축척과 같다 — 너무 축소하면 동네 구분이 사라지고, 너무 확대하면 골목 하나하나가 구조처럼 보인다.
 
 ```{python}
 #| label: fig-histogram-bins
@@ -122,7 +131,7 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="bin 수 = ",
 fig.update_layout(xaxis_title="값", yaxis_title="밀도",
                   legend=dict(x=0.02, y=0.98))
 viz.fig_defaults(fig, height=420,
-                 title=f"두 정규분포의 혼합 (n={NH}) — 진짜는 이봉이다")
+                 title=f"두 정규분포의 혼합 (n={NH}) — 진짜는 bimodal 이다")
 fig.show()
 ```
 
@@ -142,7 +151,7 @@ print("-" * 50)
 for b in BINS:
     c, _ = np.histogram(mix, bins=b)
     p = count_peaks(c)
-    verd = ("이봉을 놓침" if p < 2 else
+    verd = ("bimodal을 놓침" if p < 2 else
             "정확" if p == 2 else "잡음 봉우리")
     print(f"{b:>8} {hists[b][2]:>9.3f} {p:>14}  {verd}")
 
@@ -153,7 +162,7 @@ for name in ["sturges", "fd", "scott", "doane", "auto"]:
     print(f"  {name:<10} {len(c):>4}개  폭 {e[1]-e[0]:.3f}  봉우리 {count_peaks(c)}")
 ```
 
-**너무 적어도 너무 많아도 틀린다.** bin 이 3개면 봉우리가 하나로 보여 이봉 구조가 통째로 사라지고,
+**너무 적어도 너무 많아도 틀린다.** bin이 3개면 봉우리가 하나로 보여 bimodal 구조가 통째로 사라지고,
 120개면 봉우리가 수십 개라 표본 잡음이 구조처럼 보인다.
 
 자동 규칙들은 대체로 맞는 답을 준다. 하지만 **규칙을 믿지 말고 여러 폭으로 그려 보라.**
@@ -162,12 +171,13 @@ for name in ["sturges", "fd", "scott", "doane", "auto"]:
 ::: {.key-concept}
 **ECDF: 구간 폭이 없는 대안**
 
-경험적 누적분포함수는 임의 선택이 하나도 없다.
+**ECDF**(empirical cumulative distribution function, 경험적 누적분포함수)는 데이터를 작은 순으로 줄 세우고
+"이 값 이하인 데이터가 전체의 몇 %인가"를 그린 계단 모양 곡선이다. 임의 선택이 하나도 없다.
 
 $$\hat{F}(t) = \frac{1}{n}\sum_i \mathbf{1}[x_i \le t]$$
 
 - 모든 데이터점을 그대로 쓴다 (정보 손실 없음)
-- 조정할 파라미터가 없다 (bin 폭도, 대역폭도)
+- 조정할 파라미터가 없다 (bin 폭도, bandwidth — 밀도 곡선을 얼마나 부드럽게 할지 — 도)
 - 두 분포를 겹쳐 그리면 비교가 쉽다
 - 분위수를 눈으로 읽을 수 있다
 
@@ -230,11 +240,11 @@ print(f"같은 평균·분산 정규분포와의 KS 검정")
 print(f"  통계량 D = {ks.statistic:.4f}, p = {ks.pvalue:.3e}")
 ```
 
-KS 통계량 $D$ 는 두 ECDF 의 **최대 세로 간격**이다 — 위 그림에서 눈으로도 보인다.
+KS(Kolmogorov–Smirnov) 검정의 통계량 $D$ 는 두 ECDF의 **최대 세로 간격**이다 — 위 그림에서 눈으로도 보인다.
 $p$ 가 `{python} f"{ks.pvalue:.0e}"` 이므로 정규가 아니라고 강하게 기각된다.
 
-**주의할 점이 있다.** 표본이 크면 KS 검정은 사소한 차이도 기각한다.
-정규에 왜도를 조금 준 분포(감마)를 표본 크기만 바꿔 가며 검정해 본다.
+**주의할 점이 있다.** 표본이 크면 KS 검정은 사소한 차이도 기각한다 — 현미경 배율을 올리면 어떤 두 물체도 달라 보이는 것과 같다.
+정규에 skewness를 조금 준 분포(감마)를 표본 크기만 바꿔 가며 검정해 본다.
 
 ```{python}
 #| label: ks-sample-size
@@ -242,7 +252,7 @@ $p$ 가 `{python} f"{ks.pvalue:.0e}"` 이므로 정규가 아니라고 강하게
 
 rng_k = np.random.default_rng(11)
 ks_rows = []
-print(f"  {'n':>7} {'D (효과 크기)':>14} {'p 값':>12}  {'판정'}")
+print(f"  {'n':>7} {'D (effect size)':>15} {'p 값':>12}  {'판정'}")
 print("-" * 50)
 for nn_ in [50, 200, 1000, 5000, 20000]:
     sub = rng_k.gamma(shape=50, scale=1/np.sqrt(50), size=nn_)   # 거의 정규지만 살짝 우편향
@@ -258,22 +268,23 @@ $p$ 가 작아지는 것은 같은 크기의 차이라도 표본이 크면 확�
 즉 $n=50$ 에서는 "차이 `{python} f"{ks_rows[0][1]:.3f}"` 인데 기각 못 함",
 $n=20{,}000$ 에서는 "차이 `{python} f"{ks_rows[-1][1]:.3f}"` 인데 기각"이다.
 
-**$p$ 값은 "차이가 큰가"가 아니라 "차이가 0 이 아니라고 확신하는가"를 답한다.**
+**$p$ 값은 "차이가 큰가"가 아니라 "차이가 0이 아니라고 확신하는가"를 답한다.**
 실제 크기는 $D$ 를 봐야 하고, 표본이 충분히 크면 어떤 실제 데이터도 기각된다.
 
 ### bin 폭을 고르는 규칙에는 근거가 있다
 
 "여러 폭으로 그려 보라"는 조언은 옳지만, 출발점을 정하는 이론도 있다.
-히스토그램은 밀도추정량이고, 폭 $h$ 는 전형적인 **편향-분산 트레이드오프**를 만든다.
+히스토그램은 density estimator(밀도 추정량 — 데이터로 분포의 모양을 어림하는 도구)이고, 폭 $h$ 는 전형적인 **bias–variance tradeoff**(편향-분산 상충)를 만든다.
+여론조사를 시·도 단위로 집계하면 동네 차이가 뭉개지고(bias), 동 단위로 집계하면 동마다 응답자가 몇 명 안 되어 숫자가 들쭉날쭉한(variance) 것과 같은 구조다.
 
-- $h$ 가 **크면** 한 칸 안의 실제 밀도 변화가 뭉개진다 → **편향** 증가.
-  칸 안에서 밀도를 상수로 근사하므로 편향은 대략 $h$ 에 비례한다.
+- $h$ 가 **크면** 한 칸 안의 실제 밀도 변화가 뭉개진다 → **bias** 증가.
+  칸 안에서 밀도를 상수로 근사하므로 bias는 대략 $h$ 에 비례한다.
 - $h$ 가 **작으면** 칸마다 들어가는 표본이 적어진다. 한 칸의 기대 개수가 $nh$ 정도이고
   개수는 포아송처럼 흔들리므로, 밀도 추정의 **분산**은 대략 $1/(nh)$ 에 비례한다.
 
-평균제곱오차를 합쳐 최소화하면 최적 폭의 차수가 나온다.
+MSE(mean squared error, 평균제곱오차)를 합쳐 최소화하면 최적 폭의 차수가 나온다.
 
-$$\text{MSE}(h) \;\approx\; \underbrace{c_1 h^2}_{\text{편향}^2} + \underbrace{\frac{c_2}{nh}}_{\text{분산}}
+$$\text{MSE}(h) \;\approx\; \underbrace{c_1 h^2}_{\text{bias}^2} + \underbrace{\frac{c_2}{nh}}_{\text{variance}}
 \quad\Longrightarrow\quad
 \frac{d}{dh}: \; 2c_1 h - \frac{c_2}{nh^2} = 0
 \quad\Longrightarrow\quad
@@ -283,7 +294,7 @@ h^\star \propto n^{-1/3}$$
 
 | 규칙 | 폭 $h$ | 성격 |
 |---|---|---|
-| **Freedman-Diaconis** | $2\,\mathrm{IQR}\cdot n^{-1/3}$ | 산포를 IQR로 재 **이상치에 강건**. 기본값으로 권장 |
+| **Freedman-Diaconis** | $2\,\mathrm{IQR}\cdot n^{-1/3}$ | 산포를 IQR(interquartile range — 상위 25%와 하위 25%를 잘라낸 가운데 절반의 폭)로 재 **outlier에 robust**. 기본값으로 권장 |
 | **Scott** | $3.49\,\sigma\, n^{-1/3}$ | 정규분포에서 최적. 꼬리가 두꺼우면 과하게 넓어진다 |
 | Sturges | $\text{범위}/(\log_2 n + 1)$ | 칸 수가 $\log n$ 으로만 늘어 **큰 $n$ 에서 심하게 부족** |
 
@@ -310,17 +321,20 @@ for n in [100, 600, 5_000, 50_000]:
           f"{sturges:>12.4f}{span/sturges:>6.0f}")
 ```
 
-$n$ 이 500배 늘어도 Sturges 는 칸을 `{python} f"{bins_by[100][2]}"`개에서 `{python} f"{bins_by[50_000][2]}"`개로만 늘린다.
-FD 와 Scott 은 $n^{1/3}$ 에 비례해 `{python} f"{bins_by[50_000][0]}"`개, `{python} f"{bins_by[50_000][1]}"`개까지 늘어난다.
-Sturges 는 작은 표본을 위해 만들어진 규칙이라 큰 데이터에서 구조를 뭉갠다.
+$n$ 이 500배 늘어도 Sturges는 칸을 `{python} f"{bins_by[100][2]}"`개에서 `{python} f"{bins_by[50_000][2]}"`개로만 늘린다.
+FD와 Scott은 $n^{1/3}$ 에 비례해 `{python} f"{bins_by[50_000][0]}"`개, `{python} f"{bins_by[50_000][1]}"`개까지 늘어난다.
+Sturges는 작은 표본을 위해 만들어진 규칙이라 큰 데이터에서 구조를 뭉갠다.
 
 NumPy의 `np.histogram_bin_edges(x, bins="fd")` 나 `bins="auto"`(FD와 Sturges 중 큰 칸 수)가
-이 규칙들을 구현해 두었다. **다만 어떤 규칙도 다봉성을 보장하지는 않는다** —
+이 규칙들을 구현해 두었다. **다만 어떤 규칙도 봉우리가 여러 개(multimodal)인 구조를 드러낸다고 보장하지는 않는다** —
 위 그림에서 봤듯 최종 확인은 여러 폭으로 직접 그려 보는 것이다.
 
 ---
 
-## G1.1.2 — 앤스컴 4중주: 요약통계의 한계
+## G1.1.2 — Anscombe's quartet: 요약통계의 한계
+
+**Anscombe's quartet**(앤스컴 4중주)은 평균·분산·상관·회귀선이 전부 같도록 만든 네 개의 데이터셋이다.
+네 학생의 평균 점수와 편차가 똑같아도 답안지는 전혀 다를 수 있다는 것을 보여 주는 고전적인 예다.
 
 ```{python}
 #| label: fig-anscombe
@@ -338,7 +352,7 @@ ANS = {
         (XA, np.array([8.04, 6.95, 7.58, 8.81, 8.33, 9.96, 7.24, 4.26, 10.84, 4.82, 5.68])),
     "II: 곡선 관계":
         (XA, np.array([9.14, 8.14, 8.74, 8.77, 9.26, 8.10, 6.13, 3.10, 9.13, 7.26, 4.74])),
-    "III: 이상치 하나":
+    "III: outlier 하나":
         (XA, np.array([7.46, 6.77, 12.74, 7.11, 7.81, 8.84, 6.08, 5.39, 8.15, 6.42, 5.73])),
     "IV: 지렛점 하나":
         (np.array([8, 8, 8, 8, 8, 8, 8, 19, 8, 8, 8], float),
@@ -360,7 +374,7 @@ for i, (k, (xx, yy)) in enumerate(ANS.items()):
     fig.update_xaxes(range=[2, 21], row=r_, col=c_)
     fig.update_yaxes(range=[2, 14], row=r_, col=c_)
 viz.fig_defaults(fig, height=560,
-                 title="앤스컴 4중주 — 회귀선까지 같다")
+                 title="Anscombe's quartet — 회귀선까지 같다")
 fig.show()
 ```
 
@@ -389,7 +403,7 @@ for k, (xx, yy) in ANS.items():
 #| code-fold: false
 
 diag = {}
-print(f"{'':<20} {'스피어만':>9} {'잔차 최대':>10} {'x 최대 지렛값':>14}")
+print(f"{'':<20} {'Spearman':>9} {'residual 최대':>13} {'x 최대 leverage':>15}")
 print("-" * 58)
 for k, (xx, yy) in ANS.items():
     b, a = np.polyfit(xx, yy, 1)
@@ -402,11 +416,11 @@ for k, (xx, yy) in ANS.items():
           f"{np.abs(resid).max():>10.3f} {h.max():>14.3f}")
 ```
 
-- **II** 는 스피어만(`{python} f"{diag['II'][0]:.2f}"`)이 피어슨(0.82)보다 낮다 → 곡선이라 단조성도 깨진다
-- **III** 은 잔차 하나가 유독 크다 → 이상치. 스피어만은 오히려 `{python} f"{diag['III'][0]:.2f}"` 로 거의 완벽하다
-- **IV** 는 지렛값이 `{python} f"{diag['IV'][2]:.2f}"` 다 → 점 하나가 회귀선을 혼자 정한다
+- **II**는 Spearman 상관(순위로 잰 상관, 아래 참조)이 `{python} f"{diag['II'][0]:.2f}"` 로 Pearson 상관(0.82)보다 낮다 → 곡선이라 한 방향으로만 올라가지도 않는다
+- **III**은 residual(잔차 — 회귀선과 실제 값의 차이) 하나가 유독 크다 → outlier. Spearman은 오히려 `{python} f"{diag['III'][0]:.2f}"` 로 거의 완벽하다
+- **IV**는 leverage(지렛값 — 한 점이 회귀선을 얼마나 끌어당기는가)가 `{python} f"{diag['IV'][2]:.2f}"` 다 → 점 하나가 회귀선을 혼자 정한다
 
-**그래서 회귀를 돌렸으면 반드시 잔차를 그려 봐야 한다.**
+**그래서 회귀를 돌렸으면 반드시 residual을 그려 봐야 한다.**
 $R^2$ 하나만 보고 넘어가면 네 경우를 구별할 수 없다.
 
 ---
@@ -415,11 +429,11 @@ $R^2$ 하나만 보고 넘어가면 네 경우를 구별할 수 없다.
 
 $$r = \frac{\operatorname{Cov}(X,Y)}{\sigma_X \sigma_Y}$$
 
-피어슨 상관은 **선형** 관계만 잰다. 비선형 의존은 잡지 못한다.
+Pearson 상관(보통 "상관계수"라 부르는 것)은 **직선** 관계만 잰다. 직선 자로 곡선의 길이를 재려는 것과 같아서, 휘어진 의존은 잡지 못한다.
 
 ```{python}
 #| label: fig-correlation-gallery
-#| fig-cap: "피어슨 상관은 모두 0 근처인데 구조는 전혀 다릅니다"
+#| fig-cap: "Pearson 상관은 모두 0 근처인데 구조는 전혀 다릅니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -450,7 +464,7 @@ for i, (k, (a, b)) in enumerate(PATS.items(), start=1):
     fig.update_xaxes(showticklabels=False, row=1, col=i)
     fig.update_yaxes(showticklabels=False, row=1, col=i)
 viz.fig_defaults(fig, height=280,
-                 title="피어슨 r은 전부 0 근처다")
+                 title="Pearson r 은 전부 0 근처다")
 fig.show()
 ```
 
@@ -462,7 +476,7 @@ import numpy as np
 from scipy import stats
 
 def distance_correlation(x, y):
-    """거리 상관 — 0 이면 **독립**을 함의한다 (피어슨과 결정적으로 다른 점)."""
+    """거리 상관 — 0 이면 **독립**을 함의한다 (Pearson과 결정적으로 다른 점)."""
     a = np.abs(x[:, None] - x[None, :])
     b = np.abs(y[:, None] - y[None, :])
     A = a - a.mean(0) - a.mean(1)[:, None] + a.mean()
@@ -471,8 +485,8 @@ def distance_correlation(x, y):
     dvx, dvy = (A*A).mean(), (B*B).mean()
     return float(np.sqrt(max(dcov2, 0))/np.sqrt(np.sqrt(dvx*dvy))) if dvx*dvy > 0 else 0.0
 
-# 거리상관은 유한 표본에서 0 이 아니라 양의 편향을 갖는다.
-# 그래서 절대값이 아니라 **순열 검정**으로 판단해야 한다.
+# distance correlation 은 유한 표본에서 0 이 아니라 양의 bias 를 갖는다.
+# 그래서 절대값이 아니라 permutation test 로 판단해야 한다.
 def dcor_permutation_p(x, y, n_perm=200, seed=0):
     r0 = distance_correlation(x, y)
     rp = np.random.default_rng(seed)
@@ -480,7 +494,7 @@ def dcor_permutation_p(x, y, n_perm=200, seed=0):
                      for _ in range(n_perm)])
     return r0, float(null.mean()), float((null >= r0).mean())
 
-print(f"{'패턴':<16} {'피어슨':>9} {'스피어만':>10} {'켄달':>9} {'거리상관':>10} "
+print(f"{'패턴':<16} {'Pearson':>9} {'Spearman':>10} {'Kendall':>9} {'dCor':>10} "
       f"{'순열귀무평균':>12} {'p':>8}")
 print("-" * 84)
 res = {}
@@ -497,14 +511,16 @@ sig = [k for k, v in res.items() if v[2] < 0.01]
 ns = [k for k, v in res.items() if v[2] >= 0.01]
 ```
 
-**피어슨·스피어만·켄달이 전부 0 근처지만 거리상관은 다르다.**
-두 순위 상관(스피어만·켄달)도 도움이 안 되는 이유는 같다 —
-**단조가 아닌 관계**는 순위로도 잡히지 않기 때문이다.
+**Pearson·Spearman·Kendall이 전부 0 근처지만 distance correlation(distance correlation)은 다르다.**
+Spearman과 Kendall은 값 대신 순위를 써서 재는 상관이라 곡선이어도 한 방향으로 올라가기만 하면 잡지만,
+**monotone(단조 — 한 방향으로만 증가하거나 감소)이 아닌 관계**는 순위로도 잡히지 않는다.
+distance correlation은 점들 사이의 거리 패턴을 비교해 어떤 형태의 의존이든 잡아낸다.
 
-거리상관을 읽을 때 주의할 점이 하나 있다. 유한 표본에서는 **0 이 아니라 양의 편향**을 갖는다.
+distance correlation을 읽을 때 주의할 점이 하나 있다. 유한 표본에서는 **0이 아니라 양의 bias**를 갖는다.
 실제로 독립인 데이터도 `{python} f"{res['실제로 독립'][0]:.3f}"` 가 나왔다.
-그래서 절대값이 아니라 **순열 검정**으로 판단한다 — $y$ 를 무작위로 섞어 독립을 강제한 뒤
+그래서 절대값이 아니라 **permutation test**(순열 검정)로 판단한다 — $y$ 를 무작위로 섞어 독립을 강제한 뒤
 같은 통계량의 분포를 만들고, 원래 값이 그 분포에서 얼마나 극단적인지 본다.
+카드를 섞어 "우연이라면 이 정도"라는 기준선을 직접 만드는 셈이다.
 위 표에서 $p<0.01$ 로 의존이 확인된 것은 `{python} ", ".join(sig)` 이고,
 독립을 기각하지 못한 것은 `{python} ", ".join(ns) if ns else "없음"` 이다.
 
@@ -512,22 +528,25 @@ ns = [k for k, v in res.items() if v[2] >= 0.01]
 
 | 지표 | 잡는 것 |
 |---|---|
-| 피어슨 $r$ | 선형 관계만 |
-| 스피어만 $\rho$ | 단조 관계 (곡선이어도 방향이 일정하면 잡음) |
-| 켄달 $\tau$ | 단조 관계. 이상치에 더 강건, 작은 표본에 적합 |
-| 거리상관 | **모든 형태의 의존**. 0 ⟺ 독립 |
-| 상호정보 | 모든 의존. 단 추정이 어렵고 표본이 많이 필요 |
+| Pearson $r$ | 직선 관계만 |
+| Spearman $\rho$ | monotone 관계 (곡선이어도 방향이 일정하면 잡음) |
+| Kendall $\tau$ | monotone 관계. outlier에 더 robust, 작은 표본에 적합 |
+| distance correlation | **모든 형태의 의존**. 0 ⟺ 독립 |
+| mutual information | 모든 의존. 단 추정이 어렵고 표본이 많이 필요 |
 
 실무 순서는 산점도를 먼저 그리고, 숫자는 그 다음이다.
 숫자 하나로 관계를 요약하려는 순간 위 다섯 경우가 전부 같아 보인다.
 
 ---
 
-## G1.1.4 — 이상치: 방법마다 다른 점을 지목한다
+## G1.1.4 — outlier: 방법마다 다른 점을 지목한다
+
+키 150cm도 정상이고 몸무게 100kg도 정상 범위지만, 둘의 조합은 이상하다.
+outlier를 축마다 따로 찾는 방법과 조합을 함께 보는 방법이 서로 다른 점을 지목하는 이유가 이것이다.
 
 ```{python}
 #| label: fig-outliers
-#| fig-cap: "세 방법이 서로 다른 점을 이상치로 지목합니다"
+#| fig-cap: "세 방법이 서로 다른 점을 outlier로 지목합니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -551,16 +570,16 @@ dmah = np.sqrt(np.einsum("ij,jk,ik->i", P - P.mean(0), Cinv, P - P.mean(0)))
 METHODS = {
     "z-score > 3": zmax > 3,
     "IQR 1.5배": iqr_flag,
-    "마할라노비스 > 3": dmah > 3,
+    "Mahalanobis > 3": dmah > 3,
 }
 
-m0 = "마할라노비스 > 3"
+m0 = "Mahalanobis > 3"
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=P[~METHODS[m0], 0], y=P[~METHODS[m0], 1], mode="markers",
                          name="정상 판정",
                          marker=dict(size=5, color=viz.hex_rgba(viz.ACCENT, 0.5))))
 fig.add_trace(go.Scatter(x=P[METHODS[m0], 0], y=P[METHODS[m0], 1], mode="markers",
-                         name="이상치 판정",
+                         name="outlier 판정",
                          marker=dict(size=11, color=viz.WARM, symbol="circle-open",
                                      line=dict(width=2.5))))
 fig.add_trace(go.Scatter(x=INJECT[:, 0], y=INJECT[:, 1], mode="markers",
@@ -576,7 +595,7 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="방법: ",
 fig.update_layout(xaxis_title="x₁", yaxis_title="x₂",
                   legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 viz.fig_defaults(fig, height=460,
-                 title=f"강한 상관(ρ=0.9) 데이터에 이상치 4개를 주입")
+                 title=f"강한 상관(ρ=0.9) 데이터에 outlier 4개를 주입")
 fig.show()
 ```
 
@@ -586,7 +605,7 @@ fig.show()
 
 import numpy as np
 
-print(f"{'방법':<20} {'탐지 수':>8} {'주입 4개 중':>12} {'오탐':>7} {'재현율':>9}")
+print(f"{'방법':<20} {'탐지 수':>8} {'주입 4개 중':>12} {'오탐':>7} {'recall':>9}")
 print("-" * 62)
 for nm, flag in METHODS.items():
     hit = int((flag & truth).sum())
@@ -594,7 +613,7 @@ for nm, flag in METHODS.items():
           f"{int((flag & ~truth).sum()):>7} {hit/4:>9.0%}")
 print()
 print("주입한 4개 점을 각 지표로 보면:")
-print(f"{'좌표':<16} {'|z| 최대':>10} {'IQR 플래그':>11} {'마할라노비스':>13}  {'성격'}")
+print(f"{'좌표':<16} {'|z| 최대':>10} {'IQR 플래그':>11} {'Mahalanobis':>13}  {'성격'}")
 print("-" * 70)
 for i in range(NO, len(P)):
     kind = ("축 방향 극단" if zmax[i] > 3 else "상관 구조 위반")
@@ -603,35 +622,35 @@ for i in range(NO, len(P)):
 ```
 
 **뒤의 두 점이 핵심이다.** $(2.2, -2.2)$ 는 각 축만 보면 $|z|$ 가 `{python} f"{zmax[NO+2]:.2f}"` 로 평범하다.
-그런데 마할라노비스 거리는 `{python} f"{dmah[NO+2]:.2f}"` 다.
-$x_1$ 과 $x_2$ 가 0.9 로 강하게 양의 상관인데 이 점만 부호가 반대이기 때문이다.
+그런데 Mahalanobis distance([0.2](../00_foundations/02_probability.qmd)에서 본, 분포가 퍼진 방향을 감안한 거리)는 `{python} f"{dmah[NO+2]:.2f}"` 다.
+$x_1$ 과 $x_2$ 가 0.9로 강하게 양의 상관인데 이 점만 부호가 반대이기 때문이다.
 
-일변량 방법(z-score, IQR)은 **각 축을 따로 본다.**
+한 변수씩 보는 방법(z-score — 평균에서 표준편차 몇 개만큼 떨어졌는가, IQR 규칙)은 **각 축을 따로 본다.**
 그래서 '개별 값은 정상인데 조합이 이상한' 점을 원리적으로 찾을 수 없다.
 
-반대로 마할라노비스도 만능이 아니다.
+반대로 Mahalanobis도 만능이 아니다.
 
-- 평균과 공분산 자체가 이상치에 오염된다 (강건 추정 필요 — MCD 등)
+- 평균과 covariance 자체가 outlier에 오염된다 (robust 추정 필요 — MCD 등)
 - 타원형 분포를 가정한다. 군집이 여럿이거나 곡선형이면 실패한다
-- 차원이 높으면 거리 자체가 의미를 잃는다 ([4.5 임베딩](../04_architectures/05_embeddings.qmd))
+- 차원이 높으면 거리 자체가 의미를 잃는다 ([4.5 embedding](../04_architectures/05_embeddings.qmd))
 
 **그리고 가장 중요한 질문은 통계가 답할 수 없다** — 이 점을 버릴 것인가?
 측정 오류라면 버려야 하고, 드물지만 진짜인 현상이라면 버리면 안 된다.
 그 판단은 도메인 지식의 몫이다.
 
-### 붕괴점: 얼마나 오염되면 무너지는가
+### breakdown point: 얼마나 오염되면 무너지는가
 
-"이상치에 강건하다"는 말을 숫자로 정의할 수 있다.
-**붕괴점(breakdown point)** 은 추정량을 완전히 망가뜨리는 데 필요한
-오염 표본의 최소 비율이다.
+"outlier에 robust하다"는 말을 숫자로 정의할 수 있다.
+**breakdown point**(breakdown point)는 추정량을 완전히 망가뜨리는 데 필요한
+오염 표본의 최소 비율이다. 배심원 열두 명 중 몇 명을 매수해야 판결을 뒤집을 수 있는가와 같은 질문이다.
 
-| 추정량 | 붕괴점 | 뜻 |
+| 추정량 | breakdown point | 뜻 |
 |---|---|---|
 | 평균, 표준편차 | **0%** | 점 **하나**를 무한대로 보내면 추정값도 무한대 |
-| $\alpha$ 절사평균 | $\alpha$ | 양끝 $\alpha$ 씩 버리므로 그만큼 견딘다 |
+| $\alpha$ trimmed mean(trimmed mean — 양끝 $\alpha$ 비율을 잘라내고 낸 평균) | $\alpha$ | 양끝 $\alpha$ 씩 버리므로 그만큼 견딘다 |
 | 중앙값, MAD | **50%** | 이론적 최댓값. 절반 미만이면 버틴다 |
 
-평균의 붕괴점이 0이라는 것은 은유가 아니다.
+평균의 breakdown point가 0이라는 것은 은유가 아니다.
 $\bar{x} = \frac{1}{n}\sum x_i$ 에서 $x_1 \to \infty$ 로 보내면 $\bar{x} \to \infty$ 다.
 $n$ 이 아무리 커도 마찬가지다 — 표본을 늘려도 해결되지 않는다.
 
@@ -646,7 +665,7 @@ rng = np.random.default_rng(1)
 base = rng.normal(10, 2, 100)          # 참 평균 10
 
 bd = {}
-print(f"{'오염 비율':>10}{'평균':>14}{'중앙값':>12}{'10% 절사평균':>16}")
+print(f"{'오염 비율':>10}{'평균':>14}{'중앙값':>12}{'10% trimmed':>16}")
 for frac in [0.0, 0.05, 0.10, 0.20, 0.45, 0.55]:
     x = base.copy()
     k = int(len(x) * frac)
@@ -657,17 +676,17 @@ for frac in [0.0, 0.05, 0.10, 0.20, 0.45, 0.55]:
           f"{stats.trim_mean(x, 0.10):>16,.2f}")
 ```
 
-평균은 5% 오염에서 이미 참값의 `{python} f"{bd[0.05][0]/10/1000:.0f}"`천 배가 된다 (붕괴점 0%).
-10% 절사평균은 10%까지 버티다가 20%에서 무너진다 (붕괴점 10%).
+평균은 5% 오염에서 이미 참값의 `{python} f"{bd[0.05][0]/10/1000:.0f}"`천 배가 된다 (breakdown point 0%).
+10% trimmed mean은 10%까지 버티다가 20%에서 무너진다 (breakdown point 10%).
 중앙값은 45%에서도 `{python} f"{bd[0.0][1]:.2f}"` 에서 `{python} f"{bd[0.45][1]:.2f}"` 로만 움직이고, 55%에서 무너진다.
 
 ### MAD와 1.4826이라는 상수
 
-표준편차의 강건한 대체물이 **중앙값 절대편차(MAD)** 다.
+표준편차의 robust한 대체물이 **MAD**(median absolute deviation, 중앙값 절대편차 — 각 값이 중앙값에서 떨어진 거리들의 중앙값)다.
 
 $$\mathrm{MAD} = \mathrm{med}\big(|x_i - \mathrm{med}(x)|\big)$$
 
-그런데 이 값은 표준편차와 **눈금이 다르다.** 정의상 MAD 는 $P(|X-\mu| \le c) = 0.5$ 를
+그런데 이 값은 표준편차와 **눈금이 다르다.** 인치로 잰 길이를 cm와 비교하려면 2.54를 곱해야 하듯, 환산 상수가 필요하다. 정의상 MAD는 $P(|X-\mu| \le c) = 0.5$ 를
 만족하는 $c$ 다. 정규분포에서 $|X-\mu| \le c$ 는 $\mu-c \le X \le \mu+c$ 이고,
 이 구간의 확률이 절반이 되려면 양쪽 꼬리에 25% 씩 남아야 하므로 $c$ 는 75% 분위수다.
 
@@ -709,33 +728,33 @@ print(f"  1.4826·MAD        {mad_c:>8.2f}   ← 거의 정확")
 ```
 
 ::: {.key-concept}
-강건 추정량은 공짜가 아니다. **오염이 없을 때는 효율이 떨어진다.**
+robust 추정량은 공짜가 아니다. **오염이 없을 때는 efficiency(효율 — 같은 표본으로 얼마나 정밀한가)가 떨어진다.** 보험료를 내는 셈이다.
 
 정규분포에서 중앙값의 분산은 평균의 약 $\pi/2 \approx 1.57$ 배다 —
 같은 정밀도를 얻으려면 표본이 57% 더 필요하다는 뜻이다.
 그래서 선택은 상황에 달려 있다.
 
-- **탐색 단계, 데이터 품질을 모를 때** → 강건 추정량. 잘못된 결론을 막는 것이 우선이다.
+- **탐색 단계, 데이터 품질을 모를 때** → robust 추정량. 잘못된 결론을 막는 것이 우선이다.
 - **데이터가 깨끗하고 정밀도가 중요할 때** → 평균과 표준편차.
 - 가장 좋은 것은 **둘을 나란히 보는 것**이다. 크게 다르면 그 차이 자체가
   "꼬리가 두껍거나 오염이 있다"는 신호다.
 
-위 그림의 세 이상치 탐지법이 서로 다른 점을 지목한 이유도 같다 —
-각자 다른 산포 척도(표준편차, IQR, 마할라노비스 거리)에 기대고 있고,
-그 척도들의 붕괴점이 다르기 때문이다.
+위 그림의 세 outlier 탐지법이 서로 다른 점을 지목한 이유도 같다 —
+각자 다른 산포 척도(표준편차, IQR, Mahalanobis distance)에 기대고 있고,
+그 척도들의 breakdown point가 다르기 때문이다.
 :::
 
 ---
 
 ## 결측 메커니즘: 버려도 되는가
 
-[1.0](00_data_and_types.qmd)에서 MCAR·MAR·MNAR 을 정의하고, 완전사례 분석이 언제 편향되는지 봤다.
+[1.0](00_data_and_types.qmd)에서 MCAR·MAR·MNAR을 정의하고, complete-case analysis(결측 있는 행을 버리는 것)가 언제 bias를 만드는지 봤다.
 여기서는 EDA 관점에서 두 가지를 더한다 — **남은 분포가 어떻게 생겼는지** 눈으로 보는 것,
-그리고 **회귀 대치가 어디까지 복구하는지**다.
+그리고 **regression imputation(회귀 대치 — 다른 열로 예측해 빈칸을 채우기)이 어디까지 복구하는지**다.
 
 ```{python}
 #| label: fig-missingness
-#| fig-cap: "결측 메커니즘에 따른 완전사례분석의 편향"
+#| fig-cap: "결측 메커니즘에 따른 complete-case analysis의 bias"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -778,8 +797,8 @@ import numpy as np
 
 print(f"참 평균 소득: {true_mean:,.0f}")
 print()
-print(f"{'메커니즘':<24} {'결측률':>8} {'완전사례':>11} {'편향':>9} "
-      f"{'회귀대치':>11} {'편향':>9}")
+print(f"{'메커니즘':<24} {'결측률':>8} {'complete-case':>13} {'bias':>9} "
+      f"{'regression imp.':>16} {'bias':>9}")
 print("-" * 78)
 for nm, miss in MECH.items():
     obs = ~miss
@@ -791,36 +810,36 @@ for nm, miss in MECH.items():
           f"{imp.mean():>11,.0f} {imp.mean()-true_mean:>+9,.0f}")
 ```
 
-그림에서 보이는 것은 **남은 분포의 모양**이다. MCAR 은 전체와 같은 모양으로 줄어들 뿐이고,
-MAR 과 MNAR 은 둘 다 한쪽이 깎여 있다. 그림만으로는 이 둘을 구별할 수 없다 —
-1.0 에서 말한 "데이터만 봐서는 MAR 과 MNAR 을 구분할 수 없다"가 눈으로 확인되는 셈이다.
+그림에서 보이는 것은 **남은 분포의 모양**이다. MCAR은 전체와 같은 모양으로 줄어들 뿐이고,
+MAR과 MNAR은 둘 다 한쪽이 깎여 있다. 그림만으로는 이 둘을 구별할 수 없다 —
+1.0에서 말한 "데이터만 봐서는 MAR과 MNAR을 구분할 수 없다"가 눈으로 확인되는 셈이다.
 
 표의 오른쪽 두 열이 새로 더해진 부분이다. 나이는 항상 관측된다고 보고,
 관측된 행으로 나이→소득 회귀를 학습해 결측을 채웠다.
-MAR 에서는 이것으로 편향이 거의 사라진다 — 결측이 나이에만 의존하므로 나이를 쓰면 복구된다.
-MNAR 에서는 회귀대치를 해도 편향이 상당히 남는다. 고소득자가 답을 안 하는 경향은
+MAR에서는 이것으로 bias가 거의 사라진다 — 결측이 나이에만 의존하므로 나이를 쓰면 복구된다.
+MNAR에서는 regression imputation을 해도 bias가 상당히 남는다. 고소득자가 답을 안 하는 경향은
 나이로 설명되지 않기 때문이다.
 
-결측 자체가 정보일 수도 있다. '소득 미응답'이라는 지시자 열을 추가하면 모델이 그 패턴을 쓸 수 있다.
-단, 그 패턴이 학습과 서빙에서 동일하게 유지되는지 확인해야 한다.
+결측 자체가 정보일 수도 있다. '소득 미응답'이라는 indicator 열(있으면 1, 없으면 0)을 추가하면 모델이 그 패턴을 쓸 수 있다.
+단, 그 패턴이 학습 때와 실제 서비스(serving) 때 동일하게 유지되는지 확인해야 한다.
 
 ---
 
 ## EDA 점검 순서
 
 ::: {.key-concept}
-**모델을 돌리기 전에**
+**모델을 돌리기 전에** — 조종사의 이륙 전 점검표처럼, 매번 같은 순서로 확인한다.
 
 ```
 □ 행 수 · 열 수 · 결측률 · 중복 행
-□ 각 열의 dtype 과 측정 척도가 맞는가
-□ 각 수치 열의 min / max / 고유값 개수      ← 센티널(-999) 탐지
-□ 각 범주 열의 카디널리티와 상위 빈도
+□ 각 열의 dtype 과 measurement scale 이 맞는가
+□ 각 수치 열의 min / max / 고유값 개수      ← sentinel(-999) 탐지
+□ 각 범주 열의 cardinality(서로 다른 값의 개수)와 상위 빈도
 □ 히스토그램을 **여러 bin 폭으로** 그려 본다
-□ 타깃 분포 (불균형? 꼬리? 다봉?)
-□ 상관 히트맵 — 단, 비선형은 안 잡힌다는 것을 기억
+□ 타깃 분포 (불균형? 꼬리? multimodal?)
+□ correlation heatmap — 단, 직선 관계만 잡힌다는 것을 기억
 □ 주요 쌍은 산점도로 직접 본다
-□ 시간 열이 있으면 시간축으로 정렬해 그려 본다  ← 분포 이동 탐지
+□ 시간 열이 있으면 시간축으로 정렬해 그려 본다  ← distribution shift(시간에 따라 분포가 달라짐) 탐지
 □ 결측 패턴 자체를 시각화 (열 간 결측이 상관되는가)
 ```
 
@@ -848,7 +867,7 @@ def quick_profile(name, col):
 rng_p = np.random.default_rng(7)
 cols = {
     "정상 열": rng_p.normal(50, 10, 1000),
-    "센티널 섞임": np.where(rng_p.random(1000) < 0.05, -999.0,
+    "sentinel 섞임": np.where(rng_p.random(1000) < 0.05, -999.0,
                        rng_p.normal(50, 10, 1000)),
     "상수 열": np.full(1000, 3.0),
     "0 이 과다": np.where(rng_p.random(1000) < 0.7, 0.0, rng_p.exponential(20, 1000)),
@@ -864,21 +883,21 @@ for nm, c in cols.items():
 
 이 표 하나로 세 가지 문제가 즉시 보인다.
 
-- '센티널 섞임' — 최소가 −999. 정상 범위와 동떨어져 있다
+- 'sentinel 섞임' — 최소가 −999. 정상 범위와 동떨어져 있다
 - '상수 열' — 고유값 1개. 모델에 아무 정보도 주지 않는다
-- '0 이 과다' — 영값이 70%. 진짜 0 인가, 미측정인가?
+- '0이 과다' — 영값이 70%. 진짜 0 인가, 미측정인가?
 
 ---
 
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① bin 규칙을 이봉분포에 적용한다**
-`bin-rules` 의 데이터를 정규분포 대신 이봉분포로 바꾸면 FD·Scott이 권하는
-칸 수가 봉우리 두 개를 드러내는가? 규칙이 다봉성을 **보장하지 않는다**는 말을 확인하라.
+**① bin 규칙을 bimodal 분포에 적용한다**
+`bin-rules` 의 데이터를 정규분포 대신 bimodal 분포로 바꾸면 FD·Scott이 권하는
+칸 수가 봉우리 두 개를 드러내는가? 규칙이 multimodal 구조를 **보장하지 않는다**는 말을 확인하라.
 
-**② 붕괴점을 눈으로 센다**
-`breakdown` 에서 20% 절사평균을 추가하라. 붕괴점이 20%라면 오염 비율
+**② breakdown point를 눈으로 센다**
+`breakdown` 에서 20% trimmed mean을 추가하라. breakdown point가 20%라면 오염 비율
 15%와 25%에서 각각 어떻게 되어야 하는가. 예측하고 확인하라.
 
 **③ MAD가 틀리는 분포를 찾는다**
@@ -890,14 +909,15 @@ for nm, c in cols.items():
 
 | 개념 | 핵심 |
 |------|------|
-| 왜도·첨도 | 왜도 0 ≠ 정규. 이봉도 왜도 0 |
-| 표본 첨도 | 꼬리가 두꺼우면 불안정 — t(3)에서 `{python} f"{kt:.1f}"` |
-| 히스토그램 | 너무 적어도 많아도 틀림. **여러 폭으로 그려라** |
-| ECDF | 조정 파라미터 없음. KS 검정의 $D$ 가 최대 세로 간격 |
-| 앤스컴 4중주 | 아홉 통계량이 같아도 그림은 전혀 다름 |
-| 상관계수 | 피어슨=선형, 스피어만/켄달=단조, **거리상관=모든 의존** |
-| z-score / IQR | 축을 따로 봄 — 상관 구조 위반을 못 잡음 |
-| 마할라노비스 | 상관을 고려. 단 타원 가정·오염·고차원에 취약 |
+| skewness·kurtosis | 네 숫자로는 사람도 분포도 못 알아본다. skewness 0 ≠ 정규 — bimodal도 0 |
+| 표본 kurtosis | 4제곱이라 극단값 하나에 휘둘림. 꼬리가 두꺼우면 불안정 — t(3)에서 `{python} f"{kt:.1f}"` |
+| 히스토그램 | 지도 축척처럼 너무 적어도 많아도 틀림. **여러 폭으로 그려라** |
+| ECDF | 줄 세워 "이 값 이하가 몇 %". 조정 파라미터 없음. KS 검정의 $D$ 가 최대 세로 간격 |
+| Anscombe's quartet | 아홉 통계량이 같아도 그림은 전혀 다름 — 같은 평균 점수, 다른 답안지 |
+| 상관계수 | Pearson=직선, Spearman/Kendall=monotone, **distance correlation=모든 의존** |
+| z-score / IQR | 축을 따로 봄 — 키·몸무게 조합 같은 상관 구조 위반을 못 잡음 |
+| Mahalanobis | 상관을 고려. 단 타원 가정·오염·고차원에 취약 |
+| breakdown point | 배심원 몇 명을 매수해야 뒤집히나. 평균 0%, 중앙값 50% |
 | MCAR/MAR/MNAR | MAR은 복구 가능, MNAR은 원리적으로 불가 |
 | 구분 불가 | 데이터만으로 MAR/MNAR 구분 불가 — 수집 과정을 알아야 함 |
 
@@ -909,6 +929,6 @@ EDA의 결론은 늘 같다.
 
 ---
 
-**다음**: [1.2 데이터 시각화](02_visualization.qmd) — 그래픽 문법과 지각
+**다음**: [1.2 데이터 시각화](02_visualization.qmd) — grammar of graphics와 지각
 
 **이전**: [1.0 데이터의 구조](00_data_and_types.qmd)
