@@ -26,7 +26,7 @@ GPT 를 학습시키는 것도, 선형회귀를 푸는 것도 같은 문장이�
 고등학교에서 배운 미분 $f'(x)$ 는 "$x$ 를 조금 늘리면 $f$ 가 얼마나 변하는가", 즉 그래프의 기울기다.
 
 변수가 여러 개면 — 산 위에 서 있다고 하자 — 동쪽으로 갈 때와 북쪽으로 갈 때의 기울기가 다르다.
-각 축 방향의 기울기(편미분)를 벡터로 모은 것이 **gradient**(gradient, $\nabla f$ — "나블라 f"라 읽는다)다.
+각 축 방향의 기울기(편미분)를 벡터로 모은 것이 **gradient**(기울기 벡터, $\nabla f$ — "나블라 f"라 읽는다)다.
 
 $$\nabla f = \left[\frac{\partial f}{\partial x_1}, \dots, \frac{\partial f}{\partial x_n}\right]^\top$$
 
@@ -166,7 +166,7 @@ gradient 가 오르막을 가리키니, 내려가려면 반대로 한 걸음씩 
 
 $$\theta_{t+1} = \theta_t - \eta \, \nabla L(\theta_t)$$
 
-$\eta$(eta)가 **learning rate**(learning rate) — 한 걸음의 **보폭**이다. 딥러닝에서 가장 중요한 하이퍼파라미터다.
+$\eta$(eta)가 **learning rate**(학습률) — 한 걸음의 **보폭**이다. 딥러닝에서 가장 중요한 하이퍼파라미터다.
 
 이 식은 하늘에서 떨어진 것이 아니다. **"어느 방향으로 얼마나"** 라는 두 질문에 각각 답하면 그대로 나온다.
 
@@ -365,7 +365,7 @@ $\lambda_{\max}$ 는 Hessian의 최대 eigenvalue — **가장 가파른 방향�
 
 ## chain rule: 역전파의 뼈대
 
-**chain rule**(chain rule)은 함수 안에 함수가 들어 있을 때(합성함수)의 미분 규칙이다.
+**chain rule**(연쇄 법칙)은 함수 안에 함수가 들어 있을 때(합성함수)의 미분 규칙이다.
 
 $$\frac{d}{dx} f(g(x)) = f'(g(x)) \cdot g'(x)$$
 
@@ -404,7 +404,7 @@ residual connection $y = x + F(x)$ 의 미분은 $1 + F'(x)$ 다.
 
 ### 다변수 chain rule 과 Jacobian
 
-층의 입출력이 벡터면 미분은 행렬이 된다 — **Jacobian**(Jacobian).
+층의 입출력이 벡터면 미분은 행렬이 된다 — **Jacobian**(모든 출력을 모든 입력으로 편미분한 값을 모아 놓은 행렬).
 입력 다이얼이 $n$ 개, 출력 계기판이 $m$ 개인 기계에서 "다이얼 $j$ 를 살짝 돌리면 계기판 $i$ 가 얼마나 움직이는가"를
 $m \times n$ 표로 적은 것이다.
 
@@ -558,7 +558,7 @@ orthogonal 초기화, residual connection($J = I + \cdots$ 라 singular value가
 gradient 가 "지금 얼마나 기울었는가"(1차 정보)라면, 2차 정보는 **곡률** — "그 기울기가 얼마나 빨리 변하는가",
 즉 길이 얼마나 급하게 휘는가다. 직선 도로와 급커브의 차이다.
 
-**Hessian**(Hessian)은 gradient 의 Jacobian 이다. 방금 본 Jacobian 을 $\nabla f$ 에 적용한 것,
+**Hessian**(2차 편미분을 모아 놓은 행렬)은 gradient 의 Jacobian 이다. 방금 본 Jacobian 을 $\nabla f$ 에 적용한 것,
 그뿐이다. $\nabla f : \mathbb{R}^n \to \mathbb{R}^n$ 이므로 그 Jacobian 은 $n\times n$ 행렬이 된다.
 
 $$H = \frac{\partial(\nabla f)}{\partial \theta}, \qquad
@@ -669,7 +669,7 @@ $$f(\theta + \Delta) \approx f(\theta) + \nabla f^\top \Delta + \tfrac{1}{2}\Del
 
 ## G0.1.3 — saddle point
 
-**saddle point**(saddle point)는 말 안장처럼 한쪽 방향으로는 골짜기이고 다른 방향으로는 봉우리인 지점이다.
+**saddle point**(안장점)는 말 안장처럼 한쪽 방향으로는 골짜기이고 다른 방향으로는 봉우리인 지점이다.
 산으로 치면 두 봉우리 사이의 고개(pass)다 — 능선을 따라가면 가장 낮은 곳이지만, 골짜기 쪽으로 보면 가장 높은 곳이다.
 고차원 손실 지형에서 gradient 가 0인 지점은 대부분 local minimum 이 아니라 saddle point 다.
 $n$ 차원에서 모든 eigenvalue 가 우연히 같은 부호일 확률은 $2^{-n}$ 수준이기 때문이다.
@@ -807,7 +807,7 @@ eigenvalue가 0 근처에 몰린 영역에서는 밀어내는 힘 자체가 없�
 
 ## convexity: 보장이 있는 세계
 
-**convex**(convex) 함수는 그래프가 그릇처럼 생겨서, 그래프 위의 두 점을 이은 선분이 언제나 그래프보다 위에 놓이는 함수다.
+**convex**(볼록) 함수는 그래프가 그릇처럼 생겨서, 그래프 위의 두 점을 이은 선분이 언제나 그래프보다 위에 놓이는 함수다.
 $y = x^2$ 이 대표적이다. 구덩이가 하나뿐이라 공을 어디서 굴려도 같은 바닥에 멈춘다.
 
 $$f(\lambda x + (1-\lambda)y) \le \lambda f(x) + (1-\lambda)f(y), \quad \lambda\in[0,1]$$
@@ -947,7 +947,7 @@ $\lambda$ 를 튜닝한다는 것은 사실 **복잡도 예산 $t$ 를 에둘러
 
 $$\min_{\mathbf{x}}\ f_0(\mathbf{x}) \quad \text{s.t.}\quad f_i(\mathbf{x}) \le 0\ \ (i=1,\dots,m), \qquad h_j(\mathbf{x}) = 0\ \ (j=1,\dots,r)$$
 
-**Lagrangian**(Lagrangian)은 제약마다 **multiplier**(곱수, 계수) $\lambda_i$ 를 붙여 목적함수에 더한 것이다.
+**Lagrangian**(라그랑주 함수)은 제약마다 **multiplier**(곱수, 계수) $\lambda_i$ 를 붙여 목적함수에 더한 것이다.
 제약을 "지켜야 할 규칙"에서 "어기면 $\lambda_i$ 배로 물어야 할 벌금"으로 바꿔 식 안에 넣는 장치다.
 
 $$L(\mathbf{x},\boldsymbol{\lambda},\boldsymbol{\nu}) = f_0(\mathbf{x}) + \sum_{i=1}^{m}\lambda_i f_i(\mathbf{x}) + \sum_{j=1}^{r}\nu_j h_j(\mathbf{x}), \qquad \lambda_i \ge 0$$
@@ -968,7 +968,7 @@ $$p^\star = \inf_{\mathbf{x}}\ \sup_{\boldsymbol{\lambda}\ge0,\ \boldsymbol{\nu}
 
 ### dual problem: 순서를 뒤집는다
 
-inf(하한)와 sup(상한)의 순서를 뒤집은 것이 **dual problem**(dual problem)이고,
+inf(하한)와 sup(상한)의 순서를 뒤집은 것이 **dual problem**(쌍대 문제)이고,
 원래 문제는 구별해서 **primal problem**(원래 문제)이라 부른다. 안쪽 하한을 먼저 취한 것이 **dual function** 이다.
 
 $$g(\boldsymbol{\lambda},\boldsymbol{\nu}) = \inf_{\mathbf{x}} L(\mathbf{x},\boldsymbol{\lambda},\boldsymbol{\nu}),
@@ -1132,7 +1132,7 @@ $X$ 의 열이 완전히 상관되어도 해가 존재한다. regularization이 
 #### Lasso: 미분 불가능한 곳은 subdifferential 로
 
 $q=1$ 이면 $\|\beta\|_1$ 이 $\beta_j=0$ 에서 미분 불가능하다 — $|x|$ 의 그래프가 0 에서 꺾여 있어 접선이 하나로 정해지지 않는다.
-그래서 기울기 하나 대신, 그 점에서 그래프 아래로 지나갈 수 있는 **모든 접선의 기울기 집합**을 쓴다. 이것이 **subdifferential**(subdifferential)이다.
+그래서 기울기 하나 대신, 그 점에서 그래프 아래로 지나갈 수 있는 **모든 접선의 기울기 집합**을 쓴다. 이것이 **subdifferential**(접선 기울기의 집합)이다.
 
 $$\partial|\beta_j| =
 \begin{cases}
