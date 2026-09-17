@@ -1,6 +1,6 @@
 ---
 title: "0.5 수치 컴퓨팅"
-subtitle: "부동소수점·벡터화·수치 안정성 — 수식과 코드 사이의 간극"
+subtitle: "floating point·vectorization·수치 안정성 — 수식과 코드 사이의 간극"
 jupyter: ai-ml-study
 ---
 
@@ -8,8 +8,8 @@ jupyter: ai-ml-study
 
 $$\text{softmax}(z)_i = \frac{e^{z_i}}{\sum_j e^{z_j}}$$
 
-이 식을 그대로 옮기면 $z$ 가 조금만 커도 무너진다.
-[5.0 어텐션](../05_transformer/00_attention_mechanism.qmd)에서 쓴 안정 softmax,
+이 식을 그대로 옮기면 $z$ 가 조금만 커도 무너진다 — $e^{1000}$ 은 컴퓨터가 담을 수 있는 수보다 크기 때문이다.
+[5.0 attention](../05_transformer/00_attention_mechanism.qmd)에서 쓴 안정 softmax,
 [7.14 추론 최적화](../07_language/14_inference_optimization.qmd)의 fp16 학습 사고,
 [5.1](../05_transformer/01_self_attention.qmd)에서 마스크에 `-inf` 대신 `-1e9` 를 쓰는 관행 —
 전부 이 장에서 설명된다.
@@ -18,13 +18,17 @@ $$\text{softmax}(z)_i = \frac{e^{z_i}}{\sum_j e^{z_j}}$$
 
 ---
 
-## 부동소수점: 유한한 격자
+## floating point: 유한한 격자
 
-$32$비트 float은 부호 1 + 지수 8 + 가수 23비트로 이루어진다.
+컴퓨터가 실수를 담는 방식인 **floating point**(floating point)는 과학적 표기법과 같다.
+$123{,}000$ 을 $1.23 \times 10^5$ 로 쓰듯, "유효숫자 몇 자리"와 "10의 몇 승"을 따로 저장한다 —
+다만 컴퓨터는 10 대신 2를 쓴다. 소수점의 위치가 지수에 따라 떠다니기(float) 때문에 붙은 이름이다.
+
+$32$비트 float는 부호 1 + exponent(지수) 8 + mantissa(가수 — 유효숫자 부분) 23비트로 이루어진다.
 
 $$x = (-1)^s \times 1.m \times 2^{e-127}$$
 
-핵심은 **가수 비트 수가 정밀도를, 지수 비트 수가 범위를 결정**한다는 것이다.
+핵심은 **mantissa 비트 수가 정밀도(몇 자리까지 정확한가)를, exponent 비트 수가 범위(얼마나 큰 수까지 담는가)를 결정**한다는 것이다.
 
 ```{python}
 #| label: float-formats
@@ -38,7 +42,7 @@ fmts = [
     ("float32", np.float32, 8, 23),
     ("float16", np.float16, 5, 10),
 ]
-print(f"{'형식':<10} {'지수':>5} {'가수':>5} {'최대값':>12} {'최소 정규값':>13} "
+print(f"{'형식':<10} {'exp':>5} {'mant':>5} {'최대값':>12} {'최소 정규값':>13} "
       f"{'엡실론':>11} {'유효자리'}")
 print("-" * 74)
 for name, dt, e_bits, m_bits in fmts:
@@ -48,38 +52,39 @@ for name, dt, e_bits, m_bits in fmts:
           f"{float(info.tiny):>13.2e} {float(info.eps):>11.2e} {digits:>7.1f}자리")
 
 print()
-print("bfloat16 : 지수 8, 가수 7  → float32 와 같은 범위, 낮은 정밀도")
-print("           그래서 딥러닝 학습에서 fp16 보다 안전하다 (오버플로가 적다)")
+print("bfloat16 : exponent 8, mantissa 7  → float32 와 같은 범위, 낮은 정밀도")
+print("           그래서 딥러닝 학습에서 fp16 보다 안전하다 (overflow 가 적다)")
 ```
 
 ::: {.key-concept}
 **이 표가 bfloat16이 딥러닝의 기본이 된 이유를 보여준다.**
 
-fp16은 지수가 5비트뿐이라 최대값이 약 65504다.
-학습 중 그래디언트나 활성화가 이 값을 넘으면 `inf` 가 되고, 곧 `NaN` 으로 번진다.
+fp16은 exponent가 5비트뿐이라 최대값이 약 65504다.
+학습 중 gradient나 activation(층의 출력값)이 이 값을 넘으면 `inf`(overflow — 담을 수 있는 최대값을 넘침)가 되고, 곧 `NaN` 으로 번진다.
 
-bf16은 가수를 7비트로 줄이는 대신 지수를 8비트로 유지한다 —
-**fp32와 동일한 범위**를 갖는다. 정밀도는 떨어지지만,
+bf16은 mantissa를 7비트로 줄이는 대신 exponent를 8비트로 유지한다 —
+**fp32와 동일한 범위**를 갖는다. 정밀도는 떨어지지만(유효숫자가 약 2~3자리),
 신경망 학습은 정밀도보다 범위에 민감하다는 것이 경험적으로 확인되었다.
 :::
 
-### 부동소수점 연산의 기본 모델
+### floating point 연산의 기본 모델
 
 수치 계산의 거의 모든 논의가 딱 한 줄의 가정 위에 서 있다.
-실수 $x$ 를 가장 가까운 부동소수점 수로 반올림하는 것을 $\mathrm{fl}(x)$ 라 하면
+실수 $x$ 를 가장 가까운 floating point 수로 반올림하는 것을 $\mathrm{fl}(x)$ 라 하면
 
 $$\mathrm{fl}(x) = x(1+\delta), \qquad |\delta| \le u$$
 
-여기서 $u$ 를 **단위 반올림(unit roundoff)** 이라 하고, 가수가 $m$ 비트일 때
+여기서 $u$ 를 **unit roundoff**(단위 반올림 오차 — 반올림 한 번이 만들 수 있는 최대 상대오차)라 하고, mantissa가 $m$ 비트일 때
 
 $$u = 2^{-(m+1)} = \frac{\epsilon}{2}$$
 
 이다($\epsilon$ 은 `np.finfo(dt).eps`, 즉 1 다음 수와 1의 간격).
 핵심은 **오차가 절대량이 아니라 비율로 들어온다**는 것이다.
 1 근처에서든 $10^{20}$ 근처에서든 상대오차는 똑같이 $u$ 이하다.
+유효숫자 3자리 저울로 재면 3g도 3,000kg도 "앞 세 자리까지만" 정확한 것과 같다.
 
 여기서 격자 간격도 따라 나온다. $2^e \le |x| < 2^{e+1}$ 인 구간에서
-이웃한 두 부동소수점 수의 간격(ulp)은
+이웃한 두 floating point 수의 간격(ulp, unit in the last place)은
 
 $$\mathrm{ulp}(x) = 2^{e-m} = \epsilon \cdot 2^{\lfloor \log_2 |x|\rfloor}$$
 
@@ -119,12 +124,13 @@ print(f"  float32에서 1e8 + 1 == 1e8 ?  {big + np.float32(1.0) == big}")
 
 ::: {.key-concept}
 $\mathrm{fl}(x)=x(1+\delta)$ 라는 모델이 알려주는 것은
-**부동소수점 연산은 "약간 다른 입력에 대한 정확한 연산"** 이라는 관점이다.
+**floating point 연산은 "약간 다른 입력에 대한 정확한 연산"** 이라는 관점이다.
+계산기가 틀리는 것이 아니라, 계산기에 넣은 숫자가 애초에 살짝 다른 숫자였다고 보는 것이다.
 
 그래서 결과가 나빠지는 경우가 둘로 갈린다.
 
 - **문제 자체가 민감한 경우** — 입력이 조금만 달라도 답이 크게 달라진다.
-  [0.0의 조건수](00_linear_algebra.qmd)가 재는 것이 정확히 이 민감도다.
+  [0.0의 condition number](00_linear_algebra.qmd)가 재는 것이 정확히 이 민감도다.
 - **알고리즘이 나쁜 경우** — 문제는 순한데 계산 순서가 오차를 키운다.
   아래의 분산 공식과 합산이 이 경우다.
 
@@ -136,7 +142,8 @@ $\mathrm{fl}(x)=x(1+\delta)$ 라는 모델이 알려주는 것은
 
 ## G0.5.1 — 수는 균등하게 놓여 있지 않다
 
-부동소수점의 가장 중요한 성질: **표현 가능한 값 사이의 간격이 크기에 비례해 벌어진다.**
+floating point의 가장 중요한 성질: **표현 가능한 값 사이의 간격이 크기에 비례해 벌어진다.**
+1 근처에서는 촘촘하고 1억 근처에서는 성긴 자다. 억 단위로 적는 회계 장부에서 1원이 사라지는 것과 같다.
 
 ```{python}
 #| label: fig-float-spacing
@@ -170,7 +177,7 @@ fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"),
 fig.update_layout(xaxis_title="값의 크기", xaxis_type="log",
                   yaxis_title="이웃 값과의 간격", yaxis_type="log",
                   legend=dict(x=0.02, y=0.98))
-viz.fig_defaults(fig, height=410, title="부동소수점 격자의 간격")
+viz.fig_defaults(fig, height=410, title="floating point 격자의 간격")
 fig.show()
 ```
 
@@ -186,7 +193,7 @@ for v in [1e6, 1e7, 1.7e7, 1e8]:
     print(f"  {v:>8.1e}: {v:.0f} + 1 == {v:.0f} ?  {np.float32(a + 1) == a}")
 
 print()
-print("누적합의 위험 (같은 값 100만 번 더하기):")
+print("누적합(값을 하나씩 계속 더해 가기)의 위험 (같은 값 100만 번 더하기):")
 x = np.full(1_000_000, 0.1, dtype=np.float32)
 naive = np.float32(0)
 for i in range(0, 1_000_000, 1000):     # 샘플링해서 빠르게
@@ -202,10 +209,12 @@ float16은 값이 2048만 되어도 간격이 1을 넘습니다 — **정수조�
 
 ---
 
-## 소거: 가까운 수를 빼면 자릿수가 날아간다
+## cancellation: 가까운 수를 빼면 자릿수가 날아간다
 
 두 비슷한 수를 뺄 때 유효숫자가 대량으로 사라진다 —
-**치명적 소거(catastrophic cancellation)** 다.
+**catastrophic cancellation**(치명적 소거)이다.
+두 빌딩의 높이를 각각 미터 단위까지만 재어 놓고 그 차이로 층 하나의 높이를 구하려는 것과 같다.
+두 높이 모두 앞자리는 정확하지만, 빼고 나면 정확한 자리가 하나도 남지 않는다.
 
 ```{python}
 #| label: cancellation
@@ -245,8 +254,8 @@ $$\frac{|(\hat{x}-\hat{y})-(x-y)|}{|x-y|}
 = \frac{|x\delta_1 - y\delta_2|}{|x-y|}
 \;\le\; u \cdot \underbrace{\frac{|x|+|y|}{|x-y|}}_{\text{증폭 배율}}$$
 
-이 배율이 **뺄셈의 조건수**다. $x \approx y$ 이면 분모가 0으로 가면서 폭발한다.
-[0.0의 조건수](00_linear_algebra.qmd)와 정확히 같은 개념이 스칼라 한 번의 연산에 적용된 것이다.
+이 배율이 **뺄셈의 condition number**다. $x \approx y$ 이면 분모가 0으로 가면서 폭발한다.
+[0.0의 condition number](00_linear_algebra.qmd)와 정확히 같은 개념이 스칼라 한 번의 연산에 적용된 것이다.
 
 $\log_{10}(\text{배율})$ 만큼 유효자리를 잃는다고 읽으면 실용적이다.
 float32는 유효자리가 약 7이므로 배율이 $10^7$ 이면 남는 것이 없다.
@@ -267,7 +276,7 @@ print("\n마지막 줄은 float32 유효자리를 전부 소진한다.")
 print("빼기 전에는 두 수 모두 7자리가 정확했는데, 뺀 결과에는 정확한 자리가 없다.")
 ```
 
-여기서 실무 규칙이 나온다. **소거는 뺄셈 자체가 아니라 "가까운 두 수의 뺄셈"이 문제다.**
+여기서 실무 규칙이 나온다. **cancellation은 뺄셈 자체가 아니라 "가까운 두 수의 뺄셈"이 문제다.**
 그리고 대개 식을 다시 쓰면 피할 수 있다.
 
 | 위험한 형태 | 안전한 형태 | 이유 |
@@ -275,19 +284,19 @@ print("빼기 전에는 두 수 모두 7자리가 정확했는데, 뺀 결과에
 | $\mathbb{E}[X^2]-(\mathbb{E}[X])^2$ | $\mathbb{E}[(X-\bar{x})^2]$ | 큰 수끼리 빼지 않는다 |
 | $\sqrt{x+1}-\sqrt{x}$ | $\dfrac{1}{\sqrt{x+1}+\sqrt{x}}$ | 유리화하면 뺄셈이 사라진다 |
 | $1-\cos x$ (작은 $x$) | $2\sin^2(x/2)$ | 삼각항등식으로 치환 |
-| $\log(1+x)$ (작은 $x$) | `np.log1p(x)` | 전용 함수가 소거를 피해 구현되어 있다 |
+| $\log(1+x)$ (작은 $x$) | `np.log1p(x)` | 전용 함수가 cancellation을 피해 구현되어 있다 |
 | $e^x-1$ (작은 $x$) | `np.expm1(x)` | 같은 이유 |
 
 마지막 두 줄이 실제로 자주 쓰인다. 로그확률을 다루는 코드에서 `log1p`/`expm1` 이
 보이면 대개 이 이유다.
 
 ::: {.callout-warning}
-## 실무에서 만나는 소거
+## 실무에서 만나는 cancellation
 
-- **분산·공분산 계산** — 위 예시. 온라인 알고리즘(Welford)을 쓰거나 평균을 먼저 뺀다.
-- **수치 미분** — $(f(x+\epsilon)-f(x-\epsilon))/2\epsilon$ 에서 $\epsilon$ 이 너무 작으면 소거가 발생.
-  [5.6의 그래디언트 검사](../05_transformer/06_build_gpt.qmd)에서 $\epsilon=10^{-5}$ 를 쓴 이유다.
-- **긴 시퀀스 누적** — 보상 합산, 로그확률 누적. Kahan 합산이나 float64 누적기를 쓴다.
+- **분산·covariance 계산** — 위 예시. 데이터를 하나씩 받으며 갱신하는 online 알고리즘(Welford)을 쓰거나 평균을 먼저 뺀다.
+- **수치 미분** — $(f(x+\epsilon)-f(x-\epsilon))/2\epsilon$ 에서 $\epsilon$ 이 너무 작으면 분자에서 cancellation이 발생.
+  [5.6의 gradient check](../05_transformer/06_build_gpt.qmd)에서 $\epsilon=10^{-5}$ 를 쓴 이유다.
+- **긴 시퀀스 누적** — 보상 합산, 로그확률 누적. Kahan 합산이나 float64 accumulator(누적 변수)를 쓴다.
 :::
 
 ### 덧붙임: 합산 오차는 순서에 달려 있다
@@ -298,6 +307,7 @@ $n$ 개를 순서대로 더하면 오차 상한이 항 수에 비례해 자란�
 $$\Big|\hat{S}_n - S_n\Big| \;\lesssim\; n\,u \sum_i |a_i|$$
 
 먼저 더한 항일수록 이후의 모든 반올림에 노출되기 때문이다.
+저울 위에 모래를 한 알씩 올리는 것을 생각하면 된다. 더미가 커질수록 저울 눈금이 성겨져 새 모래알 하나는 눈금에 잡히지 않는다.
 $n$ 이 백만이고 float32($u \approx 6\times10^{-8}$)면 $nu \approx 0.06$ — 유효자리가 남지 않는다.
 
 두 가지 개선이 있다.
@@ -306,9 +316,9 @@ $n$ 이 백만이고 float32($u \approx 6\times10^{-8}$)면 $nu \approx 0.06$ �
 |---|---|---|
 | 순차 합산 | $O(nu)$ | 기준 |
 | **pairwise 합산** | $O(u\log n)$ | 사실상 동일 |
-| **Kahan 보정 합산** | $O(u)$ ($n$ 과 무관) | 덧셈 4배 |
+| **Kahan compensated 합산** | $O(u)$ ($n$ 과 무관) | 덧셈 4배 |
 
-pairwise는 배열을 반씩 나눠 재귀적으로 더하는 방식이라 누적 깊이가 $\log n$ 으로 줄어든다.
+pairwise는 배열을 반씩 나눠 토너먼트처럼 더하는 방식이라, 어느 항이든 반올림에 노출되는 횟수가 $n$ 번이 아니라 $\log n$ 번으로 줄어든다.
 **NumPy의 `np.sum` 이 이미 이 방식을 쓴다** — 그래서 파이썬 `for` 루프로 더한 것보다 정확하다.
 
 Kahan은 매 단계에서 반올림으로 잃은 부분을 별도 변수에 담아 다음 항에 되돌린다.
@@ -355,7 +365,7 @@ Kahan을 직접 구현할 일은 드물다.
 
 이 문제가 실제로 드러나는 곳은 **손실 누적과 평가 지표 집계**다.
 배치별 손실을 float16으로 수만 번 더하면 뒤쪽 배치의 기여가 통째로 사라질 수 있다.
-그래서 혼합정밀도 학습에서도 **누적은 fp32로 한다**(아래 참조).
+그래서 mixed precision 학습에서도 **누적은 fp32로 한다**(아래 참조).
 
 ---
 
@@ -363,10 +373,12 @@ Kahan을 직접 구현할 일은 드물다.
 
 $$\log\sum_i e^{z_i}$$
 
-이 식을 그대로 계산하면 $z_i$ 가 크면 $e^{z_i}$ 가 오버플로하고,
-작으면 언더플로해서 $\log 0 = -\infty$ 가 된다.
+이 식을 그대로 계산하면 $z_i$ 가 크면 $e^{z_i}$ 가 overflow(최대값을 넘어 `inf`)하고,
+작으면 underflow(표현할 수 있는 가장 작은 수보다 작아져 0)해서 $\log 0 = -\infty$ 가 된다.
+softmax의 분모가 바로 이 식이라, 분류 모델과 언어모델 전부가 이 문제를 안고 있다.
 
-해법은 최댓값을 빼는 것이다.
+해법은 최댓값을 빼는 것이다. 여러 사람의 키를 비교할 때 "170cm 기준으로 몇 cm 크고 작은가"만 적으면
+숫자가 작아져 다루기 쉬워지는 것과 같다 — 기준을 나중에 다시 더하면 원래 값이다.
 
 $$\log\sum_i e^{z_i} = m + \log\sum_i e^{z_i - m}, \qquad m = \max_i z_i$$
 
@@ -378,14 +390,14 @@ $$\log\sum_i e^{z_i} = \log\!\Big(e^m \sum_i e^{z_i-m}\Big) = m + \log\sum_i e^{
 
 $m$ 을 굳이 최댓값으로 잡는 이유가 여기서 분명해진다.
 
-- 모든 지수가 $z_i - m \le 0$ 이라 $e^{z_i-m} \le 1$ — **오버플로가 원천적으로 불가능**하다.
+- 모든 지수가 $z_i - m \le 0$ 이라 $e^{z_i-m} \le 1$ — **overflow가 원천적으로 불가능**하다.
 - 최댓값 항은 정확히 $e^0 = 1$ 이라 합이 최소 1 이상 — **로그의 입력이 0이 되지 않는다.**
-- 나머지 항이 언더플로해서 0이 되더라도 잃는 것은 원래 무시할 만한 기여분뿐이다.
+- 나머지 항이 underflow해서 0이 되더라도 잃는 것은 원래 무시할 만한 기여분뿐이다.
 
-즉 최댓값은 "오버플로를 막으면서 언더플로도 안전한" 유일한 선택에 가깝다.
+즉 최댓값은 "overflow를 막으면서 underflow도 안전한" 유일한 선택에 가깝다.
 softmax도 같은 항등식의 결과다 — 분자와 분모에서 $e^m$ 이 약분되므로
 $\text{softmax}(z) = \text{softmax}(z-m)$ 이고,
-[0.4에서 본 "로짓 이동 불변성"](04_information_theory.qmd)이 구현 차원에서 이렇게 쓰인다.
+[0.4에서 본 "logit에 상수를 더해도 softmax는 그대로"](04_information_theory.qmd)라는 성질이 구현 차원에서 이렇게 쓰인다.
 
 ---
 
@@ -393,7 +405,7 @@ $\text{softmax}(z) = \text{softmax}(z-m)$ 이고,
 
 ```{python}
 #| label: fig-softmax-stability
-#| fig-cap: "로짓 크기에 따른 naive/안정 softmax의 거동"
+#| fig-cap: "logit 크기에 따른 naive/안정 softmax의 거동"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -438,7 +450,7 @@ fig.add_trace(go.Scatter(x=scales, y=naive_err, mode="lines+markers",
                          showlegend=False, line=dict(color=viz.PINK, width=2.5)),
               row=1, col=2)
 
-fig.update_xaxes(title_text="로짓 스케일", type="log")
+fig.update_xaxes(title_text="logit 스케일", type="log")
 fig.update_yaxes(title_text="1 = 정상, 0 = NaN/inf", range=[-0.1, 1.15], row=1, col=1)
 fig.update_yaxes(title_text="최대 절대오차", row=1, col=2)
 viz.fig_defaults(fig, height=400, title="softmax 수치 안정성 (float64)")
@@ -452,7 +464,7 @@ fig.show()
 
 import numpy as np
 
-print("float64 에서 exp 가 오버플로하는 지점: exp(709) 는 되고 exp(710) 은 inf")
+print("float64 에서 exp 가 overflow 하는 지점: exp(709) 는 되고 exp(710) 은 inf")
 print(f"  exp(709) = {np.exp(709):.3e}")
 with np.errstate(over="ignore"):
     print(f"  exp(710) = {np.exp(710)}")
@@ -470,27 +482,29 @@ print(f"안정  softmax([1000, 1001, 999]) = "
 ```
 
 ::: {.key-concept}
-**어텐션에서 최댓값 빼기가 왜 중요한가**
+**attention에서 최댓값 빼기가 왜 중요한가**
 
-[5.0](../05_transformer/00_attention_mechanism.qmd)의 $\sqrt{d_k}$ 스케일링은
-**오버플로 방지가 목적이 아니다** — 안정 softmax를 쓰면 오버플로는 애초에 안 난다.
+[5.0](../05_transformer/00_attention_mechanism.qmd)의 $\sqrt{d_k}$ scaling은
+**overflow 방지가 목적이 아니다** — 안정 softmax를 쓰면 overflow는 애초에 안 난다.
 
-$\sqrt{d_k}$ 가 막는 것은 **그래디언트 소실**이다.
-로짓이 크면 softmax가 원-핫에 가까워지고, 야코비안 $\text{diag}(p)-pp^\top$ 의
-모든 원소가 0에 가까워진다.
+$\sqrt{d_k}$ 가 막는 것은 **vanishing gradient(gradient 소실 — 학습 신호가 0에 가까워져 배우지 못하는 것)**다.
+logit이 크면 softmax가 one-hot에 가까워지고(한 항목만 1, 나머지는 0), Jacobian $\text{diag}(p)-pp^\top$ 의
+모든 원소가 0에 가까워진다. 확신에 찬 출력은 입력이 조금 바뀌어도 꿈쩍하지 않으니 미분이 0이다.
 
 즉 두 가지는 다른 문제다.
-- 안정 softmax → **순전파가 `NaN` 이 되는 것**을 막는다
-- $\sqrt{d_k}$ 스케일링 → **역전파 신호가 죽는 것**을 막는다
+- 안정 softmax → **forward pass(순전파 — 입력에서 출력을 계산하는 방향)가 `NaN` 이 되는 것**을 막는다
+- $\sqrt{d_k}$ scaling → **backward pass(역전파 — 출력에서 gradient를 거꾸로 계산하는 방향) 신호가 죽는 것**을 막는다
 :::
 
 ### 로그 확률로 사는 법
 
-확률을 여러 번 곱하면 언더플로한다. 그래서 실무에서는 **항상 로그 공간에서** 작업한다.
+확률을 여러 번 곱하면 underflow한다 — 0.01을 천 번 곱하면 $10^{-2000}$ 인데 float64가 담을 수 있는 가장 작은 수는 약 $10^{-308}$ 이다.
+그래서 실무에서는 **항상 로그 공간에서** 작업한다. 로그를 씌우면 곱이 합이 되어 숫자가 $-2000$ 정도로 얌전해진다 —
+계산자(slide rule)와 로그표가 곱셈을 덧셈으로 바꿔 주던 것과 같은 원리다.
 
 | 확률 공간 | 로그 공간 | 이유 |
 |-----------|-----------|------|
-| $p_1 p_2 \cdots p_n$ | $\log p_1 + \cdots + \log p_n$ | 언더플로 방지 |
+| $p_1 p_2 \cdots p_n$ | $\log p_1 + \cdots + \log p_n$ | underflow 방지 |
 | $\sum_i p_i$ | $\text{logsumexp}(\log p_i)$ | 안정적 합 |
 | $p / q$ | $\log p - \log q$ | — |
 
@@ -501,11 +515,11 @@ $\sqrt{d_k}$ 가 막는 것은 **그래디언트 소실**이다.
 import numpy as np
 from scipy.special import logsumexp
 
-# 토큰 1000개의 로그확률을 곱한다 (시퀀스 우도)
+# 토큰 1000개의 로그확률을 곱한다 (시퀀스 likelihood)
 rng = np.random.default_rng(0)
 probs = rng.uniform(0.001, 0.05, 1000)
 
-print(f"확률 공간에서 곱 : {np.prod(probs):.3e}   ← 언더플로")
+print(f"확률 공간에서 곱 : {np.prod(probs):.3e}   ← underflow")
 print(f"로그 공간에서 합 : {np.sum(np.log(probs)):.3f}")
 print()
 print()
@@ -520,10 +534,11 @@ print(f"  logsumexp            : {logsumexp(log_p_tiny):.6f}   ← 정상")
 
 ---
 
-## 벡터화: 루프 대신 배열
+## vectorization: 루프 대신 배열
 
-파이썬 루프는 느리다. 인터프리터 오버헤드가 연산 자체보다 크기 때문이다.
-NumPy는 같은 연산을 컴파일된 C 루프로 수행한다.
+파이썬 루프는 느리다. 숫자 하나를 더하는 일보다 "다음 원소를 꺼내고, 타입을 확인하고, 함수를 호출하는" 인터프리터의 잡무가 훨씬 크기 때문이다.
+NumPy는 같은 연산을 컴파일된 C 루프로 수행한다 — 배열 전체에 한 번의 명령으로 연산을 적용하는 것을 **vectorization**(vectorization)이라 한다.
+학생 한 명씩 이름을 부르며 유인물을 나눠 주는 것과, 한 줄로 세워 놓고 한 번에 돌리는 것의 차이다.
 
 ```{python}
 #| label: fig-vectorization
@@ -558,7 +573,7 @@ fig = go.Figure()
 fig.add_trace(go.Scatter(x=sizes, y=t_loop * 1e3, mode="lines+markers",
                          name="파이썬 루프", line=dict(color=viz.WARM, width=2.5)))
 fig.add_trace(go.Scatter(x=sizes, y=t_vec * 1e3, mode="lines+markers",
-                         name="NumPy 벡터화", line=dict(color=viz.ACCENT, width=2.5)))
+                         name="NumPy vectorization", line=dict(color=viz.ACCENT, width=2.5)))
 fig.update_layout(xaxis_title="배열 크기", xaxis_type="log",
                   yaxis_title="실행 시간 (ms)", yaxis_type="log",
                   legend=dict(x=0.02, y=0.98))
@@ -571,9 +586,10 @@ fig.show()
 두 선의 기울기는 같습니다(둘 다 $O(n)$). 차이는 **상수 배율**이며, 그 배율이 수십~수백 배입니다. 알고리즘 복잡도가 같아도 구현이 성능을 결정하는 전형적 사례입니다.
 :::
 
-### 브로드캐스팅과 메모리
+### broadcasting과 메모리
 
-벡터화가 항상 이기는 것은 아니다. **중간 배열이 메모리에 만들어진다**는 대가가 있다.
+vectorization이 항상 이기는 것은 아니다. **중간 배열이 메모리에 만들어진다**는 대가가 있다.
+아래 예에서 모든 점 쌍의 거리를 구하려고 "쌍마다 차이 벡터"를 전부 늘어놓으면 원본보다 수천 배 큰 배열이 생긴다.
 
 ```{python}
 #| label: broadcasting-memory
@@ -584,7 +600,7 @@ import numpy as np
 n, d = 5000, 128
 A = np.random.rand(n, d).astype(np.float32)
 
-# 모든 쌍의 거리 — 브로드캐스팅으로 쓰면 (n, n, d) 중간 배열이 생긴다
+# 모든 쌍의 거리 — broadcasting 으로 쓰면 (n, n, d) 중간 배열이 생긴다
 mid_gb = n * n * d * 4 / 1024**3
 print(f"A[:, None, :] - A[None, :, :] 의 중간 배열: "
       f"({n}, {n}, {d}) = {mid_gb:.1f} GB   ← 메모리 폭발")
@@ -603,7 +619,8 @@ print("중간 결과를 만들지 않도록 계산 순서를 바꾼다.")
 
 ## 연산량 세기: 모델 비용 추정
 
-논문의 FLOPs 숫자를 직접 계산할 수 있어야 한다.
+논문의 FLOPs(floating point operations — 곱셈·덧셈 한 번이 1 FLOP) 숫자를 직접 계산할 수 있어야 한다.
+학습 비용의 어림 공식은 $6ND$ — 파라미터 수 $N$ 과 학습 토큰 수 $D$ 의 곱의 6배 — 다.
 
 ```{python}
 #| label: flops-counting
@@ -632,18 +649,20 @@ print("(GPU 1장 기준. 실제로는 수천 장을 병렬로 쓴다 — 11.2 �
 
 파라미터 하나당 토큰 하나를 처리하는 데:
 
-- 순전파: 곱셈 1 + 덧셈 1 = **2 FLOPs**
-- 역전파: 입력에 대한 그래디언트 2 + 가중치에 대한 그래디언트 2 = **4 FLOPs**
+- forward pass: 곱셈 1 + 덧셈 1 = **2 FLOPs**
+- backward pass: 입력에 대한 gradient 2 + 가중치에 대한 gradient 2 = **4 FLOPs**
 
-합쳐서 6. 어텐션의 $n^2$ 항은 $n \ll d$ 인 구간에서 무시할 만해
+합쳐서 6. attention의 $n^2$ 항은 $n \ll d$ 인 구간에서 무시할 만해
 이 근사가 대체로 통한다([5.0에서 본 교차점](../05_transformer/00_attention_mechanism.qmd) $n=4d$ 참고).
 :::
 
 ---
 
-## 재현성
+## reproducibility(재현성)
 
 같은 코드가 같은 결과를 내게 하는 것은 생각보다 어렵다.
+가장 근본적인 이유는 floating point 덧셈이 더하는 순서에 따라 결과가 달라진다는 것이다 —
+같은 물건들을 사도 계산대에서 찍는 순서에 따라 반올림 때문에 영수증 합계가 1원 다를 수 있는 것과 같다.
 
 ```{python}
 #| label: reproducibility
@@ -651,7 +670,7 @@ print("(GPU 1장 기준. 실제로는 수천 장을 병렬로 쓴다 — 11.2 �
 
 import numpy as np
 
-# 부동소수점 덧셈은 결합법칙이 성립하지 않는다
+# floating point 덧셈은 결합법칙이 성립하지 않는다
 a, b, c = np.float32(1e8), np.float32(-1e8), np.float32(1.0)
 print(f"(a + b) + c = {(a + b) + c}")
 print(f"a + (b + c) = {a + (b + c)}   ← 다르다")
@@ -668,34 +687,35 @@ print(f"같은 시드, 독립 생성기: {np.allclose(rng1.normal(size=5), rng2.
 
 | 무작위성의 출처 | 고정 방법 |
 |-----------------|-----------|
-| 데이터 순서·증강 | 데이터로더 시드, 워커별 시드 |
+| 데이터 순서·augmentation | DataLoader 시드, worker별 시드 |
 | 가중치 초기화 | 전역 시드 |
-| 드롭아웃 | 전역 시드 |
-| **비결정적 GPU 커널** | 결정론적 모드 (느려짐) |
-| **부동소수점 누적 순서** | 완전 고정 불가능한 경우가 있음 |
+| dropout | 전역 시드 |
+| **non-deterministic GPU kernel**(실행할 때마다 순서가 달라질 수 있는 GPU 연산) | deterministic 모드 (느려짐) |
+| **floating point 누적 순서** | 완전 고정 불가능한 경우가 있음 |
 
 ::: {.callout-warning}
-비트 단위 재현성을 추구하면 성능을 크게 잃는다.
-실무에서는 **통계적 재현성**(여러 시드의 분포가 일치)으로 충분한 경우가 많다.
-[11.0 재현성](../11_systems/00_reproducibility.qmd)에서 자세히 다룬다.
+비트 단위 reproducibility를 추구하면 성능을 크게 잃는다.
+실무에서는 **통계적 reproducibility**(여러 시드로 돌린 결과의 분포가 일치)로 충분한 경우가 많다.
+[11.0 reproducibility](../11_systems/00_reproducibility.qmd)에서 자세히 다룬다.
 :::
 
 ---
 
-## 혼합정밀도 학습
+## mixed precision 학습
 
-fp16으로 계산하고 fp32로 누적하는 방식이 표준이다.
+**mixed precision**(mixed precision)은 fp16으로 계산하고 fp32로 누적하는 방식이며, 현재의 표준이다.
+빠르고 메모리를 덜 쓰는 낮은 정밀도로 대부분의 계산을 하되, 오차가 쌓이는 곳만 높은 정밀도로 지키는 것이다.
 
 ```
-1. 가중치 마스터 사본은 fp32 로 유지
-2. 순전파·역전파는 fp16/bf16 으로 (빠름, 메모리 절약)
-3. 그래디언트를 fp32 로 변환해 옵티마이저 갱신
-4. fp16 이면 손실 스케일링 필요 (bf16 은 불필요)
+1. 가중치 master copy 는 fp32 로 유지
+2. forward·backward pass 는 fp16/bf16 으로 (빠름, 메모리 절약)
+3. gradient 를 fp32 로 변환해 optimizer 갱신
+4. fp16 이면 loss scaling 필요 (bf16 은 불필요)
 ```
 
-**손실 스케일링**: fp16의 좁은 범위 때문에 작은 그래디언트가 0으로 언더플로한다.
-손실에 큰 상수(예: $2^{15}$)를 곱해 그래디언트를 범위 안으로 끌어올리고,
-옵티마이저 갱신 직전에 다시 나눈다.
+**loss scaling**(손실 스케일링): fp16의 좁은 범위 때문에 작은 gradient가 0으로 underflow한다.
+손실에 큰 상수(예: $2^{15}$)를 곱해 gradient를 범위 안으로 끌어올리고,
+optimizer 갱신 직전에 다시 나눈다. 센트 단위 금액을 정수로 계산하려고 100배 해 두었다가 마지막에 100으로 나누는 것과 같다.
 
 ```{python}
 #| label: loss-scaling
@@ -703,24 +723,24 @@ fp16으로 계산하고 fp32로 누적하는 방식이 표준이다.
 
 import numpy as np
 
-S = np.float32(2**15)          # 손실 스케일 인자
+S = np.float32(2**15)          # loss scale 인자
 grads = np.array([1e-4, 1e-6, 1e-8, 1e-9, 1e-10], dtype=np.float32)
 
-print(f"{'fp32 그래디언트':>16} {'fp16 직접':>13} {'스케일 후 fp16':>16} "
+print(f"{'fp32 gradient':>14} {'fp16 직접':>13} {'scale 후 fp16':>15} "
       f"{'fp32 로 복원':>15}")
 print("-" * 68)
 for g in grads:
     direct = np.float16(g)                       # 그냥 fp16 으로 저장
     in_fp16 = np.float16(g * S)                  # 역전파는 스케일된 값으로 진행
-    restored = np.float32(in_fp16) / S           # 옵티마이저 직전 fp32 에서 되돌림
+    restored = np.float32(in_fp16) / S           # optimizer 직전 fp32 에서 되돌림
     flag = "  ← 직접 저장은 소실" if direct == 0 and restored != 0 else ""
     print(f"{g:>16.1e} {float(direct):>13.2e} {float(in_fp16):>16.2e} "
           f"{float(restored):>15.2e}{flag}")
 print()
 print("핵심: 되돌리는 나눗셈을 fp32 에서 해야 한다.")
-print("      fp16 안에서 나누면 다시 언더플로해 아무 이득이 없다.")
+print("      fp16 안에서 나누면 다시 underflow 해 아무 이득이 없다.")
 print()
-print("bf16 은 범위가 fp32 와 같아 손실 스케일링이 필요 없다 —")
+print("bf16 은 범위가 fp32 와 같아 loss scaling 이 필요 없다 —")
 print("이것이 최근 학습이 bf16 으로 수렴한 이유다.")
 ```
 
@@ -729,13 +749,13 @@ print("이것이 최근 학습이 bf16 으로 수렴한 이유다.")
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 소거를 직접 일으킨다**
+**① cancellation을 직접 일으킨다**
 `float32` 로 $\sqrt{x+1}-\sqrt{x}$ 를 $x=10^6$ 에서 계산하고,
 유리화한 형태 $1/(\sqrt{x+1}+\sqrt{x})$ 와 비교하라.
 유효숫자가 몇 자리 차이 나는가. 증폭 배율 공식이 예측한 값과 맞는가.
 
 **② log-sum-exp 없이 무너뜨린다**
-로짓에 1000을 더한 뒤 naive softmax를 계산하면 무엇이 나오는가.
+logit에 1000을 더한 뒤 naive softmax를 계산하면 무엇이 나오는가.
 최댓값을 빼면? 그리고 **1000을 빼면** 어떻게 되는지도 확인하라.
 
 **③ 합산 순서를 바꿔 본다**
@@ -747,17 +767,17 @@ print("이것이 최근 학습이 bf16 으로 수렴한 이유다.")
 
 | 개념 | 핵심 | 어디서 만나나 |
 |------|------|---------------|
-| 지수 vs 가수 | 범위 vs 정밀도 | bf16이 fp16을 대체한 이유 |
-| 격자 간격 | 값이 클수록 벌어짐 | fp16 누적합 금지 |
-| 치명적 소거 | 비슷한 수의 뺄셈 | 분산 계산, 수치 미분 |
-| **log-sum-exp** | 최댓값을 빼고 지수화 | softmax, 로그우도 |
-| 안정 softmax vs √d_k | **다른 문제** | 전자는 NaN, 후자는 그래디언트 소실 |
-| 로그 공간 | 곱을 합으로 | 시퀀스 우도 |
-| 벡터화 | 복잡도 같아도 상수가 수십~수백 배 | 모든 수치 코드 |
-| 중간 배열 | 브로드캐스팅의 메모리 대가 | FlashAttention의 동기 |
-| 6ND | 순전파 2 + 역전파 4 | 학습 비용 추정 |
-| 부동소수점 결합법칙 | **성립하지 않음** | GPU 재현성 한계 |
-| 손실 스케일링 | fp16 언더플로 방지 | 혼합정밀도 학습 |
+| exponent vs mantissa | 범위 vs 정밀도 — 과학적 표기법의 "10의 몇 승"과 "유효숫자" | bf16이 fp16을 대체한 이유 |
+| 격자 간격 | 값이 클수록 벌어짐 — 억 단위 장부에서 1원이 사라진다 | fp16 누적합 금지 |
+| catastrophic cancellation | 비슷한 수의 뺄셈 — 빌딩 두 채의 높이 차로 층고 구하기 | 분산 계산, 수치 미분 |
+| **log-sum-exp** | 최댓값을 빼고 지수화 — 기준 키를 빼고 비교 | softmax, log-likelihood |
+| 안정 softmax vs √d_k | **다른 문제** | 전자는 NaN, 후자는 vanishing gradient |
+| 로그 공간 | 곱을 합으로 — 계산자의 원리 | 시퀀스 likelihood |
+| vectorization | 복잡도 같아도 상수가 수십~수백 배 | 모든 수치 코드 |
+| 중간 배열 | broadcasting의 메모리 대가 | FlashAttention의 동기 |
+| 6ND | forward 2 + backward 4 | 학습 비용 추정 |
+| floating point 결합법칙 | **성립하지 않음** — 계산대 순서에 따라 다른 영수증 | GPU reproducibility 한계 |
+| loss scaling | fp16 underflow 방지 — 센트를 100배 해서 정수로 계산 | mixed precision 학습 |
 
 ---
 
