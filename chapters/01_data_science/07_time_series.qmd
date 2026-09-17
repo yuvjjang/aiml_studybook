@@ -1,28 +1,34 @@
 ---
 title: "1.7 시계열 분석"
-subtitle: "정상성·ARIMA·예측 검증 — 시간이 붙은 데이터의 규칙"
+subtitle: "stationarity·ARIMA·예측 검증 — 시간이 붙은 데이터의 규칙"
 jupyter: ai-ml-study
 ---
 
-시간 데이터는 **i.i.d. 가정을 깬다.**
+시간 데이터는 **i.i.d. 가정**(independent and identically distributed — 관측들이 서로 독립이고 같은 분포에서 나왔다는 가정)**을 깬다.**
+오늘 기온은 어제 기온과 닮았고, 이번 달 매출은 지난달 매출과 닮았다 — 이웃한 관측이 서로 독립이 아니다.
 
 그리고 그 결과는 두 가지 방향으로 나타난다.
 
 1. **없는 관계가 보인다** — 독립인 두 시계열의 상관이 83% 확률로 "유의"하다
-2. **없는 성능이 보인다** — 무작위 교차검증이 오차를 최대 71% 과소평가한다
+2. **없는 성능이 보인다** — 무작위 cross-validation이 오차를 최대 71% 과소평가한다
 
 둘 다 이 장에서 직접 잰다.
 
-[1.3](03_preprocessing.qmd)의 누수 규칙과 [1.5](05_experiment_design.qmd)의
+[1.3](03_preprocessing.qmd)의 leakage 규칙과 [1.5](05_experiment_design.qmd)의
 "기각 못 함 ≠ 참"이 시간축에서 어떻게 다시 나타나는지가 이 장의 줄거리다.
 
 ---
 
-## G1.7.1 — 가짜 회귀: 추세가 만드는 상관
+## G1.7.1 — spurious regression: 추세가 만드는 상관
+
+**random walk**(random walk — 매 시점 무작위로 한 걸음씩 더해 가는 계열)는 취객의 걸음이다.
+방향 없이 비틀거리지만, 한참 뒤에 보면 출발점에서 꽤 멀어져 있고 얼핏 "추세"처럼 보인다.
+서로 모르는 취객 두 명의 궤적을 겹쳐 놓으면 우연히 같은 방향으로 가는 구간이 흔하다 —
+이것이 **spurious regression**(spurious regression)이다.
 
 ```{python}
 #| label: fig-spurious
-#| fig-cap: "독립인 두 무작위 걷기가 강한 상관을 보입니다"
+#| fig-cap: "독립인 두 random walk가 강한 상관을 보입니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -51,7 +57,7 @@ eb = np.cumsum(rng.normal(0, 1, T_S))
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
                     subplot_titles=(
-                        f"독립인 두 무작위 걷기 (r = {np.corrcoef(ea, eb)[0,1]:+.3f})",
+                        f"독립인 두 random walk (r = {np.corrcoef(ea, eb)[0,1]:+.3f})",
                         "상관계수 분포 (1,000회)"))
 fig.add_trace(go.Scatter(y=ea, mode="lines", name="계열 A",
                          line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
@@ -76,7 +82,7 @@ fig.show()
 
 import numpy as np
 
-print(f"독립인 무작위 걷기 쌍 {N_SIM:,}개 (길이 {T_S})")
+print(f"독립인 random walk 쌍 {N_SIM:,}개 (길이 {T_S})")
 print()
 print(f"{'':<14} {'|r| 평균':>10} {'|r| 최대':>10} {'p<0.05 비율':>13}")
 print("-" * 50)
@@ -87,35 +93,36 @@ print(f"{'차분 상관':<14} {np.mean(np.abs(df_r)):>10.4f} "
 fp_lv, fp_df = sig_lv/N_SIM, sig_df/N_SIM
 ```
 
-**두 계열은 완전히 독립인데 수준 상관이 `{python} f"{fp_lv:.0%}"` 확률로 '유의'하다.**
-명목 유의수준은 5% 인데 실제 거짓 양성률이 `{python} f"{fp_lv/0.05:.0f}"`배다.
-차분하면 `{python} f"{fp_df:.1%}"` 로 돌아온다 — 설계대로다.
+**두 계열은 완전히 독립인데 수준(level — 값 자체) 상관이 `{python} f"{fp_lv:.0%}"` 확률로 '유의'하다.**
+명목 significance level은 5% 인데 실제 false positive 비율이 `{python} f"{fp_lv/0.05:.0f}"`배다.
+차분(differencing — 직전 값과의 차이를 취하기)하면 `{python} f"{fp_df:.1%}"` 로 돌아온다 — 설계대로다.
+취객의 위치 대신 "매 걸음의 방향"을 비교하면 두 사람이 무관하다는 것이 드러나는 셈이다.
 
 '나이지리아 인구와 미국 원유 수입'처럼 둘 다 시간에 따라 증가하기만 하는 계열에서
 강한 상관이 나오는 유명한 가짜 상관들의 정체가 이것이다.
 (자주 함께 거론되는 '아이스크림 판매량과 익사 사고'는 성격이 다르다 — 그쪽은 여름이라는
-**공통 원인**이 만든 교란이고, [1.6](06_causal_inference.qmd)의 주제다.)
+**공통 원인**이 만든 confounding이고, [1.6](06_causal_inference.qmd)의 주제다.)
 
 | 대응 | 내용 |
 |---|---|
-| 차분 | 수준이 아니라 변화량을 본다 — 위 실험 |
-| 공적분 검정 | 두 계열이 **함께** 움직이는 균형 관계인지 확인 |
+| differencing(차분) | 수준이 아니라 변화량을 본다 — 위 실험 |
+| cointegration(cointegration) 검정 | 두 계열이 **함께** 움직이는 균형 관계인지 확인 |
 | 추세 항 포함 | 회귀에 $t$ 를 넣어 공통 추세를 흡수 |
-| Newey-West 표준오차 | 자기상관을 반영해 표준오차를 보정 |
-| 그레인저 인과 | 시차를 넣어 예측력 개선 여부를 검정 (인과는 아님) |
+| Newey-West standard error | autocorrelation을 반영해 standard error를 보정 |
+| Granger causality | lag를 넣어 예측력 개선 여부를 검정 (인과는 아님) |
 
 ### 왜 이런 일이 생기는가
 
-두 가지가 겹친다. 하나는 정상 계열에서도 생기는 일반적인 문제다.
-회귀의 표준오차 공식은 **관측치의 독립성**을 가정하는데, 자기상관이 있으면
-유효 표본 크기가 실제보다 훨씬 작다. 공식은 $n$ 을 그대로 쓰므로 표준오차를 과소평가하고
+두 가지가 겹친다. 하나는 stationary(정상 — 아래 절에서 정의) 계열에서도 생기는 일반적인 문제다.
+회귀의 standard error 공식은 **관측치의 독립성**을 가정하는데, autocorrelation(autocorrelation — 한 계열의 이웃한 값끼리의 상관)이 있으면
+effective sample size가 실제보다 훨씬 작다. 공식은 $n$ 을 그대로 쓰므로 standard error를 과소평가하고
 $p$ 값이 작아진다. 이것만이라면 Newey-West 같은 보정으로 해결된다.
 
-그런데 확률보행에서는 더 근본적인 일이 벌어진다. **비정상성의 필연적 결과**로,
-두 독립 확률보행 $X_t, Y_t$ 를 회귀하면 표본 상관계수 자체가 0으로 수렴하지 **않는다.**
+그런데 random walk에서는 더 근본적인 일이 벌어진다. **non-stationarity(비정상성)의 필연적 결과**로,
+두 독립 random walk $X_t, Y_t$ 를 회귀하면 표본 상관계수 자체가 0으로 수렴하지 **않는다.**
 
-정상 계열이라면 큰 수의 법칙이 작동해 $\hat\rho \to 0$ 이다.
-그런데 확률보행은 분산이 $t\sigma^2$ 로 계속 커지므로 그 법칙이 적용되지 않는다.
+stationary 계열이라면 law of large numbers가 작동해 $\hat\rho \to 0$ 이다.
+그런데 random walk는 분산이 $t\sigma^2$ 로 계속 커지므로 그 법칙이 적용되지 않는다.
 두 계열 모두 각자 긴 추세를 그리며 떠돌고, 표본 상관은 **0 근처가 아니라
 $[-1,1]$ 전체에 퍼진 분포**로 수렴한다. $T$ 를 늘려도 좁아지지 않는다.
 
@@ -124,7 +131,7 @@ $[-1,1]$ 전체에 퍼진 분포**로 수렴한다. $T$ 를 늘려도 좁아지�
 $$|t| \;\sim\; O(\sqrt{T})$$
 
 **데이터를 늘릴수록 유의해진다.** 표본을 늘리면 해결되는 문제가 아니라
-표본을 늘리면 악화되는 문제다(Granger-Newbold).
+표본을 늘리면 악화되는 문제다(Granger-Newbold). 취객 둘을 더 오래 지켜볼수록 "둘이 같이 간다"고 더 확신하게 되는 착각이다.
 
 ```{python}
 #| label: spurious-scaling
@@ -137,7 +144,7 @@ reps = 4000
 
 print(f"{'길이 T':>8}{'|상관|>0.5 비율':>16}{'p<0.05 비율':>14}{'평균 |t|':>11}")
 for T in [50, 200, 800, 3200]:
-    x = rng.normal(0, 1, (reps, T)).cumsum(1)      # 독립 확률보행 두 개
+    x = rng.normal(0, 1, (reps, T)).cumsum(1)      # 독립 random walk 두 개
     y = rng.normal(0, 1, (reps, T)).cumsum(1)
     xc = x - x.mean(1, keepdims=True)
     yc = y - y.mean(1, keepdims=True)
@@ -146,8 +153,8 @@ for T in [50, 200, 800, 3200]:
     print(f"{T:>8}{(np.abs(r) > 0.5).mean():>16.1%}"
           f"{(t > 1.96).mean():>14.1%}{t.mean():>11.1f}")
 
-# 차분하면 정상이 되어 정상적으로 동작한다
-print("\n차분 후 (Δx, Δy 는 백색잡음)")
+# 차분하면 stationary 가 되어 정상적으로 동작한다
+print("\n차분 후 (Δx, Δy 는 white noise)")
 T = 800
 x = rng.normal(0, 1, (reps, T)).cumsum(1)
 y = rng.normal(0, 1, (reps, T)).cumsum(1)
@@ -161,16 +168,17 @@ print(f"  T={T}  |상관|>0.5 비율 {(np.abs(r) > 0.5).mean():.1%}  "
 ```
 
 두 계열은 완전히 독립인데도 $T$ 가 커질수록 '유의'해진다.
-정상 계열이라면 $p<0.05$ 비율이 5% 로 유지되어야 하고, 차분하면 실제로 그렇게 된다.
+stationary 계열이라면 $p<0.05$ 비율이 5% 로 유지되어야 하고, 차분하면 실제로 그렇게 된다.
 
 ::: {.key-concept}
 그래서 시계열 회귀의 순서가 정해져 있다.
 
-1. **각 계열이 정상인지 먼저 확인한다** (ADF/KPSS).
-2. 비정상이면 **차분하거나 추세를 제거**한 뒤 회귀한다.
-3. 예외 — 두 계열이 **공적분(cointegration)** 관계이면 수준에서의 회귀가 의미를 가진다.
-   각자는 확률보행인데 **선형결합이 정상**인 경우이고, 이때는 차분이 오히려
-   장기 균형 정보를 버린다(오차수정모형을 쓴다).
+1. **각 계열이 stationary인지 먼저 확인한다** (ADF/KPSS).
+2. non-stationary이면 **차분하거나 추세를 제거**한 뒤 회귀한다.
+3. 예외 — 두 계열이 **cointegration**(cointegration) 관계이면 수준에서의 회귀가 의미를 가진다.
+   각자는 random walk인데 **선형결합이 stationary**인 경우 — 취객과 그 취객이 끈으로 묶어 끌고 가는 개처럼,
+   각자는 비틀거려도 둘 사이의 거리는 일정 범위를 벗어나지 않는다 — 이고, 이때는 차분이 오히려
+   장기 균형 정보를 버린다(error correction model을 쓴다).
 
 머신러닝 쪽에서도 같은 함정이 반복된다. 추세가 있는 특성과 추세가 있는 타깃을
 그대로 모델에 넣으면 **"시간"을 학습한 것을 성능으로 착각**하게 된다.
@@ -179,49 +187,51 @@ print(f"  T={T}  |상관|>0.5 비율 {(np.abs(r) > 0.5).mean():.1%}  "
 
 ---
 
-## 정상성: 왜 필요한가
+## stationarity: 왜 필요한가
 
-**정상(stationary)** 시계열은 평균·분산·자기공분산이 시간에 따라 변하지 않는다.
+**stationary**(정상) 시계열은 평균·분산·autocovariance(자기공분산 — 시차를 둔 두 값의 covariance)가 시간에 따라 변하지 않는다.
+강의 물은 계속 흘러도 강의 성질(수온, 유속의 흔들림)은 어제나 오늘이나 같다는 뜻이다.
 대부분의 시계열 방법이 이 가정 위에 서 있다.
 
 ### 정의를 정확히
 
-실무에서 쓰는 것은 **약정상성(weak stationarity)** 이다. 세 조건뿐이다.
+실무에서 쓰는 것은 **weak stationarity**(약정상성)다. 세 조건뿐이다.
 
 $$\mathbb{E}[X_t] = \mu \ \ (\text{$t$ 와 무관}), \qquad
 \operatorname{Var}(X_t) = \sigma^2 < \infty, \qquad
 \operatorname{Cov}(X_t, X_{t+h}) = \gamma(h)$$
 
-세 번째가 핵심이다. 공분산이 **두 시점의 간격 $h$ 에만** 의존하고
-절대 위치 $t$ 에는 의존하지 않는다. 이것을 정규화한 것이 자기상관함수다.
+세 번째가 핵심이다. covariance가 **두 시점의 간격 $h$ 에만** 의존하고
+절대 위치 $t$ 에는 의존하지 않는다. 이것을 분산으로 나눠 $[-1,1]$ 로 맞춘 것이 **ACF**(autocorrelation function, autocorrelation함수)다.
 
 $$\rho(h) = \frac{\gamma(h)}{\gamma(0)}$$
 
-(모든 유한 차원 분포가 시간 이동에 불변인 것은 **강정상성**이고 훨씬 강한 조건이다.
-가우스 과정에서는 둘이 일치한다.)
+(모든 유한 차원 분포가 시간 이동에 불변인 것은 **strict stationarity**(강정상성)이고 훨씬 강한 조건이다.
+Gaussian process에서는 둘이 일치한다.)
 
 ### 왜 필요한가
 
 **표본 하나로 모집단을 추정해야 하기 때문이다.**
 시계열에서 우리가 가진 것은 각 시점마다 **관측 하나**뿐이다.
 $\mathbb{E}[X_{100}]$ 을 추정하려면 원래는 시점 100을 여러 번 반복 관측해야 하는데
-그럴 수 없다. 대신 **시간축을 따라 평균 내는 것**으로 대체한다.
+그럴 수 없다 — 2024년 3월을 다시 살 수는 없다. 대신 **시간축을 따라 평균 내는 것**으로 대체한다.
 
 $$\hat{\mu} = \frac{1}{T}\sum_{t=1}^{T} X_t \;\xrightarrow{\ ?\ }\; \mu$$
 
-이 대체가 정당하려면 시점마다 평균이 같아야 한다 — 그것이 정상성이다.
+이 대체가 정당하려면 시점마다 평균이 같아야 한다 — 그것이 stationarity다.
 평균이 시간에 따라 변하면 $\hat\mu$ 는 **아무것도 추정하지 않는다.**
 ACF, 분산, 모델 계수 전부 같은 처지다.
 
-정상이 아닌 대표적인 예가 **확률보행**이다.
+stationary가 아닌 대표적인 예가 **random walk**다.
 
 $$X_t = X_{t-1} + \epsilon_t = \sum_{s=1}^{t}\epsilon_s
 \quad\Longrightarrow\quad
 \operatorname{Var}(X_t) = t\,\sigma^2$$
 
-분산이 $t$ 에 비례해 **무한히 커진다.** 평균은 0으로 일정하지만 분산이 변하므로 비정상이다.
-그런데 차분하면 $\Delta X_t = X_t - X_{t-1} = \epsilon_t$ 로 백색잡음이 되어 정상이 된다.
-**차분이 표준 처방인 이유**가 이것이고, ARIMA의 "I"가 그 횟수다.
+분산이 $t$ 에 비례해 **무한히 커진다.** 취객이 출발점에서 얼마나 멀어졌는지는 시간이 갈수록 예측하기 어려워진다.
+평균은 0으로 일정하지만 분산이 변하므로 non-stationary다.
+그런데 차분하면 $\Delta X_t = X_t - X_{t-1} = \epsilon_t$ 로 white noise(white noise — 서로 독립이고 평균 0인 순수 잡음)가 되어 stationary가 된다.
+**차분이 표준 처방인 이유**가 이것이고, ARIMA의 "I"(integrated)가 그 횟수다.
 
 ```{python}
 #| label: rw-variance
@@ -233,7 +243,7 @@ rng = np.random.default_rng(0)
 T, reps = 400, 20_000
 
 eps = rng.normal(0, 1, size=(reps, T))
-rw = eps.cumsum(axis=1)                    # 확률보행
+rw = eps.cumsum(axis=1)                    # random walk
 
 print(f"{'시점 t':>8}{'Var(X_t) 실측':>16}{'이론값 t·σ²':>14}")
 for t in [10, 50, 100, 200, 400]:
@@ -245,22 +255,23 @@ print(f"\n차분 후 분산: t=10 에서 {d[:, 9].var():.3f}, "
 ```
 
 ::: {.callout-note}
-## 추세정상 vs 차분정상
+## trend-stationary vs difference-stationary
 
-비정상성에는 두 종류가 있고 처방이 다르다.
+non-stationarity에는 두 종류가 있고 처방이 다르다.
+에스컬레이터 위에서 제자리걸음을 하는 사람(추세는 있지만 그 주위에서 흔들림)과, 매 걸음이 그대로 누적되는 취객이다.
 
 | 유형 | 형태 | 처방 |
 |---|---|---|
-| **추세정상** | $X_t = a + bt + \epsilon_t$ | 추세를 **회귀로 제거** |
-| **차분정상**(단위근) | $X_t = X_{t-1} + \epsilon_t$ | **차분** |
+| **trend-stationary**(추세정상) | $X_t = a + bt + \epsilon_t$ | 추세를 **회귀로 제거** |
+| **difference-stationary**(차분정상, unit root — 단위근) | $X_t = X_{t-1} + \epsilon_t$ | **차분** |
 
 겉보기에는 둘 다 "우상향하는 시계열"이라 눈으로 구별하기 어렵다.
-그런데 잘못 처방하면 문제가 생긴다 — 단위근에 추세 회귀를 하면 잔차가 여전히 비정상이고,
-추세정상에 차분을 하면 **과차분**되어 MA 성분이 인위적으로 생긴다.
+그런데 잘못 처방하면 문제가 생긴다 — unit root에 추세 회귀를 하면 residual이 여전히 non-stationary이고,
+trend-stationary에 차분을 하면 **over-differencing**(over-differencing)되어 MA 성분이 인위적으로 생긴다.
 
-구별에는 검정을 쓴다. **ADF 검정**은 단위근이 있다는 것을 귀무가설로 두고,
-**KPSS 검정**은 정상성을 귀무가설로 둔다. 방향이 반대라 둘을 함께 보는 것이 관례다
-(ADF 기각 + KPSS 미기각 → 정상이라는 결론이 가장 든든하다).
+구별에는 검정을 쓴다. **ADF 검정**은 unit root가 있다는 것을 null hypothesis로 두고,
+**KPSS 검정**은 stationarity를 null hypothesis로 둔다. 방향이 반대라 둘을 함께 보는 것이 관례다
+(ADF 기각 + KPSS 미기각 → stationary라는 결론이 가장 든든하다).
 :::
 
 ```{python}
@@ -275,10 +286,10 @@ NS = 400
 t_ = np.arange(NS)
 
 SERIES = {
-    "백색잡음 (정상)":      rng_s.normal(0, 1, NS),
+    "white noise (정상)":   rng_s.normal(0, 1, NS),
     "AR(1) φ=0.7 (정상)":  None,
     "추세 (비정상)":        0.02*t_ + rng_s.normal(0, 1, NS),
-    "무작위 걷기 (비정상)":   np.cumsum(rng_s.normal(0, 1, NS)),
+    "random walk (비정상)": np.cumsum(rng_s.normal(0, 1, NS)),
     "분산 변화 (비정상)":     rng_s.normal(0, 1, NS)*(1 + 3*t_/NS),
 }
 ar1 = np.zeros(NS)
@@ -290,7 +301,7 @@ def half_stats(x):
     h = len(x)//2
     return x[:h].mean(), x[h:].mean(), x[:h].std(), x[h:].std()
 
-print("전반부와 후반부의 통계량 비교 — 정상이면 비슷해야 한다")
+print("전반부와 후반부의 통계량 비교 — stationary 면 비슷해야 한다")
 print(f"{'계열':<22} {'전반 평균':>10} {'후반 평균':>10} {'전반 표준편차':>13} "
       f"{'후반 표준편차':>13}  {'판정'}")
 print("-" * 88)
@@ -302,33 +313,35 @@ for k, v in SERIES.items():
     print(f"{k:<22} {m1:>10.3f} {m2:>10.3f} {s1:>13.3f} {s2:>13.3f}  {verd}")
 ```
 
-**이 간단한 검사만으로도 비정상 계열이 드러난다.**
-정식 검정은 위 노트의 ADF 와 KPSS 를 함께 쓰고, 네 가지 조합으로 읽는다.
+**이 간단한 검사만으로도 non-stationary 계열이 드러난다.**
+정식 검정은 위 노트의 ADF와 KPSS를 함께 쓰고, 네 가지 조합으로 읽는다.
 
 | ADF | KPSS | 결론 |
 |---|---|---|
-| 기각 | 기각 못함 | 정상 |
-| 기각 못함 | 기각 | 비정상 (단위근) |
-| 기각 | 기각 | 추세 정상일 수 있음 |
+| 기각 | 기각 못함 | stationary |
+| 기각 못함 | 기각 | non-stationary (unit root) |
+| 기각 | 기각 | trend-stationary일 수 있음 |
 | 기각 못함 | 기각 못함 | **정보 부족** — 표본이 짧다 |
 
 차분이 만능은 아니다.
 
-- 과차분(over-differencing)은 인위적 MA 구조를 만든다
-- 분산이 변하는 비정상은 차분으로 안 고쳐진다 → 로그 변환이나 GARCH
-- 계절성은 계절 차분(lag $=s$)이 따로 필요하다
+- over-differencing은 인위적 MA 구조를 만든다
+- 분산이 변하는 non-stationarity는 차분으로 안 고쳐진다 → 로그 변환이나 GARCH
+- seasonality(계절성 — 일정 주기로 반복되는 패턴)는 seasonal differencing(lag $=s$ 의 차분)이 따로 필요하다
 
 ---
 
 ## G1.7.2 — ACF와 PACF로 차수 읽기
 
-차수를 읽으려면 먼저 무엇의 차수인지가 정의되어야 한다. 두 기본 모형이 있다.
+차수(order — 모형이 과거를 몇 시점까지 보는가)를 읽으려면 먼저 무엇의 차수인지가 정의되어야 한다. 두 기본 모형이 있다.
 
-**AR($p$) — 자기회귀.** 과거 **값**의 선형결합으로 현재를 설명한다.
+**AR($p$) — autoregressive(자기회귀).** 과거 **값**의 선형결합으로 현재를 설명한다.
+어제의 기분이 오늘 기분에 이어지는 식이다.
 
 $$X_t = c + \phi_1 X_{t-1} + \dots + \phi_p X_{t-p} + \epsilon_t$$
 
-**MA($q$) — 이동평균.** 과거 **충격**의 선형결합으로 현재를 설명한다.
+**MA($q$) — moving average(이동평균).** 과거 **충격**의 선형결합으로 현재를 설명한다.
+어제 받은 사건(충격)의 여파가 며칠 남아 있는 식이다.
 
 $$X_t = \mu + \epsilon_t + \theta_1 \epsilon_{t-1} + \dots + \theta_q \epsilon_{t-q}$$
 
@@ -338,17 +351,17 @@ $$X_t = \mu + \epsilon_t + \theta_1 \epsilon_{t-1} + \dots + \theta_q \epsilon_{
 
 - **ACF** $\rho(h)$ — 간접 경로를 포함한 총 상관. $X_t$ 와 $X_{t-2}$ 는
   $X_{t-1}$ 을 **경유해서도** 이어져 있고, ACF는 그 경유분까지 전부 센다.
-- **PACF** $\phi_{hh}$ — 사이 시점들을 **통제한 뒤** 남는 상관.
+- **PACF**(partial autocorrelation function, 편autocorrelation함수) $\phi_{hh}$ — 사이 시점들을 **통제한 뒤** 남는 상관.
   $X_{t-1}$ 의 영향을 제거하고 $X_t$ 와 $X_{t-2}$ 사이에 직접 연결이 있는지 본다
-  ([1.6의 통제](06_causal_inference.qmd)와 같은 발상이다).
+  ([1.6의 통제](06_causal_inference.qmd)와 같은 발상이다). 친구의 친구를 통한 영향과 직접 아는 사이의 영향을 구별하는 셈이다.
 
 여기서 진단 규칙이 나온다.
 
 | 모형 | ACF | PACF |
 |---|---|---|
-| **AR($p$)** | 지수적으로 감쇠(꼬리를 끔) | **$p$ 이후 절단** |
-| **MA($q$)** | **$q$ 이후 절단** | 지수적으로 감쇠 |
-| ARMA($p,q$) | 감쇠 | 감쇠 |
+| **AR($p$)** | 지수적으로 줄어듦(꼬리를 끔) | **$p$ 이후 cutoff(뚝 끊김)** |
+| **MA($q$)** | **$q$ 이후 cutoff** | 지수적으로 줄어듦 |
+| ARMA($p,q$) | 줄어듦 | 줄어듦 |
 
 **MA($q$) 의 ACF가 $q$ 에서 끊기는 이유**는 정의에서 바로 나온다.
 $X_t$ 와 $X_{t-h}$ 는 공통된 $\epsilon$ 항을 가질 때만 상관이 있는데,
@@ -384,7 +397,7 @@ for h, (a, t) in enumerate(zip(acf(ma2, 5), th)):
     print(f"{h:>4}{a:>12.4f}{t:>12.4f}")
 ```
 
-$h=3$ 부터 0 으로 떨어진다 — 공유하는 $\epsilon$ 항이 없기 때문이다.
+$h=3$ 부터 0으로 떨어진다 — 공유하는 $\epsilon$ 항이 없기 때문이다.
 
 ```{python}
 #| label: fig-acf-pacf
@@ -446,7 +459,7 @@ for i, (k, x) in enumerate(PROC.items(), start=1):
         fig.add_hline(y=-BOUND, line=dict(color=viz.YELLOW, dash="dot"),
                       row=r_, col=i)
         fig.update_yaxes(range=[-0.5, 0.9], row=r_, col=i)
-        fig.update_xaxes(title_text="시차", row=r_, col=i)
+        fig.update_xaxes(title_text="lag", row=r_, col=i)
 viz.fig_defaults(fig, height=560,
                  title=f"n={T_A:,}, 점선 = 유의 경계 ±{BOUND:.3f}")
 fig.show()
@@ -467,8 +480,8 @@ for k, x in PROC.items():
     print(f"[{k}]")
     print(f"  ACF  " + " ".join(f"{v:>6.2f}" for v in a_[1:7]))
     print(f"  PACF " + " ".join(f"{v:>6.2f}" for v in p_[1:7]))
-    print(f"  유의한 ACF 시차 : {sig_a[:6]}{' ...' if len(sig_a) > 6 else ''}")
-    print(f"  유의한 PACF 시차: {sig_p[:6]}{' ...' if len(sig_p) > 6 else ''}")
+    print(f"  유의한 ACF lag : {sig_a[:6]}{' ...' if len(sig_a) > 6 else ''}")
+    print(f"  유의한 PACF lag: {sig_p[:6]}{' ...' if len(sig_p) > 6 else ''}")
     print()
 
 ar_p, ar_a = pacf(ar2, K_A), acf(ar2, K_A)
@@ -476,32 +489,33 @@ ma_a, ma_p = acf(ma2, K_A), pacf(ma2, K_A)
 sig_ar_acf = [l for l in range(1, K_A+1) if abs(ar_a[l]) > BOUND]
 ```
 
-위 실험에서 AR(2) 의 PACF 는 시차 1·2 가 `{python} f"{ar_p[1]:+.2f}"`, `{python} f"{ar_p[2]:+.2f}"` 로 크고
-시차 3 부터 `{python} f"{ar_p[3]:+.2f}"` 로 작다 → $p=2$.
-MA(2) 의 ACF 는 시차 1·2 가 `{python} f"{ma_a[1]:+.2f}"`, `{python} f"{ma_a[2]:+.2f}"` 로 크고
-시차 3 부터 `{python} f"{ma_a[3]:+.2f}"` 로 작다 → $q=2$. 앞의 진단 규칙 표 그대로다.
+위 실험에서 AR(2) 의 PACF는 lag 1·2가 `{python} f"{ar_p[1]:+.2f}"`, `{python} f"{ar_p[2]:+.2f}"` 로 크고
+lag 3부터 `{python} f"{ar_p[3]:+.2f}"` 로 작다 → $p=2$.
+MA(2) 의 ACF는 lag 1·2가 `{python} f"{ma_a[1]:+.2f}"`, `{python} f"{ma_a[2]:+.2f}"` 로 크고
+lag 3부터 `{python} f"{ma_a[3]:+.2f}"` 로 작다 → $q=2$. 앞의 진단 규칙 표 그대로다.
 
-**AR(2) 의 ACF 를 보면 '천천히 감쇠'가 단조 감소를 뜻하지 않음을 알 수 있다.**
-$\phi_2 = -0.3$ 이 음수라 **진동하며** 감쇠하고, 시차 2 에서 우연히 `{python} f"{ar_a[2]:+.2f}"` 로 0 근처를 지난다.
+**AR(2)의 ACF를 보면 '천천히 줄어든다'가 한 방향으로만 줄어든다는 뜻이 아님을 알 수 있다.**
+$\phi_2 = -0.3$ 이 음수라 **진동하며** 줄어들고, lag 2에서 우연히 `{python} f"{ar_a[2]:+.2f}"` 로 0 근처를 지난다.
 Yule-Walker 식의 이론값 $\rho_2 = \phi_1\rho_1 + \phi_2 = 0.6 \times$ `{python} f"{ar_a[1]:.2f}"` $- 0.3 =$
 `{python} f"{0.6*ar_a[1] - 0.3:+.3f}"` 으로 계산과 일치한다.
-그런데 유의한 ACF 시차가 `{python} f"{sig_ar_acf[:4]}"` 이다 — 시차 2 를 건너뛰고 3·4 가 다시 유의하다.
-**'절단'과 '우연히 0 을 지남'을 구별해야 한다.** 시차 하나만 보지 말고 **패턴 전체**를 봐야 한다.
+그런데 유의한 ACF lag가 `{python} f"{sig_ar_acf[:4]}"` 이다 — lag 2를 건너뛰고 3·4가 다시 유의하다.
+**'cutoff'와 '우연히 0을 지남'을 구별해야 한다.** lag 하나만 보지 말고 **패턴 전체**를 봐야 한다.
 
 **주의.** 실무 데이터에서 이 그림이 이렇게 깨끗한 경우는 드물다.
-표본이 짧으면 유의 경계가 넓어져 판단이 어렵고, ARMA 는 애초에 안 끊긴다.
-그래서 실제로는 AIC/BIC 로 여러 $(p,d,q)$ 를 비교하고,
-**잔차의 ACF 가 백색잡음처럼 보이는지**로 최종 확인한다.
+표본이 짧으면 유의 경계가 넓어져 판단이 어렵고, ARMA는 애초에 안 끊긴다.
+그래서 실제로는 AIC/BIC(information criterion, information criterion — 적합도에 파라미터 수의 벌점을 더한 점수)로 여러 $(p,d,q)$ 를 비교하고,
+**residual의 ACF가 white noise처럼 보이는지**로 최종 확인한다.
 
 ---
 
-## G1.7.3 — 검증: 무작위 교차검증은 왜 안 되는가
+## G1.7.3 — 검증: 무작위 cross-validation은 왜 안 되는가
 
-이 장에서 가장 실무적인 부분이다.
+이 장에서 가장 실무적인 부분이다. 시계열을 무작위로 섞어 fold를 나누면,
+내일 시험 문제의 답을 어제와 모레의 답에서 베끼는 셈이 된다.
 
 ```{python}
 #| label: fig-cv-leakage
-#| fig-cap: "무작위 교차검증이 오차를 얼마나 과소평가하는가"
+#| fig-cap: "무작위 cross-validation이 오차를 얼마나 과소평가하는가"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -512,15 +526,15 @@ from src import viz
 def make_series(kind, n=600, seed=2):
     r = np.random.default_rng(seed)
     t = np.arange(n)
-    if kind == "정상 AR(1) φ=0.5":
+    if kind == "stationary AR(1) φ=0.5":
         y = np.zeros(n)
         for i in range(1, n):
             y[i] = 0.5*y[i-1] + r.normal(0, 1)
-    elif kind == "강한 자기상관 φ=0.95":
+    elif kind == "강한 autocorrelation φ=0.95":
         y = np.zeros(n)
         for i in range(1, n):
             y[i] = 0.95*y[i-1] + r.normal(0, 1)
-    elif kind == "추세 + 계절성":
+    elif kind == "추세 + seasonality":
         y = 0.05*t + 3*np.sin(2*np.pi*t/24) + r.normal(0, 0.8, n)
     else:
         y = np.cumsum(r.normal(0, 1, n))
@@ -532,7 +546,7 @@ def knn_predict(Xtr, ytr, Xte, k=3):
     return ytr[idx].mean(1)
 
 def evaluate(y, mode, model, k=5):
-    """mode: random(무작위 폴드) / time(앞부분으로 학습, 뒤를 검증)"""
+    """mode: random(무작위 fold) / time(앞부분으로 학습, 뒤를 검증)"""
     lags = np.column_stack([np.roll(y, j) for j in [1, 2, 3, 4]])
     X = lags[5:]
     yy = y[5:]
@@ -558,7 +572,7 @@ def evaluate(y, mode, model, k=5):
         errs.append(np.sqrt(np.mean((yy[te]-pred)**2)))
     return float(np.mean(errs))
 
-KINDS = ["정상 AR(1) φ=0.5", "강한 자기상관 φ=0.95", "추세 + 계절성", "무작위 걷기"]
+KINDS = ["stationary AR(1) φ=0.5", "강한 autocorrelation φ=0.95", "추세 + seasonality", "random walk"]
 MODELS = ["선형", "kNN (k=3)"]
 CV_RES = {}
 for md in MODELS:
@@ -603,16 +617,16 @@ knn_max = max((CV_RES[("kNN (k=3)", k)][1]-CV_RES[("kNN (k=3)", k)][0])
               / CV_RES[("kNN (k=3)", k)][1] for k in KINDS)
 ```
 
-**모델 용량이 클수록 누수가 심하다.** 선형 모델의 최대 과소평가는 `{python} f"{lin_max:.0%}"` 인데
-kNN 은 `{python} f"{knn_max:.0%}"` 다.
-kNN 은 **시간상 이웃한 점을 그대로 찾아보기** 때문이다. 무작위 폴드에서는 $t$ 의 바로 앞뒤 시점이
-학습셋에 있고, 자기상관이 강하면 그 점들의 lag 특성이 거의 같다 — 사실상 정답 조회다.
+**모델 용량이 클수록 leakage가 심하다.** 선형 모델의 최대 과소평가는 `{python} f"{lin_max:.0%}"` 인데
+kNN은 `{python} f"{knn_max:.0%}"` 다.
+kNN은 **시간상 이웃한 점을 그대로 찾아보기** 때문이다. 무작위 fold에서는 $t$ 의 바로 앞뒤 시점이
+학습셋에 있고, autocorrelation이 강하면 그 점들의 lag 특성이 거의 같다 — 사실상 정답 조회다.
 
 **그리고 계열이 지속적일수록 심하다.** kNN 열을 위에서 아래로 읽으면 과소평가가
-정상 AR(1) → 강한 자기상관 → 무작위 걷기 순으로 커진다.
-무작위 걷기는 이웃 값이 거의 같으므로 조회가 완벽하게 통한다.
+stationary AR(1) → 강한 autocorrelation → random walk 순으로 커진다.
+random walk는 이웃 값이 거의 같으므로 조회가 완벽하게 통한다.
 
-**올바른 검증은 롤링 오리진(walk-forward)이다.**
+**올바른 검증은 rolling origin(walk-forward — 실제 운영처럼 과거로만 학습해 그 다음 구간을 맞히기를 반복)이다.**
 
 ```
 학습 [0..100]   → 검증 [101..120]
@@ -621,12 +635,12 @@ kNN 은 **시간상 이웃한 점을 그대로 찾아보기** 때문이다. 무�
 ```
 
 - 학습 구간은 항상 검증 구간보다 **과거**다
-- 고정 창(sliding)과 확장 창(expanding) 중 선택한다 — 분포 이동이 있으면 고정 창
-- 예측 지평(horizon)을 실제 운영과 맞춘다 (1스텝 예측인가, 7스텝인가)
-- 특성 생성도 폴드 안에서 한다 — [1.4](04_feature_engineering.qmd)의 `shift(1)` 규칙
+- sliding window(고정 창 — 최근 일정 기간만)와 expanding window(확장 창 — 처음부터 전부) 중 선택한다 — distribution shift가 있으면 sliding
+- forecast horizon(예측 지평 — 몇 시점 앞을 맞히는가)을 실제 운영과 맞춘다 (1스텝 예측인가, 7스텝인가)
+- 특성 생성도 fold 안에서 한다 — [1.4](04_feature_engineering.qmd)의 `shift(1)` 규칙
 
-**갭(gap)을 두기도 한다.** 검증 시작 직전 몇 시점을 학습에서 빼면,
-학습 끝과 검증 시작이 자기상관으로 이어지는 것을 막을 수 있다 (purged CV).
+**gap을 두기도 한다.** 검증 시작 직전 몇 시점을 학습에서 빼면,
+학습 끝과 검증 시작이 autocorrelation으로 이어지는 것을 막을 수 있다 (purged CV).
 
 ---
 
@@ -651,17 +665,17 @@ def build(base):
 
 SCALES = {"작은 값 (≈0.5)": 0.5, "큰 값 (≈1000)": 1000.0}
 METRICS = ["MAE", "RMSE", "MAPE(%)", "MASE"]
-FORECASTS = ["학습 평균", "나이브 (직전값)", "계절 나이브 (24 전)"]
+FORECASTS = ["학습 평균", "naive (직전값)", "계절 naive (24 전)"]
 TABLE = {}
 
 for nm, base in SCALES.items():
     y = build(base)
     tr, te = y[:SPLIT], y[SPLIT:]
-    naive_mae_tr = np.mean(np.abs(np.diff(tr)))       # MASE 분모: 학습셋 나이브
+    naive_mae_tr = np.mean(np.abs(np.diff(tr)))       # MASE 분모: 학습셋 naive
     preds = {
         "학습 평균": np.full(len(te), tr.mean()),
-        "나이브 (직전값)": y[SPLIT-1:-1],
-        "계절 나이브 (24 전)": y[SPLIT-24:NM-24],
+        "naive (직전값)": y[SPLIT-1:-1],
+        "계절 naive (24 전)": y[SPLIT-24:NM-24],
     }
     for fn, p in preds.items():
         mae = float(np.mean(np.abs(te-p)))
@@ -713,27 +727,28 @@ print()
 print("MASE 판정 (작은 값 계열)")
 for fn in FORECASTS:
     v = TABLE[(small, fn)][3]
-    verd = "나이브보다 나음" if v < 1 else "나이브보다 못함"
+    verd = "naive보다 나음" if v < 1 else "naive보다 못함"
     print(f"  {fn:<20} MASE {v:.3f} — {verd}")
 ```
 
-**MAE·RMSE 는 스케일에 비례해 2,000배 차이 난다** — 두 계열을 비교할 수 없다.
-**MAPE 와 MASE 는 거의 1.0** — 스케일에 무관하다.
+**MAE·RMSE는 스케일에 비례해 2,000배 차이 난다** — 두 계열을 비교할 수 없다.
+**MAPE와 MASE는 거의 1.0** — 스케일에 무관하다.
 
 그런데 MAPE 에는 별도의 문제가 있다.
 
-- 실제값이 0 이거나 0 에 가까우면 발산한다
+- 실제값이 0 이거나 0에 가까우면 발산한다
 - 과소예측(최대 100%)과 과대예측(무한)에 비대칭이다
 - 0 근처 값이 많은 계열(수요 예측 등)에서는 쓸 수 없다
 
-**MASE 가 나은 이유.** $\text{MASE} = \text{MAE} / (\text{학습셋 나이브 예측의 MAE})$ 이므로
+**MASE가 나은 이유.** $\text{MASE} = \text{MAE} / (\text{학습셋 naive 예측의 MAE})$ 이므로
+("어제 값을 그대로 내일 예측으로 쓴다"는 naive 예측을 1점으로 두는 상대 점수다)
 
-- 스케일에 무관하고 (위 표)
-- 0 에 강건하며 (분모가 차분의 평균 크기)
-- **해석이 명확하다** — MASE < 1 이면 나이브보다 낫다는 뜻이다. 위 판정이 그것이다
+- scale에 무관하고 (위 표)
+- 0에 robust하며 (분모가 차분의 평균 크기)
+- **해석이 명확하다** — MASE < 1 이면 naive보다 낫다는 뜻이다. 위 판정이 그것이다
 
-**기준선을 반드시 함께 보고하라.** RMSE 0.05 가 좋은 값인지 나쁜 값인지는 그 자체로 알 수 없다.
-나이브 예측·계절 나이브·직전 평균을 함께 계산하면 바로 판단이 선다.
+**baseline(기준선)을 반드시 함께 보고하라.** RMSE 0.05가 좋은 값인지 나쁜 값인지는 그 자체로 알 수 없다.
+naive 예측·seasonal naive·직전 평균을 함께 계산하면 바로 판단이 선다.
 **성능은 절대값이 아니라 기준선 대비로 읽는다** — 같은 원칙이
 [3.9 학습 실무](../03_deep_learning/09_training_practice.qmd)에서 다시 나온다.
 
@@ -743,42 +758,42 @@ for fn in FORECASTS:
 
 | 모델 | 무엇을 모델링 | 식별 단서 | 주의 |
 |---|---|---|---|
-| AR(p) | 과거 값의 선형 결합 | PACF가 p에서 절단 | 정상성 필요 |
-| MA(q) | 과거 **오차**의 선형 결합 | ACF가 q에서 절단 | 정상성 필요 |
-| ARMA(p,q) | 둘의 결합 | 둘 다 감쇠 | 정보기준으로 차수 선택 |
-| ARIMA(p,d,q) | d 번 차분 후 ARMA | 차분으로 정상화 | d는 보통 0~2 |
-| SARIMA | + 계절 차분·계절 항 | 주기 s를 명시 | 파라미터가 많아짐 |
-| SARIMAX | + 외생 변수 X | 회귀 + 시계열 오차 | X도 예측해야 함 |
-| 지수평활 / ETS | 가중 평균, 최근에 큰 가중 | 추세·계절 성분 분해 | M4 대회 상위권 |
+| AR(p) | 과거 값의 선형 결합 | PACF가 p에서 cutoff | stationarity 필요 |
+| MA(q) | 과거 **오차**의 선형 결합 | ACF가 q에서 cutoff | stationarity 필요 |
+| ARMA(p,q) | 둘의 결합 | 둘 다 서서히 줄어듦 | information criterion으로 차수 선택 |
+| ARIMA(p,d,q) | d 번 차분 후 ARMA | 차분으로 stationary화 | d는 보통 0~2 |
+| SARIMA | + seasonal differencing·계절 항 | 주기 s를 명시 | 파라미터가 많아짐 |
+| SARIMAX | + exogenous variable(외생 변수 — 바깥에서 주어지는 설명변수) X | 회귀 + 시계열 오차 | X도 예측해야 함 |
+| exponential smoothing / ETS | 가중 평균, 최근에 큰 가중 | 추세·계절 성분 분해 | M4 대회 상위권 |
 | VAR | 여러 계열이 서로를 예측 | 다변량 | 파라미터가 k² 로 증가 |
-| GARCH | **분산**을 모델링 | 변동성 군집 | 금융 수익률 |
-| 트리·부스팅 | 시차 특성 + GBM | 비선형·상호작용 | 특성 공학이 핵심 |
-| 딥러닝 (DeepAR 등) | 다수 계열을 함께 학습 | 전역 모델 | 계열이 많아야 유리 |
+| GARCH | **분산**을 모델링 | volatility clustering(변동성 군집 — 요동치는 시기가 몰려 나타남) | 금융 수익률 |
+| 트리·boosting | lag 특성 + GBM | 비선형·interaction | feature engineering이 핵심 |
+| 딥러닝 (DeepAR 등) | 다수 계열을 함께 학습 | global model | 계열이 많아야 유리 |
 
 **모델 선택보다 검증이 먼저다.**
 M4·M5 예측 대회의 반복된 교훈:
 
-- 단순한 방법(지수평활, 나이브 조합)이 자주 상위권에 든다
-- 복잡한 모델이 이기려면 계열이 **많아야** 한다 (전역 모델의 이점)
-- 앙상블이 거의 항상 단일 모델을 이긴다
-- **나이브 기준선을 못 이기는 모델이 생각보다 많다**
+- 단순한 방법(exponential smoothing, naive 조합)이 자주 상위권에 든다
+- 복잡한 모델이 이기려면 계열이 **많아야** 한다 (global model의 이점)
+- ensemble이 거의 항상 단일 모델을 이긴다
+- **naive baseline을 못 이기는 모델이 생각보다 많다**
 
 
 ::: {.key-concept}
 **시계열에서 특히 조심할 것**
 
-[1.3](03_preprocessing.qmd)의 누수 규칙이 시간축에서는 더 엄격해진다.
+[1.3](03_preprocessing.qmd)의 leakage 규칙이 시간축에서는 더 엄격해진다.
 
 | 작업 | 시계열에서의 규칙 |
 |------|-------------------|
-| 스케일링 | 학습 **기간**의 통계로만. 전체 기간 통계는 미래를 봄 |
-| 결측 대치 | 앞방향 채우기(ffill)만. 뒤방향(bfill)은 미래를 봄 |
-| 이상치 제거 | 학습 기간 기준으로만 |
-| 특성 생성 | 롤링은 `shift(1)` 후 ([1.4](04_feature_engineering.qmd)) |
-| 리샘플링 | 시간 순서를 절대 섞지 않음 |
-| 하이퍼파라미터 | 롤링 오리진 안에서 선택 |
+| scaling | 학습 **기간**의 통계로만. 전체 기간 통계는 미래를 봄 |
+| imputation | 앞방향 채우기(ffill)만. 뒤방향(bfill)은 미래를 봄 |
+| outlier 제거 | 학습 기간 기준으로만 |
+| 특성 생성 | rolling은 `shift(1)` 후 ([1.4](04_feature_engineering.qmd)) |
+| resampling | 시간 순서를 절대 섞지 않음 |
+| 하이퍼파라미터 | rolling origin 안에서 선택 |
 
-그리고 **분포 이동**이 있다. 학습 기간과 운영 기간의 분포가 다르면
+그리고 **distribution shift**(분포 이동 — 시간이 지나며 데이터의 성질이 달라지는 것)가 있다. 학습 기간과 운영 기간의 분포가 다르면
 아무리 검증을 잘해도 실제 성능은 떨어진다 —
 그래서 시계열 모델은 **재학습 주기**를 함께 설계해야 한다.
 :::
@@ -788,17 +803,17 @@ M4·M5 예측 대회의 반복된 교훈:
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 공적분을 만들어 본다**
-두 확률보행 $x_t, y_t$ 를 만들되 $y_t = 2x_t + \varepsilon_t$ 로 두면
-각자는 비정상인데 선형결합은 정상이다. `spurious-scaling` 과 달리
+**① cointegration을 만들어 본다**
+두 random walk $x_t, y_t$ 를 만들되 $y_t = 2x_t + \varepsilon_t$ 로 두면
+각자는 non-stationary인데 선형결합은 stationary다. `spurious-scaling` 과 달리
 이 경우 수준 회귀가 의미를 갖는지 확인하라.
 
 **② AR(1) 의 ACF를 예측한다**
 $X_t = 0.7X_{t-1} + \varepsilon_t$ 의 이론 ACF는 $\rho(h)=0.7^h$ 다.
 `arma-acf` 를 AR(1) 로 바꿔 실측과 비교하고, PACF는 어디서 끊기는지 보라.
 
-**③ 과차분을 일으킨다**
-추세정상 계열($x_t = 0.1t + \varepsilon_t$)에 차분을 적용하면 ACF가 어떻게 되는가.
+**③ over-differencing을 일으킨다**
+trend-stationary 계열($x_t = 0.1t + \varepsilon_t$)에 차분을 적용하면 ACF가 어떻게 되는가.
 왜 인위적인 MA 성분이 생기는지 설명하라.
 :::
 
@@ -806,17 +821,19 @@ $X_t = 0.7X_{t-1} + \varepsilon_t$ 의 이론 ACF는 $\rho(h)=0.7^h$ 다.
 
 | 개념 | 핵심 |
 |------|------|
-| 가짜 회귀 | 독립인 무작위 걷기 쌍의 `{python} f"{fp_lv:.0%}"`가 "유의" (명목 5%) |
-| 차분 | `{python} f"{fp_df:.1%}"`로 회복 — 설계대로 |
-| 정상성 | 전·후반 평균·분산 비교만으로도 비정상이 드러남 |
-| ADF / KPSS | 귀무가설이 반대 — 함께 써서 교차 확인 |
-| ACF / PACF | AR(p)는 PACF가 p에서, MA(q)는 ACF가 q에서 절단 |
-| ARMA | **둘 다 안 끊김** — 정보기준으로 |
-| 무작위 CV | 선형 모델도 최대 `{python} f"{lin_max:.0%}"` 과소평가 |
+| spurious regression | 취객 둘의 궤적. 독립인 random walk 쌍의 `{python} f"{fp_lv:.0%}"`가 "유의" (명목 5%) |
+| differencing | 위치 대신 걸음의 방향을 비교. `{python} f"{fp_df:.1%}"`로 회복 — 설계대로 |
+| stationarity | 강의 성질이 어제나 오늘이나 같다. 전·후반 평균·분산 비교만으로도 non-stationary가 드러남 |
+| trend vs unit root | 에스컬레이터 위 제자리걸음 vs 누적되는 취객 — 처방(추세 제거 vs 차분)이 다름 |
+| ADF / KPSS | null hypothesis가 반대 — 함께 써서 교차 확인 |
+| AR / MA | 어제 기분의 여운 vs 어제 사건의 여파 |
+| ACF / PACF | 총 상관 vs 직접 상관. AR(p)는 PACF가 p에서, MA(q)는 ACF가 q에서 cutoff |
+| ARMA | **둘 다 안 끊김** — information criterion으로 |
+| 무작위 CV | 어제·모레 답안 베끼기. 선형 모델도 최대 `{python} f"{lin_max:.0%}"` 과소평가 |
 | 모델 용량 | kNN에서는 **최대 `{python} f"{knn_max:.0%}"`** — 이웃 조회가 되기 때문 |
-| 롤링 오리진 | 학습은 항상 검증보다 과거. 갭을 두면 더 안전 |
-| MAPE | 스케일 무관하지만 0 근처에서 발산 |
-| MASE | 스케일 무관 + 0에 강건 + **1 미만이면 나이브보다 나음** |
+| rolling origin | 학습은 항상 검증보다 과거. gap을 두면 더 안전 |
+| MAPE | scale 무관하지만 0 근처에서 발산 |
+| MASE | naive를 1점으로 둔 상대 점수. scale 무관 + 0에 robust + **1 미만이면 naive보다 나음** |
 
 ---
 
@@ -829,7 +846,7 @@ $X_t = 0.7X_{t-1} + \varepsilon_t$ 의 이론 ACF는 $\rho(h)=0.7^h$ 다.
 
 > **정확하게 계산한 값이 틀린 답일 수 있다.**
 
-심슨의 역설도, 충돌부 편향도, 엿보기도, 무작위 교차검증도
+Simpson's paradox도, collider bias도, peeking도, 무작위 cross-validation도
 계산 자체는 정확했다. 틀린 것은 **그 계산이 답하는 질문**이었다.
 
 다음 파트는 이 데이터로 **모델을 만든다.**
@@ -839,4 +856,4 @@ $X_t = 0.7X_{t-1} + \varepsilon_t$ 의 이론 ACF는 $\rho(h)=0.7^h$ 다.
 
 **다음**: [2.0 학습 문제의 정의](../02_classical_ml/00_learning_problem.qmd)
 
-**이전**: [1.6 인과추론](06_causal_inference.qmd)
+**이전**: [1.6 causal inference](06_causal_inference.qmd)
