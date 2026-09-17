@@ -1,6 +1,6 @@
 ---
 title: "1.5 실험 설계와 A/B 테스트"
-subtitle: "무작위화·검정력·순차분석 — 의사결정을 위한 통계"
+subtitle: "randomization·power·sequential test — 의사결정을 위한 통계"
 jupyter: ai-ml-study
 ---
 
@@ -9,7 +9,7 @@ jupyter: ai-ml-study
 그리고 그 실험은 대부분 잘못 설계되고 잘못 읽힌다.
 
 이 장의 첫 실험이 가장 흔한 실수를 보여준다.
-**아무 효과도 없는 A/A 테스트**에서, 중간에 20번 들여다보는 것만으로
+**아무 효과도 없는 A/A 테스트**(두 군에 똑같은 것을 보여 주는 테스트)에서, 중간에 20번 들여다보는 것만으로
 "유의미한 차이"를 발견할 확률이 5%에서 **24%로** 오른다.
 
 데이터를 조작한 것이 아니다. 통계 방법도 정확하다.
@@ -17,30 +17,32 @@ jupyter: ai-ml-study
 
 ---
 
-## 무작위화가 인과를 주는 이유
+## randomization이 인과를 주는 이유
 
-[1.0](00_data_and_types.qmd)에서 봤듯, 관찰 데이터에서는 교란이 결론을 뒤집는다.
-무작위 배정은 그 문제를 **설계로** 없앤다. 왜 그런지는 표기 하나를 도입하면 정확히 말할 수 있다.
+[1.0](00_data_and_types.qmd)에서 봤듯, 관찰 데이터에서는 confounding(교란 — 제3의 변수가 원인과 결과 양쪽에 영향을 주는 것)이 결론을 뒤집는다.
+**randomization**(randomization — 동전 던지기로 누가 처치를 받을지 정하기)은 그 문제를 **설계로** 없앤다.
+왜 그런지는 표기 하나를 도입하면 정확히 말할 수 있다.
 
-### 잠재적 결과: 인과를 적는 언어
+### potential outcomes: 인과를 적는 언어
 
-각 사용자 $i$ 에게 **두 개의 결과**가 있다고 본다.
+각 사용자 $i$ 에게 **두 개의 결과**가 있다고 본다 — 이것이 **potential outcomes**(잠재적 결과)다.
+treatment(처치 — 신기능 노출, 약 투여처럼 효과를 알고 싶은 개입)를 받은 세계와 받지 않은 세계, 두 갈래 길이다.
 
-$$Y_i(1) = \text{처치받았을 때의 결과}, \qquad Y_i(0) = \text{받지 않았을 때의 결과}$$
+$$Y_i(1) = \text{treatment를 받았을 때의 결과}, \qquad Y_i(0) = \text{받지 않았을 때의 결과}$$
 
 그 사용자의 인과효과는 $\tau_i = Y_i(1) - Y_i(0)$ 이고, 우리가 알고 싶은 것은 평균이다.
 
-$$\text{ATE} = \mathbb{E}[Y(1) - Y(0)]$$
+$$\text{ATE} = \mathbb{E}[Y(1) - Y(0)] \qquad (\text{average treatment effect, 평균 처치효과})$$
 
 **인과추론의 근본 문제**가 여기서 바로 보인다. 한 사용자에게서 둘 중 **하나만** 관측된다.
-처치를 받았으면 $Y_i(1)$ 만 보이고 $Y_i(0)$ 은 영원히 알 수 없다.
+treatment를 받았으면 $Y_i(1)$ 만 보이고 $Y_i(0)$ 은 영원히 알 수 없다 — 가지 않은 길의 결과는 볼 수 없다.
 $\tau_i$ 는 개인 수준에서 **원리적으로 관측 불가능**하다 — 그래서 평균으로 후퇴한다.
 
 관측되는 것은 배정 $T_i$ 에 따라 골라진 하나뿐이다.
 
 $$Y_i = T_i\,Y_i(1) + (1-T_i)\,Y_i(0)$$
 
-### 무작위화가 하는 일
+### randomization이 하는 일
 
 우리가 실제로 계산하는 것은 두 군의 관측 평균 차이다.
 
@@ -48,7 +50,7 @@ $$\hat{\Delta} = \mathbb{E}[Y \mid T=1] - \mathbb{E}[Y \mid T=0]
 = \mathbb{E}[Y(1) \mid T=1] - \mathbb{E}[Y(0) \mid T=0]$$
 
 이것이 ATE와 같으려면 조건부 기댓값에서 조건을 떼어낼 수 있어야 한다.
-무작위 배정은 정확히 그것을 보장한다. 동전으로 $T$ 를 정하면
+randomization은 정확히 그것을 보장한다. 동전으로 $T$ 를 정하면
 $T$ 는 사용자의 어떤 성질과도 무관하므로
 
 $$T \perp\!\!\!\perp \big(Y(0), Y(1)\big)$$
@@ -60,21 +62,22 @@ $$\mathbb{E}[Y(1)\mid T=1] = \mathbb{E}[Y(1)], \qquad
 
 $$\Longrightarrow\quad \hat{\Delta} = \mathbb{E}[Y(1)] - \mathbb{E}[Y(0)] = \text{ATE}$$
 
-**무작위화는 통계적 기법이 아니라 이 독립성을 설계로 만들어 내는 장치다.**
-그리고 독립성은 교란변수를 측정했는지와 무관하게 성립하므로,
-**관측되지 않은 교란까지** 균형을 맞춘다. 아래 실험에서 $u$ 가 그 관측되지 않은 교란이고,
+**randomization은 통계적 기법이 아니라 이 독립성을 설계로 만들어 내는 장치다.**
+학생을 동전 던지기로 두 반에 나누면, 키·성적·성격 어느 것도 한쪽에 몰리지 않는다 — 우리가 그 특성을 재지 않았어도 그렇다.
+독립성은 confounder를 측정했는지와 무관하게 성립하므로,
+**관측되지 않은 confounder까지** 균형을 맞춘다. 아래 실험에서 $u$ 가 그 관측되지 않은 confounder이고,
 표의 마지막 두 열이 그것이 균형 잡히는 모습이다.
 
 ::: {.callout-warning}
-## 무작위화가 보장하지 않는 것
+## randomization이 보장하지 않는 것
 
 - **작은 표본에서의 균형** — 독립성은 기댓값 수준의 진술이다.
-  $n$ 이 작으면 우연히 한쪽에 특성이 쏠릴 수 있고, 그래서 층화 무작위화를 쓴다.
-- **간섭이 없음(SUTVA)** — $Y_i$ 가 **자신의** 처치에만 의존한다는 가정이 따로 필요하다.
+  $n$ 이 작으면 우연히 한쪽에 특성이 쏠릴 수 있고, 그래서 stratified randomization(stratified randomization — 성별·지역 같은 그룹 안에서 따로따로 동전을 던지기)을 쓴다.
+- **interference(간섭)가 없음(SUTVA)** — $Y_i$ 가 **자신의** treatment에만 의존한다는 가정이 따로 필요하다.
   소셜 네트워크나 마켓플레이스처럼 사용자끼리 영향을 주면 깨진다(아래 참조).
-- **배정대로 처치받음** — 배정은 무작위여도 실제 사용은 자기선택일 수 있다.
-  이때 순수 비교는 ITT(배정 의도 기준)를 추정하고, 실제 사용 효과를 원하면
-  도구변수 같은 추가 장치가 필요하다([1.6](06_causal_inference.qmd)).
+- **배정대로 treatment를 받음** — 배정은 무작위여도 실제 사용은 self-selection(자기선택 — 쓸지 말지를 본인이 정함)일 수 있다.
+  이때 순수 비교는 ITT(intention-to-treat, 배정 의도 기준)를 추정하고, 실제 사용 효과를 원하면
+  instrumental variable(도구변수) 같은 추가 장치가 필요하다([1.6](06_causal_inference.qmd)).
 :::
 
 ```{python}
@@ -86,44 +89,45 @@ import numpy as np
 
 rng = np.random.default_rng(0)
 N = 20000
-# 관측되지 않는 교란변수 (예: 사용자의 원래 활동성)
+# 관측되지 않는 confounder (예: 사용자의 원래 활동성)
 u = rng.normal(0, 1, N)
-# 진짜 처치효과는 0.20 으로 고정
+# 진짜 treatment 효과는 0.20 으로 고정
 TRUE_EFFECT = 0.20
 
-# (a) 자기선택: 활동적인 사용자가 신기능을 더 많이 씀
+# (a) self-selection: 활동적인 사용자가 신기능을 더 많이 씀
 p_self = 1/(1 + np.exp(-1.5*u))
 t_self = rng.random(N) < p_self
 y_self = 0.8*u + TRUE_EFFECT*t_self + rng.normal(0, 1, N)
 
-# (b) 무작위 배정: 동전 던지기
+# (b) randomization: 동전 던지기
 t_rand = rng.random(N) < 0.5
 y_rand = 0.8*u + TRUE_EFFECT*t_rand + rng.normal(0, 1, N)
 
-print(f"진짜 처치효과: {TRUE_EFFECT:+.3f}")
+print(f"진짜 treatment 효과: {TRUE_EFFECT:+.3f}")
 print()
-print(f"{'배정 방식':<16} {'추정 효과':>11} {'편향':>10} "
-      f"{'처치군 u 평균':>14} {'대조군 u 평균':>14}")
+print(f"{'배정 방식':<16} {'추정 효과':>11} {'bias':>10} "
+      f"{'treatment군 u 평균':>16} {'control군 u 평균':>14}")
 print("-" * 72)
-for name, t_, y_ in [("자기선택", t_self, y_self), ("무작위 배정", t_rand, y_rand)]:
+for name, t_, y_ in [("self-selection", t_self, y_self), ("randomization", t_rand, y_rand)]:
     est = y_[t_].mean() - y_[~t_].mean()
     print(f"{name:<16} {est:>+11.4f} {est-TRUE_EFFECT:>+10.4f} "
           f"{u[t_].mean():>+14.4f} {u[~t_].mean():>+14.4f}")
 ```
 
-**무작위화는 관측되지 않은 교란변수까지 균형을 맞춘다.**
-표의 마지막 두 열을 보면 무작위 배정에서는 $u$ 의 평균이 두 군에서 같다.
-$u$ 를 측정하지 않았는데도 그렇다. 이것이 무작위화의 유일무이한 힘이다.
+**randomization은 관측되지 않은 confounder까지 균형을 맞춘다.**
+표의 마지막 두 열을 보면 randomization에서는 $u$ 의 평균이 두 군에서 같다.
+$u$ 를 측정하지 않았는데도 그렇다. 이것이 randomization의 유일무이한 힘이다.
 
-관찰 데이터로 같은 일을 하려면 [1.6 인과추론](06_causal_inference.qmd)의
-도구들이 필요하고, 그마저도 **관측된** 교란만 다룰 수 있다.
+관찰 데이터로 같은 일을 하려면 [1.6 causal inference](06_causal_inference.qmd)의
+도구들이 필요하고, 그마저도 **관측된** confounder만 다룰 수 있다.
 
 ---
 
-## G1.5.1 — 엿보기: 자주 볼수록 거짓 발견이 늘어난다
+## G1.5.1 — peeking: 자주 볼수록 거짓 발견이 늘어난다
 
-$p$-값의 정의는 "귀무가설이 참일 때 이만큼 또는 그보다 극단적인 결과가 나올 확률"이다.
+$p$-값의 정의는 "null hypothesis가 참일 때 이만큼 또는 그보다 극단적인 결과가 나올 확률"이다.
 한 번 볼 때 5%다. **여러 번 보면 그 중 한 번이라도 5% 아래로 내려갈 확률은 훨씬 크다.**
+동전을 계속 던지다가 앞면이 몰려 나온 순간 "이 동전은 bias됐다"고 선언하고 멈추는 것 — 이것이 **peeking**(peeking)이다.
 
 ```{python}
 #| label: fig-peeking
@@ -163,7 +167,7 @@ for s in range(6):
     traj.append((ns, [stats.ttest_ind(a[:n], b[:n]).pvalue for n in ns]))
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.45, 0.55],
-                    subplot_titles=("확인 횟수에 따른 거짓 양성률",
+                    subplot_titles=("확인 횟수에 따른 false positive 비율",
                                     "p 값 궤적 (효과가 전혀 없는 6번의 실험)"))
 fig.add_trace(go.Scatter(x=LOOKS, y=fprs, mode="lines+markers", showlegend=False,
                          line=dict(color=viz.WARM, width=2.5),
@@ -176,7 +180,7 @@ for i, (ns, ps) in enumerate(traj):
 fig.add_hline(y=ALPHA, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="p = 0.05", row=1, col=2)
 fig.update_xaxes(title_text="중간 확인 횟수", row=1, col=1)
-fig.update_yaxes(title_text="거짓 양성률", row=1, col=1)
+fig.update_yaxes(title_text="false positive률", row=1, col=1)
 fig.update_xaxes(title_text="누적 표본 수", row=1, col=2)
 fig.update_yaxes(title_text="p 값", type="log", row=1, col=2)
 viz.fig_defaults(fig, height=420,
@@ -190,9 +194,9 @@ fig.show()
 
 import numpy as np
 
-print(f"명목 유의수준 {ALPHA:.0%}, 진짜 효과 0, 시뮬레이션 {N_SIM:,}회")
+print(f"명목 significance level {ALPHA:.0%}, 진짜 효과 0, 시뮬레이션 {N_SIM:,}회")
 print()
-print(f"{'확인 횟수':>10} {'거짓 양성률':>13} {'명목 대비':>11}")
+print(f"{'확인 횟수':>10} {'false positive':>14} {'명목 대비':>11}")
 print("-" * 38)
 for k, f in zip(LOOKS, fprs):
     print(f"{k:>10} {f:>13.2%} {f/ALPHA:>10.1f}배")
@@ -211,11 +215,11 @@ n_cross = sum(1 for _, ps in traj if min(ps) < ALPHA)
 | 해결책 | 성격 |
 |---|---|
 | 사전에 표본 크기를 정하고 그때까지 안 본다 | 가장 단순. 하지만 조기 중단의 이점을 못 얻는다 |
-| 순차검정 (SPRT, mSPRT, group sequential) | 확인 횟수를 반영해 경계를 조정. 원할 때 멈출 수 있다 |
-| 항상 유효한 신뢰구간 (anytime-valid, e-value) | 언제 봐도 커버리지가 보장됨. 대신 구간이 넓다 |
+| sequential test (SPRT, mSPRT, group sequential — 여러 번 볼 것을 전제로 설계된 검정) | 확인 횟수를 반영해 경계를 조정. 원할 때 멈출 수 있다 |
+| anytime-valid confidence interval (e-value) | 언제 봐도 coverage가 보장됨. 대신 구간이 넓다 |
 
-**모니터링 자체는 해도 된다.** 문제는 '유의하면 멈춘다'는 정지 규칙이다.
-가드레일 지표가 무너지는지 지켜보는 것은 오히려 필수다 —
+**모니터링 자체는 해도 된다.** 문제는 '유의하면 멈춘다'는 stopping rule(정지 규칙)이다.
+guardrail(가드레일 — 망가지면 안 되는 지표) 지표가 무너지는지 지켜보는 것은 오히려 필수다 —
 다만 그 관찰로 **성공을 선언하면** 안 된다.
 
 ::: {.key-concept}
@@ -223,21 +227,25 @@ n_cross = sum(1 for _, ps in traj if min(ps) < ALPHA)
 
 "20번 볼 거면 $\alpha$ 를 20으로 나누면 되지 않나?"
 
-가능하지만 **지나치게 보수적**이다.
+가능하지만 **지나치게 conservative(조심스러워서 진짜 효과도 놓치기 쉬움)**하다.
 연속된 확인 시점의 통계량은 서로 **강하게 상관**되어 있기 때문이다
-(n=1000일 때와 n=1025일 때의 결과는 거의 같다).
+(n=1000일 때와 n=1025일 때의 결과는 거의 같다 — 어제 잰 체중과 오늘 잰 체중을 독립된 측정 20개로 치는 셈이다).
 
 그래서 실무는 이 상관을 반영하는 방법을 쓴다.
 
 - **O'Brien-Fleming** — 초반엔 매우 엄격, 후반에 느슨. 조기 중단은 큰 효과일 때만
 - **Pocock** — 모든 시점에 동일한 경계
 - **mSPRT** — 확인 횟수에 제한이 없음. Optimizely, VWO 등이 채택
-- **e-value / 신뢰순차** — 임의 정지에 대해 수학적으로 안전
+- **e-value / confidence sequence** — 임의 정지에 대해 수학적으로 안전
 :::
 
 ---
 
-## G1.5.2 — 표본 크기와 최소검출효과
+## G1.5.2 — 표본 크기와 MDE
+
+**MDE**(minimum detectable effect, 최소 검출 가능 효과)는 이 실험이 잡아낼 수 있는 가장 작은 효과다.
+1g 차이를 재려면 정밀 저울이 필요하듯, 작은 효과를 잡으려면 큰 표본이 필요하다.
+[0.3](../00_foundations/03_statistics.qmd)에서 유도한 공식이 그 관계를 준다.
 
 $$n_{\text{그룹당}} = \frac{2(z_{1-\alpha/2} + z_{\text{power}})^2 \sigma^2}{\text{MDE}^2}$$
 
@@ -246,7 +254,7 @@ $$n_{\text{그룹당}} = \frac{2(z_{1-\alpha/2} + z_{\text{power}})^2 \sigma^2}{
 
 ```{python}
 #| label: fig-sample-size
-#| fig-cap: "MDE·검정력에 따른 필요 표본 수"
+#| fig-cap: "MDE·power에 따른 필요 표본 수"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -267,7 +275,7 @@ fig = make_subplots(rows=1, cols=2,
                                     "표본이 정해졌을 때 잡을 수 있는 MDE"))
 for i, pw in enumerate(POWERS):
     fig.add_trace(go.Scatter(x=MDES, y=[required_n(m, power=pw) for m in MDES],
-                             mode="lines", name=f"검정력 {pw:.0%}",
+                             mode="lines", name=f"power {pw:.0%}",
                              line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
 NS = np.logspace(2, 6.5, 40)
 za, zb = stats.norm.ppf(0.975), stats.norm.ppf(0.8)
@@ -278,7 +286,7 @@ fig.update_xaxes(title_text="MDE (표준편차 단위)", type="log", row=1, col=
 fig.update_yaxes(title_text="그룹당 표본 수", type="log", row=1, col=1)
 fig.update_xaxes(title_text="그룹당 표본 수", type="log", row=1, col=2)
 fig.update_yaxes(title_text="검출 가능한 MDE", type="log", row=1, col=2)
-viz.fig_defaults(fig, height=400, title="α=5%, 양측검정")
+viz.fig_defaults(fig, height=400, title="α=5%, two-sided test")
 fig.update_layout(legend=dict(x=0.02, y=0.25, font=dict(size=10)))
 fig.show()
 ```
@@ -289,14 +297,14 @@ fig.show()
 
 import numpy as np
 
-print("α=5%, 검정력 80%, 양측검정")
+print("α=5%, power 80%, two-sided test")
 print(f"{'MDE (σ 단위)':>14} {'그룹당 표본':>14} {'MDE 절반일 때':>15}")
 print("-" * 48)
 for m in [0.5, 0.2, 0.1, 0.05, 0.02, 0.01]:
     print(f"{m:>14.3f} {required_n(m):>14,.0f} {required_n(m/2):>15,.0f}")
 ```
 
-**MDE 를 절반으로 줄이면 표본이 4배 필요하다** (제곱 반비례).
+**MDE를 절반으로 줄이면 표본이 4배 필요하다** (제곱 반비례).
 이것을 전환율 지표로 환산해 본다. 이진 지표의 표준편차는 $\sqrt{p(1-p)}$ 다.
 
 ```{python}
@@ -326,23 +334,26 @@ days_1pct = 2*required_n(p0*0.01/sd0)/100000
 
 | 표본을 줄이는 방법 | 원리 |
 |---|---|
-| 분산 축소 (CUPED 등) | $\sigma$ 를 줄인다 — 아래에서 다룬다 |
+| variance reduction (CUPED 등) | $\sigma$ 를 줄인다 — 아래에서 다룬다 |
 | 더 민감한 지표 | 이진 전환보다 연속 지표가 분산이 작을 수 있다 |
-| 층화 무작위화 | 사전 정보로 균형을 맞춰 $\sigma$ 를 줄인다 |
-| 이상치 처리(윈저화) | 꼬리가 $\sigma$ 를 부풀리는 경우 |
-| **MDE 를 현실적으로** | 잡을 수 없는 크기를 목표로 두지 않는다 |
+| stratified randomization | 사전 정보로 균형을 맞춰 $\sigma$ 를 줄인다 |
+| outlier 처리(winsorization — 극단값을 상·하한으로 잘라 붙이기) | 꼬리가 $\sigma$ 를 부풀리는 경우 |
+| **MDE를 현실적으로** | 잡을 수 없는 크기를 목표로 두지 않는다 |
 
 ---
 
 ## G1.5.3 — CUPED: 사전 데이터로 분산 줄이기
 
-실험 **전** 기간의 같은 지표를 공변량으로 쓴다.
+다이어트 약 효과를 잴 때 사후 체중만 비교하면 사람마다 원래 체중이 달라 차이가 묻힌다.
+사전 체중을 빼고 비교하면 개인차가 사라져 약 효과가 훨씬 또렷해진다.
+**CUPED**(controlled-experiment using pre-experiment data)는 정확히 이것을 한다 —
+실험 **전** 기간의 같은 지표를 covariate(covariate — 결과에 영향을 주는 보조 변수)로 쓴다.
 
 $$Y^{\text{CUPED}} = Y - \theta(X - \bar{X}),
 \qquad \theta = \frac{\operatorname{Cov}(Y, X)}{\operatorname{Var}(X)}$$
 
-$X$ 는 처치 전에 정해지므로 **처치와 무관**하다.
-따라서 이 조정은 **편향을 만들지 않으면서** 분산만 줄인다.
+$X$ 는 treatment 전에 정해지므로 **treatment와 무관**하다.
+따라서 이 조정은 **bias를 만들지 않으면서** 분산만 줄인다.
 
 ### 얼마나 줄어드는가, 그리고 왜 그 $\theta$ 인가
 
@@ -351,14 +362,14 @@ $X$ 는 처치 전에 정해지므로 **처치와 무관**하다.
 $$\operatorname{Var}\big(Y - \theta(X-\bar{X})\big)
 = \operatorname{Var}(Y) - 2\theta\operatorname{Cov}(Y,X) + \theta^2\operatorname{Var}(X)$$
 
-$\theta$ 에 대한 볼록 이차식이므로 미분해서 0으로 놓으면 최솟값을 주는 $\theta$ 가 나온다.
+$\theta$ 에 대한 아래로 볼록한 이차식이므로 미분해서 0으로 놓으면 최솟값을 주는 $\theta$ 가 나온다.
 
 $$-2\operatorname{Cov}(Y,X) + 2\theta\operatorname{Var}(X) = 0
 \quad\Longrightarrow\quad
 \theta^\star = \frac{\operatorname{Cov}(Y,X)}{\operatorname{Var}(X)}$$
 
 **위 식의 $\theta$ 는 임의로 고른 값이 아니라 분산을 최소화하는 유일한 값**이고,
-$X$ 에 대한 $Y$ 의 회귀계수와 같다. 이 값을 다시 넣으면 남는 분산이 정리된다.
+$X$ 에 대한 $Y$ 의 regression coefficient(회귀계수 — $X$ 가 1 늘 때 $Y$ 가 얼마나 느는가)와 같다. 이 값을 다시 넣으면 남는 분산이 정리된다.
 
 $$\operatorname{Var}(Y^{\text{CUPED}}) = \operatorname{Var}(Y) - \frac{\operatorname{Cov}(Y,X)^2}{\operatorname{Var}(X)}
 = \operatorname{Var}(Y)\,\big(1-\rho^2\big)$$
@@ -403,14 +414,14 @@ print(f"  Var(Y)        = {Y.var(ddof=1):.4f}")
 print(f"  Var(Y_CUPED)  = {Yc.var(ddof=1):.4f}")
 print(f"  실제 비율      = {Yc.var(ddof=1)/Y.var(ddof=1):.4f}")
 print(f"  이론값 1-ρ²   = {1 - rho**2:.4f}")
-print(f"  평균 변화      = {Yc.mean() - Y.mean():+.6f}  ← 0 (편향 없음)")
+print(f"  평균 변화      = {Yc.mean() - Y.mean():+.6f}  ← 0 (bias 없음)")
 ```
 
 ::: {.key-concept}
-CUPED가 통하는 조건은 **$X$ 가 처치 이전에 확정된 값**이라는 것 하나다.
-처치 이후에 측정된 변수를 공변량으로 쓰면 처치의 영향을 함께 빼버려
-**편향이 생긴다** — 이것이 [1.6](06_causal_inference.qmd)에서 다룰
-"매개 변수를 통제하면 안 된다"는 규칙의 한 사례다.
+CUPED가 통하는 조건은 **$X$ 가 treatment 이전에 확정된 값**이라는 것 하나다.
+treatment 이후에 측정된 변수를 covariate로 쓰면 treatment의 영향을 함께 빼버려
+**bias가 생긴다** — 이것이 [1.6](06_causal_inference.qmd)에서 다룰
+"mediator(매개 변수)를 통제하면 안 된다"는 규칙의 한 사례다.
 
 같은 이유로 사용자 ID 단위 실험에서 사전 기간이 없는 신규 사용자는
 CUPED를 적용할 수 없다. 실무에서는 신규/기존을 나눠 처리하거나
@@ -419,7 +430,7 @@ $X$ 가 없는 쪽은 $\bar{X}$ 로 채워 조정량을 0으로 만든다.
 
 ```{python}
 #| label: fig-cuped
-#| fig-cap: "사전-사후 상관이 높을수록 신뢰구간이 좁아집니다"
+#| fig-cap: "사전-사후 상관이 높을수록 confidence interval이 좁아집니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -453,7 +464,7 @@ for rho in RHOS:
     se_r.append(a_); se_c.append(b_); red.append(1-(b_/a_)**2)
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("표준오차", "분산 감소율"))
+                    subplot_titles=("standard error", "분산 감소율"))
 fig.add_trace(go.Scatter(x=RHOS, y=se_r, mode="lines+markers", name="일반 차이",
                          line=dict(color=viz.WARM, width=2.5),
                          marker=dict(size=9)), row=1, col=1)
@@ -469,7 +480,7 @@ fig.add_trace(go.Scatter(x=RHOS, y=np.array(RHOS)**2, mode="lines",
                          line=dict(color=viz.YELLOW, width=2.5, dash="dash")),
               row=1, col=2)
 fig.update_xaxes(title_text="사전-사후 상관 ρ")
-fig.update_yaxes(title_text="표준오차", row=1, col=1)
+fig.update_yaxes(title_text="standard error", row=1, col=1)
 fig.update_yaxes(title_text="분산 감소율", row=1, col=2)
 viz.fig_defaults(fig, height=400,
                  title=f"CUPED (n={NC:,}, 시드 30개 평균)")
@@ -493,19 +504,19 @@ err = max(abs(r_ - rho**2) for rho, r_ in zip(RHOS, red))
 ```
 
 **실측 분산 감소가 이론값 $\rho^2$ 와 일치한다** (최대 오차 `{python} f"{err:.4f}"`).
-분산이 $\rho^2$ 만큼 줄면 **같은 검정력에 필요한 표본도 그만큼 줄어든다** —
+분산이 $\rho^2$ 만큼 줄면 **같은 power에 필요한 표본도 그만큼 줄어든다** —
 $\rho=0.7$ 이면 표본 49% 절감, $\rho=0.9$ 면 81% 절감이다.
 
 **공짜 점심에 가까운 이유**
 
 - 사전 데이터는 이미 있다 — 추가 수집 비용이 없다
-- $X$ 가 처치 전에 정해지므로 **편향이 생기지 않는다** (핵심)
-- $\theta$ 를 잘못 추정해도 편향은 없다 — 분산 감소가 덜할 뿐이다
+- $X$ 가 treatment 전에 정해지므로 **bias가 생기지 않는다** (핵심)
+- $\theta$ 를 잘못 추정해도 bias는 없다 — 분산 감소가 덜할 뿐이다
 - $\rho=0$ 이어도 손해가 아니다 (위 표의 첫 행)
 
 **주의**
 
-- $X$ 는 반드시 **처치 이전** 데이터여야 한다. 실험 중 지표를 쓰면 편향이 생긴다
+- $X$ 는 반드시 **treatment 이전** 데이터여야 한다. 실험 중 지표를 쓰면 bias가 생긴다
 - 신규 사용자는 사전 데이터가 없다 — 별도 처리가 필요하다
 - 지표가 사전 기간과 상관이 낮으면 이득이 적다 (신규 가입 전환 등)
 
@@ -513,8 +524,10 @@ $\rho=0.7$ 이면 표본 49% 절감, $\rho=0.9$ 면 81% 절감이다.
 
 ## G1.5.4 — SRM: 실험이 망가졌다는 가장 강한 신호
 
+**SRM**(sample ratio mismatch)은 실제 배정 비율이 설계와 다른 것이다.
+50:50으로 설계했는데 1만 명 중 5,200명이 한쪽에 들어갔다면, 동전이 아니라 배정 장치가 고장 난 것이다.
 배정 비율이 설계와 다르면 **그 실험의 결과 전부를 버려야 한다.**
-무작위화가 깨졌다는 뜻이기 때문이다.
+randomization이 깨졌다는 뜻이기 때문이다.
 
 ```{python}
 #| label: fig-srm
@@ -545,7 +558,7 @@ for i, p_ in enumerate(RATIOS):
                              marker=dict(size=6)))
 fig.add_hline(y=0.001, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="SRM 경보 기준 (p < 0.001)")
-fig.update_layout(xaxis_title="총 표본 수", yaxis_title="카이제곱 p 값",
+fig.update_layout(xaxis_title="총 표본 수", yaxis_title="chi-square 검정 p 값",
                   xaxis_type="log", yaxis_type="log",
                   legend=dict(x=0.02, y=0.25))
 viz.fig_defaults(fig, height=400,
@@ -587,21 +600,21 @@ p_1pct_10k = float(np.median([srm_p(0.510, 10000, seed=s) for s in range(9)]))
 ```
 
 **표본이 커질수록 더 미세한 불균형이 잡힌다** — 당연하지만 함의가 있다.
-대형 서비스에서는 아주 작은 버그도 SRM 으로 드러나고,
+대형 서비스에서는 아주 작은 버그도 SRM으로 드러나고,
 반대로 표본이 작으면 실제 불균형이 있어도 통과할 수 있다
 (위 표에서 $n=10{,}000$ 일 때 1% 불균형은 $p=$ `{python} f"{p_1pct_10k:.3f}"` 로 잡히지 않았다).
 
-SRM 이 뜨면 **결과를 해석하지 말고 원인부터 찾아야 한다.** 흔한 원인은 이렇다.
+SRM이 뜨면 **결과를 해석하지 말고 원인부터 찾아야 한다.** 흔한 원인은 이렇다.
 
 - 봇·크롤러가 한쪽에 몰림 (필터가 처치군에만 적용되는 등)
 - 리다이렉트 지연 — 처치군만 느려서 이탈이 더 많음
 - 로깅 누락 — 한쪽 이벤트가 덜 기록됨
-- 해시 함수 편향 또는 재배정 로직 버그
+- 해시 함수 bias 또는 재배정 로직 버그
 - 실험 시작 시점의 캐시 문제
 
-**SRM 은 원인이 아니라 증상이다.** 그리고 그 원인은 거의 항상
+**SRM은 원인이 아니라 증상이다.** 그리고 그 원인은 거의 항상
 결과에도 영향을 준다 — 이탈한 사용자가 무작위가 아니기 때문이다.
-그래서 'SRM 이 있지만 효과가 커서 괜찮다'는 판단은 성립하지 않는다.
+그래서 'SRM이 있지만 효과가 커서 괜찮다'는 판단은 성립하지 않는다.
 
 ---
 
@@ -609,23 +622,24 @@ SRM 이 뜨면 **결과를 해석하지 말고 원인부터 찾아야 한다.** 
 
 | 분류 | 역할 | 예 | 규칙 |
 |---|---|---|---|
-| 목표지표 (OEC) | 실험의 성공을 정의 | 장기 가치와 정렬돼야 함 | 1개만. 여러 개면 결정이 안 된다 |
-| 동인지표 (driver) | OEC 를 움직이는 중간 지표 | 왜 움직였는지 설명 | 인과 경로를 가정한다 |
-| 가드레일 (guardrail) | 망가지면 안 되는 것 | 지연시간, 오류율, 이탈 | 악화되면 롤백 |
+| OEC (overall evaluation criterion, 목표지표) | 실험의 성공을 정의 | 장기 가치와 정렬돼야 함 | 1개만. 여러 개면 결정이 안 된다 |
+| driver metric (동인지표) | OEC를 움직이는 중간 지표 | 왜 움직였는지 설명 | 인과 경로를 가정한다 |
+| guardrail (가드레일) | 망가지면 안 되는 것 | 지연시간, 오류율, 이탈 | 악화되면 롤백 |
 | 데이터 품질 | 실험 자체의 건강 | SRM, 로깅 완결성 | 이게 깨지면 나머지가 무의미 |
 
-**대리지표(proxy)의 위험.** 장기 가치(유지율, LTV)는 측정에 몇 달이 걸린다.
-그래서 단기 대리지표(클릭, 체류시간)를 쓰는데, **대리지표를 최적화하면 대리지표만 좋아질 수 있다.**
-'체류시간'을 OEC 로 두면 UI 를 헷갈리게 만들어도 점수가 오른다.
-Goodhart 의 법칙 — 지표가 목표가 되면 좋은 지표이기를 멈춘다.
+**proxy metric(대리지표)의 위험.** 장기 가치(유지율, LTV)는 측정에 몇 달이 걸린다.
+그래서 단기 proxy(클릭, 체류시간)를 쓰는데, **proxy를 최적화하면 proxy만 좋아질 수 있다.**
+'체류시간'을 OEC로 두면 UI를 헷갈리게 만들어도 점수가 오른다.
+병원의 대기시간을 지표로 삼으면 접수 자체를 늦추는 식이다.
+Goodhart의 법칙 — 지표가 목표가 되면 좋은 지표이기를 멈춘다.
 
-**다중 비교 보정.** 지표를 여러 개 보면 그중 하나가 우연히 유의할 확률이 빠르게 커진다.
+**multiple comparisons 보정.** 지표를 여러 개 보면 그중 하나가 우연히 유의할 확률이 빠르게 커진다.
 
 ```{python}
 #| label: metric-design
 #| code-fold: false
 
-print(f"  {'검정 개수':>10} {'보정 없을 때 최소 1개 거짓양성 확률':>34} "
+print(f"  {'검정 개수':>10} {'보정 없을 때 최소 1개 false positive 확률':>38} "
       f"{'Bonferroni α':>14}")
 print("  " + "-"*62)
 for m in [1, 5, 10, 20, 50]:
@@ -635,32 +649,36 @@ fw20 = 1 - 0.95**20
 ```
 
 지표 20개를 보면 전부 효과가 없어도 `{python} f"{fw20:.0%}"` 확률로 하나는 '유의'하다.
-Bonferroni 는 보수적이므로, 지표가 많으면 **FDR 통제**(Benjamini-Hochberg)를 쓴다.
+Bonferroni는 conservative하므로, 지표가 많으면 **FDR 통제**(Benjamini-Hochberg, [0.3](../00_foundations/03_statistics.qmd))를 쓴다.
 
 ---
 
-## 간섭과 대안 설계
+## interference와 대안 설계
+
+**interference**(간섭)는 한 사용자의 treatment가 다른 사용자의 결과에 영향을 주는 것이다.
+친구가 쿠폰을 받으면 나의 구매도 달라진다 — 같은 어항의 물고기 한 마리에게만 약을 줄 수는 없다.
 
 | 설계·문제 | 내용 | 상황 | 주의 |
 |---|---|---|---|
-| SUTVA 위반 (간섭) | 한 사용자의 처치가 다른 사용자에게 영향 | 소셜, 마켓플레이스, 배달 공급 | 클러스터 무작위화, 스위치백 |
-| 클러스터 무작위화 | 개인이 아니라 그룹(지역·시간) 단위로 배정 | 네트워크 효과가 있을 때 | **유효 표본이 크게 줄어든다** |
-| 스위치백 | 같은 단위를 시간 구간마다 번갈아 처치 | 배달·차량 호출의 공급 효과 | 이월 효과(carryover) 주의 |
-| 인터리빙 | 한 사용자에게 두 랭킹을 섞어 제시 | 검색·추천 랭킹 비교 | 민감도가 매우 높음. 랭킹에만 적용 |
-| 이중 대조 (A/A) | 동일한 두 그룹을 함께 돌림 | 시스템 검증 | 실험 인프라 신뢰도 점검용 |
+| SUTVA 위반 (interference) | 한 사용자의 treatment가 다른 사용자에게 영향 | 소셜, 마켓플레이스, 배달 공급 | cluster randomization, switchback |
+| cluster randomization | 개인이 아니라 그룹(지역·시간) 단위로 배정 | 네트워크 효과가 있을 때 | **effective sample size(유효 표본 수)가 크게 줄어든다** |
+| switchback | 같은 단위를 시간 구간마다 번갈아 treatment | 배달·차량 호출의 공급 효과 | carryover(이월 효과 — 앞 구간의 영향이 남음) 주의 |
+| interleaving | 한 사용자에게 두 랭킹을 섞어 제시 | 검색·추천 랭킹 비교 | 민감도가 매우 높음. 랭킹에만 적용 |
+| A/A | 동일한 두 그룹을 함께 돌림 | 시스템 검증 | 실험 인프라 신뢰도 점검용 |
 
-클러스터 무작위화의 대가는 **설계효과(design effect)** 로 계산된다.
-클러스터 크기를 $m$, 급내상관을 ICC 라 하면
+cluster randomization의 대가는 **design effect**(설계효과)로 계산된다.
+학생 1,000명을 반 단위로 배정하면 실제로 독립인 단위는 학생 1,000명이 아니라 반 30개에 가깝다.
+cluster 크기를 $m$, ICC(intraclass correlation, 급내상관 — 같은 cluster 안의 사람들이 서로 얼마나 닮았는가)라 하면
 
 $$\text{DE} = 1 + (m-1)\cdot\text{ICC}$$
 
-이고, DE 가 10 이면 **표본이 10배 필요하다.**
+이고, DE가 10 이면 **표본이 10배 필요하다.**
 
 ```{python}
 #| label: interference
 #| code-fold: false
 
-print(f"  {'클러스터 크기 m':>16} " + " ".join(f"{f'ICC={i}':>12}"
+print(f"  {'cluster 크기 m':>16} " + " ".join(f"{f'ICC={i}':>12}"
                                           for i in [0.01, 0.05, 0.2]))
 print("  " + "-"*56)
 for m in [10, 50, 200, 1000]:
@@ -669,9 +687,9 @@ for m in [10, 50, 200, 1000]:
 de_200 = 1 + 199*0.05
 ```
 
-ICC 가 0.05 이고 클러스터가 200명이면 DE ≈ `{python} f"{de_200:.0f}"` — 실험 기간이 그만큼 길어진다.
-그래서 간섭이 **실제로 있는지** 먼저 확인해야 한다.
-없는데 클러스터 무작위화를 하면 검정력만 버리는 것이다.
+ICC가 0.05이고 cluster가 200명이면 DE ≈ `{python} f"{de_200:.0f}"` — 실험 기간이 그만큼 길어진다.
+그래서 interference가 **실제로 있는지** 먼저 확인해야 한다.
+없는데 cluster randomization을 하면 power만 버리는 것이다.
 
 ---
 
@@ -683,13 +701,13 @@ ICC 가 0.05 이고 클러스터가 200명이면 DE ≈ `{python} f"{de_200:.0f}
 ```
 □ SRM 이 없는가                        ← 있으면 여기서 중단
 □ 표본 크기를 사전에 정했는가
-□ 정지 규칙이 사전에 정의됐는가            ← 엿보기 방지
+□ stopping rule 이 사전에 정의됐는가        ← peeking 방지
 □ OEC 를 사전에 하나로 정했는가
-□ 가드레일 지표를 함께 보는가
+□ guardrail 지표를 함께 보는가
 □ A/A 테스트로 인프라를 검증했는가
-□ 세그먼트 분석은 **사전 등록**한 것만
+□ 세그먼트 분석은 **사전 등록(preregistration)**한 것만
 □ 다중 지표 보정을 했는가
-□ 신뢰구간을 보는가 (p 값만 보지 않는가)
+□ confidence interval 을 보는가 (p 값만 보지 않는가)
 □ 효과 크기가 **실무적으로** 의미 있는가
 ```
 
@@ -703,13 +721,13 @@ ICC 가 0.05 이고 클러스터가 200명이면 DE ≈ `{python} f"{de_200:.0f}
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 무작위화가 깨지는 것을 본다**
-`randomization-why` 에서 무작위 배정의 확률을 0.5가 아니라 $u$ 에 의존하게 만들면
-(즉 자기선택을 조금 섞으면) 추정 편향이 어떻게 변하는가.
+**① randomization이 깨지는 것을 본다**
+`randomization-why` 에서 배정 확률을 0.5가 아니라 $u$ 에 의존하게 만들면
+(즉 self-selection을 조금 섞으면) 추정 bias가 어떻게 변하는가.
 
-**② CUPED의 공변량을 잘못 고른다**
-`cuped-gain` 에서 $X$ 를 **처치 이후** 측정된 값으로 바꾸면 어떻게 되는가.
-평균이 변하는지 확인하고, 왜 편향이 생기는지 설명하라.
+**② CUPED의 covariate를 잘못 고른다**
+`cuped-gain` 에서 $X$ 를 **treatment 이후** 측정된 값으로 바꾸면 어떻게 되는가.
+평균이 변하는지 확인하고, 왜 bias가 생기는지 설명하라.
 
 **③ 필요 표본을 직접 계산한다**
 전환율 2%를 2.2%로 올리는 것을 검출하려면 군당 몇 명이 필요한가.
@@ -720,26 +738,27 @@ $\sigma^2 = p(1-p)$ 를 써서 계산하고 시뮬레이션으로 확인하라.
 
 | 개념 | 핵심 |
 |------|------|
-| 무작위화 | **관측되지 않은** 교란까지 균형을 맞춤 |
-| 엿보기 | 20번 확인하면 거짓 양성률 5% → `{python} f"{fprs[-1]:.0%}"` (실측) |
-| 순차검정 | 확인 횟수를 반영해 경계를 조정 |
-| 표본 크기 | MDE 제곱에 반비례 — 절반 효과에 4배 표본 |
-| CUPED | 분산 감소가 정확히 $\rho^2$ (이론과 실측 일치) |
-| CUPED 조건 | $X$ 가 **처치 이전**이어야 편향이 없음 |
-| SRM | 0.5% 불균형도 n=100만이면 탐지. 뜨면 결과 폐기 |
-| 대리지표 | Goodhart — 지표가 목표가 되면 지표이기를 멈춤 |
-| 다중 비교 | 지표 20개면 `{python} f"{fw20:.0%}"` 확률로 하나는 '유의' |
-| 클러스터 | 설계효과만큼 표본이 더 필요 (ICC 0.05·m 200이면 `{python} f"{de_200:.0f}"`배) |
+| potential outcomes | 두 갈래 길 중 하나만 걸을 수 있다 — 개인의 인과효과는 관측 불가, 평균만 추정 |
+| randomization | 동전 던지기로 반 나누기. **관측되지 않은** confounder까지 균형을 맞춤 |
+| peeking | 앞면이 몰린 순간 멈추기. 20번 확인하면 false positive 5% → `{python} f"{fprs[-1]:.0%}"` (실측) |
+| sequential test | 확인 횟수를 반영해 경계를 조정 |
+| 표본 크기 | 1g을 재려면 정밀 저울. MDE 제곱에 반비례 — 절반 효과에 4배 표본 |
+| CUPED | 사전 체중을 빼고 비교. 분산 감소가 정확히 $\rho^2$ (이론과 실측 일치) |
+| CUPED 조건 | $X$ 가 **treatment 이전**이어야 bias가 없음 |
+| SRM | 배정 장치 고장. 0.5% 불균형도 n=100만이면 탐지. 뜨면 결과 폐기 |
+| proxy metric | Goodhart — 대기시간 지표를 위해 접수를 늦추듯, 지표가 목표가 되면 지표이기를 멈춤 |
+| multiple comparisons | 지표 20개면 `{python} f"{fw20:.0%}"` 확률로 하나는 '유의' |
+| cluster | 학생 1,000명이 아니라 반 30개. design effect만큼 표본이 더 필요 (ICC 0.05·m 200이면 `{python} f"{de_200:.0f}"`배) |
 
 실험은 인과를 주는 가장 확실한 방법이다.
 
 **하지만 언제나 실험할 수 있는 것은 아니다.**
-윤리적으로 불가능하거나, 이미 일어난 일이거나, 무작위화가 불가능한 경우가 있다.
+윤리적으로 불가능하거나, 이미 일어난 일이거나, randomization이 불가능한 경우가 있다.
 
 다음 장이 그때의 도구다.
 
 ---
 
-**다음**: [1.6 인과추론](06_causal_inference.qmd) — 교란·DAG·성향점수
+**다음**: [1.6 causal inference](06_causal_inference.qmd) — confounding·DAG·propensity score
 
-**이전**: [1.4 특성 공학](04_feature_engineering.qmd)
+**이전**: [1.4 feature engineering](04_feature_engineering.qmd)
