@@ -1,32 +1,34 @@
 ---
-title: "2.3 정규화"
+title: "2.3 regularization"
 subtitle: "Ridge·Lasso·ElasticNet — 복잡도에 값을 매기기"
 jupyter: ai-ml-study
 ---
 
-[2.1](01_bias_variance.qmd)에서 과적합의 정체가 **분산**임을 봤다.
-그리고 [2.2](02_linear_regression.qmd)에서 다중공선성이 계수를 널뛰게 만드는 것도 봤다.
+[2.1](01_bias_variance.qmd)에서 overfitting의 정체가 **variance**임을 봤다.
+그리고 [2.2](02_linear_regression.qmd)에서 multicollinearity가 계수를 널뛰게 만드는 것도 봤다.
 
-정규화는 두 문제를 한 번에 다룬다. 방법은 놀랍도록 단순하다.
-**손실함수에 "복잡하면 벌점" 항을 더한다.**
+**regularization**(정규화)은 두 문제를 한 번에 다룬다. 방법은 놀랍도록 단순하다.
+**손실함수에 "복잡하면 벌점" 항을 더한다.** 큰 계수에 세금을 매겨, 꼭 필요한 만큼만 쓰게 만드는 것이다.
 
 $$J(\boldsymbol\beta) = \underbrace{\|\mathbf{y}-X\boldsymbol\beta\|^2}_{\text{데이터에 맞추기}} + \lambda\underbrace{\Omega(\boldsymbol\beta)}_{\text{단순함 선호}}$$
 
-이 한 줄이 [2.0에서 말한 귀납 편향](00_learning_problem.qmd)을
+$\lambda$ 가 세율이다. 이 한 줄이 [2.0에서 말한 inductive bias](00_learning_problem.qmd)를
 손실함수에 **직접 적어 넣은 것**이다. 그리고 딥러닝의 weight decay까지 그대로 이어진다.
 
 ---
 
 ## Ridge: L2 벌점
 
+**Ridge**는 계수의 제곱합(L2 norm의 제곱)에 벌점을 매긴다.
+
 $$J = \|\mathbf{y}-X\boldsymbol\beta\|^2 + \lambda\|\boldsymbol\beta\|_2^2$$
 
-미분해서 0으로 놓으면 닫힌 해가 나온다 — 여기서도 계산이 끝까지 된다.
+미분해서 0으로 놓으면 closed form 해가 나온다 — 여기서도 계산이 끝까지 된다.
 
 $$\hat{\boldsymbol\beta}_{\text{ridge}} = (X^\top X + \lambda I)^{-1}X^\top\mathbf{y}$$
 
 $\lambda I$ 가 대각을 부풀린다는 점이 핵심이다.
-[2.2에서 본 다중공선성](02_linear_regression.qmd)으로 $X^\top X$ 가 특이에 가까워져도,
+[2.2에서 본 multicollinearity](02_linear_regression.qmd)로 $X^\top X$ 가 singular에 가까워져도,
 $\lambda I$ 를 더하면 **항상 역행렬이 존재한다.**
 
 ::: {.key-concept}
@@ -38,32 +40,32 @@ $$\hat{\mathbf{y}}_{\text{OLS}} = \sum_j \mathbf{u}_j\mathbf{u}_j^\top\mathbf{y}
 \qquad
 \hat{\mathbf{y}}_{\text{ridge}} = \sum_j \frac{\sigma_j^2}{\sigma_j^2+\lambda}\,\mathbf{u}_j\mathbf{u}_j^\top\mathbf{y}$$
 
-각 주성분 방향의 기여에 **축소 계수** $\frac{\sigma_j^2}{\sigma_j^2+\lambda}$ 가 붙는다.
+각 principal component(주성분) 방향의 기여에 **shrinkage(축소) 계수** $\frac{\sigma_j^2}{\sigma_j^2+\lambda}$ 가 붙는다.
 
-- 특이값이 큰 방향($\sigma_j^2 \gg \lambda$) → 계수 ≈ 1, 거의 안 건드림
-- 특이값이 작은 방향($\sigma_j^2 \ll \lambda$) → 계수 ≈ 0, 강하게 억제
+- singular value가 큰 방향($\sigma_j^2 \gg \lambda$) → 계수 ≈ 1, 거의 안 건드림
+- singular value가 작은 방향($\sigma_j^2 \ll \lambda$) → 계수 ≈ 0, 강하게 억제
 
 즉 Ridge는 **데이터의 분산이 작아 불안정한 방향을 골라서 죽인다.**
-모든 계수를 균일하게 줄이는 게 아니다.
+바람에 흔들리는 가는 가지만 붙잡아 매는 것이지, 모든 계수를 균일하게 줄이는 게 아니다.
 :::
 
-### 왜 편향을 받아들이는 것이 이득인가
+### 왜 bias를 받아들이는 것이 이득인가
 
-[2.2의 가우스-마르코프](02_linear_regression.qmd)는 OLS가 **불편 추정량 중** 최선이라고 했다.
-정규화는 그 조건을 깨고 들어온다 — 편향을 조금 받고 분산을 많이 줄인다.
-이 거래가 **언제나 이득이 되는 구간이 존재한다**는 것을 직교 설계에서 정확히 보일 수 있다.
+[2.2의 Gauss–Markov](02_linear_regression.qmd)는 OLS가 **unbiased 추정량 중** 최선이라고 했다.
+regularization은 그 조건을 깨고 들어온다 — bias를 조금 받고 variance를 많이 줄인다.
+이 거래가 **언제나 이득이 되는 구간이 존재한다**는 것을 orthogonal design(특성들이 서로 직교해 $X^\top X = I$ 인 경우)에서 정확히 보일 수 있다.
 
-$X^\top X = I$ 로 두면 Ridge 해가 OLS 해의 단순 축소가 된다.
+$X^\top X = I$ 로 두면 Ridge 해가 OLS 해의 단순 shrinkage가 된다.
 
 $$\hat{\boldsymbol\beta}_{\text{ridge}} = \frac{1}{1+\lambda}\,\hat{\boldsymbol\beta}_{\text{OLS}}$$
 
 $\hat{\boldsymbol\beta}_{\text{OLS}}$ 는 평균 $\boldsymbol\beta$, 공분산 $\sigma^2 I$ 이므로
 [2.1의 분해](01_bias_variance.qmd)를 그대로 적용하면 두 항이 나온다.
 
-$$\underbrace{\left\|\mathbb{E}[\hat{\boldsymbol\beta}_{\text{ridge}}]-\boldsymbol\beta\right\|^2}_{\text{편향}^2}
+$$\underbrace{\left\|\mathbb{E}[\hat{\boldsymbol\beta}_{\text{ridge}}]-\boldsymbol\beta\right\|^2}_{\text{bias}^2}
 = \left(\frac{\lambda}{1+\lambda}\right)^2\|\boldsymbol\beta\|^2,
 \qquad
-\underbrace{\operatorname{tr}\operatorname{Var}(\hat{\boldsymbol\beta}_{\text{ridge}})}_{\text{분산}}
+\underbrace{\operatorname{tr}\operatorname{Var}(\hat{\boldsymbol\beta}_{\text{ridge}})}_{\text{variance}}
 = \frac{\sigma^2 p}{(1+\lambda)^2}$$
 
 $\lambda$ 가 커지면 앞은 늘고 뒤는 준다. 합이 총 MSE 다.
@@ -84,7 +86,7 @@ $\lambda$ 를 0에서 조금 키우는 것이 **반드시** MSE를 낮춘다.
 $$\boxed{\ \lambda^\star = \frac{\sigma^2 p}{\|\boldsymbol\beta\|^2}\ }$$
 
 식이 말하는 바가 직관과 맞는다 — **잡음이 크거나($\sigma^2$), 파라미터가 많거나($p$),
-참 신호가 약할수록($\|\boldsymbol\beta\|$ 작을수록) 더 강하게 정규화해야 한다.**
+참 신호가 약할수록($\|\boldsymbol\beta\|$ 작을수록) 더 강하게 regularization해야 한다.**
 
 ```{python}
 #| label: ridge-beats-ols
@@ -102,7 +104,7 @@ lam_star = sigma**2 * p / np.linalg.norm(beta)**2
 print(f"‖β‖ = {np.linalg.norm(beta):.1f},  σ² = {sigma**2}, p = {p}")
 print(f"이론 최적 λ* = σ²p/‖β‖² = {lam_star:.4f}\n")
 
-print(f"{'λ':>8}{'편향²':>10}{'분산':>10}{'MSE 실측':>11}{'MSE 이론':>11}")
+print(f"{'λ':>8}{'bias²':>10}{'variance':>10}{'MSE 실측':>11}{'MSE 이론':>11}")
 for lam in [0.0, 0.5, lam_star, 4.0, 20.0]:
     est = np.array([(rng.normal(0, sigma, p) + beta) / (1 + lam)
                     for _ in range(reps)])          # β̂_OLS ~ N(β, σ²I)
@@ -114,29 +116,29 @@ for lam in [0.0, 0.5, lam_star, 4.0, 20.0]:
           f"{mse_th:>11.3f}{tag}")
 ```
 
-$\lambda=0$(OLS)의 MSE 가 최소가 아니다 — $\lambda^\star$ 에서 더 낮다.
-편향을 받아들인 대가로 분산이 그보다 크게 줄었기 때문이고, 실측과 이론값이 열마다 일치한다.
+$\lambda=0$(OLS)의 MSE가 최소가 아니다 — $\lambda^\star$ 에서 더 낮다.
+bias를 받아들인 대가로 variance가 그보다 크게 줄었기 때문이고, 실측과 이론값이 열마다 일치한다.
 
 ::: {.callout-warning}
 ## "언제나 이득"의 범위
 
-이 정리는 **MSE 라는 특정 기준**에 대한 진술이고, 직교 설계에서 유도했다.
+이 정리는 **MSE라는 특정 기준**에 대한 진술이고, orthogonal design에서 유도했다.
 일반 $X$ 에서는 $\lambda^\star$ 가 저렇게 깔끔하지 않고 $\sigma^2$ 와 $\|\boldsymbol\beta\|$ 를
-모르므로 실무에서는 **교차검증으로 고른다**(아래 절).
+모르므로 실무에서는 **cross-validation으로 고른다**(아래 절).
 
 그리고 이득은 어디까지나 **추정 정확도**의 이야기다.
-$\hat{\boldsymbol\beta}$ 가 편향되었으므로 **계수 해석과 가설검정은 더 이상 유효하지 않다.**
-Ridge 계수에 대한 통상적인 $t$ 검정과 신뢰구간은 의미가 없다 —
+$\hat{\boldsymbol\beta}$ 에 bias가 있으므로 **계수 해석과 hypothesis test는 더 이상 유효하지 않다.**
+Ridge 계수에 대한 통상적인 $t$ 검정과 confidence interval은 의미가 없다 —
 예측이 목적이면 쓰고, 계수 자체를 주장하려면 다른 도구가 필요하다.
 :::
 
 ---
 
-## G2.3.1 — Ridge의 축소 효과
+## G2.3.1 — Ridge의 shrinkage 효과
 
 ```{python}
 #| label: fig-ridge-shrinkage
-#| fig-cap: "특이값 방향별 축소 계수. 작은 특이값 방향이 먼저 죽습니다."
+#| fig-cap: "singular value 방향별 shrinkage 계수. 작은 singular value 방향이 먼저 죽습니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -144,10 +146,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import viz
 
-# 특이값이 넓게 퍼진 설계행렬
+# singular value 가 넓게 퍼진 design matrix
 rng = np.random.default_rng(0)
 n, p = 200, 12
-sv = np.logspace(1.2, -1.2, p)                 # 특이값 스펙트럼
+sv = np.logspace(1.2, -1.2, p)                 # singular value 스펙트럼
 U, _ = np.linalg.qr(rng.normal(size=(n, p)))
 V, _ = np.linalg.qr(rng.normal(size=(p, p)))
 X = U @ np.diag(sv) @ V.T
@@ -160,8 +162,8 @@ coefs = np.array([np.linalg.solve(X.T @ X + l*np.eye(p), X.T @ y) for l in lams]
 dof = np.array([np.sum(sv**2 / (sv**2 + l)) for l in lams])
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.48, 0.52],
-                    subplot_titles=("주성분 방향별 축소 계수",
-                                    "유효 자유도 tr(H_ridge)"))
+                    subplot_titles=("principal component 방향별 shrinkage 계수",
+                                    "effective degrees of freedom tr(H_ridge)"))
 
 l0 = lams[12]
 fig.add_trace(go.Bar(x=[f"σ{i+1}" for i in range(p)], y=shrink[l0],
@@ -180,34 +182,36 @@ for i, l in enumerate(lams):
     steps.append((f"{l:.1e}", {"y": [shrink[l], dof, [dof[i]]],
                                "x": [[f"σ{k+1}" for k in range(p)], lams, [l]]}))
 fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ", active=12, pad_t=55)])
-fig.update_yaxes(title_text="축소 계수 σ²/(σ²+λ)", range=[0, 1.05], row=1, col=1)
+fig.update_yaxes(title_text="shrinkage 계수 σ²/(σ²+λ)", range=[0, 1.05], row=1, col=1)
 fig.update_xaxes(title_text="λ", type="log", row=1, col=2)
-fig.update_yaxes(title_text="유효 자유도", row=1, col=2)
+fig.update_yaxes(title_text="effective d.o.f.", row=1, col=2)
 viz.fig_defaults(fig, height=420, title="Ridge는 불안정한 방향을 골라 억제한다")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-$\lambda$ 를 키우면 **오른쪽 막대(작은 특이값)부터** 0으로 내려갑니다. 왼쪽 막대는 한참 버팁니다. 오른쪽 그림의 유효 자유도가 12에서 연속적으로 줄어드는 것도 보세요 — [2.2의 $\text{tr}(H)$](02_linear_regression.qmd)가 실수가 되었습니다.
+$\lambda$ 를 키우면 **오른쪽 막대(작은 singular value)부터** 0으로 내려갑니다. 왼쪽 막대는 한참 버팁니다. 오른쪽 그림의 effective degrees of freedom이 12에서 연속적으로 줄어드는 것도 보세요 — [2.2의 $\text{tr}(H)$](02_linear_regression.qmd)가 실수가 되었습니다.
 :::
 
 ---
 
-## Lasso: L1 벌점과 희소성
+## Lasso: L1 벌점과 sparsity
+
+**Lasso**는 제곱 대신 절댓값의 합(L1 norm)에 벌점을 매긴다.
 
 $$J = \|\mathbf{y}-X\boldsymbol\beta\|^2 + \lambda\|\boldsymbol\beta\|_1$$
 
-절댓값으로 바꾸면 성질이 완전히 달라진다. **계수가 정확히 0이 된다.**
+절댓값으로 바꾸면 성질이 완전히 달라진다. **계수가 정확히 0이 된다** — 대부분의 계수가 0인 상태를 **sparse**(희소)하다고 한다.
 
 Ridge는 계수를 0에 가깝게 만들 뿐 0으로 만들지는 않는다.
-Lasso는 실제로 0으로 만들어 **특성 선택을 수행한다.**
+Lasso는 실제로 0으로 만들어 **feature selection을 수행한다.**
 
-왜인가? [0.0의 norm 단위구](../00_foundations/00_linear_algebra.qmd)에서 봤듯이
-**L1 공의 꼭짓점이 축 위에 있기** 때문이다.
+왜인가? [0.0의 norm unit sphere](../00_foundations/00_linear_algebra.qmd)에서 봤듯이
+**L1 공의 꼭짓점이 축 위에 있기** 때문이다. 풍선(손실이 같은 타원)을 부풀리면 둥근 공보다 마름모의 뾰족한 꼭짓점에 먼저 닿는다.
 
 ```{python}
 #| label: fig-l1-l2-geometry
-#| fig-cap: "제약 영역과 손실 등고선이 만나는 지점. L1은 축 위 꼭짓점에서 만납니다."
+#| fig-cap: "제약 영역과 손실이 같은 선이 만나는 지점. L1은 축 위 꼭짓점에서 만납니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -215,7 +219,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import viz
 
-# 손실 등고선 (타원)
+# 손실이 같은 선 (타원)
 g = np.linspace(-2.2, 3.2, 220)
 B1, B2 = np.meshgrid(g, g)
 center = np.array([2.0, 1.0])
@@ -267,15 +271,15 @@ fig.show()
 
 ### soft-thresholding: 왜 정확히 0인가
 
-직교 설계($X^\top X = I$)에서는 Lasso 해가 닫힌 형태로 나온다.
+orthogonal design($X^\top X = I$)에서는 Lasso 해가 closed form으로 나온다.
 
 $$\hat{\beta}_j^{\text{lasso}} = \text{sign}(\hat{\beta}_j^{\text{OLS}})\big(|\hat{\beta}_j^{\text{OLS}}| - \lambda/2\big)_+$$
 
-$(\cdot)_+$ 는 음수면 0으로 자르는 연산이다. **임계값보다 작으면 정확히 0이 된다.**
+$(\cdot)_+$ 는 음수면 0으로 자르는 연산이다. **threshold보다 작으면 정확히 0이 된다.** 소득에서 기본 공제액을 뺀 뒤 남는 것이 없으면 세금이 정확히 0인 것과 같다 — Ridge는 비율로 깎고, Lasso는 일정액을 빼서 0 이하를 잘라 낸다.
 
 ```{python}
 #| label: fig-soft-threshold
-#| fig-cap: "Ridge는 비례 축소, Lasso는 임계값 이하를 0으로 자릅니다."
+#| fig-cap: "Ridge는 비례 shrinkage, Lasso는 threshold 이하를 0으로 자릅니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -289,7 +293,7 @@ fig = go.Figure()
 l0 = 1.0
 fig.add_trace(go.Scatter(x=b, y=b, mode="lines", name="OLS (항등)",
                          line=dict(color="rgba(255,255,255,0.4)", width=2, dash="dot")))
-fig.add_trace(go.Scatter(x=b, y=b / (1 + l0), mode="lines", name="Ridge (비례 축소)",
+fig.add_trace(go.Scatter(x=b, y=b / (1 + l0), mode="lines", name="Ridge (비례 shrinkage)",
                          line=dict(color=viz.ACCENT, width=3)))
 fig.add_trace(go.Scatter(x=b, y=np.sign(b) * np.maximum(np.abs(b) - l0/2, 0),
                          mode="lines", name="Lasso (soft-threshold)",
@@ -298,9 +302,9 @@ fig.add_trace(go.Scatter(x=b, y=np.sign(b) * np.maximum(np.abs(b) - l0/2, 0),
 steps = [(f"{l:g}", {"y": [b, b/(1+l), np.sign(b)*np.maximum(np.abs(b)-l/2, 0)]})
          for l in lams]
 fig.update_layout(sliders=[viz.slider(steps, prefix="λ = ", active=3, pad_t=55)],
-                  xaxis_title="OLS 계수", yaxis_title="정규화된 계수",
+                  xaxis_title="OLS 계수", yaxis_title="regularization 후 계수",
                   legend=dict(x=0.02, y=0.98))
-viz.fig_defaults(fig, height=420, title="두 정규화가 계수를 다루는 방식")
+viz.fig_defaults(fig, height=420, title="두 regularization 이 계수를 다루는 방식")
 fig.show()
 ```
 
@@ -310,10 +314,10 @@ Lasso(주황)는 원점 근처에 **평평한 구간**이 있습니다 — 그 �
 
 ---
 
-## G2.3.2 — 정규화 경로
+## G2.3.2 — regularization path
 
-$\lambda$ 를 바꿔가며 계수들이 어떻게 움직이는지가 정규화 경로다.
-Lasso의 특성 선택이 여기서 눈에 보인다.
+$\lambda$ 를 바꿔가며 계수들이 어떻게 움직이는지가 **regularization path**(regularization path)다.
+Lasso의 feature selection이 여기서 눈에 보인다.
 
 ```{python}
 #| label: fig-reg-path
@@ -331,7 +335,7 @@ X = rng.normal(size=(n, p))
 X[:, 5] = X[:, 0] * 0.9 + rng.normal(0, 0.3, n)      # 상관 특성 하나
 beta_true = np.array([3.0, -2.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0])
 y = X @ beta_true + rng.normal(0, 1.0, n)
-X = (X - X.mean(0)) / X.std(0)                        # 표준화 필수
+X = (X - X.mean(0)) / X.std(0)                        # standardization 필수
 y = y - y.mean()
 
 def lasso_cd(X, y, lam, iters=400):
@@ -398,9 +402,9 @@ print(f"참값이 0이 아닌 특성: β1, β2, β3, β8")
 
 ---
 
-## 왜 표준화가 필수인가
+## 왜 standardization이 필수인가
 
-정규화 항 $\lambda\|\boldsymbol\beta\|^2$ 는 계수의 **크기**를 벌한다.
+regularization 항 $\lambda\|\boldsymbol\beta\|^2$ 는 계수의 **크기**를 벌한다.
 그런데 계수 크기는 특성의 단위에 의존한다.
 
 키를 미터로 재면 계수가 크고, 밀리미터로 재면 1000배 작아진다.
@@ -427,7 +431,7 @@ X_raw = np.c_[x1, x2]
 X_mm = np.c_[x1 * 1000, x2]                        # 키를 mm 로만 바꿈
 X_std = (X_raw - X_raw.mean(0)) / X_raw.std(0)
 
-print(f"{'λ':>6} {'원 단위 (m, kg)':>22} {'키만 mm 로':>22} {'표준화 후':>22}")
+print(f"{'λ':>6} {'원 단위 (m, kg)':>22} {'키만 mm 로':>22} {'standardization 후':>22}")
 print("-" * 76)
 for lam in [0, 1, 100]:
     a = ridge(X_raw, y, lam); b = ridge(X_mm, y, lam); c = ridge(X_std, y, lam)
@@ -435,39 +439,40 @@ for lam in [0, 1, 100]:
           f"    [{b[0]:>8.5f},{b[1]:>7.3f}]     [{c[0]:>7.3f},{c[1]:>7.3f}]")
 ```
 
-같은 데이터인데 단위만 바꾸면 정규화 결과가 완전히 달라진다.
+같은 데이터인데 단위만 바꾸면 regularization 결과가 완전히 달라진다.
 $\lambda=0$ 에서는 세 열이 같은 모델(단위 환산만 다름)인데, $\lambda$ 를 키우는 순간
 mm 단위의 키 계수는 거의 벌점을 받지 않고 m 단위의 키 계수는 크게 눌린다.
-표준화하면 모든 특성이 같은 조건에서 벌점을 받는다.
+standardization(평균을 빼고 표준편차로 나누기)하면 모든 특성이 같은 조건에서 벌점을 받는다.
 
 ::: {.callout-warning}
-표준화 파라미터(평균·표준편차)는 **훈련셋에서만** 계산해야 한다.
+standardization 파라미터(평균·표준편차)는 **훈련셋에서만** 계산해야 한다.
 전체 데이터로 계산하면 시험셋 정보가 새어든다 —
-[2.12 데이터 누수](12_practical_issues.qmd)의 전형적 형태다.
+[2.12 data leakage](12_practical_issues.qmd)의 전형적 형태다.
 :::
 
 ---
 
-## 베이즈 관점: 정규화 = 사전분포
+## 베이즈 관점: regularization = prior
 
 [0.2 확률](../00_foundations/02_probability.qmd)에서 예고한 대응이 여기서 완성된다.
+"계수는 아마 0 근처일 것"이라는 믿음(prior)을 미리 적어 두는 것과, 큰 계수에 벌점을 매기는 것이 같은 일이라는 이야기다.
 
-MAP 추정은 사후분포를 최대화한다.
+MAP 추정은 posterior를 최대화한다.
 
 $$\hat{\boldsymbol\beta}_{\text{MAP}} = \arg\max_\beta\; p(\mathbf{y}|\boldsymbol\beta)\,p(\boldsymbol\beta)
 = \arg\min_\beta\; \big[-\log p(\mathbf{y}|\boldsymbol\beta) - \log p(\boldsymbol\beta)\big]$$
 
-첫 항이 손실, 둘째 항이 정규화다.
+첫 항이 손실, 둘째 항이 regularization이다.
 
-| 사전분포 $p(\beta)$ | $-\log p(\beta)$ | 정규화 |
+| prior $p(\beta)$ | $-\log p(\beta)$ | regularization |
 |---------------------|------------------|--------|
 | 가우스 $\mathcal{N}(0,\tau^2)$ | $\propto \|\beta\|_2^2$ | **Ridge** |
-| 라플라스 $\text{Lap}(0,b)$ | $\propto \|\beta\|_1$ | **Lasso** |
-| 균등 | 상수 | 정규화 없음 |
+| Laplace $\text{Lap}(0,b)$ | $\propto \|\beta\|_1$ | **Lasso** |
+| 균등 | 상수 | regularization 없음 |
 
 ```{python}
 #| label: fig-priors
-#| fig-cap: "가우스와 라플라스 사전분포. 라플라스는 0에서 뾰족합니다."
+#| fig-cap: "가우스와 Laplace prior. Laplace는 0에서 뾰족합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -479,10 +484,10 @@ b = np.linspace(-4, 4, 600)
 gauss = np.exp(-b**2 / 2) / np.sqrt(2*np.pi)
 laplace = np.exp(-np.abs(b) * np.sqrt(2)) * np.sqrt(2) / 2
 
-fig = make_subplots(rows=1, cols=2, subplot_titles=("사전분포 p(β)", "벌점 −log p(β)"))
+fig = make_subplots(rows=1, cols=2, subplot_titles=("prior p(β)", "벌점 −log p(β)"))
 fig.add_trace(go.Scatter(x=b, y=gauss, mode="lines", name="가우스 → Ridge",
                          line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
-fig.add_trace(go.Scatter(x=b, y=laplace, mode="lines", name="라플라스 → Lasso",
+fig.add_trace(go.Scatter(x=b, y=laplace, mode="lines", name="Laplace → Lasso",
                          line=dict(color=viz.WARM, width=3)), row=1, col=1)
 fig.add_trace(go.Scatter(x=b, y=b**2/2, mode="lines", showlegend=False,
                          line=dict(color=viz.ACCENT, width=3)), row=1, col=2)
@@ -492,13 +497,13 @@ fig.add_trace(go.Scatter(x=b, y=np.abs(b)*np.sqrt(2), mode="lines", showlegend=F
 fig.update_xaxes(title_text="β")
 fig.update_yaxes(title_text="밀도", row=1, col=1)
 fig.update_yaxes(title_text="벌점", range=[0, 6], row=1, col=2)
-viz.fig_defaults(fig, height=380, title="정규화의 확률적 해석")
+viz.fig_defaults(fig, height=380, title="regularization 의 확률적 해석")
 fig.update_layout(legend=dict(x=0.02, y=0.98))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-라플라스(주황)는 0에서 **뾰족한 꼭짓점**을 갖습니다 — 미분 불가능한 그 점이 계수를 0에 붙잡아둡니다. 가우스는 0에서 매끄러워 그런 힘이 없습니다. 오른쪽 벌점 그림이 정확히 L1·L2 norm입니다.
+Laplace(주황)는 0에서 **뾰족한 꼭짓점**을 갖습니다 — 미분 불가능한 그 점이 계수를 0에 붙잡아둡니다. 가우스는 0에서 매끄러워 그런 힘이 없습니다. 오른쪽 벌점 그림이 정확히 L1·L2 norm입니다.
 :::
 
 ---
@@ -512,7 +517,8 @@ Lasso에는 알려진 약점이 있다.
 1. **상관된 특성 그룹에서 임의로 하나만 고른다.** 나머지는 0으로 만든다.
 2. $p > n$ 이면 최대 $n$ 개까지만 선택할 수 있다.
 
-ElasticNet은 L2 항을 섞어 이를 완화한다 — 상관된 특성들이 **함께 살아남는다**(그룹 효과).
+ElasticNet은 L2 항을 섞어 이를 완화한다 — 상관된 특성들이 **함께 살아남는다**(grouping effect, 그룹 효과).
+쌍둥이가 함께 이룬 성과에 Lasso는 한 명에게만 상을 주고, ElasticNet은 나눠 준다.
 
 ```{python}
 #| label: elasticnet-group
@@ -549,14 +555,14 @@ for name, a in [("Lasso (α=1)", 1.0), ("ElasticNet (α=0.5)", 0.5),
           f"{int((np.abs(grp) < 1e-8).sum()):>7} {grp.std():>13.3f}")
 ```
 
-셋은 사실상 같은 정보인데, Lasso 는 하나를 0 으로 죽이고 나머지도 들쭉날쭉하게 나눠 갖는다
-(셋의 표준편차가 크다). ElasticNet 은 셋에 거의 균등하게 배분한다 — 이것이 그룹 효과다.
+셋은 사실상 같은 정보인데, Lasso는 하나를 0으로 죽이고 나머지도 들쭉날쭉하게 나눠 갖는다
+(셋의 표준편차가 크다). ElasticNet은 셋에 거의 균등하게 배분한다 — 이것이 grouping effect다.
 
 ---
 
 ## λ는 어떻게 고르는가
 
-정답은 하나다. **검증 데이터로 고른다.**
+정답은 하나다. **검증 데이터로 고른다.** 세율을 얼마로 할지는 모의고사 점수로 정한다.
 
 ```{python}
 #| label: fig-lambda-selection
@@ -593,7 +599,7 @@ tr, te, cv = np.array(tr), np.array(te), np.array(cv)
 best_cv, best_te = lams[cv.argmin()], lams[te.argmin()]
 
 fig = go.Figure()
-for name, arr, col in [("훈련 오차", tr, viz.GREEN), ("5겹 CV 오차", cv, viz.ACCENT),
+for name, arr, col in [("훈련 오차", tr, viz.GREEN), ("5-fold CV 오차", cv, viz.ACCENT),
                        ("시험 오차 (참값)", te, viz.WARM)]:
     fig.add_trace(go.Scatter(x=lams, y=arr, mode="lines+markers", name=name,
                              line=dict(color=col, width=2.5)))
@@ -605,29 +611,29 @@ fig.add_vline(x=best_te, line=dict(color=viz.WARM, dash="dot"),
 fig.update_layout(xaxis_title="λ", xaxis_type="log",
                   yaxis_title="평균제곱오차", yaxis_type="log",
                   legend=dict(x=0.02, y=0.98))
-viz.fig_defaults(fig, height=420, title=f"n={n}, p={p} — 정규화가 필수인 설정")
+viz.fig_defaults(fig, height=420, title=f"n={n}, p={p} — regularization 이 필수인 설정")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-훈련 오차(초록)는 $\lambda$ 가 커질수록 **단조 증가**합니다 — 절대 이걸로 고르면 안 됩니다. CV 오차(파랑)와 시험 오차(주황)가 U자를 그리고, 두 최적점이 가깝습니다. CV가 시험 오차의 좋은 대리인 이유입니다.
+훈련 오차(초록)는 $\lambda$ 가 커질수록 **계속 증가**합니다 — 절대 이걸로 고르면 안 됩니다. CV 오차(파랑)와 시험 오차(주황)가 U자를 그리고, 두 최적점이 가깝습니다. CV가 시험 오차의 좋은 대리인 이유입니다.
 :::
 
 ---
 
 ## weight decay로 이어지는 다리
 
-딥러닝의 weight decay는 L2 정규화와 같은 것이다 — **단, SGD에서만.**
+딥러닝의 **weight decay**(매 갱신마다 가중치를 일정 비율로 깎아 내리는 것 — 감가상각처럼)는 L2 regularization과 같은 것이다 — **단, SGD에서만.**
 
 $$\text{L2 를 손실에 추가:}\quad \nabla(J + \tfrac{\lambda}{2}\|\theta\|^2) = \nabla J + \lambda\theta$$
 $$\text{weight decay:}\quad \theta \leftarrow \theta - \eta\nabla J - \eta\lambda\theta$$
 
 SGD에서는 동일하다. 그런데 **Adam에서는 다르다.**
-Adam은 그래디언트를 $\sqrt{v}$ 로 나누는데, L2 항이 그래디언트에 섞여 있으면
-그 항까지 함께 나뉘어 **실효 감쇠율이 파라미터마다 달라진다.**
+Adam은 gradient를 $\sqrt{v}$ 로 나누는데, L2 항이 gradient에 섞여 있으면
+그 항까지 함께 나뉘어 **실효 decay 비율이 파라미터마다 달라진다.**
 
-AdamW는 감쇠를 그래디언트가 아니라 **갱신 단계에 직접** 적용해 이 문제를 고친다
-([3.4 옵티마이저](../03_deep_learning/04_optimizers.qmd)에서 다루고, [5.6](../05_transformer/06_build_gpt.qmd)에서 그 형태로 구현한다).
+AdamW는 decay를 gradient가 아니라 **갱신 단계에 직접** 적용해 이 문제를 고친다
+([3.4 optimizer](../03_deep_learning/04_optimizers.qmd)에서 다루고, [5.6](../05_transformer/06_build_gpt.qmd)에서 그 형태로 구현한다).
 
 ---
 
@@ -640,7 +646,7 @@ $\lambda^\star = \sigma^2 p/\|\beta\|^2$ 가 예측한 값과 맞는가?
 
 **② Lasso 경로를 그린다**
 $\lambda$ 를 $\lambda_{\max}$ 에서 0까지 줄이며 0이 아닌 계수 개수를 세라.
-경로가 조각별 선형인 것이 보이는가?
+경로가 piecewise linear(구간마다 직선)인 것이 보이는가?
 
 **③ ElasticNet이 필요한 상황을 만든다**
 상관이 0.99 인 특성 두 개를 만들고 Lasso와 ElasticNet을 비교하라.
@@ -651,23 +657,24 @@ Lasso는 둘 중 하나만 남기는가? 시드를 바꾸면 남는 쪽이 바�
 
 | 개념 | 식 | 핵심 |
 |------|-----|------|
-| Ridge | $+\lambda\|\beta\|_2^2$ | 닫힌 해 존재, 작은 특이값 방향을 억제 |
-| SVD 관점 | $\frac{\sigma^2}{\sigma^2+\lambda}$ | 불안정한 방향만 골라 죽인다 |
-| 유효 자유도 | $\sum\frac{\sigma_j^2}{\sigma_j^2+\lambda}$ | 복잡도가 연속적으로 줄어듦 |
-| Lasso | $+\lambda\|\beta\|_1$ | **정확히 0** → 특성 선택 |
-| 기하 | L1 공의 꼭짓점이 축 위 | 희소성의 이유 |
-| soft-threshold | $\text{sign}(\beta)(|\beta|-\lambda/2)_+$ | 임계값 이하를 자름 |
-| **표준화** | 필수 | 단위가 바뀌면 벌점이 바뀜 |
-| 베이즈 해석 | 가우스=Ridge, 라플라스=Lasso | MAP = 손실 + 정규화 |
-| ElasticNet | L1 + L2 | 상관 특성의 그룹 효과 |
-| λ 선택 | **교차검증** | 훈련 오차로는 절대 못 고름 |
-| weight decay | Adam에서는 L2 ≠ decay | AdamW가 나온 이유 |
+| regularization | 손실 + λ·벌점 | 큰 계수에 세금. λ가 세율 |
+| Ridge | $+\lambda\|\beta\|_2^2$ | closed form 해 존재, 작은 singular value 방향을 억제 |
+| SVD 관점 | $\frac{\sigma^2}{\sigma^2+\lambda}$ | 바람에 흔들리는 가지만 붙잡는다 — 불안정한 방향만 골라 죽인다 |
+| effective degrees of freedom | $\sum\frac{\sigma_j^2}{\sigma_j^2+\lambda}$ | 복잡도가 연속적으로 줄어듦 |
+| Lasso | $+\lambda\|\beta\|_1$ | **정확히 0** → feature selection |
+| 기하 | L1 공의 꼭짓점이 축 위 — 풍선이 마름모 꼭짓점에 먼저 닿는다 | sparsity의 이유 |
+| soft-threshold | $\text{sign}(\beta)(|\beta|-\lambda/2)_+$ | 기본 공제처럼 threshold 이하를 자름 |
+| **standardization** | 필수 | 단위가 바뀌면 벌점이 바뀜 |
+| 베이즈 해석 | 가우스=Ridge, Laplace=Lasso | MAP = 손실 + regularization |
+| ElasticNet | L1 + L2 | 쌍둥이에게 상을 나눠 주기 — 상관 특성의 grouping effect |
+| λ 선택 | **cross-validation** | 훈련 오차로는 절대 못 고름 |
+| weight decay | 감가상각. Adam에서는 L2 ≠ decay | AdamW가 나온 이유 |
 
 여기까지 회귀를 다뤘다. 다음 장은 출력이 범주일 때 —
 **확률을 출력하는 선형 모델**로 넘어간다.
 
 ---
 
-**다음**: [2.4 로지스틱 회귀와 분류](04_logistic_regression.qmd) — 시그모이드·로그오즈·최대우도
+**다음**: [2.4 logistic regression과 분류](04_logistic_regression.qmd) — sigmoid·log-odds·maximum likelihood
 
 **이전**: [2.2 선형회귀](02_linear_regression.qmd)
