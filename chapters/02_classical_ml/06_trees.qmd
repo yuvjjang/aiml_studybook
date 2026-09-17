@@ -1,34 +1,34 @@
 ---
-title: "2.6 결정트리"
-subtitle: "분할 기준·가지치기·해석 — 규칙으로 학습하는 모델"
+title: "2.6 decision tree"
+subtitle: "분할 기준·pruning·해석 — 규칙으로 학습하는 모델"
 jupyter: ai-ml-study
 ---
 
-지금까지 본 모델들 — [선형회귀](02_linear_regression.qmd), [로지스틱](04_logistic_regression.qmd),
+지금까지 본 모델들 — [선형회귀](02_linear_regression.qmd), [logistic](04_logistic_regression.qmd),
 [SVM](05_svm_kernels.qmd) — 은 전부 **가중합**으로 예측한다.
 
-트리는 완전히 다르다. **질문을 던지고 답에 따라 갈라진다.**
+**decision tree**(결정트리)는 완전히 다르다. **질문을 던지고 답에 따라 갈라진다.** 스무고개와 같다.
 
 > 나이 < 35인가? → 예: 소득 < 4000인가? → 아니오: 예측 = 0.82
 
-이 다른 귀납 편향이 실전에서 큰 차이를 만든다.
-스케일링이 필요 없고, 범주형을 그대로 먹고, 비선형·상호작용을 자동으로 잡아낸다.
+이 다른 inductive bias가 실전에서 큰 차이를 만든다.
+scaling이 필요 없고, 범주형을 그대로 먹고, 비선형·interaction을 자동으로 잡아낸다.
 
 그리고 트리 하나는 약하지만, **모으면 정형 데이터 최강이 된다** —
-[다음 장 앙상블](07_ensembles.qmd)의 기본 단위다.
+[다음 장 ensemble](07_ensembles.qmd)의 기본 단위다.
 
 ---
 
-## 재귀적 이진 분할
+## recursive binary splitting
 
-학습은 단순한 재귀다.
+학습은 단순한 재귀(같은 절차를 결과에 다시 적용하기)다 — **recursive binary splitting**(재귀적 이진 분할).
 
-1. 모든 (특성, 임계값) 후보 중 **불순도를 가장 많이 줄이는** 분할을 찾는다
+1. 모든 (특성, threshold) 후보 중 **impurity(impurity — 한 덩어리 안에 클래스가 얼마나 섞여 있는가)를 가장 많이 줄이는** 분할을 찾는다
 2. 데이터를 둘로 나눈다
 3. 각 부분에서 1을 반복한다
-4. 정지 조건에 닿으면 잎으로 만들고 예측값을 저장한다
+4. 정지 조건에 닿으면 leaf(잎 — 더 이상 나누지 않는 끝 노드)로 만들고 예측값을 저장한다
 
-각 분할이 축과 평행하므로, 결정경계는 항상 **직사각형들의 모자이크**가 된다.
+각 분할이 축과 평행하므로(한 번에 특성 하나만 묻는다), decision boundary는 항상 **직사각형들의 모자이크**가 된다.
 
 ---
 
@@ -61,7 +61,7 @@ leaves = [stats[d][0] for d in depths]
 accs = [stats[d][1] for d in depths]
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
-                    subplot_titles=("결정 영역", "깊이에 따른 잎 수와 훈련 정확도"))
+                    subplot_titles=("결정 영역", "깊이에 따른 leaf 수와 훈련 정확도"))
 
 d0 = 4
 fig.add_trace(go.Heatmap(x=gx, y=gy, z=surf[d0], colorscale="RdBu",
@@ -73,7 +73,7 @@ for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
                                          line=dict(width=1, color="black"))),
                   row=1, col=1)
 
-fig.add_trace(go.Scatter(x=depths, y=leaves, mode="lines+markers", name="잎 개수",
+fig.add_trace(go.Scatter(x=depths, y=leaves, mode="lines+markers", name="leaf 개수",
                          line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
 fig.add_trace(go.Scatter(x=depths, y=np.array(accs)*max(leaves), mode="lines+markers",
                          name="훈련 정확도 (우측 스케일)",
@@ -86,7 +86,7 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="최대 깊이 = ",
 fig.update_xaxes(title_text="x₁", row=1, col=1)
 fig.update_yaxes(title_text="x₂", row=1, col=1)
 fig.update_xaxes(title_text="최대 깊이", row=1, col=2)
-fig.update_yaxes(title_text="잎 개수", row=1, col=2)
+fig.update_yaxes(title_text="leaf 개수", row=1, col=2)
 viz.fig_defaults(fig, height=440, title="트리 성장")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
@@ -96,41 +96,41 @@ fig.show()
 #| label: growth-table
 #| code-fold: false
 
-print(f"{'최대 깊이':>10} {'잎 개수':>9} {'훈련 정확도':>12}")
+print(f"{'최대 깊이':>10} {'leaf 개수':>9} {'훈련 정확도':>12}")
 print("-" * 34)
 for d in depths:
     print(f"{d:>10} {stats[d][0]:>9} {stats[d][1]:>12.3f}")
 ```
 
 깊이를 풀면 훈련 데이터를 완전히 외운다 (깊이 `{python} f"{depths[-1]}"` 에서 훈련 정확도 `{python} f"{stats[depths[-1]][1]:.2f}"`).
-이것이 트리 하나가 고분산 모델인 이유다.
+이것이 트리 하나가 high variance 모델인 이유다.
 
 ::: {.interaction-hint}
-깊이 1은 직선 하나, 깊이 2는 사각형 4개입니다. 깊이가 커지면 **점 하나만 감싸는 좁은 띠**가 생기기 시작합니다 — 전형적 과적합입니다.
+깊이 1은 직선 하나, 깊이 2는 사각형 4개입니다. 깊이가 커지면 **점 하나만 감싸는 좁은 띠**가 생기기 시작합니다 — 전형적 overfitting입니다.
 :::
 
 ---
 
-## 분할 기준: 불순도
+## 분할 기준: impurity
 
-"좋은 분할"은 자식 노드가 **한 클래스로 순수해지는** 분할이다.
+"좋은 분할"은 자식 노드가 **한 클래스로 순수해지는** 분할이다. 빨간 공과 파란 공이 섞인 상자를 둘로 나눌 때, 한쪽엔 빨간 공만 다른 쪽엔 파란 공만 담기게 나누는 것이 최선이다.
 
 | 기준 | 식 | 범위 (2클래스) |
 |------|-----|----------------|
-| 지니 불순도 | $1-\sum_k p_k^2$ | 0 ~ 0.5 |
-| 엔트로피 | $-\sum_k p_k\log_2 p_k$ | 0 ~ 1 |
+| Gini impurity(Gini impurity — 무작위로 두 개를 뽑았을 때 클래스가 다를 확률) | $1-\sum_k p_k^2$ | 0 ~ 0.5 |
+| entropy | $-\sum_k p_k\log_2 p_k$ | 0 ~ 1 |
 | 분산 (회귀) | $\frac{1}{n}\sum(y_i-\bar{y})^2$ | 0 ~ ∞ |
 
-분할의 **이득**은 부모 불순도에서 자식들의 가중 평균을 뺀 것이다.
+분할의 **gain**(이득)은 부모 impurity에서 자식들의 가중 평균을 뺀 것이다.
 
 $$\text{Gain} = I(\text{부모}) - \frac{n_L}{n}I(\text{왼쪽}) - \frac{n_R}{n}I(\text{오른쪽})$$
 
-엔트로피를 쓰면 이 값이 [0.4의 상호정보](../00_foundations/04_information_theory.qmd)와 정확히 같다 —
-"분할이 레이블에 대해 알려주는 정보량"이다.
+entropy를 쓰면 이 값이 [0.4의 mutual information](../00_foundations/04_information_theory.qmd)과 정확히 같다 —
+"분할이 label에 대해 알려주는 정보량"이고, 이 경우를 **information gain**(정보 이득)이라 부른다.
 
 ```{python}
 #| label: fig-impurity
-#| fig-cap: "두 불순도 함수. 모양이 비슷해 실제 결과도 거의 같습니다."
+#| fig-cap: "두 impurity 함수. 모양이 비슷해 실제 결과도 거의 같습니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -143,42 +143,42 @@ ent_v = -(p*np.log2(p) + (1-p)*np.log2(1-p))
 err_v = np.minimum(p, 1-p)
 
 fig = go.Figure()
-for name, v, col in [("지니 (×2 정규화)", gini_v / gini_v.max(), viz.ACCENT),
-                     ("엔트로피 (정규화)", ent_v / ent_v.max(), viz.WARM),
-                     ("오분류율 (정규화)", err_v / err_v.max(), viz.GREEN)]:
+for name, v, col in [("Gini (최댓값 1로)", gini_v / gini_v.max(), viz.ACCENT),
+                     ("entropy (최댓값 1로)", ent_v / ent_v.max(), viz.WARM),
+                     ("misclassification (최댓값 1로)", err_v / err_v.max(), viz.GREEN)]:
     fig.add_trace(go.Scatter(x=p, y=v, mode="lines", name=name,
                              line=dict(color=col, width=2.5)))
 fig.add_vline(x=0.5, line=dict(color=viz.YELLOW, dash="dot"))
-fig.update_layout(xaxis_title="클래스 1의 비율 p", yaxis_title="정규화된 불순도",
+fig.update_layout(xaxis_title="클래스 1의 비율 p", yaxis_title="impurity (최댓값 1)",
                   legend=dict(x=0.02, y=0.98))
 viz.fig_defaults(fig, height=390,
-                 title="불순도 함수 (최댓값 1로 맞춰 비교)")
+                 title="impurity 함수 (최댓값 1로 맞춰 비교)")
 fig.show()
 ```
 
-### 오목성이 이득을 보장한다
+### concavity가 gain을 보장한다
 
-불순도 함수 $I$ 가 **엄격히 오목**하면 어떤 분할이든 이득이 음수가 되지 않는다.
-이유는 [0.4에서 쓴 젠슨 부등식](../00_foundations/04_information_theory.qmd)이다.
+impurity 함수 $I$ 가 **strictly concave**(엄격히 오목 — 그래프가 언덕 모양이고 직선 구간이 없음)하면 어떤 분할이든 gain이 음수가 되지 않는다.
+이유는 [0.4에서 쓴 Jensen 부등식](../00_foundations/04_information_theory.qmd)이다.
 
 부모의 클래스 분포 $\mathbf{p}$ 는 자식들의 분포를 크기로 가중평균한 것이다.
 
 $$\mathbf{p} = \frac{n_L}{n}\mathbf{p}_L + \frac{n_R}{n}\mathbf{p}_R$$
 
-$I$ 가 오목이므로 "가중평균의 함수값 $\ge$ 함수값의 가중평균"이 성립한다.
+$I$ 가 concave이므로 "가중평균의 함수값 $\ge$ 함수값의 가중평균"이 성립한다.
 
 $$I(\mathbf{p}) \;\ge\; \frac{n_L}{n}I(\mathbf{p}_L) + \frac{n_R}{n}I(\mathbf{p}_R)
 \quad\Longrightarrow\quad
 \text{Gain} \ge 0$$
 
-**엄격히** 오목이면 등호는 $\mathbf{p}_L = \mathbf{p}_R$ 일 때만 — 즉 분할이 분포를 전혀 바꾸지 못할 때만 —
-성립한다. 그래서 지니와 엔트로피는 조금이라도 분포를 가르는 분할이면 **반드시 양의 이득**을 준다.
+**strictly** concave이면 등호는 $\mathbf{p}_L = \mathbf{p}_R$ 일 때만 — 즉 분할이 분포를 전혀 바꾸지 못할 때만 —
+성립한다. 그래서 Gini와 entropy는 조금이라도 분포를 가르는 분할이면 **반드시 양의 gain**을 준다.
 
 ::: {.callout-note}
-## 왜 오분류율을 분할 기준으로 쓰지 않는가
+## 왜 misclassification rate를 분할 기준으로 쓰지 않는가
 
-오분류율 $I = 1-\max_k p_k$ 는 오목이지만 **엄격하지 않다** — 조각별 선형이다.
-그래서 분포가 확실히 갈리는 분할인데도 이득이 정확히 0으로 계산되는 경우가 생긴다.
+misclassification rate(misclassification rate) $I = 1-\max_k p_k$ 는 concave이지만 **strict하지 않다** — piecewise linear(구간마다 직선)다.
+그래서 분포가 확실히 갈리는 분할인데도 gain이 정확히 0으로 계산되는 경우가 생긴다.
 
 ```{python}
 #| label: impurity-comparison
@@ -210,34 +210,34 @@ splits = {
 }
 
 print(f"부모: A {parent[0]}, B {parent[1]}\n")
-print(f"{'':<32}{'오분류율 이득':>14}{'지니 이득':>12}{'엔트로피 이득':>15}")
+print(f"{'':<32}{'misclass. gain':>14}{'Gini gain':>12}{'entropy gain':>15}")
 for name, (L, R) in splits.items():
     print(f"{name:<32}{gain(parent, L, R, misclass):>14.4f}"
           f"{gain(parent, L, R, gini):>12.4f}"
           f"{gain(parent, L, R, entropy):>15.4f}")
 ```
 
-오분류율은 두 분할을 '동점'으로 본다 — 둘 다 이득 0.25 다.
-그런데 분할 ② 는 오른쪽 자식을 완전히 순수하게 만든다(B 가 0개).
-지니와 엔트로피는 ② 를 더 높게 평가한다 — 순수한 잎을 만드는 쪽이
-이후 분할에서 유리하기 때문이고, 이것이 엄격 오목성의 효과다.
+misclassification rate는 두 분할을 '동점'으로 본다 — 둘 다 gain 0.25 다.
+그런데 분할 ② 는 오른쪽 자식을 완전히 순수하게 만든다(B가 0개).
+Gini와 entropy는 ② 를 더 높게 평가한다 — 순수한 leaf를 만드는 쪽이
+이후 분할에서 유리하기 때문이고, 이것이 strict concavity의 효과다.
 
-실무에서 지니와 엔트로피의 차이는 거의 없고, 지니가 로그 계산이 없어 조금 빠르다.
+실무에서 Gini와 entropy의 차이는 거의 없고, Gini가 로그 계산이 없어 조금 빠르다.
 :::
 
 ::: {.key-concept}
-**회귀 트리의 잎이 평균인 것도 같은 이야기다.**
-분산을 불순도로 쓴다는 것은 제곱손실을 쓴다는 뜻이고,
+**회귀 트리의 leaf가 평균인 것도 같은 이야기다.**
+분산을 impurity로 쓴다는 것은 제곱손실을 쓴다는 뜻이고,
 [2.0에서 유도했듯](00_learning_problem.qmd) 제곱손실을 최소화하는 상수는 평균이다.
-불순도를 MAE로 바꾸면 잎의 예측값이 **중앙값**이 된다 — 이상치에 강건한 트리가 된다.
+impurity를 MAE로 바꾸면 leaf의 예측값이 **중앙값**이 된다 — outlier에 robust한 트리가 된다.
 :::
 
 ---
 
-## 축 정렬의 한계
+## axis-aligned 분할의 한계
 
-트리의 편향은 명확하다. **분할이 항상 축에 평행하다.**
-대각선 경계는 계단으로 근사해야 한다.
+트리의 inductive bias는 명확하다. **분할이 항상 축에 평행하다**(axis-aligned).
+대각선 경계는 계단으로 근사해야 한다 — 모눈종이의 격자선만 따라 자를 수 있는 가위와 같다.
 
 ```{python}
 #| label: fig-axis-aligned
@@ -277,7 +277,7 @@ for c, a in enumerate(angles, start=1):
         fig.add_trace(go.Scatter(x=Xa[m,0], y=Xa[m,1], mode="markers",
                                  showlegend=False,
                                  marker=dict(size=3, color=col)), row=1, col=c)
-    fig.layout.annotations[c-1].text = f"{a}° 회전<br><sub>잎 {nl}개, 정확도 {acc:.2f}</sub>"
+    fig.layout.annotations[c-1].text = f"{a}° 회전<br><sub>leaf {nl}개, 정확도 {acc:.2f}</sub>"
     fig.update_xaxes(showticklabels=False, row=1, col=c)
     fig.update_yaxes(showticklabels=False, row=1, col=c)
 
@@ -288,28 +288,28 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-0°에서는 **분할 하나**로 완벽히 갈립니다. 45°에서는 같은 정보량의 문제인데 잎이 훨씬 많이 필요하고 경계가 계단 모양입니다. 선형 모델이라면 회전에 전혀 영향받지 않았을 문제입니다.
+0°에서는 **분할 하나**로 완벽히 갈립니다. 45°에서는 같은 정보량의 문제인데 leaf가 훨씬 많이 필요하고 경계가 계단 모양입니다. 선형 모델이라면 회전에 전혀 영향받지 않았을 문제입니다.
 :::
 
 ::: {.key-concept}
-이것이 [2.0의 귀납 편향](00_learning_problem.qmd)이 실제로 작동하는 모습이다.
+이것이 [2.0의 inductive bias](00_learning_problem.qmd)가 실제로 작동하는 모습이다.
 
 | | 트리에 유리 | 트리에 불리 |
 |---|---|---|
-| 경계 모양 | 축 정렬, 계단형 | 대각선, 매끄러운 곡선 |
-| 특성 | 이질적 (단위·종류 다름) | 동질적 (픽셀, 임베딩) |
-| 관계 | 구간별 상수, 상호작용 | 부드러운 선형·주기 |
+| 경계 모양 | axis-aligned, 계단형 | 대각선, 매끄러운 곡선 |
+| 특성 | 이질적 (단위·종류 다름) | 동질적 (픽셀, embedding) |
+| 관계 | piecewise constant, interaction | 부드러운 선형·주기 |
 
-이미지나 임베딩에서 트리가 약한 이유도 이것이다 —
-그런 데이터는 축 정렬 구조를 갖지 않는다.
+이미지나 embedding에서 트리가 약한 이유도 이것이다 —
+그런 데이터는 axis-aligned 구조를 갖지 않는다.
 :::
 
 ---
 
-## 회귀 트리: 구간별 상수
+## 회귀 트리: piecewise constant
 
-회귀에서는 분산을 줄이도록 분할하고, 잎에서 **평균**을 예측한다.
-따라서 예측 함수는 항상 **계단 함수**다.
+회귀에서는 분산을 줄이도록 분할하고, leaf에서 **평균**을 예측한다.
+따라서 예측 함수는 항상 **계단 함수**(piecewise constant — 구간 안에서는 값이 하나)다.
 
 ```{python}
 #| label: fig-regression-tree
@@ -341,35 +341,35 @@ fig.add_trace(go.Scatter(x=x, y=y, mode="markers", name="데이터",
 fig.add_trace(go.Scatter(x=grid, y=preds[d0], mode="lines", name="회귀 트리",
                          line=dict(color=viz.ACCENT, width=3, shape="hv")))
 
-steps = [(f"{d} (잎 {info[d][0]})", {"y": [truth, y, preds[d]]}) for d in depths]
+steps = [(f"{d} (leaf {info[d][0]})", {"y": [truth, y, preds[d]]}) for d in depths]
 fig.update_layout(sliders=[viz.slider(steps, prefix="깊이 = ",
                                       active=depths.index(d0), pad_t=55)],
                   xaxis_title="x", yaxis_title="y",
                   legend=dict(x=0.02, y=0.02))
-viz.fig_defaults(fig, height=420, title="회귀 트리의 구간별 상수 예측")
+viz.fig_defaults(fig, height=420, title="회귀 트리의 piecewise constant 예측")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-깊이 1은 계단 2개, 깊이 10은 데이터 점을 거의 그대로 따라갑니다. **외삽이 불가능**하다는 점도 보세요 — $x>1$ 에서는 마지막 잎의 값을 영원히 유지합니다. 선형 모델과의 결정적 차이입니다.
+깊이 1은 계단 2개, 깊이 10은 데이터 점을 거의 그대로 따라갑니다. **extrapolation(외삽 — 본 범위 밖으로 예측을 뻗기)이 불가능**하다는 점도 보세요 — $x>1$ 에서는 마지막 leaf의 값을 영원히 유지합니다. 선형 모델과의 결정적 차이입니다.
 :::
 
 ---
 
-## 가지치기: 과적합 억제
+## pruning: overfitting 억제
 
-트리를 끝까지 키우면 훈련 데이터를 외운다. 두 가지 처방이 있다.
+트리를 끝까지 키우면 훈련 데이터를 외운다. **pruning**(pruning)에는 두 가지 처방이 있다.
 
-**사전 가지치기(pre-pruning)**: 자라는 도중 멈춘다 — `max_depth`, `min_samples_leaf` 등.
-빠르지만 근시안적이다(지금은 이득이 없어도 두 번 더 나누면 좋아질 수 있다).
+**pre-pruning**(사전 pruning): 자라는 도중 멈춘다 — `max_depth`, `min_samples_leaf` 등.
+빠르지만 근시안적이다(지금은 gain이 없어도 두 번 더 나누면 좋아질 수 있다).
 
-**사후 가지치기(post-pruning)**: 끝까지 키운 뒤 가지를 되돌린다.
-**비용 복잡도 가지치기**가 표준이다.
+**post-pruning**(사후 pruning): 끝까지 키운 뒤 가지를 되돌린다.
+**cost-complexity pruning**(비용 복잡도 pruning)이 표준이다.
 
-$$R_\alpha(T) = \underbrace{R(T)}_{\text{오차}} + \alpha\underbrace{|T|}_{\text{잎 개수}}$$
+$$R_\alpha(T) = \underbrace{R(T)}_{\text{오차}} + \alpha\underbrace{|T|}_{\text{leaf 개수}}$$
 
-$\alpha$ 를 키우면 잎이 하나씩 줄어든다 —
-[2.3의 정규화 경로](03_regularization.qmd)와 같은 구조다.
+$\alpha$ 를 키우면 leaf가 하나씩 줄어든다 —
+[2.3의 regularization path](03_regularization.qmd)와 같은 구조다. leaf 하나마다 세금을 매기는 것이다.
 
 ```{python}
 #| label: fig-pruning
@@ -400,22 +400,22 @@ fig.add_trace(go.Scatter(x=depths, y=tr_err, mode="lines+markers", name="훈련 
 fig.add_trace(go.Scatter(x=depths, y=va_err, mode="lines+markers", name="검증 오차",
                          line=dict(color=viz.WARM, width=2.5)))
 fig.add_trace(go.Scatter(x=depths, y=np.array(n_leaves)/max(n_leaves)*max(va_err),
-                         mode="lines", name="잎 개수 (스케일 조정)",
+                         mode="lines", name="leaf 개수 (스케일 조정)",
                          line=dict(color="rgba(255,255,255,0.35)", width=2, dash="dot")))
 fig.add_vline(x=depths[best], line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text=f"최적 깊이 {depths[best]}")
-fig.update_layout(xaxis_title="최대 깊이", yaxis_title="오분류율",
+fig.update_layout(xaxis_title="최대 깊이", yaxis_title="misclassification rate",
                   legend=dict(x=0.55, y=0.98))
-viz.fig_defaults(fig, height=400, title="트리 복잡도와 일반화")
+viz.fig_defaults(fig, height=400, title="트리 복잡도와 generalization")
 fig.show()
 ```
 
 ---
 
-## 특성 중요도와 그 함정
+## feature importance와 그 함정
 
-불순도 감소를 특성별로 합치면 중요도가 나온다.
-쓰기 쉽지만 **알려진 편향**이 있다.
+impurity 감소를 특성별로 합치면 **feature importance**(feature importance)가 나온다.
+쓰기 쉽지만 **알려진 bias**가 있다.
 
 ```{python}
 #| label: importance-bias
@@ -427,19 +427,19 @@ from src import trees
 
 rng = np.random.default_rng(0)
 n = 600
-# y 와 무관한 특성 4개, 카디널리티만 다르게
+# y 와 무관한 특성 4개, cardinality 만 다르게
 X = np.c_[
     rng.integers(0, 2, n),        # 이진
     rng.integers(0, 5, n),        # 5개 값
     rng.integers(0, 50, n),       # 50개 값
-    rng.normal(size=n),           # 연속 (사실상 무한 카디널리티)
+    rng.normal(size=n),           # 연속 (사실상 무한 cardinality)
 ].astype(float)
 y = rng.integers(0, 2, n)         # 순수 잡음 — 어떤 특성도 정보 없음
 
 t = trees.DecisionTree(max_depth=8, random_state=0).fit(X, y)
 imp = t.feature_importance(4)
 
-print(f"{'특성':<22} {'고유값 수':>10} {'불순도 기반 중요도':>20}")
+print(f"{'특성':<22} {'고유값 수':>10} {'impurity 기반 중요도':>20}")
 print("-" * 56)
 for name, k, v in zip(["이진 (0/1)", "범주형 (5개)", "범주형 (50개)", "연속"],
                       [2, 5, 50, n], imp):
@@ -450,15 +450,15 @@ $y$ 는 순수 잡음이라 모든 특성의 참 중요도는 0 인데, 고유�
 분할 후보가 많아 우연히 좋은 분할을 찾을 기회가 많기 때문이다.
 
 ::: {.callout-warning}
-## 불순도 기반 중요도를 믿지 말 것
+## impurity 기반 중요도를 믿지 말 것
 
-두 가지 편향이 있다.
+두 가지 bias가 있다.
 
-1. **고카디널리티 편향** — 위 실험이 보여주는 것. 연속 특성과 고유값 많은 범주형이 과대평가된다.
-2. **훈련 데이터 기반** — 과적합된 분할의 이득까지 그대로 반영한다.
+1. **high-cardinality bias** — 위 실험이 보여주는 것. 연속 특성과 고유값 많은 범주형이 과대평가된다. 복권을 더 많이 산 사람이 당첨될 확률이 높은 것과 같다.
+2. **훈련 데이터 기반** — overfitting된 분할의 gain까지 그대로 반영한다.
 
-대안은 **순열 중요도**다. 검증 데이터에서 특성 하나를 섞고 성능이 얼마나 떨어지는지 재는 방식으로,
-훈련 데이터의 편향을 받지 않는다. 다만 상관된 특성에는 별도의 문제가 있다 —
+대안은 **permutation importance**(순열 중요도)다. 검증 데이터에서 특성 하나를 섞고 성능이 얼마나 떨어지는지 재는 방식으로,
+훈련 데이터의 bias를 받지 않는다. 다만 상관된 특성에는 별도의 문제가 있다 —
 [12.0 설명 가능성](../12_trust/00_interpretability.qmd)에서 자세히 다룬다.
 :::
 
@@ -468,13 +468,13 @@ $y$ 는 순수 잡음이라 모든 특성의 참 중요도는 0 인데, 고유�
 
 | 항목 | 트리 | 비고 |
 |---|---|---|
-| 전처리 | 스케일링·정규화 불필요 | 선형 모델은 필수 |
-| 범주형 | 직접 처리 가능 | 원핫 인코딩 불필요 |
-| 결측치 | 대리 분할로 처리 가능 | 구현에 따라 다름 |
-| 비선형·상호작용 | 자동으로 포착 | 명시적 특성 공학 불필요 |
+| 전처리 | scaling·standardization 불필요 | 선형 모델은 필수 |
+| 범주형 | 직접 처리 가능 | one-hot encoding 불필요 |
+| 결측치 | surrogate split(대리 분할)로 처리 가능 | 구현에 따라 다름 |
+| 비선형·interaction | 자동으로 포착 | 명시적 feature engineering 불필요 |
 | 해석 | 규칙 경로로 설명 | 깊으면 어려워짐 |
-| 외삽 | **불가능** | 훈련 범위 밖은 상수 |
-| 매끄러운 함수 | 계단으로만 근사 | 축 정렬 편향 |
+| extrapolation | **불가능** | 훈련 범위 밖은 상수 |
+| 매끄러운 함수 | 계단으로만 근사 | axis-aligned bias |
 | 안정성 | **매우 낮음** | 데이터가 조금 바뀌면 구조가 통째로 바뀜 |
 
 
@@ -482,13 +482,13 @@ $y$ 는 순수 잡음이라 모든 특성의 참 중요도는 0 인데, 고유�
 **마지막 항목이 다음 장으로 이어지는 다리다.**
 
 트리는 불안정하다 — 데이터를 조금만 바꿔도 첫 분할이 달라지고,
-그 아래 구조가 전부 바뀐다. 즉 **분산이 매우 크다**
-([2.1 편향-분산](01_bias_variance.qmd)).
+그 아래 구조가 전부 바뀐다. 즉 **variance가 매우 크다**
+([2.1 bias–variance](01_bias_variance.qmd)). 스무고개에서 첫 질문이 달라지면 이후 질문이 전부 달라지는 것과 같다.
 
 그런데 [0.2에서 본 분산 공식](../00_foundations/02_probability.qmd)에 의하면
-불안정한 추정기를 여러 개 평균 내면 분산이 줄어든다.
+불안정한 추정기를 여러 개 평균 내면 variance가 줄어든다.
 
-**약점이 곧 앙상블이 통하는 이유다.** 안정적인 모델을 평균 내면 얻는 게 별로 없다.
+**약점이 곧 ensemble이 통하는 이유다.** 안정적인 모델을 평균 내면 얻는 게 별로 없다.
 :::
 
 ---
@@ -497,9 +497,9 @@ $y$ 는 순수 잡음이라 모든 특성의 참 중요도는 0 인데, 고유�
 
 | 알고리즘 | 연도 | 특징 |
 |----------|------|------|
-| ID3 | 1986 | 정보이득, 범주형만, 다중 분기 |
-| C4.5 | 1993 | 이득비(카디널리티 편향 보정), 연속 특성, 결측치 |
-| **CART** | 1984 | 이진 분할, 지니, 회귀 지원, 비용복잡도 가지치기 |
+| ID3 | 1986 | information gain, 범주형만, 다중 분기 |
+| C4.5 | 1993 | gain ratio(cardinality bias 보정), 연속 특성, 결측치 |
+| **CART** | 1984 | 이진 분할, Gini, 회귀 지원, cost-complexity pruning |
 
 현대 라이브러리는 대부분 CART 계열이다. 이 장의 [`src/trees.py`](https://github.com/yuvjjang/aiml_studybook/blob/main/src/trees.py) 구현도 그렇다.
 
@@ -508,16 +508,16 @@ $y$ 는 순수 잡음이라 모든 특성의 참 중요도는 0 인데, 고유�
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 오분류율로 트리를 키운다**
-`impurity-comparison` 의 기준을 오분류율로 바꿔 트리를 학습시켜라.
-지니로 키운 트리와 깊이·정확도가 어떻게 다른가?
+**① misclassification rate로 트리를 키운다**
+`impurity-comparison` 의 기준을 misclassification rate로 바꿔 트리를 학습시켜라.
+Gini로 키운 트리와 깊이·정확도가 어떻게 다른가?
 
-**② 회귀 트리의 잎을 중앙값으로**
-분산 대신 MAE를 불순도로 쓰면 잎의 예측값이 중앙값이 된다.
-이상치를 넣고 두 트리의 예측을 비교하라.
+**② 회귀 트리의 leaf를 중앙값으로**
+분산 대신 MAE를 impurity로 쓰면 leaf의 예측값이 중앙값이 된다.
+outlier를 넣고 두 트리의 예측을 비교하라.
 
-**③ 특성 중요도의 편향을 재현한다**
-`importance-bias` 에서 카디널리티가 높은 무작위 특성을 추가하면
+**③ feature importance의 bias를 재현한다**
+`importance-bias` 에서 cardinality가 높은 무작위 특성을 추가하면
 중요도가 어떻게 나오는가? 왜 그런지 설명하라.
 :::
 
@@ -525,22 +525,22 @@ $y$ 는 순수 잡음이라 모든 특성의 참 중요도는 0 인데, 고유�
 
 | 개념 | 핵심 |
 |------|------|
-| 학습 | 재귀적 탐욕 이진 분할 |
-| 분할 기준 | 지니 / 엔트로피 / 분산 감소 |
-| 정보이득 | 엔트로피 기준 이득 = **상호정보** |
-| 오분류율 | 엄격 오목이 아니라 기준으로 부적합 |
-| 축 정렬 편향 | 대각 경계를 계단으로 근사 |
-| 회귀 트리 | 구간별 상수, **외삽 불가** |
-| 사전 가지치기 | `max_depth` 등, 빠르지만 근시안적 |
-| 사후 가지치기 | 비용복잡도 $R(T)+\alpha|T|$ |
-| 중요도 편향 | 고카디널리티 특성 과대평가 |
-| **불안정성** | 고분산 → **앙상블의 재료** |
+| 학습 | 스무고개 — recursive greedy binary splitting |
+| 분할 기준 | Gini / entropy / 분산 감소 — 상자를 나눠 공 색깔을 순수하게 |
+| information gain | entropy 기준 gain = **mutual information** |
+| misclassification rate | strictly concave가 아니라 기준으로 부적합 |
+| axis-aligned bias | 모눈종이 격자선만 따라 자르는 가위. 대각 경계를 계단으로 근사 |
+| 회귀 트리 | piecewise constant, **extrapolation 불가** |
+| pre-pruning | `max_depth` 등, 빠르지만 근시안적 |
+| post-pruning | cost-complexity $R(T)+\alpha|T|$ — leaf마다 세금 |
+| importance bias | 복권을 많이 산 사람. high-cardinality 특성 과대평가 |
+| **불안정성** | high variance → **ensemble의 재료** |
 
 트리 하나는 약하다. 다음 장에서 이것을 수백 개 모아
 정형 데이터에서 여전히 최강인 모델을 만든다.
 
 ---
 
-**다음**: [2.7 앙상블](07_ensembles.qmd) — 배깅·랜덤포레스트·부스팅·GBDT
+**다음**: [2.7 ensemble](07_ensembles.qmd) — bagging·random forest·boosting·GBDT
 
-**이전**: [2.5 서포트 벡터 머신과 커널](05_svm_kernels.qmd)
+**이전**: [2.5 support vector machine과 kernel](05_svm_kernels.qmd)
