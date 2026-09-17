@@ -1,28 +1,28 @@
 ---
-title: "2.5 서포트 벡터 머신과 커널"
-subtitle: "최대 마진·쌍대문제·커널 트릭 — 고차원으로 올려서 푸는 법"
+title: "2.5 support vector machine과 kernel"
+subtitle: "maximum margin·dual problem·kernel trick — 고차원으로 올려서 푸는 법"
 jupyter: ai-ml-study
 ---
 
-[2.4 로지스틱 회귀](04_logistic_regression.qmd)는 데이터를 나누는 직선을 찾았다.
+[2.4 logistic regression](04_logistic_regression.qmd)은 데이터를 나누는 직선을 찾았다.
 그런데 나누는 직선이 여러 개라면, 어느 것을 골라야 하나?
 
-SVM의 답은 명확하다. **양쪽 클래스에서 가장 멀리 떨어진 직선.**
+**SVM**(support vector machine)의 답은 명확하다. **양쪽 클래스에서 가장 멀리 떨어진 직선.**
+두 마을 사이에 도로를 놓는다면 양쪽 집에서 가장 멀리, 가장 넓은 완충지대를 두고 놓는 것이다.
 
-그리고 여기서 커널 트릭이 나온다 —
+그리고 여기서 kernel trick이 나온다 —
 "명시적으로 계산하지 않고 고차원으로 간다"는 발상이며,
-[어텐션의 유사도 계산](../05_transformer/00_attention_mechanism.qmd)에도 같은 사고가 살아 있다.
+[attention의 유사도 계산](../05_transformer/00_attention_mechanism.qmd)에도 같은 사고가 살아 있다.
 
 ---
 
-## 최대 마진
+## maximum margin
 
-여러 분리 직선 중 **마진(margin)** 이 가장 큰 것을 고른다.
-마진은 경계에서 가장 가까운 점까지의 거리다.
+여러 분리 직선 중 **margin**(margin — 경계에서 가장 가까운 점까지의 거리, 즉 완충지대의 폭)이 가장 큰 것을 고른다.
 
 ```{python}
 #| label: fig-max-margin
-#| fig-cap: "여러 분리선 중 마진이 최대인 것. 마진을 결정하는 점이 서포트 벡터입니다."
+#| fig-cap: "여러 분리선 중 margin이 최대인 것. margin을 결정하는 점이 support vector입니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -36,7 +36,7 @@ B = rng.normal([1.6, 1.0], 0.55, (14, 2))
 X = np.vstack([A, B]); y = np.r_[-np.ones(14), np.ones(14)]
 
 def margin_of(w, b):
-    """모든 점이 올바르게 분류될 때의 마진 (아니면 음수)"""
+    """모든 점이 올바르게 분류될 때의 margin (아니면 음수)"""
     d = y * (X @ w + b) / np.linalg.norm(w)
     return d.min()
 
@@ -45,7 +45,7 @@ cands = {}
 for a in angles:
     th = np.radians(a + 45)
     w = np.array([np.cos(th), np.sin(th)])
-    # 이 방향에서 마진이 최대가 되도록 절편을 잡는다
+    # 이 방향에서 margin이 최대가 되도록 절편을 잡는다
     proj = X @ w
     b = -(proj[y == 1].min() + proj[y == -1].max()) / 2
     cands[a] = (w, b, margin_of(w, b))
@@ -63,10 +63,10 @@ fig = go.Figure()
 a0 = best_a
 w0, b0, m0 = cands[a0]
 nw = np.linalg.norm(w0)
-fig.add_trace(go.Scatter(x=gx, y=boundary(w0, b0), mode="lines", name="결정경계",
+fig.add_trace(go.Scatter(x=gx, y=boundary(w0, b0), mode="lines", name="decision boundary",
                          line=dict(color=viz.GREEN, width=3)))
 fig.add_trace(go.Scatter(x=gx, y=boundary(w0, b0, m0*nw), mode="lines",
-                         name="마진 경계", line=dict(color=viz.GREEN, width=1.5, dash="dash")))
+                         name="margin 경계", line=dict(color=viz.GREEN, width=1.5, dash="dash")))
 fig.add_trace(go.Scatter(x=gx, y=boundary(w0, b0, -m0*nw), mode="lines",
                          showlegend=False, line=dict(color=viz.GREEN, width=1.5, dash="dash")))
 for lab, col, m in [(-1, viz.ACCENT, y == -1), (1, viz.WARM, y == 1)]:
@@ -74,11 +74,11 @@ for lab, col, m in [(-1, viz.ACCENT, y == -1), (1, viz.WARM, y == 1)]:
                              name=f"클래스 {lab}",
                              marker=dict(size=10, color=col,
                                          line=dict(width=1, color="black"))))
-# 서포트 벡터 강조
+# support vector 강조
 d0 = y * (X @ w0 + b0) / nw
 sv = np.abs(d0 - m0) < 1e-6
 fig.add_trace(go.Scatter(x=X[sv, 0], y=X[sv, 1], mode="markers",
-                         name="서포트 벡터",
+                         name="support vector",
                          marker=dict(size=18, color="rgba(0,0,0,0)",
                                      line=dict(width=2.5, color=viz.YELLOW))))
 
@@ -99,43 +99,43 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="경계 각도 = ",
                   yaxis=dict(title="x₂", range=[-3, 3.5]),
                   legend=dict(x=0.01, y=0.99))
 viz.fig_defaults(fig, height=470,
-                 title=f"최대 마진 = {max(margins):.3f} (각도 {best_a:.0f}°)")
+                 title=f"최대 margin = {max(margins):.3f} (각도 {best_a:.0f}°)")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-각도를 돌려보세요. 마진 경계(점선)의 간격이 가장 넓은 지점이 최적입니다. 노란 원으로 표시된 **서포트 벡터**만 마진에 닿아 있고, 나머지 점은 마진 밖에 있습니다.
+각도를 돌려보세요. margin 경계(점선)의 간격이 가장 넓은 지점이 최적입니다. 노란 원으로 표시된 **support vector**(지지 벡터 — 경계를 떠받치는 점)만 margin에 닿아 있고, 나머지 점은 margin밖에 있습니다. 도로의 폭을 정하는 것은 도로에 가장 가까운 집 몇 채뿐이다.
 :::
 
 ---
 
-## 최적화 문제와 쌍대
+## 최적화 문제와 dual
 
-### 마진 최대화가 왜 $\tfrac12\|\mathbf{w}\|^2$ 최소화가 되는가
+### margin 최대화가 왜 $\tfrac12\|\mathbf{w}\|^2$ 최소화가 되는가
 
 "동등하다"는 말에는 눈금 고정이라는 단계가 하나 숨어 있다.
 
-초평면 $\mathbf{w}^\top\mathbf{x}+b=0$ 까지의 거리는 [0.0](../00_foundations/00_linear_algebra.qmd)의
+hyperplane $\mathbf{w}^\top\mathbf{x}+b=0$ 까지의 거리는 [0.0](../00_foundations/00_linear_algebra.qmd)의
 점-평면 거리 공식으로
 
 $$d(\mathbf{x}) = \frac{|\mathbf{w}^\top\mathbf{x}+b|}{\|\mathbf{w}\|}$$
 
 여기에 문제가 하나 있다. $(\mathbf{w},b)$ 를 $(c\mathbf{w},cb)$ 로 바꿔도
-**같은 초평면**이라 거리는 변하지 않는데 $\|\mathbf{w}\|$ 는 변한다.
-즉 표현이 유일하지 않다. 그래서 **눈금을 고정한다** —
+**같은 hyperplane**이라 거리는 변하지 않는데 $\|\mathbf{w}\|$ 는 변한다.
+즉 표현이 유일하지 않다 — 같은 직선을 cm 눈금으로 적을 수도 m 눈금으로 적을 수도 있는 것과 같다. 그래서 **눈금을 고정한다** —
 경계에 가장 가까운 점에서 함수값의 크기가 정확히 1이 되도록 잡는다.
 
 $$\min_i\, y_i(\mathbf{w}^\top\mathbf{x}_i+b) = 1$$
 
-이 규격화 아래에서 마진(양쪽 여백의 절반)이 깔끔하게 정리된다.
+이 눈금 고정 아래에서 margin(양쪽 여백의 절반)이 깔끔하게 정리된다.
 
-$$\text{마진} = \min_i \frac{y_i(\mathbf{w}^\top\mathbf{x}_i+b)}{\|\mathbf{w}\|} = \frac{1}{\|\mathbf{w}\|}$$
+$$\text{margin} = \min_i \frac{y_i(\mathbf{w}^\top\mathbf{x}_i+b)}{\|\mathbf{w}\|} = \frac{1}{\|\mathbf{w}\|}$$
 
-$$\boxed{\ \text{마진 최대화} \iff \|\mathbf{w}\| \text{ 최소화} \iff \tfrac{1}{2}\|\mathbf{w}\|^2 \text{ 최소화}\ }$$
+$$\boxed{\ \text{margin 최대화} \iff \|\mathbf{w}\| \text{ 최소화} \iff \tfrac{1}{2}\|\mathbf{w}\|^2 \text{ 최소화}\ }$$
 
-제곱과 $\tfrac12$ 은 순전히 편의다 — 단조 변환이라 최적해가 같고,
-미분하면 $\mathbf{w}$ 가 깔끔하게 나오며, 무엇보다 **볼록 이차계획**이 되어
-전역 최적해가 보장된다. 규격화가 만든 부등식 제약 $y_i(\mathbf{w}^\top\mathbf{x}_i+b)\ge 1$ 이
+제곱과 $\tfrac12$ 은 순전히 편의다 — 순서를 지키는 변환이라 최적해가 같고,
+미분하면 $\mathbf{w}$ 가 깔끔하게 나오며, 무엇보다 **convex quadratic program**(볼록 이차계획 — 목적함수가 그릇 모양 이차식이고 제약이 직선인 문제)이 되어
+global optimum이 보장된다. 눈금 고정이 만든 부등식 제약 $y_i(\mathbf{w}^\top\mathbf{x}_i+b)\ge 1$ 이
 아래 문제의 제약 그대로다.
 
 ```{python}
@@ -144,38 +144,38 @@ $$\boxed{\ \text{마진 최대화} \iff \|\mathbf{w}\| \text{ 최소화} \iff \t
 
 import numpy as np
 
-# 같은 초평면을 서로 다른 눈금으로 표현해 본다
+# 같은 hyperplane 을 서로 다른 눈금으로 표현해 본다
 w0, b0 = np.array([1.0, 1.0]), -2.0
 pts = np.array([[2.0, 1.0], [0.5, 0.5], [3.0, 2.0]])
 y = np.array([1.0, -1.0, 1.0])
 
-print(f"{'배율 c':>8}{'‖w‖':>10}{'가장 가까운 점의 함수값':>22}{'기하 마진':>12}")
+print(f"{'배율 c':>8}{'‖w‖':>10}{'가장 가까운 점의 함수값':>22}{'기하 margin':>12}")
 for c in [0.5, 1.0, 2.0, 10.0]:
     w, b = c * w0, c * b0
     f = y * (pts @ w + b)
     print(f"{c:>8.1f}{np.linalg.norm(w):>10.3f}{f.min():>22.3f}"
           f"{f.min()/np.linalg.norm(w):>12.4f}")
 
-# 규격화 후: 마진 = 1/‖w‖
+# 눈금 고정 후: margin = 1/‖w‖
 c_norm = 1.0 / (y * (pts @ w0 + b0)).min()
 w, b = c_norm * w0, c_norm * b0
-print(f"\n규격화 배율 c = {c_norm:.4f}")
+print(f"\n눈금 고정 배율 c = {c_norm:.4f}")
 print(f"  함수값 최솟값 = {(y * (pts @ w + b)).min():.4f}")
 print(f"  1/‖w‖ = {1/np.linalg.norm(w):.4f}")
 ```
 
-기하 마진은 $c$ 와 무관하다 — 같은 초평면이니 당연하다.
-$\|\mathbf{w}\|$ 만 보고 "마진이 크다"고 말할 수 없는 이유이고,
-그래서 함수값의 최솟값을 1 로 고정하는 규격화가 필요하다.
-규격화 배율을 곱한 뒤에는 함수값 최솟값이 1 이 되고 $1/\|\mathbf{w}\|$ 가 기하 마진과 일치한다.
+기하 margin은 $c$ 와 무관하다 — 같은 hyperplane이니 당연하다.
+$\|\mathbf{w}\|$ 만 보고 "margin이 크다"고 말할 수 없는 이유이고,
+그래서 함수값의 최솟값을 1로 고정하는 눈금 고정이 필요하다.
+그 배율을 곱한 뒤에는 함수값 최솟값이 1이 되고 $1/\|\mathbf{w}\|$ 가 기하 margin과 일치한다.
 
-마진을 최대화하는 것은 다음과 동등하다.
+margin을 최대화하는 것은 다음과 동등하다.
 
 $$\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2
 \quad\text{s.t.}\quad y_i(\mathbf{w}^\top\mathbf{x}_i + b) \ge 1 \;\;\forall i$$
 
-[0.1의 라그랑주·KKT](../00_foundations/01_calculus_optimization.qmd)를 적용하면
-**쌍대 문제**가 나온다.
+[0.1의 Lagrange·KKT](../00_foundations/01_calculus_optimization.qmd)를 적용하면
+**dual problem**(dual problem — "어느 점이 얼마나 중요한가"라는 관점으로 바꿔 쓴 같은 문제)이 나온다.
 
 $$\max_{\boldsymbol\alpha}\ \sum_i\alpha_i - \tfrac{1}{2}\sum_{i,j}\alpha_i\alpha_j y_i y_j\,\underbrace{\mathbf{x}_i^\top\mathbf{x}_j}_{\text{내적!}}
 \quad\text{s.t.}\quad \alpha_i \ge 0,\ \sum_i\alpha_i y_i = 0$$
@@ -183,26 +183,27 @@ $$\max_{\boldsymbol\alpha}\ \sum_i\alpha_i - \tfrac{1}{2}\sum_{i,j}\alpha_i\alph
 여기서 두 가지가 결정적이다.
 
 ::: {.key-concept}
-**1. 상보 여유조건이 서포트 벡터를 만든다.**
+**1. complementary slackness(상보 여유조건)가 support vector를 만든다.**
 
 KKT의 $\alpha_i\big[y_i(\mathbf{w}^\top\mathbf{x}_i+b)-1\big]=0$ 에 의해
 
-- 마진 밖의 점 → 제약이 느슨함 → $\alpha_i = 0$ → **답에 영향 없음**
-- 마진 위의 점 → 제약이 팽팽함 → $\alpha_i > 0$ → **서포트 벡터**
+- margin 밖의 점 → 제약이 느슨함 → $\alpha_i = 0$ → **답에 영향 없음**
+- margin 위의 점 → 제약이 팽팽함 → $\alpha_i > 0$ → **support vector**
 
 해는 $\mathbf{w} = \sum_i \alpha_i y_i \mathbf{x}_i$ 인데, 대부분의 $\alpha_i$ 가 0이므로
-**소수의 점만으로 결정경계가 정해진다.**
+**소수의 점만으로 decision boundary가 정해진다.** 도로에서 먼 집은 몇 채를 더 짓든 도로 폭에 영향이 없다.
 
 **2. 데이터가 오직 내적 $\mathbf{x}_i^\top\mathbf{x}_j$ 로만 등장한다.**
 
-이것이 커널 트릭의 문이다.
+이것이 kernel trick의 문이다.
 :::
 
 ---
 
-## 소프트 마진: 완벽히 나눌 수 없을 때
+## soft margin: 완벽히 나눌 수 없을 때
 
-현실 데이터는 겹친다. 슬랙 변수 $\xi_i$ 로 위반을 허용한다.
+현실 데이터는 겹친다. **soft margin**은 몇 채가 도로 안에 들어와 있어도 벌금을 내고 허용하는 것이다 —
+slack variable(여유 변수) $\xi_i$ 가 각 점이 얼마나 침범했는지를 잰다.
 
 $$\min\ \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_i\xi_i
 \quad\text{s.t.}\quad y_i(\mathbf{w}^\top\mathbf{x}_i+b)\ge 1-\xi_i,\ \xi_i\ge 0$$
@@ -211,35 +212,37 @@ $C$ 가 트레이드오프를 조절한다.
 
 | $C$ | 의미 | 결과 |
 |-----|------|------|
-| 크다 | 위반에 큰 벌점 | 마진 좁음, 훈련 오차 작음, 과적합 위험 |
-| 작다 | 위반에 관대 | 마진 넓음, 더 많은 서포트 벡터, 단순한 경계 |
+| 크다 | 위반에 큰 벌점 | margin 좁음, 훈련 오차 작음, overfitting 위험 |
+| 작다 | 위반에 관대 | margin 넓음, 더 많은 support vector, 단순한 경계 |
 
 ::: {.callout-note}
-## SVM은 사실 정규화된 ERM이다
+## SVM은 사실 regularization된 ERM이다
 
-소프트 마진 문제를 다시 쓰면 [2.0의 ERM 형태](00_learning_problem.qmd)가 그대로 나온다.
+soft margin 문제를 다시 쓰면 [2.0의 ERM 형태](00_learning_problem.qmd)가 그대로 나온다.
 
-$$\min_{\mathbf{w},b}\ \underbrace{\sum_i \max(0,\,1-y_i f(\mathbf{x}_i))}_{\text{힌지 손실}} + \underbrace{\frac{1}{2C}\|\mathbf{w}\|^2}_{\text{L2 정규화}}$$
+$$\min_{\mathbf{w},b}\ \underbrace{\sum_i \max(0,\,1-y_i f(\mathbf{x}_i))}_{\text{hinge loss}} + \underbrace{\frac{1}{2C}\|\mathbf{w}\|^2}_{\text{L2 regularization}}$$
 
-즉 SVM = **힌지 손실 + Ridge 정규화**다.
-[2.0에서 본 대리손실 그림](00_learning_problem.qmd)에서 힌지가 바로 이것이고,
+즉 SVM = **hinge loss(hinge loss — margin 안으로 들어온 만큼만 벌점) + Ridge regularization**이다.
+[2.0에서 본 surrogate loss 그림](00_learning_problem.qmd)에서 hinge가 바로 이것이고,
 [2.3의 L2 벌점](03_regularization.qmd)이 여기 붙어 있다.
 
-로지스틱 회귀와의 차이는 **손실함수 하나**뿐이다:
-로지스틱 손실은 모든 점에 조금씩 반응하고, 힌지 손실은 마진 안쪽 점만 본다.
+logistic regression과의 차이는 **손실함수 하나**뿐이다:
+logistic 손실은 모든 점에 조금씩 반응하고, hinge loss는 margin 안쪽 점만 본다.
 :::
 
 ---
 
-## 커널 트릭
+## kernel trick
 
-쌍대 문제에서 데이터는 내적으로만 등장한다.
-그러니 내적을 **다른 함수로 바꿔치기**해도 문제가 그대로 풀린다.
+dual problem에서 데이터는 내적으로만 등장한다.
+그러니 내적을 **다른 함수로 바꿔치기**해도 문제가 그대로 풀린다. 이것이 **kernel trick**(kernel trick)이다.
 
 $$\mathbf{x}_i^\top\mathbf{x}_j \;\longrightarrow\; K(\mathbf{x}_i,\mathbf{x}_j) = \phi(\mathbf{x}_i)^\top\phi(\mathbf{x}_j)$$
 
+$\phi$ 는 feature map(특성 사상 — 원래 입력을 더 높은 차원으로 옮기는 함수)이고, kernel $K$ 는 "옮긴 뒤의 내적"이다.
 핵심은 **$\phi$ 를 절대 계산하지 않는다**는 것이다.
 $\phi$ 가 무한 차원이어도 $K$ 만 계산할 수 있으면 된다.
+두 사람의 닮은 정도를 알고 싶을 때, 각자의 상세 프로필 수천 항목을 다 적지 않고도 "얼마나 닮았는가"라는 점수 하나를 바로 낼 수 있는 셈이다.
 
 ```{python}
 #| label: kernel-trick-demo
@@ -251,7 +254,7 @@ import numpy as np
 x1 = np.array([1.0, 2.0])
 x2 = np.array([3.0, -1.0])
 
-# 2차 다항 커널의 명시적 특성 사상
+# 2차 polynomial kernel 의 명시적 feature map
 def phi_poly2(x):
     a, b = x
     return np.array([a**2, b**2, np.sqrt(2)*a*b, np.sqrt(2)*a, np.sqrt(2)*b, 1.0])
@@ -260,25 +263,26 @@ explicit = phi_poly2(x1) @ phi_poly2(x2)
 kernel = (x1 @ x2 + 1) ** 2
 
 print(f"명시적으로 6차원으로 올려 내적 : {explicit:.10f}")
-print(f"커널 (x·x' + 1)² 로 바로 계산   : {kernel:.10f}")
+print(f"kernel (x·x' + 1)² 로 바로 계산  : {kernel:.10f}")
 print(f"차이: {abs(explicit - kernel):.2e}")
 print()
 print("차원이 커질수록 이 절약이 커진다:")
-print(f"{'원 차원 d':>10} {'2차 다항 특성 수':>18} {'커널 계산 비용':>16}")
+print(f"{'원 차원 d':>10} {'2차 다항 특성 수':>18} {'kernel 계산 비용':>17}")
 print("-" * 48)
 for d in [2, 10, 100, 1000]:
     n_feat = (d + 1) * (d + 2) // 2
     print(f"{d:>10} {n_feat:>18,} {d:>15}회 곱셈")
 ```
 
-2차 다항 커널만 해도 원 차원 1000 에서 명시적 특성이 50만 개인데 커널 계산은 곱셈 1000번이다.
-RBF 커널은 $\phi$ 가 무한 차원이라 명시적 계산이 아예 불가능하다.
+2차 polynomial kernel만 해도 원 차원 1000에서 명시적 특성이 50만 개인데 kernel 계산은 곱셈 1000번이다.
+RBF kernel은 $\phi$ 가 무한 차원이라 명시적 계산이 아예 불가능하다.
 
 ---
 
-## G2.5.1 — 커널이 데이터를 들어 올린다
+## G2.5.1 — kernel이 데이터를 들어 올린다
 
 2차원에서 선형 분리가 안 되는 데이터가 3차원에서는 평면으로 갈린다.
+종이 위의 점들을 직선 하나로 못 나눌 때, 종이를 들어 올려 휘게 하면 칼로 한 번에 자를 수 있는 것과 같다.
 
 ```{python}
 #| label: fig-kernel-lift
@@ -302,7 +306,7 @@ z = (X**2).sum(1)                              # 리프팅 좌표
 
 fig = make_subplots(rows=1, cols=2, specs=[[{"type": "xy"}, {"type": "scene"}]],
                     subplot_titles=("원 공간 (2D) — 직선으로 못 나눔",
-                                    "리프팅 후 (3D) — 평면으로 갈림"))
+                                    "lifting 후 (3D) — 평면으로 갈림"))
 for c in (0, 1):
     m = y == c
     fig.add_trace(go.Scatter(x=X[m,0], y=X[m,1], mode="markers",
@@ -332,21 +336,21 @@ fig.update_layout(scene=dict(xaxis_title="x₁", yaxis_title="x₂",
                              camera=dict(eye=dict(x=1.5, y=1.5, z=0.8)),
                              bgcolor="rgba(0,0,0,0)"),
                   legend=dict(x=0.01, y=0.99))
-viz.fig_defaults(fig, height=470, title="커널 트릭의 기하학적 직관")
+viz.fig_defaults(fig, height=470, title="kernel trick 의 기하학적 직관")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-오른쪽을 회전시켜 보세요. 안쪽 원(파랑)은 아래, 바깥 원(주황)은 위에 있어 **초록 평면 하나로 완전히 갈립니다**. RBF 커널은 이런 리프팅을 무한 차원에서 암묵적으로 수행합니다.
+오른쪽을 회전시켜 보세요. 안쪽 원(파랑)은 아래, 바깥 원(주황)은 위에 있어 **초록 평면 하나로 완전히 갈립니다**. RBF kernel은 이런 lifting을 무한 차원에서 암묵적으로 수행합니다.
 :::
 
 ---
 
-## 커널 종류와 효과
+## kernel 종류와 효과
 
 ```{python}
 #| label: fig-kernels
-#| fig-cap: "커널과 하이퍼파라미터에 따른 결정경계"
+#| fig-cap: "kernel과 하이퍼파라미터에 따른 decision boundary"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -367,7 +371,7 @@ def kernel_matrix(A, B, kind, gamma=1.0, degree=3, coef0=1.0):
     raise ValueError(kind)
 
 def kernel_svm(K, ys, C=1.0, iters=3000, lr=0.001):
-    """마진을 위반한 점의 α 를 키우고 나머지는 줄이는 사영 경사법 (교육용 간이 구현)"""
+    """margin 을 위반한 점의 α 를 키우고 나머지는 줄이는 projected gradient 법 (교육용 간이 구현)"""
     n = len(ys)
     a = np.zeros(n)
     for _ in range(iters):
@@ -401,7 +405,7 @@ fig.add_trace(go.Contour(x=gx, y=gy, z=surfaces[n0], colorscale="RdBu", zmid=0,
                          contours=dict(showlines=False)))
 fig.add_trace(go.Contour(x=gx, y=gy, z=surfaces[n0], showscale=False,
                          contours=dict(start=0, end=0, size=1, coloring="lines"),
-                         line=dict(color=viz.GREEN, width=3), name="결정경계"))
+                         line=dict(color=viz.GREEN, width=3), name="decision boundary"))
 for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
     m = y == c
     fig.add_trace(go.Scatter(x=X[m,0], y=X[m,1], mode="markers",
@@ -411,35 +415,35 @@ for c, col in [(0, viz.ACCENT), (1, viz.WARM)]:
 
 steps = [(nm, {"z": [surfaces[nm], surfaces[nm], None, None]})
          for nm, _ in configs]
-fig.update_layout(sliders=[viz.slider(steps, prefix="커널 = ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="kernel = ",
                                       active=[c[0] for c in configs].index(n0),
                                       pad_t=55)],
                   xaxis_title="x₁", yaxis_title="x₂",
                   legend=dict(x=0.01, y=0.99))
-viz.fig_defaults(fig, height=470, title="커널 선택이 가설공간을 바꾼다")
+viz.fig_defaults(fig, height=470, title="kernel 선택이 hypothesis space 를 바꾼다")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-**선형**은 초승달을 못 나눕니다. **RBF γ=1** 정도가 적당하고, **γ=30** 은 각 점 주위에 작은 섬을 만듭니다 — 전형적 과적합입니다. $\gamma$ 는 "각 점의 영향 반경"을 정합니다: 크면 좁고, 작으면 넓습니다.
+**선형**은 초승달을 못 나눕니다. **RBF γ=1** 정도가 적당하고, **γ=30** 은 각 점 주위에 작은 섬을 만듭니다 — 전형적 overfitting입니다. $\gamma$ 는 "각 점의 영향 반경"을 정합니다: 크면 좁고, 작으면 넓습니다 — 가로등 하나가 비추는 범위라고 보면 됩니다.
 :::
 
-| 커널 | 식 | 특징 |
+| kernel | 식 | 특징 |
 |------|-----|------|
-| 선형 | $\mathbf{x}^\top\mathbf{x}'$ | 빠름, 고차원 희소 데이터(텍스트)에 적합 |
-| 다항 | $(\gamma\mathbf{x}^\top\mathbf{x}'+c)^d$ | 유한 차원, $d$ 크면 불안정 |
-| **RBF** | $\exp(-\gamma\|\mathbf{x}-\mathbf{x}'\|^2)$ | 무한 차원, 기본 선택 |
-| 시그모이드 | $\tanh(\gamma\mathbf{x}^\top\mathbf{x}'+c)$ | 조건부로만 유효 커널 |
+| linear | $\mathbf{x}^\top\mathbf{x}'$ | 빠름, 고차원 sparse 데이터(텍스트)에 적합 |
+| polynomial | $(\gamma\mathbf{x}^\top\mathbf{x}'+c)^d$ | 유한 차원, $d$ 크면 불안정 |
+| **RBF** (radial basis function) | $\exp(-\gamma\|\mathbf{x}-\mathbf{x}'\|^2)$ | 무한 차원, 기본 선택. 가까울수록 1, 멀수록 0 |
+| sigmoid | $\tanh(\gamma\mathbf{x}^\top\mathbf{x}'+c)$ | 조건부로만 유효한 kernel |
 
 ::: {.callout-note}
 ## Mercer 조건
 
-아무 함수나 커널이 될 수는 없다.
-$K$ 가 유효하려면 **커널 행렬이 항상 대칭 양반정치**여야 한다
-([0.0의 양정치](../00_foundations/00_linear_algebra.qmd)).
+아무 함수나 kernel이 될 수는 없다.
+$K$ 가 유효하려면 **kernel 행렬이 항상 대칭 positive semidefinite**여야 한다
+([0.0의 positive definite](../00_foundations/00_linear_algebra.qmd)).
 
 그래야 $K(\mathbf{x},\mathbf{x}')=\phi(\mathbf{x})^\top\phi(\mathbf{x}')$ 인 $\phi$ 가 존재함이 보장되고,
-쌍대 문제가 볼록해져 전역 최적해를 얻는다.
+dual problem이 convex해져 global optimum을 얻는다. "유사도 점수"가 진짜 어떤 공간의 내적이 되려면 지켜야 할 조건이다.
 :::
 
 ---
@@ -450,7 +454,7 @@ $K$ 가 유효하려면 **커널 행렬이 항상 대칭 양반정치**여야 �
 
 ```{python}
 #| label: fig-c-gamma
-#| fig-cap: "C와 γ 격자에서의 결정경계 복잡도"
+#| fig-cap: "C와 γ 격자에서의 decision boundary 복잡도"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -503,7 +507,7 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-오른쪽 아래(C=50, γ=20)가 가장 심한 과적합입니다 — 점 하나하나를 감싸는 섬이 생깁니다. 왼쪽 위(C=0.05, γ=0.2)는 거의 직선입니다. 실무에서는 이 격자를 **로그 스케일로 탐색**합니다.
+오른쪽 아래(C=50, γ=20)가 가장 심한 overfitting입니다 — 점 하나하나를 감싸는 섬이 생깁니다. 왼쪽 위(C=0.05, γ=0.2)는 거의 직선입니다. 실무에서는 이 격자를 **로그 스케일로 탐색**합니다.
 :::
 
 ---
@@ -513,43 +517,43 @@ fig.show()
 | 항목 | SVM | 함의 |
 |---|---|---|
 | 복잡도 (학습) | $O(n^2)\sim O(n^3)$ | 대규모 데이터에서 병목 |
-| 복잡도 (예측) | $O$(서포트 벡터 수) | SV 가 많으면 느림 |
-| 확률 출력 | 직접 안 나옴 | Platt 스케일링 등 후처리 필요 |
-| 다중 클래스 | 직접 지원 안 함 | OvR/OvO 로 조합 |
-| 특성 스케일 | 민감 | 표준화 필수 |
-| 해석 | SV 로 설명 가능 | 커널 쓰면 어려워짐 |
+| 복잡도 (예측) | $O$(support vector 수) | SV가 많으면 느림 |
+| 확률 출력 | 직접 안 나옴 | Platt scaling 등 후처리 필요 |
+| multi-class | 직접 지원 안 함 | OvR/OvO(하나 대 나머지 / 하나 대 하나)로 조합 |
+| 특성 scale | 민감 | standardization 필수 |
+| 해석 | SV로 설명 가능 | kernel 쓰면 어려워짐 |
 
 여전히 강한 곳은 표본이 적고 차원이 높을 때($n<p$), 텍스트 분류, 생물정보학,
-이상 탐지(One-Class SVM)다. 밀려난 곳은 대규모 정형 데이터(→ GBDT)와 이미지·텍스트(→ 딥러닝)다.
+anomaly detection(이상 탐지, One-Class SVM)이다. 밀려난 곳은 대규모 정형 데이터(→ GBDT)와 이미지·텍스트(→ 딥러닝)다.
 
 ::: {.key-concept}
-**커널 아이디어는 SVM보다 오래 살아남았다.**
+**kernel 아이디어는 SVM보다 오래 살아남았다.**
 
 | 어디서 | 어떻게 |
 |--------|--------|
-| [가우시안 프로세스](08_knn_naive_bayes.qmd) | 커널이 공분산 함수 |
-| [커널 PCA](10_dimensionality_reduction.qmd) | 비선형 차원축소 |
-| [어텐션](../05_transformer/00_attention_mechanism.qmd) | $\exp(q^\top k)$ 는 커널이고, 어텐션은 커널 회귀 |
-| [선형 어텐션](../05_transformer/07_efficient_attention.qmd) | 커널을 $\phi(q)^\top\phi(k)$ 로 근사해 결합법칙 사용 |
-| 신경 탄젠트 커널 | 무한 폭 신경망 = 커널 회귀 |
+| [Gaussian process](08_knn_naive_bayes.qmd) | kernel이 covariance 함수 |
+| [kernel PCA](10_dimensionality_reduction.qmd) | 비선형 dimensionality reduction |
+| [attention](../05_transformer/00_attention_mechanism.qmd) | $\exp(q^\top k)$ 는 kernel이고, attention은 kernel 회귀 |
+| [linear attention](../05_transformer/07_efficient_attention.qmd) | kernel을 $\phi(q)^\top\phi(k)$ 로 근사해 결합법칙 사용 |
+| neural tangent kernel | 무한 폭 신경망 = kernel 회귀 |
 
-특히 마지막 두 개가 흥미롭다. 선형 어텐션은 **"커널을 명시적 특성으로 되돌려"**
-계산 순서를 바꾸는 것이고, 이는 커널 트릭의 정확한 역방향이다.
+특히 마지막 두 개가 흥미롭다. linear attention은 **"kernel을 명시적 특성으로 되돌려"**
+계산 순서를 바꾸는 것이고, 이는 kernel trick의 정확한 역방향이다.
 :::
 
 ---
 
 ## 회귀로의 확장: SVR
 
-$\epsilon$-무감도 손실을 쓰면 회귀에도 같은 기계를 적용할 수 있다.
+$\epsilon$-insensitive 손실(오차가 $\epsilon$ 이내면 신경 쓰지 않는 손실)을 쓰면 회귀에도 같은 기계를 적용할 수 있다 — **SVR**(support vector regression)이다.
 
 $$L_\epsilon(r) = \max(0,\ |r| - \epsilon)$$
 
-**오차가 $\epsilon$ 이내면 벌점 0.** 튜브 안에 들어오면 신경 쓰지 않는다.
+**오차가 $\epsilon$ 이내면 벌점 0.** 튜브 안에 들어오면 신경 쓰지 않는다 — 허용 오차 안에 든 납품에는 벌금이 없는 것과 같다.
 
 ```{python}
 #| label: fig-svr-loss
-#| fig-cap: "ε-무감도 손실. 튜브 안은 벌점이 0입니다."
+#| fig-cap: "ε-insensitive 손실. 튜브 안은 벌점이 0입니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -564,54 +568,54 @@ for i, eps in enumerate([0.0, 0.3, 0.7, 1.2]):
                              line=dict(color=viz.color(i), width=2.5)))
 fig.add_trace(go.Scatter(x=r, y=r**2, mode="lines", name="MSE (비교)",
                          line=dict(color="rgba(255,255,255,0.35)", width=2, dash="dot")))
-fig.update_layout(xaxis_title="잔차 r", yaxis_title="손실",
+fig.update_layout(xaxis_title="residual r", yaxis_title="손실",
                   yaxis=dict(range=[0, 3]), legend=dict(x=0.35, y=0.98))
-viz.fig_defaults(fig, height=380, title="ε-무감도 손실")
+viz.fig_defaults(fig, height=380, title="ε-insensitive 손실")
 fig.show()
 ```
 
 $\epsilon=0$ 이면 MAE와 같아진다. $\epsilon$ 을 키우면 **평평한 구간이 넓어져**
-그 안의 점들은 서포트 벡터가 되지 않는다 — 해가 더 희소해진다.
+그 안의 점들은 support vector가 되지 않는다 — 해가 더 sparse해진다.
 
 ---
 
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 서포트 벡터만 남긴다**
-학습 후 $\alpha_i>0$ 인 점만으로 다시 학습시켜라. 결정경계가 같은가?
-전체의 몇 %가 서포트 벡터인가?
+**① support vector만 남긴다**
+학습 후 $\alpha_i>0$ 인 점만으로 다시 학습시켜라. decision boundary가 같은가?
+전체의 몇 %가 support vector인가?
 
-**② C와 마진의 관계**
-소프트 마진의 $C$ 를 바꿔가며 마진 폭과 오분류 수를 재라.
+**② C와 margin의 관계**
+soft margin의 $C$ 를 바꿔가며 margin 폭과 오분류 수를 재라.
 $C\to\infty$ 면 어떤 문제로 돌아가는가?
 
-**③ RBF 커널의 γ 를 극단으로**
-$\gamma$ 를 아주 크게 하면 결정경계가 어떻게 되는가.
-왜 그것이 과적합인지 [2.8의 거리 집중](08_knn_naive_bayes.qmd)과 연결해 설명하라.
+**③ RBF kernel의 γ 를 극단으로**
+$\gamma$ 를 아주 크게 하면 decision boundary가 어떻게 되는가.
+왜 그것이 overfitting인지 [2.8의 distance concentration](08_knn_naive_bayes.qmd)과 연결해 설명하라.
 :::
 
 ## 요약
 
 | 개념 | 핵심 | 이어지는 곳 |
 |------|------|-------------|
-| 최대 마진 | 가장 가까운 점에서 가장 멀리 | 일반화 직관 |
-| 쌍대 문제 | 데이터가 **내적으로만** 등장 | 커널 트릭의 문 |
-| 서포트 벡터 | KKT 상보 여유 → 대부분 $\alpha_i=0$ | 희소한 해 |
-| 소프트 마진 | $C$ 로 위반 허용 | 겹치는 데이터 |
-| **SVM = 힌지 + L2** | 정규화된 ERM | 로지스틱과 손실만 다름 |
-| 커널 트릭 | $\phi$ 계산 없이 고차원 | RBF는 무한 차원 |
-| Mercer 조건 | 커널 행렬이 양반정치 | 볼록성 보장 |
-| $\gamma$ | 각 점의 영향 반경 | 크면 과적합 |
-| SVR | $\epsilon$-무감도 손실 | 튜브 안은 무시 |
-| 커널의 후생 | GP, 커널 PCA, **어텐션** | 아이디어가 더 오래 살아남음 |
+| maximum margin | 가장 가까운 점에서 가장 멀리 — 두 마을 사이의 가장 넓은 완충지대 | generalization 직관 |
+| dual problem | 데이터가 **내적으로만** 등장 | kernel trick의 문 |
+| support vector | KKT complementary slackness → 대부분 $\alpha_i=0$ — 도로 폭은 가장 가까운 집 몇 채가 정한다 | sparse한 해 |
+| soft margin | $C$ 로 위반 허용 — 벌금 내고 침범 | 겹치는 데이터 |
+| **SVM = hinge + L2** | regularization된 ERM | logistic과 손실만 다름 |
+| kernel trick | $\phi$ 계산 없이 고차원 — 종이를 들어 올려 자르기 | RBF는 무한 차원 |
+| Mercer 조건 | kernel 행렬이 positive semidefinite | convexity 보장 |
+| $\gamma$ | 각 점의 영향 반경 — 가로등 밝기 범위 | 크면 overfitting |
+| SVR | $\epsilon$-insensitive 손실 | 허용 오차 안은 무시 |
+| kernel의 후생 | GP, kernel PCA, **attention** | 아이디어가 더 오래 살아남음 |
 
-축 정렬 분할이라는 완전히 다른 귀납 편향으로 넘어간다.
-스케일링도 필요 없고, 범주형도 그대로 먹으며, 해석도 쉬운 모델 —
-그리고 정형 데이터 최강 앙상블의 기본 단위다.
+축에 나란한 분할이라는 완전히 다른 inductive bias로 넘어간다.
+scaling도 필요 없고, 범주형도 그대로 먹으며, 해석도 쉬운 모델 —
+그리고 정형 데이터 최강 ensemble의 기본 단위다.
 
 ---
 
-**다음**: [2.6 결정트리](06_trees.qmd) — 분할 기준·가지치기·해석
+**다음**: [2.6 decision tree](06_trees.qmd) — 분할 기준·pruning·해석
 
-**이전**: [2.4 로지스틱 회귀와 분류](04_logistic_regression.qmd)
+**이전**: [2.4 logistic regression과 분류](04_logistic_regression.qmd)
