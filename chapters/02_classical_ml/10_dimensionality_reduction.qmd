@@ -1,14 +1,15 @@
 ---
-title: "2.10 차원 축소"
-subtitle: "PCA·t-SNE·UMAP·매니폴드 — 고차원을 눈으로 보는 법"
+title: "2.10 dimensionality reduction"
+subtitle: "PCA·t-SNE·UMAP·manifold — 고차원을 눈으로 보는 법"
 jupyter: ai-ml-study
 ---
 
 [2.8](08_knn_naive_bayes.qmd)에서 고차원의 거리가 무의미해지는 것을 봤다.
 그런데 현대 AI가 다루는 것은 전부 고차원 벡터다 —
-임베딩은 768차원, 이미지는 수만 차원이다.
+embedding은 768차원, 이미지는 수만 차원이다.
 
-차원 축소는 두 가지 목적으로 쓰인다.
+**dimensionality reduction**(차원 축소 — 열의 수를 줄이되 중요한 정보는 남기기)은 두 가지 목적으로 쓰인다.
+3차원 물체의 그림자를 벽에 비추는 것과 같다 — 어느 각도에서 비추느냐에 따라 모양이 잘 보이기도, 뭉개지기도 한다.
 
 | 목적 | 요구 | 대표 |
 |------|------|------|
@@ -22,40 +23,43 @@ jupyter: ai-ml-study
 
 ## PCA: 분산이 큰 방향 찾기
 
-가장 많은 정보를 남기려면 **분산이 가장 큰 방향**으로 사영하면 된다.
+**PCA**(principal component analysis, 주성분 분석)는 가장 많은 정보를 남기려면 **분산이 가장 큰 방향**으로 projection(사영 — 그림자 내리기)하면 된다는 생각이다.
+럭비공의 그림자가 가장 길게 나오는 각도를 찾는 것이다.
 
 $$\max_{\|\mathbf{w}\|=1}\ \mathrm{Var}(X\mathbf{w}) = \max_{\|\mathbf{w}\|=1}\ \mathbf{w}^\top\Sigma\mathbf{w}$$
 
-이것은 [0.0의 고유값 문제](../00_foundations/00_linear_algebra.qmd) 그 자체다.
-답은 공분산 행렬 $\Sigma$ 의 **최대 고유값에 대응하는 고유벡터**다.
+이것은 [0.0의 eigenvalue 문제](../00_foundations/00_linear_algebra.qmd) 그 자체다.
+답은 covariance 행렬 $\Sigma$ 의 **최대 eigenvalue에 대응하는 eigenvector**다.
 
-### 왜 최대 고유벡터인가
+### 왜 최대 eigenvector인가
 
-$\Sigma$ 가 대칭이므로 [스펙트럼 정리](../00_foundations/00_linear_algebra.qmd)에 따라
-직교 고유기저 $\{\mathbf{v}_1,\dots,\mathbf{v}_d\}$ 와 고유값 $\lambda_1\ge\dots\ge\lambda_d\ge 0$ 이 있다.
+$\Sigma$ 가 대칭이므로 [spectral theorem](../00_foundations/00_linear_algebra.qmd)에 따라
+서로 직교하는 eigenvector들 $\{\mathbf{v}_1,\dots,\mathbf{v}_d\}$ 와 eigenvalue $\lambda_1\ge\dots\ge\lambda_d\ge 0$ 이 있다.
 임의의 단위벡터를 그 기저로 펼치면 $\mathbf{w}=\sum_i c_i\mathbf{v}_i$ 이고 $\sum_i c_i^2=1$ 이다.
 $\Sigma\mathbf{v}_i = \lambda_i\mathbf{v}_i$ 를 넣고 직교성을 쓰면
 
 $$\mathbf{w}^\top\Sigma\mathbf{w} = \sum_i \lambda_i c_i^2
 \;\le\; \lambda_1\sum_i c_i^2 = \lambda_1$$
 
-**고유값들의 가중평균**이고, 가중치의 합이 1이므로 최댓값을 넘을 수 없다.
+**eigenvalue들의 가중평균**이고, 가중치의 합이 1이므로 최댓값을 넘을 수 없다.
 등호는 $c_1=1$, 나머지가 0일 때 — 즉 $\mathbf{w}=\mathbf{v}_1$ 일 때만 성립한다.
-(이 비 $\frac{\mathbf{w}^\top\Sigma\mathbf{w}}{\mathbf{w}^\top\mathbf{w}}$ 를 **레일리 몫**이라 하고,
-[0.1에서 헤시안의 방향 곡률](../00_foundations/01_calculus_optimization.qmd)을 읽을 때 이미 썼다.)
+(이 비 $\frac{\mathbf{w}^\top\Sigma\mathbf{w}}{\mathbf{w}^\top\mathbf{w}}$ 를 **Rayleigh quotient**라 하고,
+[0.1에서 Hessian의 방향 곡률](../00_foundations/01_calculus_optimization.qmd)을 읽을 때 이미 썼다.)
 
-두 번째 주성분은 $\mathbf{v}_1$ 과 직교하라는 제약을 걸고 같은 논증을 반복하면 $\mathbf{v}_2$ 가 나온다.
+두 번째 principal component(principal component)는 $\mathbf{v}_1$ 과 직교하라는 제약을 걸고 같은 논증을 반복하면 $\mathbf{v}_2$ 가 나온다.
 이런 식으로 순서대로 얻어진다.
 
-### 분산 최대화 = 재구성 오차 최소화
+### 분산 최대화 = reconstruction error 최소화
 
 PCA를 설명하는 방식이 두 가지인데, **같은 문제의 두 얼굴**이다.
-$W$ 를 정규직교 열 $k$ 개로 두면 사영 후 되돌린 것이 $XWW^\top$ 이고,
+$W$ 를 orthonormal(서로 직교하고 길이 1인) 열 $k$ 개로 두면 projection 후 되돌린 것이 $XWW^\top$ 이고,
 피타고라스 정리에 의해 각 점에서
 
 $$\underbrace{\|\mathbf{x}\|^2}_{\text{전체}}
 = \underbrace{\|W^\top\mathbf{x}\|^2}_{\text{보존된 분산}}
-+ \underbrace{\|\mathbf{x}-WW^\top\mathbf{x}\|^2}_{\text{재구성 오차}}$$
++ \underbrace{\|\mathbf{x}-WW^\top\mathbf{x}\|^2}_{\text{reconstruction error}}$$
+
+그림자를 최대한 크게 만들수록 그림자로 복원했을 때 잃는 부분(높이 정보)이 줄어든다는 뜻이다.
 
 왼쪽은 $W$ 와 무관한 상수다. **따라서 오른쪽 첫 항을 최대화하는 것과
 둘째 항을 최소화하는 것이 정확히 같은 문제다.**
@@ -80,57 +84,57 @@ X = X - X.mean(0)
 U, S, Vt = np.linalg.svd(X, full_matrices=False)
 total = float((X ** 2).sum())
 
-print(f"{'k':>4}{'보존 분산':>12}{'재구성 오차':>13}{'합':>12}{'전체':>12}")
+print(f"{'k':>4}{'보존 분산':>12}{'reconstruction':>15}{'합':>12}{'전체':>12}")
 for k in [1, 2, 4, 6, 8]:
-    W = Vt[:k].T                            # 상위 k 개 주성분
+    W = Vt[:k].T                            # 상위 k 개 principal component
     proj = X @ W
     kept = float((proj ** 2).sum())
     err = float(((X - proj @ W.T) ** 2).sum())
     print(f"{k:>4}{kept:>12.1f}{err:>13.1f}{kept+err:>12.1f}{total:>12.1f}")
 
-# 무작위 직교 부분공간과 비교
+# 무작위 직교 subspace 와 비교
 k = 3
 Q, _ = np.linalg.qr(rng.normal(size=(d, k)))
 err_pca = float(((X - X @ Vt[:k].T @ Vt[:k]) ** 2).sum())
 err_rand = float(((X - X @ Q @ Q.T) ** 2).sum())
-print(f"\nk={k} 재구성 오차 — PCA {err_pca:.1f} vs 무작위 부분공간 {err_rand:.1f}")
+print(f"\nk={k} reconstruction error — PCA {err_pca:.1f} vs 무작위 subspace {err_rand:.1f}")
 ```
 
 보존 + 오차 = 전체가 어떤 $k$ 에서도 정확히 성립한다.
 전체가 상수이므로 하나를 최대화하는 것은 다른 하나를 최소화하는 것이고,
-같은 $k$ 에서 무작위로 고른 부분공간(`{python} f"{err_rand:.0f}"`)보다 PCA(`{python} f"{err_pca:.0f}"`)의 오차가 훨씬 작다.
+같은 $k$ 에서 무작위로 고른 subspace(`{python} f"{err_rand:.0f}"`)보다 PCA(`{python} f"{err_pca:.0f}"`)의 오차가 훨씬 작다.
 
 ::: {.key-concept}
-이 등가성이 [6.1 오토인코더](../06_generative/01_autoencoder.qmd)로 이어지는 다리다.
-**선형 오토인코더를 제곱오차로 학습하면 PCA와 같은 부분공간을 찾는다.**
-(가중치가 정확히 주성분이 되지는 않는다 — 같은 부분공간을 펴는 다른 기저일 수 있다.)
+이 등가성이 [6.1 autoencoder](../06_generative/01_autoencoder.qmd)로 이어지는 다리다.
+**선형 autoencoder를 제곱오차로 학습하면 PCA와 같은 subspace를 찾는다.**
+(가중치가 정확히 principal component가 되지는 않는다 — 같은 subspace를 펴는 다른 기저일 수 있다.)
 
-오토인코더가 PCA를 넘어서는 지점은 **인코더·디코더에 비선형을 넣을 때**다.
-그때는 평면이 아니라 굽은 매니폴드에 사영할 수 있고,
+autoencoder가 PCA를 넘어서는 지점은 **encoder·decoder에 비선형을 넣을 때**다.
+그때는 평면이 아니라 굽은 manifold에 projection할 수 있고,
 아래에서 볼 t-SNE·UMAP도 같은 동기에서 출발한다.
 :::
 
 ::: {.key-concept}
 **PCA는 SVD와 같은 것이다.**
 
-중심화된 데이터 $X = U\Sigma V^\top$ 에서
+중심화된(평균을 뺀) 데이터 $X = U\Sigma V^\top$ 에서
 
-- $V$ 의 열 = 주성분 방향 (고유벡터)
-- $\sigma_j^2/(n-1)$ = 그 방향의 분산 (고유값)
-- $U\Sigma$ = 사영된 좌표
+- $V$ 의 열 = principal component 방향 (eigenvector)
+- $\sigma_j^2/(n-1)$ = 그 방향의 분산 (eigenvalue)
+- $U\Sigma$ = projection된 좌표
 
-실무에서는 공분산 행렬을 만들지 않고 **SVD를 직접** 쓴다.
-$X^\top X$ 를 계산하면 [0.5의 소거](../00_foundations/05_numerical_computing.qmd)로
-조건수가 제곱되어 정밀도를 잃기 때문이다.
+실무에서는 covariance 행렬을 만들지 않고 **SVD를 직접** 쓴다.
+$X^\top X$ 를 계산하면 [0.5의 cancellation](../00_foundations/05_numerical_computing.qmd)으로
+condition number가 제곱되어 정밀도를 잃기 때문이다.
 :::
 
 ---
 
-## G2.10.1 — 주성분이 무엇을 찾는가
+## G2.10.1 — principal component가 무엇을 찾는가
 
 ```{python}
 #| label: fig-pca-direction
-#| fig-cap: "데이터를 회전시켜도 주성분은 항상 최대 분산 방향을 따라갑니다."
+#| fig-cap: "데이터를 회전시켜도 principal component는 항상 최대 분산 방향을 따라갑니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -153,7 +157,7 @@ for a in angles:
     data[a] = (Xr, Vt, var, Xr.mean(0))
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
-                    subplot_titles=("데이터와 주성분 축", "성분별 설명 분산"))
+                    subplot_titles=("데이터와 principal component 축", "성분별 explained variance"))
 a0 = 45
 Xr, Vt, var, mu = data[a0]
 fig.add_trace(go.Scatter(x=Xr[:,0], y=Xr[:,1], mode="markers", name="데이터",
@@ -182,22 +186,22 @@ fig.update_layout(sliders=[viz.slider(steps, prefix="데이터 회전 = ",
 fig.update_xaxes(title_text="x₁", range=[-7, 7], row=1, col=1)
 fig.update_yaxes(title_text="x₂", range=[-7, 7], scaleanchor="x", row=1, col=1)
 fig.update_yaxes(title_text="설명 분산 비율", range=[0, 1], row=1, col=2)
-viz.fig_defaults(fig, height=430, title="PCA는 회전에 등변적이다")
+viz.fig_defaults(fig, height=430, title="PCA 는 회전에 equivariant 하다")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-데이터를 회전시키면 주성분 축도 **함께 회전**합니다. 오른쪽 설명 분산 비율은 **전혀 변하지 않습니다** — PCA가 찾는 것은 좌표계가 아니라 데이터 자체의 구조이기 때문입니다.
+데이터를 회전시키면 principal component 축도 **함께 회전**합니다(equivariant — 입력을 돌리면 출력도 똑같이 돈다). 오른쪽 explained variance(설명 분산 — 각 축이 전체 분산 중 차지하는 비율)는 **전혀 변하지 않습니다** — PCA가 찾는 것은 좌표계가 아니라 데이터 자체의 구조이기 때문입니다.
 :::
 
 ---
 
-## 성분 수 선택과 재구성
+## 성분 수 선택과 reconstruction
 
 ```{python}
 #| label: fig-pca-reconstruction
-#| fig-cap: "성분 수에 따른 재구성 품질과 누적 설명 분산"
+#| fig-cap: "성분 수에 따른 reconstruction 품질과 누적 explained variance"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -231,7 +235,7 @@ for k in ks:
     recon[k] = np.round(R[0].reshape(size, size), 3)
 
 fig = make_subplots(rows=1, cols=3, column_widths=[0.27, 0.27, 0.46],
-                    subplot_titles=("원본", "재구성", "설명 분산"))
+                    subplot_titles=("원본", "reconstruction", "explained variance"))
 k0 = 5
 orig_z = np.round(D[0].reshape(size,size), 3)      # 슬라이더에서 다시 넘겨야 한다
 fig.add_trace(go.Heatmap(z=orig_z, colorscale="gray",
@@ -270,7 +274,7 @@ import numpy as np
 
 print(f"원 차원 {size*size} · 표본 {n_img}개")
 print()
-print(f"{'k':>5} {'누적 설명분산':>14} {'재구성 MSE':>13} {'저장 비율':>11}")
+print(f"{'k':>5} {'누적 expl.var':>14} {'recon. MSE':>13} {'저장 비율':>11}")
 print("-" * 48)
 for k in [1, 2, 3, 5, 8, 15, 30, 60]:
     R = (U[:, :k] * S[:k]) @ Vt[:k]
@@ -279,7 +283,7 @@ for k in [1, 2, 3, 5, 8, 15, 30, 60]:
     print(f"{k:>5} {cum[k-1]:>14.4f} {mse:>13.5f} {ratio:>10.1%}")
 print()
 k95 = int(np.searchsorted(cum, 0.95) + 1)
-print(f"→ 설명 분산 95% 에 필요한 성분: {k95}개 (원 차원의 {k95/(size*size):.0%})")
+print(f"→ explained variance 95% 에 필요한 성분: {k95}개 (원 차원의 {k95/(size*size):.0%})")
 ```
 
 ::: {.interaction-hint}
@@ -293,20 +297,20 @@ $k=1$ 은 평균 얼룩만, $k=5$ 면 대략의 모양이 나오고, $k=30$ 이�
 ::: {.callout-warning}
 ## 세 가지 함정
 
-**1. 스케일에 민감하다.**
-분산이 큰 특성이 주성분을 지배한다. 단위가 다르면 반드시 표준화해야 한다.
+**1. scale에 민감하다.**
+분산이 큰 특성이 principal component를 지배한다. 키를 mm로 재고 몸무게를 톤으로 재면 키 축만 남는다. 단위가 다르면 반드시 standardization해야 한다.
 
 **2. 분산 ≠ 유용성.**
-분산이 큰 방향이 항상 중요한 방향은 아니다.
+분산이 큰 방향이 항상 중요한 방향은 아니다 — 목소리가 크다고 내용이 중요한 것은 아니다.
 분류에 필요한 정보가 분산이 작은 방향에 있으면 PCA가 그것을 버린다.
 
 **3. 선형이다.**
-곡면 위에 놓인 데이터는 선형 사영으로 펼 수 없다.
+곡면 위에 놓인 데이터는 선형 projection으로 펼 수 없다.
 :::
 
 ```{python}
 #| label: fig-pca-limits
-#| fig-cap: "PCA가 실패하는 두 경우: 스케일 미표준화와 비선형 구조"
+#| fig-cap: "PCA가 실패하는 두 경우: standardization 누락과 비선형 구조"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -337,8 +341,8 @@ Xn = np.c_[t*np.cos(t), t*np.sin(t)] + rng.normal(0, 0.25, (300, 2))
 p_nl, _ = pca_project(Xn, 1, True)
 
 fig = make_subplots(rows=1, cols=3,
-                    subplot_titles=("표준화 없이 PCA (1차원)",
-                                    "표준화 후 PCA (1차원)",
+                    subplot_titles=("standardization 없이 PCA (1차원)",
+                                    "standardization 후 PCA (1차원)",
                                     "비선형 구조 (나선)"))
 for col, (proj, lbl, ttl) in enumerate([(p_raw, lab, None), (p_std, lab, None)], start=1):
     for c in (0, 1):
@@ -358,7 +362,7 @@ fig.update_xaxes(title_text="x₁", row=1, col=3)
 fig.update_yaxes(title_text="x₂", row=1, col=3)
 
 viz.fig_defaults(fig, height=350,
-                 title="왼쪽 둘: 같은 데이터, 표준화 여부만 다름")
+                 title="왼쪽 둘: 같은 데이터, standardization 여부만 다름")
 fig.update_layout(margin=dict(l=50, r=25, t=75, b=50))
 fig.show()
 ```
@@ -370,24 +374,24 @@ fig.show()
 import numpy as np
 
 def separability(proj, lab):
-    """1차원 사영에서 두 클래스가 얼마나 분리되는가 (표준화된 평균 차)."""
+    """1차원 projection 에서 두 클래스가 얼마나 분리되는가 (standardization된 평균 차)."""
     a, b = proj[lab == 0, 0], proj[lab == 1, 0]
     return abs(a.mean() - b.mean()) / np.sqrt(0.5*(a.var() + b.var()))
 
 sep_raw, sep_std = separability(p_raw, lab), separability(p_std, lab)
-print(f"  표준화 없이 PC1 사영 → 분리도 {sep_raw:.3f}")
-print(f"  표준화 후   PC1 사영 → 분리도 {sep_std:.3f}")
+print(f"  standardization 없이 PC1 projection → 분리도 {sep_raw:.3f}")
+print(f"  standardization 후   PC1 projection → 분리도 {sep_std:.3f}")
 ```
 
 두 클래스의 차이는 오직 $x_2$ 에만 있다 ($x_1$ 은 순수 잡음인데 표준편차가 50배다).
-표준화하지 않으면 PCA 가 잡음 축 $x_1$ 을 제1주성분으로 골라 분리도가 `{python} f"{sep_raw:.2f}"` 에 그치고,
-표준화하면 `{python} f"{sep_std:.2f}"` 다. 분산이 크다고 정보가 많은 것은 아니다.
+standardization하지 않으면 PCA가 잡음 축 $x_1$ 을 첫 principal component로 골라 분리도가 `{python} f"{sep_raw:.2f}"` 에 그치고,
+standardization하면 `{python} f"{sep_std:.2f}"` 다. 분산이 크다고 정보가 많은 것은 아니다.
 
 ---
 
-## 비선형: 매니폴드 가설
+## 비선형: manifold 가설
 
-고차원 데이터가 실제로는 **저차원 곡면 위에** 놓여 있다는 가정이다.
+**manifold hypothesis**(manifold 가설)는 고차원 데이터가 실제로는 **저차원 곡면 위에** 놓여 있다는 가정이다.
 
 이미지를 예로 들면, 64×64 흑백 이미지의 공간은 4096차원이지만
 "사람 얼굴 사진"들은 그 안의 훨씬 낮은 차원 부분집합을 차지한다.
@@ -398,25 +402,26 @@ print(f"  표준화 후   PC1 사영 → 분리도 {sep_std:.3f}")
 | 방법 | 보존하려는 것 |
 |------|---------------|
 | MDS | 모든 쌍의 거리 |
-| Isomap | **측지 거리** (곡면을 따라간 거리) |
-| LLE | 국소 선형 재구성 가중치 |
-| **t-SNE** | 국소 이웃 관계 (확률로) |
-| **UMAP** | 국소 + 일부 전역 구조 |
+| Isomap | **geodesic distance**(측지 거리 — 곡면을 따라간 거리. 지구 표면을 따라 잰 서울–뉴욕 거리) |
+| LLE | local 선형 reconstruction 가중치 |
+| **t-SNE** | local 이웃 관계 (확률로) |
+| **UMAP** | local + 일부 global 구조 |
 
 ---
 
 ## t-SNE: 이웃 관계를 확률로
 
-t-SNE의 아이디어는 이렇다.
+**t-SNE**는 지하철 노선도와 같다 — 어느 역이 어느 역 옆인지(이웃 관계)는 지키지만, 역 사이의 실제 거리와 방향은 버린다.
 
 1. 고차원에서 "$j$ 가 $i$ 의 이웃일 확률" $p_{ij}$ 를 가우스로 정의
 2. 저차원에서 같은 확률 $q_{ij}$ 를 **t-분포**로 정의
-3. $D_{KL}(P\|Q)$ 를 최소화하도록 저차원 좌표를 경사하강
+3. $D_{KL}(P\|Q)$ 를 최소화하도록 저차원 좌표를 gradient descent
 
 ::: {.key-concept}
-**왜 저차원에서 t-분포를 쓰는가 — 붐빔 문제**
+**왜 저차원에서 t-분포를 쓰는가 — crowding problem(붐빔 문제)**
 
 고차원에서 서로 등거리인 점들을 2D에 넣으려면 공간이 부족하다.
+정사면체의 꼭짓점 4개는 서로 등거리이지만 종이 위에 등거리로 놓을 수 없는 것과 같다.
 중간 거리의 점들이 전부 가운데로 몰려 뭉개진다.
 
 t-분포는 가우스보다 **꼬리가 두꺼워서**, 같은 확률을 만드는 데
@@ -499,7 +504,7 @@ from plotly.subplots import make_subplots
 from src import viz
 
 rng = np.random.default_rng(0)
-# 10차원 공간의 군집 3개 — 크기와 밀도가 다르다
+# 10차원 공간의 cluster 3개 — 크기와 밀도가 다르다
 Xh = np.vstack([
     rng.normal(0, 0.5, (60, 10)) + np.r_[6, np.zeros(9)],
     rng.normal(0, 1.5, (60, 10)) + np.r_[np.zeros(5), 6, np.zeros(4)],
@@ -518,21 +523,21 @@ for c, p in enumerate(perps, start=1):
     for k in range(3):
         m = yh == k
         fig.add_trace(go.Scatter(x=Y[m,0], y=Y[m,1], mode="markers",
-                                 showlegend=(c == 1), name=f"군집 {k}",
+                                 showlegend=(c == 1), name=f"cluster {k}",
                                  marker=dict(size=5, color=viz.color(k))),
                       row=1, col=c)
     fig.update_xaxes(showticklabels=False, row=1, col=c)
     fig.update_yaxes(showticklabels=False, row=1, col=c)
 
 viz.fig_defaults(fig, height=330,
-                 title="10차원 군집 3개 (가운데 군집만 분산이 3배)")
+                 title="10차원 cluster 3개 (가운데 cluster 만 분산이 3배)")
 fig.update_layout(margin=dict(l=30, r=25, t=75, b=30),
                   legend=dict(x=0.01, y=1.18, orientation="h"))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-perplexity 5에서는 군집이 잘게 쪼개져 보입니다 — **없는 하위 구조가 만들어진 것**입니다. 30~50에서는 세 군집이 안정적으로 나타납니다. perplexity는 "몇 개의 이웃을 볼 것인가"에 해당하며, 대개 5~50 사이에서 여러 값을 시도해야 합니다.
+perplexity 5에서는 cluster가 잘게 쪼개져 보입니다 — **없는 하위 구조가 만들어진 것**입니다. 30~50에서는 세 cluster가 안정적으로 나타납니다. perplexity는 "몇 개의 이웃을 볼 것인가"에 해당하며, 대개 5~50 사이에서 여러 값을 시도해야 합니다.
 :::
 
 ---
@@ -542,13 +547,13 @@ perplexity 5에서는 군집이 잘게 쪼개져 보입니다 — **없는 하�
 ::: {.callout-warning}
 ## t-SNE 해석의 네 가지 규칙
 
-**1. 군집 크기는 의미 없다.**
-t-SNE는 밀집된 군집을 부풀리고 퍼진 군집을 압축한다.
+**1. cluster 크기는 의미 없다.**
+t-SNE는 밀집된 cluster를 부풀리고 퍼진 cluster를 압축한다. 노선도에서 역 간격이 실제 거리가 아닌 것과 같다.
 
-**2. 군집 간 거리는 의미 없다.**
-두 군집이 멀리 떨어져 보인다고 실제로 더 다른 것이 아니다.
+**2. cluster 간 거리는 의미 없다.**
+두 cluster가 멀리 떨어져 보인다고 실제로 더 다른 것이 아니다.
 
-**3. 무작위 잡음에서도 군집이 보인다.**
+**3. 무작위 잡음에서도 cluster가 보인다.**
 구조가 없어도 t-SNE는 덩어리를 만든다.
 
 **4. 실행할 때마다 다르다.**
@@ -557,7 +562,7 @@ t-SNE는 밀집된 군집을 부풀리고 퍼진 군집을 압축한다.
 
 ```{python}
 #| label: fig-tsne-pitfalls
-#| fig-cap: "왼쪽: 원 데이터의 군집 크기와 거리. 오른쪽: t-SNE가 그것을 왜곡합니다."
+#| fig-cap: "왼쪽: 원 데이터의 cluster 크기와 거리. 오른쪽: t-SNE가 그것을 왜곡합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -587,7 +592,7 @@ for c, (P, ttl) in enumerate([(Xp, None), (Yp, None)], start=1):
     for k in range(3):
         m = yp == k
         fig.add_trace(go.Scatter(x=P[m,0], y=P[m,1], mode="markers",
-                                 showlegend=(c == 1), name=f"군집 {k}",
+                                 showlegend=(c == 1), name=f"cluster {k}",
                                  marker=dict(size=5, color=viz.color(k))),
                       row=1, col=c)
     fig.update_xaxes(showticklabels=(c == 1), row=1, col=c)
@@ -607,38 +612,38 @@ import numpy as np
 
 print(f"{'':<26} {'원 데이터':>12} {'t-SNE':>12} {'비율 변화'}")
 print("-" * 66)
-for k, nm in enumerate(["군집0 (조밀)", "군집1 (퍼짐)", "군집2 (조밀)"]):
+for k, nm in enumerate(["cluster0 (조밀)", "cluster1 (퍼짐)", "cluster2 (조밀)"]):
     o, t = spread(Xp, yp, k), spread(Yp, yp, k)
     print(f"{nm+' 반경':<26} {o:>12.2f} {t:>12.2f}")
 print()
 o01, o12 = between(Xp, yp, 0, 1), between(Xp, yp, 1, 2)
 t01, t12 = between(Yp, yp, 0, 1), between(Yp, yp, 1, 2)
-print(f"{'군집0↔1 거리':<26} {o01:>12.2f} {t01:>12.2f}")
-print(f"{'군집1↔2 거리':<26} {o12:>12.2f} {t12:>12.2f}")
+print(f"{'cluster0↔1 거리':<26} {o01:>12.2f} {t01:>12.2f}")
+print(f"{'cluster1↔2 거리':<26} {o12:>12.2f} {t12:>12.2f}")
 print(f"{'두 거리의 비 (1↔2)/(0↔1)':<26} {o12/o01:>12.2f} {t12/t01:>12.2f}")
 ```
 
-원 데이터에서 군집 1↔2 가 0↔1 보다 `{python} f"{o12/o01:.1f}"`배 멀지만,
+원 데이터에서 cluster 1↔2가 0↔1보다 `{python} f"{o12/o01:.1f}"`배 멀지만,
 t-SNE 그림에서는 그 비가 `{python} f"{t12/t01:.1f}"` 로 보존되지 않는다.
-퍼진 군집 1의 반경도 조밀한 군집들과 비슷해졌다.
+퍼진 cluster 1의 반경도 조밀한 cluster들과 비슷해졌다.
 
 ---
 
 ## UMAP과의 비교
 
-UMAP은 t-SNE와 목적이 비슷하지만 다른 수학을 쓴다
-(퍼지 단체 복합체와 교차엔트로피 기반 목적함수).
+**UMAP**은 t-SNE와 목적이 비슷하지만 다른 수학을 쓴다
+(fuzzy simplicial complex와 cross-entropy 기반 목적함수). 노선도이되 구역 간 대략의 배치는 좀 더 맞는 노선도라고 보면 된다.
 
 | | t-SNE | UMAP |
 |---|---|---|
-| 이론적 기반 | 확률분포 + KL 발산 | 위상수학 + 교차엔트로피 |
-| 전역 구조 | 거의 보존 안 됨 | **상대적으로 더 보존** |
+| 이론적 기반 | 확률분포 + KL divergence | topology(위상수학) + cross-entropy |
+| global 구조 | 거의 보존 안 됨 | **상대적으로 더 보존** |
 | 속도 | 느림 ($O(n^2)$ 또는 근사) | **빠름** (ANN 그래프 사용) |
 | 새 점 변환 | 불가 (재실행 필요) | **가능** (transform 지원) |
 | 주요 파라미터 | perplexity | n_neighbors, min_dist |
 | 재현성 | 시드 의존 | 시드 의존 |
 
-공통 주의 — 둘 다 시각화 도구이지, 다운스트림 모델의 입력 전처리로는
+공통 주의 — 둘 다 시각화 도구이지, downstream 모델(그 뒤에 이어지는 모델)의 입력 전처리로는
 권장되지 않는다 (비선형 왜곡 + 새 데이터 처리 문제).
 
 ::: {.key-concept}
@@ -648,23 +653,23 @@ UMAP은 t-SNE와 목적이 비슷하지만 다른 수학을 쓴다
 |------|------|
 | 전처리·압축 (모델 입력) | **PCA** (선형, 역변환 가능, 새 점 처리 쉬움) |
 | 탐색적 시각화 | t-SNE / UMAP (해석에 주의) |
-| 잡음 제거 | PCA 저계수 근사 |
+| denoising(잡음 제거) | PCA low-rank 근사 |
 | 매우 고차원 → 중간 차원 | PCA로 50차원 → 그 다음 t-SNE (관례) |
-| 비선형 압축 + 재구성 | [오토인코더](../06_generative/01_autoencoder.qmd) |
+| 비선형 압축 + reconstruction | [autoencoder](../06_generative/01_autoencoder.qmd) |
 :::
 
 ---
 
-## 무작위 사영: 놀랍도록 잘 되는 방법
+## random projection: 놀랍도록 잘 되는 방법
 
-**존슨-린덴슈트라우스 보조정리**: 무작위 선형 사영만으로도
+**Johnson–Lindenstrauss 보조정리**: 무작위 각도로 그림자를 내리는 **random projection**(random projection)만으로도
 $O(\log n / \epsilon^2)$ 차원이면 모든 쌍의 거리를 $(1\pm\epsilon)$ 안에서 보존할 수 있다.
 
 원 차원 $d$ 와 무관하다는 점이 놀랍다.
 
 ```{python}
 #| label: fig-random-projection
-#| fig-cap: "무작위 사영이 거리를 얼마나 보존하는가"
+#| fig-cap: "random projection이 거리를 얼마나 보존하는가"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -694,11 +699,11 @@ fig.add_trace(go.Scatter(x=ks, y=p95, mode="lines+markers", name="95 백분위",
                          line=dict(color=viz.WARM, width=2.5)))
 fig.add_hline(y=0.1, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="10% 왜곡")
-fig.update_layout(xaxis_title="사영 차원 k", xaxis_type="log",
+fig.update_layout(xaxis_title="projection 차원 k", xaxis_type="log",
                   yaxis_title="|거리 비 − 1|", yaxis_type="log",
                   legend=dict(x=0.6, y=0.98))
 viz.fig_defaults(fig, height=400,
-                 title=f"{d}차원 → k차원 무작위 사영 (표본 {n}개)")
+                 title=f"{d}차원 → k차원 random projection (표본 {n}개)")
 fig.show()
 ```
 
@@ -711,45 +716,45 @@ fig.show()
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 스케일이 주성분을 바꾼다**
-`pca-scale-numbers` 에서 한 특성만 1000배 하면 첫 주성분이 어디를 향하는가?
-PCA 전에 표준화가 필요한 이유를 [1.3](../01_data_science/03_preprocessing.qmd)과 연결하라.
+**① scale이 principal component를 바꾼다**
+`pca-scale-numbers` 에서 한 특성만 1000배 하면 첫 principal component가 어디를 향하는가?
+PCA 전에 standardization이 필요한 이유를 [1.3](../01_data_science/03_preprocessing.qmd)과 연결하라.
 
-**② 재구성 오차의 하한**
-`pca-equivalence` 에서 $k$ 를 고정하고 **무작위 직교 부분공간** 100개를 뽑아
+**② reconstruction error의 하한**
+`pca-equivalence` 에서 $k$ 를 고정하고 **무작위 직교 subspace** 100개를 뽑아
 오차 분포를 그려라. PCA가 그 분포의 어디에 있는가?
 
-**③ t-SNE의 군집 크기는 의미가 없다**
+**③ t-SNE의 cluster 크기는 의미가 없다**
 같은 데이터에 perplexity를 5·30·100으로 t-SNE를 돌려라.
-군집 사이 거리와 군집 크기가 얼마나 달라지는가?
+cluster 사이 거리와 cluster 크기가 얼마나 달라지는가?
 :::
 
 ## 요약
 
 | 방법 | 보존하는 것 | 선형? | 새 점 | 용도 |
 |------|-------------|-------|-------|------|
-| **PCA** | 분산 (전역) | ✓ | 쉬움 | 압축, 전처리, 잡음 제거 |
-| 커널 PCA | 비선형 분산 | ✗ | 가능 | 비선형 압축 |
-| MDS / Isomap | (측지) 거리 | ✗ | 어려움 | 매니폴드 펼치기 |
-| **t-SNE** | 국소 이웃 | ✗ | **불가** | 시각화만 |
-| **UMAP** | 국소 + 일부 전역 | ✗ | 가능 | 시각화, 빠름 |
-| 무작위 사영 | 거리 (근사) | ✓ | 쉬움 | 대규모 전처리 |
+| **PCA** | 분산 (global) — 그림자가 가장 길게 나오는 각도 | ✓ | 쉬움 | 압축, 전처리, denoising |
+| kernel PCA | 비선형 분산 | ✗ | 가능 | 비선형 압축 |
+| MDS / Isomap | (geodesic) 거리 | ✗ | 어려움 | manifold 펼치기 |
+| **t-SNE** | local 이웃 — 지하철 노선도 | ✗ | **불가** | 시각화만 |
+| **UMAP** | local + 일부 global | ✗ | 가능 | 시각화, 빠름 |
+| random projection | 거리 (근사) — 무작위 각도의 그림자 | ✓ | 쉬움 | 대규모 전처리 |
 
 | 반드시 기억할 것 | 내용 |
 |---|---|
-| PCA = SVD | 공분산 행렬 만들지 말고 SVD 직접 |
-| 표준화 | 안 하면 큰 스케일 특성이 지배 |
-| 분산 ≠ 정보 | 중요한 축이 분산이 작을 수 있음 |
+| PCA = SVD | covariance 행렬 만들지 말고 SVD 직접 |
+| standardization | 안 하면 큰 scale 특성이 지배 — mm와 톤 |
+| 분산 ≠ 정보 | 목소리 크기 ≠ 내용. 중요한 축이 분산이 작을 수 있음 |
 | t-SNE 크기 | **의미 없음** |
-| t-SNE 군집 간 거리 | **의미 없음** |
+| t-SNE cluster 간 거리 | **의미 없음** |
 | t-SNE 잡음 | 구조 없어도 덩어리가 보임 |
-| JL 보조정리 | 무작위 사영도 거리를 보존 |
+| JL 보조정리 | random projection도 거리를 보존 |
 
 Part 2의 알고리즘을 다 훑었다.
 남은 두 장은 **그 알고리즘들을 제대로 평가하고 실전에 내놓는** 문제다.
 
 ---
 
-**다음**: [2.11 모델 평가와 선택](11_model_evaluation.qmd) — 교차검증·지표·캘리브레이션
+**다음**: [2.11 모델 평가와 선택](11_model_evaluation.qmd) — cross-validation·지표·calibration
 
-**이전**: [2.9 군집화](09_clustering.qmd)
+**이전**: [2.9 clustering](09_clustering.qmd)
