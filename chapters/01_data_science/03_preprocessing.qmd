@@ -1,29 +1,31 @@
 ---
 title: "1.3 데이터 전처리"
-subtitle: "결측·이상치·스케일링·인코딩 — 모델에 넣을 수 있는 형태로"
+subtitle: "결측·outlier·scaling·encoding — 모델에 넣을 수 있는 형태로"
 jupyter: ai-ml-study
 ---
 
 전처리는 지루한 잡일이 아니다.
 
 **모델 성능에 가장 큰 영향을 주는 단계**이고,
-동시에 **데이터 누수가 가장 자주 발생하는 지점**이다.
+동시에 **data leakage(data leakage — 학습 때 봐서는 안 되는 정보가 새어 들어오는 것)가 가장 자주 발생하는 지점**이다.
+시험 문제를 미리 보고 공부한 학생의 점수가 실력이 아니듯, leakage가 있는 모델의 검증 점수는 성능이 아니다.
 
 이 장의 첫 실험이 그것을 보여준다.
 타깃과 아무 관계도 없는 범주 변수로, 검증 AUC 0.76을 만들어 보인다.
 모델을 바꾼 것도, 특성을 추가한 것도 아니다.
-**인코딩을 언제 계산했는지만 다르다.**
+**encoding을 언제 계산했는지만 다르다.**
 
 ---
 
-## G1.3.1 — 데이터 누수: 가장 비싼 실수
+## G1.3.1 — data leakage: 가장 비싼 실수
 
-target encoding은 범주를 그 범주의 **타깃 평균**으로 바꾼다.
-고카디널리티 범주에 강력하지만, **계산 시점**을 틀리면 재앙이다.
+target encoding은 범주(예: 상품 ID)를 그 범주의 **타깃 평균**(그 상품이 팔린 비율)으로 바꾼다.
+cardinality(범주의 종류 수)가 큰 범주에 강력하지만, **계산 시점**을 틀리면 재앙이다.
+학생별 "평균 점수"를 특성으로 쓰면서 그 평균에 지금 채점하려는 시험 점수까지 넣어 버리는 것과 같다.
 
 ```{python}
 #| label: fig-target-leakage
-#| fig-cap: "타깃과 무관한 범주인데 누수만으로 AUC가 0.76이 됩니다"
+#| fig-cap: "타깃과 무관한 범주인데 leakage만으로 AUC가 0.76이 됩니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -56,10 +58,10 @@ def encode(idx_fit):
         out[c] = y[idx_fit][cat[idx_fit] == c].mean()
     return out
 
-# (a) 누수: 전체 데이터로 인코딩을 만들고 검증에도 그대로 쓴다
+# (a) leakage: 전체 데이터로 encoding을 만들고 검증에도 그대로 쓴다
 feat_leak = encode(np.arange(N))[cat]
 
-# (b) 정상: 각 폴드의 값은 **그 폴드를 제외한** 데이터로만 만든다
+# (b) 정상: 각 fold의 값은 **그 fold를 제외한** 데이터로만 만든다
 feat_ok = np.zeros(N)
 for f in range(K):
     feat_ok[folds == f] = encode(np.where(folds != f)[0])[cat[folds == f]]
@@ -80,24 +82,24 @@ for c_ in CARDS:
     leak_curve.append(cv_auc(fl)); ok_curve.append(cv_auc(fo))
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.45, 0.55],
-                    subplot_titles=("인코딩 값의 분포",
-                                    "범주 카디널리티에 따른 검증 AUC"))
-fig.add_trace(go.Histogram(x=feat_leak, nbinsx=30, name="누수 있음",
+                    subplot_titles=("encoding 값의 분포",
+                                    "범주 cardinality에 따른 검증 AUC"))
+fig.add_trace(go.Histogram(x=feat_leak, nbinsx=30, name="leakage 있음",
                            marker_color=viz.WARM, opacity=0.7), row=1, col=1)
-fig.add_trace(go.Histogram(x=feat_ok, nbinsx=30, name="누수 없음",
+fig.add_trace(go.Histogram(x=feat_ok, nbinsx=30, name="leakage 없음",
                            marker_color=viz.ACCENT, opacity=0.7), row=1, col=1)
 fig.add_trace(go.Scatter(x=CARDS, y=leak_curve, mode="lines+markers",
-                         name="누수 있음", showlegend=False,
+                         name="leakage 있음", showlegend=False,
                          line=dict(color=viz.WARM, width=2.5),
                          marker=dict(size=10)), row=1, col=2)
 fig.add_trace(go.Scatter(x=CARDS, y=ok_curve, mode="lines+markers",
-                         name="누수 없음", showlegend=False,
+                         name="leakage 없음", showlegend=False,
                          line=dict(color=viz.ACCENT, width=2.5),
                          marker=dict(size=10)), row=1, col=2)
 fig.add_hline(y=0.5, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="진짜 AUC (무작위)", row=1, col=2)
 fig.update_layout(barmode="overlay")
-fig.update_xaxes(title_text="인코딩 값", row=1, col=1)
+fig.update_xaxes(title_text="encoding 값", row=1, col=1)
 fig.update_xaxes(title_text="범주 수", type="log", row=1, col=2)
 fig.update_yaxes(title_text="검증 AUC", row=1, col=2)
 viz.fig_defaults(fig, height=410,
@@ -115,23 +117,23 @@ import numpy as np
 print(f"범주 {CARD}개, 표본 {N}개 (범주당 평균 {N/CARD:.1f}개)")
 print()
 auc_leak, auc_ok = cv_auc(feat_leak), cv_auc(feat_ok)
-print(f"  전체 데이터로 인코딩 (누수)  : AUC {auc_leak:.4f}")
-print(f"  폴드 밖 데이터로만 인코딩    : AUC {auc_ok:.4f}")
+print(f"  전체 데이터로 encoding (leakage)  : AUC {auc_leak:.4f}")
+print(f"  fold 밖 데이터로만 encoding    : AUC {auc_ok:.4f}")
 print()
-print(f"{'범주 수':>8} {'범주당 표본':>11} {'누수 AUC':>11} {'정상 AUC':>11} {'과대평가':>10}")
+print(f"{'범주 수':>8} {'범주당 표본':>11} {'leakage AUC':>11} {'정상 AUC':>11} {'과대평가':>10}")
 print("-" * 56)
 for c_, a_, b_ in zip(CARDS, leak_curve, ok_curve):
     print(f"{c_:>8} {N/c_:>11.1f} {a_:>11.4f} {b_:>11.4f} {a_-b_:>+10.4f}")
 ```
 
-**타깃 $y$ 는 범주와 독립으로 생성했다. 진짜 AUC 는 0.5 다.**
-그런데 전체 데이터로 인코딩하면 검증 AUC 가 `{python} f"{auc_leak:.2f}"` 로 나온다.
+**타깃 $y$ 는 범주와 독립으로 생성했다. 진짜 AUC는 0.5 다.**
+그런데 전체 데이터로 encoding하면 검증 AUC가 `{python} f"{auc_leak:.2f}"` 로 나온다.
 
-**범주가 잘게 쪼개질수록 누수가 심해진다.**
-극단적으로 범주가 표본 수만큼 많으면 인코딩 값이 곧 그 행의 타깃이 된다 —
+**범주가 잘게 쪼개질수록 leakage가 심해진다.**
+극단적으로 범주가 표본 수만큼 많으면 encoding 값이 곧 그 행의 타깃이 된다 —
 검증 행의 정답을 특성에 그대로 적어 넣는 셈이다.
 
-정상 인코딩의 AUC 는 `{python} f"{min(ok_curve):.2f}"`~`{python} f"{max(ok_curve):.2f}"` 로 0.5 근처다.
+정상 encoding의 AUC는 `{python} f"{min(ok_curve):.2f}"`~`{python} f"{max(ok_curve):.2f}"` 로 0.5 근처다.
 **있어야 할 답이 나온 것이다.** 이 변수는 쓸모가 없다고 올바르게 말해 준다.
 
 이 실수가 무서운 이유는 세 가지다.
@@ -141,49 +143,51 @@ for c_, a_, b_ in zip(CARDS, leak_curve, ok_curve):
 - 코드는 정상 동작한다 — 예외도, 경고도 없다
 
 ::: {.key-concept}
-**누수 방지의 단 하나의 규칙**
+**leakage 방지의 단 하나의 규칙**
 
-> **모든 fit은 학습 폴드에서만. 검증·시험 폴드는 transform만.**
+> **모든 fit은 학습 fold에서만. 검증·시험 fold는 transform만.**
 
+(fold는 cross-validation에서 데이터를 나눈 조각 하나다. `fit`은 데이터를 보고 파라미터를 정하는 단계,
+`transform`은 이미 정해진 파라미터로 데이터를 바꾸는 단계다.)
 무엇이 `fit` 인가 — 데이터를 보고 **파라미터를 정하는 모든 것**이다.
 
-| 단계 | 학습해야 하는 것 | 누수 시 증상 |
+| 단계 | 학습해야 하는 것 | leakage 시 증상 |
 |------|------------------|--------------|
-| 표준화 | 평균, 표준편차 | 미묘함. 대개 작은 편향 |
+| standardization(표준화) | 평균, 표준편차 | 미묘함. 대개 작은 bias |
 | min-max | 최솟값, 최댓값 | 시험셋 극단값이 새어 들어옴 |
-| 결측 대치 | 대치값(평균 등) | 미묘함 |
+| imputation(결측 대치 — 빈칸 채우기) | 대치값(평균 등) | 미묘함 |
 | target encoding | 범주별 타깃 평균 | **치명적** (위 실험) |
-| 특성 선택 | 어떤 열을 남길지 | 치명적 — 전체로 고르면 안 됨 |
-| 이상치 임계값 | 분위수, 표준편차 | 중간 |
-| 오버샘플링(SMOTE) | 합성 표본 | **치명적** — 분할 전에 하면 안 됨 |
+| feature selection(feature selection) | 어떤 열을 남길지 | 치명적 — 전체로 고르면 안 됨 |
+| outlier threshold | 분위수, 표준편차 | 중간 |
+| oversampling(SMOTE) | 합성 표본 | **치명적** — 분할 전에 하면 안 됨 |
 
-가장 자주 틀리는 것이 **특성 선택**과 **SMOTE** 다.
-둘 다 "전처리니까 먼저 해두자"는 자연스러운 충동이 곧 누수다.
+가장 자주 틀리는 것이 **feature selection**과 **SMOTE**다.
+둘 다 "전처리니까 먼저 해두자"는 자연스러운 충동이 곧 leakage다.
 :::
 
 ```python
 # scikit-learn 파이프라인 — 실행하지 않음
-# Pipeline 으로 묶으면 cross_val_score 가 폴드마다 알아서 fit/transform 을 나눈다
+# Pipeline 으로 묶으면 cross_val_score 가 fold마다 알아서 fit/transform 을 나눈다
 pipe = Pipeline([
     ("impute", SimpleImputer(strategy="median")),
     ("scale",  StandardScaler()),
     ("select", SelectKBest(k=20)),        # ← 이것도 반드시 파이프라인 안에
     ("model",  LogisticRegression()),
 ])
-scores = cross_val_score(pipe, X, y, cv=5)   # 폴드마다 fit 은 학습부분에서만
+scores = cross_val_score(pipe, X, y, cv=5)   # fold마다 fit 은 학습부분에서만
 
 # 흔한 실수: 파이프라인 밖에서 미리 변환
 X = StandardScaler().fit_transform(X)        # ✗ 전체 통계가 새어 들어감
 X = SelectKBest(k=20).fit_transform(X, y)    # ✗ 타깃을 보고 열을 골랐음
 ```
 
-## target encoding을 고치는 법: 축소(shrinkage)
+## target encoding을 고치는 법: shrinkage
 
 위 실험은 **계산 시점**의 문제를 보여줬다. 시점을 바로잡아도 문제가 하나 더 남는다.
 관측이 3개뿐인 범주의 타깃 평균은 신뢰할 수 없는데, 100개짜리 범주의 평균과
-똑같은 무게로 쓰이기 때문이다.
+똑같은 무게로 쓰이기 때문이다. 리뷰 1개짜리 별점 5.0 식당과 리뷰 1,000개짜리 4.5 식당 중 어디를 믿겠는가.
 
-해법은 **전체 평균 쪽으로 끌어당기는 것**이다. 범주 $c$ 의 관측 수를 $n_c$,
+해법은 **전체 평균 쪽으로 끌어당기는 것** — **shrinkage**(축소)다. 평점 사이트가 리뷰가 적은 가게의 점수를 전체 평균 쪽으로 눌러 두는 것과 같다. 범주 $c$ 의 관측 수를 $n_c$,
 그 범주의 타깃 평균을 $\bar{y}_c$, 전체 평균을 $\bar{y}$ 라 하면
 
 $$\hat{y}_c = \frac{n_c\,\bar{y}_c + m\,\bar{y}}{n_c + m}$$
@@ -201,10 +205,10 @@ $$\hat{y}_c = w_c\,\bar{y}_c + (1-w_c)\,\bar{y}, \qquad w_c = \frac{n_c}{n_c+m}$
 거기서 사후평균이 $\frac{a+k}{a+b+n}$ 이었던 것을 떠올리면,
 $m$ 이 사전분포의 유사 관측 수 $a+b$ 자리에 그대로 앉는다.
 
-즉 target encoding의 평활화는 임시방편이 아니라 **경험적 베이즈 축소 추정량**이다.
+즉 target encoding의 smoothing은 임시방편이 아니라 **empirical Bayes shrinkage 추정량**(prior를 데이터 전체에서 추정하는 베이즈 방법)이다.
 "데이터가 적으면 전체 평균 쪽으로 물러난다"는 규칙이 베이즈 갱신의 결론과 일치한다.
-같은 구조가 [2.7 앙상블](../02_classical_ml/07_ensembles.qmd)의 정규화,
-계층 모형의 부분 풀링(partial pooling)에서 반복된다.
+같은 구조가 [2.7 ensemble](../02_classical_ml/07_ensembles.qmd)의 regularization,
+hierarchical model의 partial pooling(부분 풀링 — 그룹별 추정치를 전체 쪽으로 일부 끌어당기기)에서 반복된다.
 :::
 
 ```{python}
@@ -216,10 +220,10 @@ import numpy as np
 rng = np.random.default_rng(0)
 
 global_mean = 0.30
-m = 20.0                                   # 가상 관측 수 (평활 강도)
+m = 20.0                                   # 가상 관측 수 (smoothing 강도)
 
-print(f"전체 평균 {global_mean:.2f},  평활 강도 m = {m:.0f}\n")
-print(f"{'범주 크기 n_c':>13}{'원 평균':>10}{'가중치 w':>10}{'평활 후':>10}{'이동량':>10}")
+print(f"전체 평균 {global_mean:.2f},  smoothing 강도 m = {m:.0f}\n")
+print(f"{'범주 크기 n_c':>13}{'원 평균':>10}{'가중치 w':>10}{'shrink 후':>10}{'이동량':>10}")
 for n_c in [1, 3, 10, 20, 100, 1000]:
     raw = 0.90                             # 우연히 매우 높게 나온 범주
     w = n_c / (n_c + m)
@@ -230,26 +234,28 @@ sm_1 = 1/(1+m)*0.90 + m/(1+m)*global_mean
 sm_1000 = 1000/(1000+m)*0.90 + m/(1000+m)*global_mean
 ```
 
-관측 1개짜리 범주의 0.90 은 `{python} f"{sm_1:.2f}"` 까지 끌려 내려간다 — 거의 전체 평균이다.
+관측 1개짜리 범주의 0.90은 `{python} f"{sm_1:.2f}"` 까지 끌려 내려간다 — 거의 전체 평균이다.
 1000개짜리 범주는 `{python} f"{sm_1000:.2f}"` 로 거의 그대로 남는다.
 $m$ 은 "몇 개쯤 봐야 그 범주를 믿을 것인가"를 정하는 손잡이다.
 
-평활만으로는 누수가 사라지지 않는다는 점은 그대로다.
-**두 가지를 함께 해야 한다** — 학습 폴드 안에서만 계산하고(시점),
-그 안에서 다시 축소한다(신뢰도). 실무에서는 여기에 더해
-out-of-fold 인코딩(각 폴드의 값을 나머지 폴드로 계산)을 쓰는 것이 표준이다.
+shrinkage만으로는 leakage가 사라지지 않는다는 점은 그대로다.
+**두 가지를 함께 해야 한다** — 학습 fold 안에서만 계산하고(시점),
+그 안에서 다시 shrinkage한다(신뢰도). 실무에서는 여기에 더해
+out-of-fold encoding(각 fold의 값을 나머지 fold로 계산)을 쓰는 것이 표준이다.
 
 ---
 
-## 왜 스케일링이 필요한가
+## 왜 scaling이 필요한가
 
+**scaling**은 특성마다 제각각인 단위와 크기를 비슷한 눈금으로 맞추는 일이다.
 방법을 고르기 전에, 애초에 왜 필요한지가 정리되어야 한다.
 이유가 **세 가지**이고 서로 다르다 — 모델에 따라 해당되는 것이 달라진다.
 
-**① 최적화가 느려진다.** 선형 모델의 손실 $\|X\beta-y\|^2$ 의 헤시안은 $2X^\top X$ 이고,
-[0.1에서 본 대로](../00_foundations/01_calculus_optimization.qmd) 경사하강의 수렴 속도는
-그 조건수 $\kappa$ 가 정한다. 특성 하나가 다른 것보다 1000배 큰 눈금을 쓰면
-$X^\top X$ 의 고유값도 그만큼 벌어져 손실 표면이 길쭉한 협곡이 된다.
+**① 최적화가 느려진다.** 선형 모델의 손실 $\|X\beta-y\|^2$ 의 Hessian은 $2X^\top X$ 이고,
+[0.1에서 본 대로](../00_foundations/01_calculus_optimization.qmd) gradient descent의 수렴 속도는
+그 condition number $\kappa$ 가 정한다. 특성 하나가 다른 것보다 1000배 큰 눈금을 쓰면
+$X^\top X$ 의 eigenvalue도 그만큼 벌어져 손실 표면이 길쭉한 협곡이 된다 —
+지도의 한 축은 km, 다른 축은 mm로 그린 셈이다.
 
 $$\text{수렴에 필요한 스텝 수} \;\propto\; \kappa(X^\top X)$$
 
@@ -261,10 +267,11 @@ $$d(\mathbf{a},\mathbf{b})^2 = \sum_j (a_j-b_j)^2$$
 그대로 넣으면 사실상 소득만 보는 모델이 된다. 단위를 미터에서 밀리미터로 바꾸는 것만으로
 이웃이 달라진다.
 
-**③ 정규화가 불공평해진다.** Ridge/Lasso의 벌점 $\lambda\sum_j \beta_j^2$ 은
+**③ regularization이 불공평해진다.** Ridge/Lasso의 벌점 $\lambda\sum_j \beta_j^2$ 은
 모든 계수에 **같은** 벌점을 매긴다. 그런데 특성의 눈금이 크면 같은 효과를 내는 계수가
-작아지므로 벌점을 덜 받는다. 즉 **스케일링을 안 하면 정규화의 세기가 특성마다 달라진다.**
-그래서 정규화를 쓰는 모델에서는 표준화가 선택이 아니라 필수다.
+작아지므로 벌점을 덜 받는다. 키를 cm로 넣으면 계수가 0.01이고 m로 넣으면 1인데, 벌점은 계수 크기에만 붙는다.
+즉 **scaling을 안 하면 regularization의 세기가 특성마다 달라진다.**
+그래서 regularization을 쓰는 모델에서는 standardization이 선택이 아니라 필수다.
 
 ```{python}
 #| label: why-scale
@@ -280,7 +287,7 @@ income = rng.normal(5_000_000, 1_500_000, n)   # 수백만 단위
 X = np.c_[age, income]
 Xs = (X - X.mean(0)) / X.std(0)                # 표준화
 
-print("① 최적화 — XᵀX 의 조건수")
+print("① 최적화 — XᵀX 의 condition number")
 print(f"   원본     κ = {np.linalg.cond(X.T @ X):>12.3e}")
 print(f"   표준화   κ = {np.linalg.cond(Xs.T @ Xs):>12.3e}")
 
@@ -291,7 +298,7 @@ for name, M in [("원본", X), ("표준화", Xs)]:
     share = d2.mean(0) / d2.mean(0).sum()
     print(f"   {name:<8} 나이 {share[0]:>7.2%}   소득 {share[1]:>7.2%}")
 
-print("\n③ 정규화 — 같은 효과를 내는 계수의 크기")
+print("\n③ regularization — 같은 효과를 내는 계수의 크기")
 print(f"   나이 1 표준편차 = 소득 1 표준편차 효과를 내는 원본 계수 비율 "
       f"{X.std(0)[1]/X.std(0)[0]:,.0f} : 1")
 ```
@@ -300,30 +307,32 @@ print(f"   나이 1 표준편차 = 소득 1 표준편차 효과를 내는 원본
 $\lambda\sum\beta_j^2$ 는 이 둘을 똑같이 벌하므로, 큰 눈금 특성이 사실상 벌점을 면제받는다.
 
 ::: {.key-concept}
-**어떤 모델이 스케일링을 필요로 하는가**
+**어떤 모델이 scaling을 필요로 하는가**
 
 | 모델 | 필요한가 | 이유 |
 |---|---|---|
-| 선형·로지스틱 회귀 (정규화 O) | **필수** | ③ 벌점 공평성 |
-| 선형 회귀 (정규화 X, 닫힌 해) | 불필요 | 해가 스케일에 불변 |
-| 경사하강으로 푸는 모든 것 | **필수** | ① 조건수 |
+| 선형·logistic 회귀 (regularization O) | **필수** | ③ 벌점 공평성 |
+| 선형 회귀 (regularization X, closed form 해) | 불필요 | 해가 scale에 불변 |
+| gradient descent로 푸는 모든 것 | **필수** | ① condition number |
 | kNN, k-means, SVM(RBF) | **필수** | ② 거리 |
-| 신경망 | **필수** | ①, 그리고 활성화 포화 |
-| 결정트리, 랜덤포레스트, 부스팅 | **불필요** | 분할이 순서만 본다 |
+| 신경망 | **필수** | ①, 그리고 activation 포화(입력이 너무 크면 활성화 함수가 평평한 구간에 갇힘) |
+| decision tree, random forest, boosting | **불필요** | 분할이 순서만 본다 |
 
-마지막 줄이 중요하다. 트리 계열은 각 특성에서 **임계값 하나**로 자르고
-그 판단이 순서에만 의존하므로, 단조 변환에 완전히 불변이다
-([1.0의 허용 변환](00_data_and_types.qmd) 관점에서 트리는 순서 척도만 쓴다).
-그래서 트리 모델에 표준화를 넣는 것은 해롭지는 않지만 무의미하다.
+마지막 줄이 중요하다. 트리 계열은 각 특성에서 **threshold(임계값) 하나**로 자르고
+그 판단이 순서에만 의존하므로, monotone 변환(순서를 지키는 변환)에 완전히 불변이다
+([1.0의 admissible transformation](00_data_and_types.qmd) 관점에서 트리는 ordinal scale만 쓴다).
+그래서 트리 모델에 standardization을 넣는 것은 해롭지는 않지만 무의미하다.
 :::
 
 ---
 
-## G1.3.2 — 스케일링: 이상치가 있을 때
+## G1.3.2 — scaling: outlier가 있을 때
+
+scaling 방법은 대부분 "무엇을 빼고 무엇으로 나누는가"의 차이다. 빼고 나누는 그 기준값이 outlier에 오염되면 정상값들이 엉뚱한 자리에 놓인다.
 
 ```{python}
 #| label: fig-scaling
-#| fig-cap: "이상치 2개가 스케일링 결과를 어떻게 바꾸는가"
+#| fig-cap: "outlier 2개가 scaling 결과를 어떻게 바꾸는가"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -340,10 +349,10 @@ q1s, q3s = np.percentile(xs, [25, 75])
 ranks = stats.rankdata(xs)/(len(xs)+1)
 SCALERS = {
     "원본": xs,
-    "표준화 (z)": (xs - xs.mean())/xs.std(),
+    "standardization (z)": (xs - xs.mean())/xs.std(),
     "min-max": (xs - xs.min())/(xs.max() - xs.min()),
     "robust (중앙값/IQR)": (xs - np.median(xs))/(q3s - q1s),
-    "분위수 → 정규": stats.norm.ppf(ranks),
+    "quantile → 정규": stats.norm.ppf(ranks),
 }
 
 fig = make_subplots(rows=1, cols=len(SCALERS),
@@ -352,11 +361,11 @@ for i, (k, v) in enumerate(SCALERS.items(), start=1):
     fig.add_trace(go.Box(y=v[normal_mask], name="정상값", showlegend=(i == 1),
                          marker_color=viz.ACCENT, boxpoints=False), row=1, col=i)
     fig.add_trace(go.Scatter(x=["정상값"]*2, y=v[~normal_mask], mode="markers",
-                             name="이상치", showlegend=(i == 1),
+                             name="outlier", showlegend=(i == 1),
                              marker=dict(size=11, color=viz.WARM, symbol="x")),
                   row=1, col=i)
 viz.fig_defaults(fig, height=400,
-                 title="같은 데이터, 다섯 가지 스케일링 (이상치 2개 포함)")
+                 title="같은 데이터, 다섯 가지 scaling (outlier 2개 포함)")
 fig.update_layout(legend=dict(x=0.02, y=1.12, orientation="h", font=dict(size=10)))
 fig.show()
 ```
@@ -367,10 +376,10 @@ fig.show()
 
 import numpy as np
 
-print(f"데이터: N(50, 8) 200개 + 이상치 2개 (500, 480)")
+print(f"데이터: N(50, 8) 200개 + outlier 2개 (500, 480)")
 print()
 print(f"{'방법':<20} {'정상값 범위':>22} {'정상값 표준편차':>15} {'정상값 IQR':>12} "
-      f"{'이상치 위치':>12}")
+      f"{'outlier 위치':>12}")
 print("-" * 86)
 for k, v in SCALERS.items():
     lo, hi = v[normal_mask].min(), v[normal_mask].max()
@@ -378,42 +387,45 @@ for k, v in SCALERS.items():
     print(f"{k:<20} {f'[{lo:.2f}, {hi:.2f}]':>22} {v[normal_mask].std():>15.3f} "
           f"{iqr_n:>12.3f} {v[-2]:>12.2f}")
 
-z = SCALERS["표준화 (z)"]
+z = SCALERS["standardization (z)"]
 rb = SCALERS["robust (중앙값/IQR)"]
 mm = SCALERS["min-max"]
-qt = SCALERS["분위수 → 정규"]
+qt = SCALERS["quantile → 정규"]
 z_sd = float(z[normal_mask].std())
 mm_hi = float(mm[normal_mask].max())
 rb_iqr = float(np.subtract(*np.percentile(rb[normal_mask], [75, 25])))
 ```
 
-**먼저 짚을 것.** z·min-max·robust 는 전부 선형 변환이므로
+**먼저 짚을 것.** z·min-max·robust는 전부 선형 변환이므로
 정상값끼리의 **상대적 간격은 셋 다 똑같이 보존된다.** 여기서 갈리지 않는다.
-차이는 **정상값이 어떤 스케일에 놓이느냐**이고, 그것은 이상치가 스케일 파라미터를 오염시키기 때문에 생긴다.
+차이는 **정상값이 어떤 스케일에 놓이느냐**이고, 그것은 outlier가 스케일 파라미터를 오염시키기 때문에 생긴다.
 
-- **표준화**의 목표는 '표준편차 1'인데, 정상값의 실제 표준편차는 `{python} f"{z_sd:.3f}"` 다.
-  이상치 2개가 전체 표준편차를 `{python} f"{1/z_sd:.1f}"`배 부풀렸기 때문이다.
+- **standardization**(평균을 빼고 표준편차로 나누기)의 목표는 '표준편차 1'인데, 정상값의 실제 표준편차는 `{python} f"{z_sd:.3f}"` 다.
+  outlier 2개가 전체 표준편차를 `{python} f"{1/z_sd:.1f}"`배 부풀렸기 때문이다.
 - **min-max** 의 목표는 $[0,1]$ 범위인데, 정상값은 [0, `{python} f"{mm_hi:.2f}"`] 만 쓴다.
-  나머지 `{python} f"{1-mm_hi:.0%}"` 는 이상치 2개가 차지한다.
+  나머지 `{python} f"{1-mm_hi:.0%}"` 는 outlier 2개가 차지한다.
   신경망 입력처럼 절대 범위가 의미를 갖는 곳에서 문제가 된다.
-- **robust** 는 중앙값·IQR 을 쓰므로 이상치가 파라미터에 들어가지 않는다.
-  정상값 IQR 이 정확히 `{python} f"{rb_iqr:.3f}"` — 설계대로다.
-  대신 이상치는 `{python} f"{rb[-2]:.1f}"` 로 멀리 남는다 (**지워지지 않는다**).
-- **분위수 변환**만 비선형이다. 순위만 쓰므로 이상치를 `{python} f"{qt[-2]:.2f}"` 로 끌어당긴다.
+- **robust**는 중앙값·IQR을 쓰므로 outlier가 파라미터에 들어가지 않는다.
+  정상값 IQR이 정확히 `{python} f"{rb_iqr:.3f}"` — 설계대로다.
+  대신 outlier는 `{python} f"{rb[-2]:.1f}"` 로 멀리 남는다 (**지워지지 않는다**).
+- **quantile transform**(분위수 변환 — 값을 순위로 바꾼 뒤 그 순위를 정규분포의 눈금에 다시 놓기)만 비선형이다. 순위만 쓰므로 outlier를 `{python} f"{qt[-2]:.2f}"` 로 끌어당긴다.
   분포를 강제로 정규로 만든다 — 강력하지만 **거리 정보를 버린다.**
-  '500 과 480 은 아주 크다'는 사실이 '상위 두 개'로만 남는다.
+  '500과 480은 아주 크다'는 사실이 '상위 두 개'로만 남는다 — 점수를 버리고 등수만 남긴 것이다.
 
 | 상황 | 선택 |
 |---|---|
-| 이상치가 없고 대략 정규 | 표준화 — 가장 무난 |
-| 신경망 입력, 범위를 알아야 함 | min-max — 단 이상치를 먼저 처리 |
-| 이상치가 있음 | robust |
-| 분포가 심하게 치우침 | 분위수 변환 또는 멱변환(아래) |
-| 트리 모델 | **스케일링이 불필요하다** — 분할 기준은 순서만 본다 |
+| outlier가 없고 대략 정규 | standardization — 가장 무난 |
+| 신경망 입력, 범위를 알아야 함 | min-max — 단 outlier를 먼저 처리 |
+| outlier가 있음 | robust |
+| 분포가 심하게 치우침 | quantile transform 또는 power transform(아래) |
+| 트리 모델 | **scaling이 불필요하다** — 분할 기준은 순서만 본다 |
 
 ---
 
-## G1.3.3 — 멱변환: 치우침 바로잡기
+## G1.3.3 — power transform: 치우침 바로잡기
+
+소득처럼 오른쪽 꼬리가 긴 분포는 로그를 씌우면 종 모양에 가까워진다. **power transform**(power transform — 거듭제곱으로 모양을 바꾸는 변환)은
+로그·제곱근·역수 같은 변환들을 손잡이 $\lambda$ 하나로 이어 놓은 것이다.
 
 $$\text{Box-Cox: } x^{(\lambda)} = \begin{cases}
 \dfrac{x^\lambda - 1}{\lambda} & \lambda \neq 0 \\[4pt]
@@ -438,13 +450,13 @@ $x^\lambda$ 만 쓰면 $\lambda\to0$ 에서 상수 1로 수렴해 정보가 사�
 1을 빼고 $\lambda$ 로 나누는 것은 **$\lambda=0$ 에서 로그와 매끄럽게 이어 붙이기 위한 규격화**다.
 덕분에 $\lambda$ 를 연속적인 하나의 손잡이로 다룰 수 있다.
 
-**② $\lambda<0$ 에서도 순서가 보존된다.** $\lambda=-1$ 이면 $x^{-1}$ 은 **순감소** 함수라
-큰 값과 작은 값이 뒤집힌다. 그런데 $\frac{x^{-1}-1}{-1} = 1 - \frac{1}{x}$ 는 순증가다.
+**② $\lambda<0$ 에서도 순서가 보존된다.** $\lambda=-1$ 이면 $x^{-1}$ 은 **감소** 함수라
+큰 값과 작은 값이 뒤집힌다. 그런데 $\frac{x^{-1}-1}{-1} = 1 - \frac{1}{x}$ 는 증가 함수다.
 $\lambda$ 로 나누는 것이 음수일 때 부호를 되돌려 준다.
-덕분에 **어떤 $\lambda$ 에서도 변환이 단조 증가**한다.
+덕분에 **어떤 $\lambda$ 에서도 변환이 순서를 지키며 증가**한다.
 
-$\lambda$ 자체는 **최대우도로 고른다.** 변환 후 데이터가 정규분포를 따른다고 보고
-로그우도를 최대화하는 $\lambda$ 를 찾는데, 변수변환이므로 야코비안 항
+$\lambda$ 자체는 **maximum likelihood로 고른다.** 변환 후 데이터가 정규분포를 따른다고 보고
+log-likelihood를 최대화하는 $\lambda$ 를 찾는데, 변수변환이므로 Jacobian 항
 $(\lambda-1)\sum_i \ln x_i$ 가 함께 들어간다
 ([0.2의 변수변환](../00_foundations/02_probability.qmd)과 같은 이유다).
 
@@ -525,10 +537,10 @@ fig.show()
 import numpy as np
 from scipy import stats
 
-print(f"원본 분포: 로그정규, 왜도 {stats.skew(raw):.3f}, "
+print(f"원본 분포: 로그정규, skewness {stats.skew(raw):.3f}, "
       f"초과첨도 {stats.kurtosis(raw):.3f}")
 print()
-print(f"{'λ':>7} {'왜도':>10} {'초과첨도':>11} {'정규성 검정 통계량':>18}  {'비고'}")
+print(f"{'λ':>7} {'skewness':>10} {'ex.kurt':>11} {'정규성 검정 통계량':>18}  {'비고'}")
 print("-" * 62)
 best_lam, best_skew = None, np.inf
 for lam in LAMS:
@@ -540,32 +552,35 @@ for lam in LAMS:
         best_lam, best_skew = lam, sk
     print(f"{lam:>7.2f} {sk:>10.4f} {stats.kurtosis(t):>11.4f} {ks:>18.4f}  {note}")
 print()
-print(f"왜도가 0 에 가장 가까운 λ: {best_lam} (왜도 {best_skew:+.4f})")
+print(f"skewness 가 0 에 가장 가까운 λ: {best_lam} (skewness {best_skew:+.4f})")
 print()
-# scipy 의 최대우도 추정과 비교
+# scipy 의 maximum likelihood 추정과 비교
 fitted, lam_mle = stats.boxcox(raw)
-print(f"scipy.stats.boxcox 의 최대우도 λ: {lam_mle:.4f}")
-print(f"  그때 왜도 {stats.skew(fitted):+.4f}, "
+print(f"scipy.stats.boxcox 의 maximum likelihood λ: {lam_mle:.4f}")
+print(f"  그때 skewness {stats.skew(fitted):+.4f}, "
       f"초과첨도 {stats.kurtosis(fitted):+.4f}")
 ```
 
 **로그정규를 로그 변환하면 정확히 정규가 된다** — $\lambda=0$ 이 이론적 정답이고,
-최대우도 추정도 `{python} f"{lam_mle:.3f}"` 로 거의 그 값을 찾아냈다.
+maximum likelihood 추정도 `{python} f"{lam_mle:.3f}"` 로 거의 그 값을 찾아냈다.
 
 주의할 점이 넷이다.
 
-- $\lambda$ 도 **학습셋에서만** 추정해야 한다 (누수 방지)
-- Box-Cox 는 양수만 가능하다. 0 이나 음수가 있으면 Yeo-Johnson 을 쓴다
+- $\lambda$ 도 **학습셋에서만** 추정해야 한다 (leakage 방지)
+- Box-Cox는 양수만 가능하다. 0 이나 음수가 있으면 Yeo-Johnson을 쓴다
 - 변환 후 값은 해석이 어려워진다 — 계수의 의미가 바뀐다
-- 트리 모델에는 대체로 불필요하다 (단조 변환이라 분할이 동일하다)
+- 트리 모델에는 대체로 불필요하다 (순서를 지키는 변환이라 분할이 동일하다)
 
 ---
 
-## G1.3.4 — 결측 대치의 부작용
+## G1.3.4 — imputation의 부작용
+
+**imputation**(결측 대치)은 빈칸을 그럴듯한 값으로 채우는 일이다. 문제는 "그럴듯한 값"이 실제 데이터보다 너무 얌전하다는 것이다 —
+반 전체의 빈칸을 평균 점수로 채우면 그 학생들은 전부 똑같은 점수를 받은 것처럼 보인다.
 
 ```{python}
 #| label: fig-imputation
-#| fig-cap: "평균 대치는 분산을 줄이고 상관을 약화시킵니다"
+#| fig-cap: "mean imputation은 분산을 줄이고 상관을 약화시킵니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -642,41 +657,43 @@ for m in METHODS:
           f"{r_by[m][k50]:>10.4f} {r_by[m][k50]-TRUE_R:>+9.4f}")
 ```
 
-**평균 대치는 두 방향으로 왜곡한다.**
+**mean imputation(평균 대치)은 두 방향으로 왜곡한다.**
 대치값이 전부 같은 값이라 산포가 줄어들고(표준편차 `{python} f"{sd_by['평균 대치'][k50]/TRUE_SD-1:+.0%}"`),
 대치된 행은 $u$ 와 무관한 상수가 되므로 관계가 희석된다
 (상관 `{python} f"{r_by['평균 대치'][k50]:.2f}"` 대 참값 `{python} f"{TRUE_R:.2f}"`).
 
-**회귀 대치는 반대 방향으로 틀린다.**
+**regression imputation(회귀 대치 — 다른 열로 예측한 값으로 채우기)은 반대 방향으로 틀린다.**
 대치값이 회귀선 **위에 정확히** 놓이므로 상관이 오히려 `{python} f"{r_by['회귀 대치'][k50]:.2f}"` 로 과대해진다.
 '없는 데이터를 완벽하게 예측한 것처럼' 보이게 만든다.
 
-**확률적 회귀 대치가 둘 사이를 잡는다.** 잔차 분산만큼 잡음을 다시 넣어 주면
+**stochastic regression imputation(확률적 회귀 대치 — 예측값에 잡음을 더해 채우기)이 둘 사이를 잡는다.** residual 분산만큼 잡음을 다시 넣어 주면
 표준편차 `{python} f"{sd_by['확률적 회귀 대치'][k50]:.3f}"`, 상관 `{python} f"{r_by['확률적 회귀 대치'][k50]:.3f}"` 로 참값에 가깝다.
-이것이 **다중 대치(MICE)** 의 핵심 아이디어다 —
+이것이 **multiple imputation(다중 대치, MICE)**의 핵심 아이디어다 —
 대치는 한 번이 아니라 여러 번 하고, 그 변동을 최종 불확실성에 반영한다.
 
 실무 지침은 넷이다.
 
 - 결측률이 낮고(<5%) MCAR 이면 삭제나 단순 대치로 충분하다
-- 결측 지시자 열을 함께 넣는 것이 대체로 이득이다 (결측 자체가 정보)
+- 결측 indicator 열(비었으면 1)을 함께 넣는 것이 대체로 이득이다 (결측 자체가 정보)
 - 트리 모델은 결측을 직접 다룰 수 있다 (LightGBM, XGBoost)
-- **어떤 대치든 fit 은 학습셋에서만** — 위 누수 규칙 그대로다
+- **어떤 대치든 fit은 학습셋에서만** — 위 leakage 규칙 그대로다
 
 ---
 
-## 범주형 인코딩
+## 범주형 encoding
+
+모델은 숫자만 받으므로 "서울/부산/대구" 같은 범주는 숫자로 바꿔야 한다. 바꾸는 방식마다 모델에게 다른 가정을 심어 준다.
 
 | 방법 | 차원 | 적합한 상황 | 장점 | 주의 |
 |---|---|---|---|---|
-| one-hot | 카디널리티 $k$ | 낮은 카디널리티 (<15) | 순서 가정 없음 | 고카디널리티에서 차원 폭발 |
-| ordinal | 1 | **진짜 순서가 있을 때만** | 메모리 최소 | 없는 순서를 가정하면 치명적 |
-| target/mean | 1 | 고카디널리티 | 강력함 | **누수 위험 — 폴드 밖 계산 필수** |
-| frequency | 1 | 빈도가 신호일 때 | 누수 없음(타깃 미사용) | 빈도가 같은 범주를 구별 못 함 |
-| hashing | 고정 $d$ | 카디널리티가 미지·무한 | 메모리 고정 | 충돌이 생김 |
-| 임베딩 | $d$ (학습) | 딥러닝, 초고카디널리티 | 유사도 학습 | 학습 데이터가 많이 필요 |
+| one-hot (범주마다 체크박스 열 하나) | cardinality $k$ | 낮은 cardinality (<15) | 순서 가정 없음 | 높은 cardinality에서 차원 폭발 |
+| ordinal (순서대로 0, 1, 2, …) | 1 | **진짜 순서가 있을 때만** | 메모리 최소 | 없는 순서를 가정하면 치명적 |
+| target/mean | 1 | 높은 cardinality | 강력함 | **leakage 위험 — fold 밖 계산 필수** |
+| frequency (등장 횟수) | 1 | 빈도가 신호일 때 | leakage 없음(타깃 미사용) | 빈도가 같은 범주를 구별 못 함 |
+| hashing (해시 함수로 고정 개수의 칸에 배정) | 고정 $d$ | cardinality가 미지·무한 | 메모리 고정 | 충돌이 생김 |
+| embedding (학습되는 벡터) | $d$ (학습) | 딥러닝, 초고 cardinality | 유사도 학습 | 학습 데이터가 많이 필요 |
 
-one-hot 의 차원 비용을 숫자로 보면 고카디널리티에 왜 다른 방법을 쓰는지 분명해진다.
+one-hot의 차원 비용을 숫자로 보면 높은 cardinality에 왜 다른 방법을 쓰는지 분명해진다.
 
 ```{python}
 #| label: categorical-encoding
@@ -684,7 +701,7 @@ one-hot 의 차원 비용을 숫자로 보면 고카디널리티에 왜 다른 �
 
 import numpy as np
 
-print(f"{'열':<16} {'카디널리티':>10} {'one-hot 차원':>14} {'1만 행 메모리(fp32)':>20}")
+print(f"{'열':<16} {'cardinality':>11} {'one-hot 차원':>14} {'1만 행 메모리(fp32)':>20}")
 print("-" * 64)
 total = 0
 for name, card in [("성별", 2), ("등급", 5), ("지역", 17), ("업종", 120),
@@ -696,34 +713,35 @@ print(f"{'합계':<16} {'':>10} {total:>14,} {total*10000*4/1e6:>18.1f}MB")
 ```
 
 상품ID 하나가 전체의 `{python} f"{45000/total:.1%}"` 를 차지한다.
-이래서 고카디널리티에는 target encoding 이나 임베딩을 쓴다.
+이래서 높은 cardinality에는 target encoding이나 embedding을 쓴다.
 
-**ordinal 인코딩의 함정.** `["서울", "부산", "대구", "인천"]` 을 `[0, 1, 2, 3]` 으로 넣으면
+**ordinal encoding의 함정.** `["서울", "부산", "대구", "인천"]` 을 `[0, 1, 2, 3]` 으로 넣으면
 모델은 '인천 − 대구 = 부산 − 서울'이라고 읽는다.
 선형 모델에서는 명백한 오류이고, 트리에서도 분할 후보를 왜곡한다.
 **순서가 실재할 때만 쓴다** (등급 A<B<C, 학력, 만족도 등).
-단, [1.0](00_data_and_types.qmd)에서 봤듯 순서 척도의 **간격**은 여전히 가정이다.
+단, [1.0](00_data_and_types.qmd)에서 봤듯 ordinal scale의 **간격**은 여전히 가정이다.
 
 ---
 
-## 불균형 데이터
+## imbalanced data(불균형 데이터)
 
 소수 클래스가 1% 인 문제에서 '전부 다수 클래스로 예측'하면 정확도가 99% 다.
-아무것도 안 배웠는데 높은 점수가 나온다 — **정확도는 불균형 데이터에서 쓸모없는 지표다.**
+스팸이 1%인 메일함에서 "전부 정상"이라고 답해도 99점이다.
+아무것도 안 배웠는데 높은 점수가 나온다 — **정확도는 imbalanced data에서 쓸모없는 지표다.**
 
 | 대응 | 무엇을 하는가 | 주의 |
 |---|---|---|
-| 클래스 가중치 | 손실에서 소수 클래스에 큰 가중치 | 가장 안전. 데이터를 안 바꾼다 |
-| 언더샘플링 | 다수 클래스를 버림 | 정보 손실. 데이터가 많을 때만 |
-| 오버샘플링(복제) | 소수 클래스를 복제 | 과적합 위험 |
-| SMOTE | 이웃 사이 보간으로 합성 표본 | **분할 후 학습셋에만** |
-| 임계값 조정 | 확률 컷오프를 옮김 | 재학습 불필요. 먼저 시도할 것 |
+| class weight (클래스 가중치) | 손실에서 소수 클래스에 큰 가중치 | 가장 안전. 데이터를 안 바꾼다 |
+| undersampling | 다수 클래스를 버림 | 정보 손실. 데이터가 많을 때만 |
+| oversampling(복제) | 소수 클래스를 복제 | overfitting 위험 |
+| SMOTE | 이웃 사이를 보간해 합성 표본 생성 | **분할 후 학습셋에만** |
+| threshold 조정 | 확률 cutoff를 옮김 | 재학습 불필요. 먼저 시도할 것 |
 
-**SMOTE 를 분할 전에 하면 누수다.** 합성 표본이 검증 행의 이웃으로 만들어지면
-검증 정보가 학습셋에 들어간다. 위 target encoding 과 정확히 같은 구조의 실수다.
+**SMOTE를 분할 전에 하면 leakage다.** 합성 표본이 검증 행의 이웃으로 만들어지면
+검증 정보가 학습셋에 들어간다. 위 target encoding과 정확히 같은 구조의 실수다.
 
-그리고 리샘플링은 **확률 보정을 깨뜨린다.** 소수 클래스를 $r$ 배로 늘리면
-모델이 배우는 사전확률은 $\dfrac{rp}{rp + (1-p)}$ 가 된다.
+그리고 resampling은 **calibration(확률 보정 — 모델이 말한 30%가 실제로 30%인 성질)을 깨뜨린다.** 소수 클래스를 $r$ 배로 늘리면
+모델이 배우는 prior는 $\dfrac{rp}{rp + (1-p)}$ 가 된다.
 
 ```{python}
 #| label: imbalance
@@ -737,7 +755,7 @@ for ratio in [1, 5, 20, 99]:
 ```
 
 모델의 출력 확률이 실제 확률이 아니게 된다.
-확률이 필요하면 **가중치 방식**을 쓰거나 사후 보정(Platt/isotonic)을 하고,
+확률이 필요하면 **class weight 방식**을 쓰거나 사후 calibration(Platt/isotonic)을 하고,
 순위만 필요하면(AUC) 문제가 덜하다.
 
 ---
@@ -745,26 +763,26 @@ for ratio in [1, 5, 20, 99]:
 ## 전처리 순서
 
 ::: {.key-concept}
-**교차검증 안쪽에 들어가야 하는 것**
+**cross-validation 안쪽에 들어가야 하는 것**
 
 ```
-바깥 (한 번만)                    안쪽 (폴드마다 반복)
+바깥 (한 번만)                    안쪽 (fold마다 반복)
 ─────────────────────            ──────────────────────────
-· 명백한 오류 행 제거              · 결측 대치 (fit)
-· 타입 변환 · 파싱                 · 스케일링 (fit)
-· 중복 제거                       · 인코딩 사전 만들기 (fit)
-· 열 이름 정리                     · 특성 선택 (fit)
-· 데이터 분할 ★                    · 이상치 임계값 (fit)
-                                 · 리샘플링 / SMOTE
+· 명백한 오류 행 제거              · imputation (fit)
+· 타입 변환 · 파싱                 · scaling (fit)
+· 중복 제거                       · encoding 사전 만들기 (fit)
+· 열 이름 정리                     · feature selection (fit)
+· 데이터 분할 ★                    · outlier threshold (fit)
+                                 · resampling / SMOTE
                                  · 모델 학습
 ```
 
 **★ 분할이 기준선이다.** 분할 이전에 하는 것은 타깃과 무관해야 하고,
-분할 이후의 모든 `fit` 은 학습 폴드만 본다.
+분할 이후의 모든 `fit` 은 학습 fold만 본다. 채점 기준은 학생 답안을 보기 전에 정해야 한다.
 
 판단이 서지 않으면 이렇게 물어라 —
 **"이 계산이 검증 행의 값을 하나라도 봤는가?"**
-봤다면 누수다.
+봤다면 leakage다.
 :::
 
 ---
@@ -772,15 +790,15 @@ for ratio in [1, 5, 20, 99]:
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 트리에는 정말 스케일링이 무의미한가**
-`why-scale` 의 데이터로 결정트리를 학습시키고, 표준화 전후의 분할 임계값과
-예측이 같은지 확인하라. 왜 같아야 하는지 [1.0의 허용 변환](00_data_and_types.qmd)으로 설명하라.
+**① 트리에는 정말 scaling이 무의미한가**
+`why-scale` 의 데이터로 decision tree를 학습시키고, standardization 전후의 분할 threshold와
+예측이 같은지 확인하라. 왜 같아야 하는지 [1.0의 admissible transformation](00_data_and_types.qmd)으로 설명하라.
 
 **② Box-Cox를 음수 데이터에 적용해 본다**
 `boxcox-why` 의 $x$ 에 음수를 넣으면 어떻게 되는가. Yeo-Johnson이 어떻게
 그 문제를 푸는지 식을 찾아 비교하라.
 
-**③ 평활 강도를 교차검증으로 고른다**
+**③ smoothing 강도를 cross-validation으로 고른다**
 `target-smoothing` 의 $m$ 을 1, 10, 100으로 바꿔가며 검증 성능을 재라.
 최적 $m$ 이 데이터 크기에 어떻게 의존하는가?
 :::
@@ -789,16 +807,17 @@ for ratio in [1, 5, 20, 99]:
 
 | 개념 | 핵심 |
 |------|------|
-| 데이터 누수 | 타깃과 무관한 범주로 **AUC `{python} f"{auc_leak:.2f}"`** 을 만들 수 있음 (실측) |
-| 누수 규칙 | fit은 학습 폴드에서만, 검증엔 transform만 |
-| 가장 위험한 것 | target encoding · 특성 선택 · SMOTE |
-| 표준화 | 이상치가 표준편차를 부풀려 정상값이 `{python} f"{z_sd:.2f}"` 로 눌림 |
-| min-max | 이상치가 [0,1] 의 대부분을 차지 — 절대 범위가 무너짐 |
-| robust | 중앙값·IQR — 이상치에 흔들리지 않음 |
-| 멱변환 | 로그정규는 $\lambda=0$ 에서 정규화. MLE도 그 값을 찾음 |
-| 평균 대치 | 분산 축소 + 상관 약화 |
-| 회귀 대치 | **반대로** 상관 과대 — 확률적 대치가 균형 |
-| 불균형 | 리샘플링은 확률 보정을 깨뜨림. 가중치가 안전 |
+| data leakage | 시험 문제를 미리 본 점수. 타깃과 무관한 범주로 **AUC `{python} f"{auc_leak:.2f}"`** 을 만들 수 있음 (실측) |
+| leakage 규칙 | fit은 학습 fold에서만, 검증엔 transform만 — 채점 기준은 답안을 보기 전에 |
+| 가장 위험한 것 | target encoding · feature selection · SMOTE |
+| shrinkage | 리뷰 1개짜리 5.0은 전체 평균 쪽으로 — 관측이 적을수록 전체 평균을 믿는다 |
+| standardization | outlier가 표준편차를 부풀려 정상값이 `{python} f"{z_sd:.2f}"` 로 눌림 |
+| min-max | outlier가 [0,1] 의 대부분을 차지 — 절대 범위가 무너짐 |
+| robust | 중앙값·IQR — outlier에 흔들리지 않음 |
+| power transform | 손잡이 하나로 로그·제곱근·역수를 잇는다. 로그정규는 $\lambda=0$ 에서 정규화. MLE도 그 값을 찾음 |
+| mean imputation | 빈칸을 전부 평균으로 — 분산 축소 + 상관 약화 |
+| regression imputation | **반대로** 상관 과대 — 잡음을 더한 stochastic imputation이 균형 |
+| imbalance | resampling은 calibration을 깨뜨림. class weight가 안전 |
 
 전처리는 데이터를 모델에 맞추는 일이다.
 다음 장은 반대로, **데이터에서 새 정보를 만들어내는** 일이다.
