@@ -1,23 +1,23 @@
 ---
 title: "2.11 모델 평가와 선택"
-subtitle: "교차검증·지표·ROC·캘리브레이션 — 숫자 하나를 믿기까지"
+subtitle: "cross-validation·지표·ROC·calibration — 숫자 하나를 믿기까지"
 jupyter: ai-ml-study
 ---
 
-**모델을 고르는 행위 자체가 검증셋에 대한 과적합이다.**
+**모델을 고르는 행위 자체가 검증셋에 대한 overfitting이다.**
 
 이 문장이 이 장의 전부다. [2.1](01_bias_variance.qmd)에서 훈련 성능을 믿을 수 없다는 것을 봤는데,
-검증 성능도 반복해서 들여다보면 같은 문제가 생긴다.
+검증 성능도 반복해서 들여다보면 같은 문제가 생긴다 — 모의고사를 스무 번 보고 최고점만 말하는 학생과 같다.
 
 평가 절차를 설계하지 못하면 리더보드 점수는 오르고 실제 성능은 떨어진다.
 [0.3의 통계적 추론](../00_foundations/03_statistics.qmd)이 여기서 실무 도구가 된다.
 
 ---
 
-## 교차검증 전략
+## cross-validation 전략
 
 데이터를 어떻게 나누느냐가 **i.i.d. 가정을 반영해야** 한다
-([2.0](00_learning_problem.qmd)).
+([2.0](00_learning_problem.qmd)). 같은 환자의 사진, 같은 달의 기록처럼 서로 닮은 데이터가 훈련과 검증에 나뉘어 들어가면 점수가 부풀려진다.
 
 ```{python}
 #| label: fig-cv-strategies
@@ -37,18 +37,18 @@ groups = np.repeat(np.arange(8), 5)                # 그룹 8개
 def make_splits(kind):
     idx = np.arange(n)
     out = []
-    if kind == "K-겹":
+    if kind == "K-fold":
         folds = np.array_split(idx, n_splits)
-    elif kind == "셔플 K-겹":
+    elif kind == "shuffle K-fold":
         folds = np.array_split(rng.permutation(idx), n_splits)
-    elif kind == "층화 K-겹":
+    elif kind == "stratified K-fold":
         folds = [[] for _ in range(n_splits)]
         for c in (0, 1):
             ci = idx[y_imb == c]
             for j, part in enumerate(np.array_split(ci, n_splits)):
                 folds[j].extend(part)
         folds = [np.array(sorted(f)) for f in folds]
-    elif kind == "그룹 K-겹":
+    elif kind == "group K-fold":
         gs = np.array_split(np.arange(8), n_splits)
         folds = [idx[np.isin(groups, g)] for g in gs]
     elif kind == "시간 분할":
@@ -65,7 +65,7 @@ def make_splits(kind):
         out.append((tr, va))
     return out
 
-kinds = ["K-겹", "셔플 K-겹", "층화 K-겹", "그룹 K-겹", "시간 분할"]
+kinds = ["K-fold", "shuffle K-fold", "stratified K-fold", "group K-fold", "시간 분할"]
 fig = make_subplots(rows=1, cols=len(kinds), subplot_titles=kinds,
                     horizontal_spacing=0.02, shared_yaxes=True)
 for c, kind in enumerate(kinds, start=1):
@@ -75,42 +75,42 @@ for c, kind in enumerate(kinds, start=1):
         M[j, va] = 1.0
     fig.add_trace(go.Heatmap(z=M, colorscale=[[0, viz.ACCENT], [1, viz.WARM]],
                              showscale=False,
-                             hovertemplate="폴드 %{y}, 표본 %{x}<extra></extra>"),
+                             hovertemplate="fold %{y}, 표본 %{x}<extra></extra>"),
                   row=1, col=c)
     fig.update_xaxes(title_text="표본", showticklabels=False, row=1, col=c)
-    fig.update_yaxes(title_text="폴드" if c == 1 else None,
+    fig.update_yaxes(title_text="fold" if c == 1 else None,
                      autorange="reversed", row=1, col=c)
 
-viz.fig_defaults(fig, height=280, title="교차검증 분할 전략")
+viz.fig_defaults(fig, height=280, title="cross-validation 분할 전략")
 fig.update_layout(margin=dict(l=45, r=25, t=75, b=45))
 fig.update_annotations(font_size=11)
 fig.show()
 ```
 
 ::: {.interaction-hint}
-**시간 분할**만 훈련 구간이 항상 검증 구간보다 앞에 있습니다. 나머지는 미래 데이터로 학습해 과거를 예측하는 셈이라 시계열에 쓰면 안 됩니다. **그룹 K-겹**은 같은 그룹이 훈련과 검증에 나뉘지 않게 합니다.
+**시간 분할**만 훈련 구간이 항상 검증 구간보다 앞에 있습니다. 나머지는 미래 데이터로 학습해 과거를 예측하는 셈이라 시계열에 쓰면 안 됩니다. **group K-fold**는 같은 그룹이 훈련과 검증에 나뉘지 않게 합니다.
 :::
 
 | 전략 | 쓰는 상황 | 요점 |
 |---|---|---|
-| K-겹 | 표준 i.i.d. 데이터 | 가장 흔한 기본값 |
-| 층화 K-겹 | 분류, 특히 불균형 | 각 폴드의 클래스 비율 유지 |
-| 반복 K-겹 | 분산이 큰 추정 | 여러 시드로 반복해 평균 |
-| LOOCV | 표본이 매우 적을 때 | n번 학습, 분산 큼 |
-| 그룹 K-겹 | 같은 개체의 기록이 여럿 | **누수 방지에 필수** |
+| K-fold | 표준 i.i.d. 데이터 | 가장 흔한 기본값 |
+| stratified K-fold (층화) | 분류, 특히 imbalanced | 각 fold의 클래스 비율 유지 |
+| repeated K-fold | variance가 큰 추정 | 여러 시드로 반복해 평균 |
+| LOOCV (leave-one-out) | 표본이 매우 적을 때 | n번 학습, variance 큼 |
+| group K-fold | 같은 개체의 기록이 여럿 | **leakage 방지에 필수** |
 | 시간 분할 | 시계열 | 미래 정보 차단 |
-| 중첩 CV | 하이퍼파라미터 + 성능 추정 | 선택 편향 제거 |
+| nested CV (중첩) | 하이퍼파라미터 + 성능 추정 | selection bias 제거 |
 
 
 ---
 
 ## 분류 지표: 정확도만으로는 부족하다
 
-혼동행렬에서 모든 것이 나온다.
+**confusion matrix**(confusion matrix — 실제 클래스 × 예측 클래스로 개수를 센 2×2 표)에서 모든 것이 나온다.
 
 ```{python}
 #| label: fig-confusion-threshold
-#| fig-cap: "임계값을 옮기면 혼동행렬의 네 칸이 함께 움직입니다."
+#| fig-cap: "threshold를 옮기면 confusion matrix의 네 칸이 함께 움직입니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -131,15 +131,15 @@ for t in ths:
     fn = int((~pred & (labels == 1)).sum()); tn = int((~pred & (labels == 0)).sum())
     cms[t] = np.array([[tn, fp], [fn, tp]])
     prec = tp / max(tp+fp, 1); rec = tp / max(tp+fn, 1)
-    metrics[t] = dict(정확도=(tp+tn)/len(labels), 정밀도=prec, 재현율=rec,
+    metrics[t] = dict(accuracy=(tp+tn)/len(labels), precision=prec, recall=rec,
                       F1=2*prec*rec/max(prec+rec, 1e-9),
-                      특이도=tn/max(tn+fp, 1))
+                      specificity=tn/max(tn+fp, 1))
 
-names = ["정확도", "정밀도", "재현율", "F1", "특이도"]
+names = ["accuracy", "precision", "recall", "F1", "specificity"]
 curves = {k: [metrics[t][k] for t in ths] for k in names}
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.42, 0.58],
-                    subplot_titles=("혼동행렬", "임계값에 따른 지표"))
+                    subplot_titles=("confusion matrix", "threshold에 따른 지표"))
 t0 = 0.5
 fig.add_trace(go.Heatmap(z=cms[t0], x=["예측 0", "예측 1"], y=["실제 0", "실제 1"],
                          colorscale="Blues", showscale=False,
@@ -153,10 +153,10 @@ fig.add_vline(x=t0, line=dict(color=viz.YELLOW, dash="dash"), row=1, col=2)
 steps = [(f"{t:.2f}", {"z": [cms[t], None, None, None, None, None],
                        "text": [cms[t], None, None, None, None, None]})
          for t in ths]
-fig.update_layout(sliders=[viz.slider(steps, prefix="임계값 = ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="threshold = ",
                                       active=list(ths).index(t0), pad_t=55)])
 fig.update_yaxes(autorange="reversed", row=1, col=1)
-fig.update_xaxes(title_text="임계값", row=1, col=2)
+fig.update_xaxes(title_text="threshold", row=1, col=2)
 fig.update_yaxes(title_text="값", range=[0, 1.05], row=1, col=2)
 viz.fig_defaults(fig, height=420, title="양성 비율 20% 인 데이터")
 fig.update_layout(legend=dict(x=0.55, y=0.35))
@@ -168,11 +168,11 @@ fig.show()
 
 | 지표 | 질문 | 무시하는 것 |
 |------|------|-------------|
-| 정확도 | 전체 중 몇 개를 맞혔나 | **불균형에 속음** |
-| 정밀도 | 양성이라 한 것 중 진짜는? | 놓친 양성(FN) |
-| 재현율 | 진짜 양성 중 몇 개를 잡았나 | 헛짚음(FP) |
-| F1 | 정밀도·재현율의 조화평균 | **진음성(TN)** |
-| 특이도 | 진짜 음성 중 몇 개를 걸렀나 | — |
+| accuracy (정확도) | 전체 중 몇 개를 맞혔나 | **imbalance에 속음** |
+| precision (precision) | 양성이라 한 것 중 진짜는? — 경보 중 진짜 화재 비율 | 놓친 양성(FN) |
+| recall (recall) | 진짜 양성 중 몇 개를 잡았나 — 화재 중 경보가 울린 비율 | 헛짚음(FP) |
+| F1 | precision·recall의 조화평균 | **true negative(TN)** |
+| specificity (특이도) | 진짜 음성 중 몇 개를 걸렀나 | — |
 | MCC | 네 칸을 모두 사용 | — |
 
 **정확도의 함정**: 양성이 1%인 데이터에서 "전부 음성"이라 답하면 정확도 99%다.
@@ -194,19 +194,19 @@ for pos_rate in [0.5, 0.2, 0.05, 0.01]:
 ```
 
 정확도만 보고하면 아무것도 학습하지 않은 모델이 훌륭해 보인다.
-같은 예측의 F1 과 MCC 는 양성 비율과 무관하게 **정확히 0** 이다 — 양성을 하나도 잡지 않았으므로
-재현율이 0 이고, 네 칸을 모두 쓰는 MCC 도 0 이 된다.
-불균형 데이터에서는 F1, MCC, PR-AUC 를 함께 봐야 한다.
+같은 예측의 F1과 MCC는 양성 비율과 무관하게 **정확히 0**이다 — 양성을 하나도 잡지 않았으므로
+recall이 0이고, 네 칸을 모두 쓰는 MCC도 0이 된다.
+imbalanced data에서는 F1, MCC, PR-AUC를 함께 봐야 한다.
 
 ---
 
 ## ROC vs PR 곡선
 
-두 곡선은 같은 예측을 다르게 요약한다.
+두 곡선은 같은 예측을 threshold를 0에서 1까지 옮겨 가며 다르게 요약한다.
 
-$$\text{ROC}: \text{FPR} \to \text{TPR}, \qquad \text{PR}: \text{재현율} \to \text{정밀도}$$
+$$\text{ROC}: \text{FPR} \to \text{TPR}, \qquad \text{PR}: \text{recall} \to \text{precision}$$
 
-결정적 차이는 **FPR이 진음성 수로 나뉜다**는 것이다.
+(TPR = recall, FPR = 진짜 음성 중 잘못 양성이라 한 비율.) 결정적 차이는 **FPR이 true negative 수로 나뉜다**는 것이다.
 음성이 압도적으로 많으면 FP가 늘어도 FPR은 거의 안 움직인다 — ROC가 낙관적으로 보인다.
 
 ```{python}
@@ -239,7 +239,7 @@ for r in rates:
     l = np.r_[np.ones(n_p), np.zeros(n_n)]
     data[r] = roc_pr(s, l) + (r,)
 
-fig = make_subplots(rows=1, cols=2, subplot_titles=("ROC 곡선", "정밀도-재현율 곡선"))
+fig = make_subplots(rows=1, cols=2, subplot_titles=("ROC 곡선", "precision-recall 곡선"))
 for i, r in enumerate(rates):
     fpr, tpr, rec, prec, aroc, apr, _ = data[r]
     fig.add_trace(go.Scatter(x=fpr, y=tpr, mode="lines",
@@ -251,12 +251,12 @@ for i, r in enumerate(rates):
 fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines", showlegend=False,
                          line=dict(color="rgba(255,255,255,0.35)", dash="dash")),
               row=1, col=1)
-fig.update_xaxes(title_text="거짓 양성률 (FPR)", row=1, col=1)
-fig.update_yaxes(title_text="재현율 (TPR)", row=1, col=1)
-fig.update_xaxes(title_text="재현율", row=1, col=2)
-fig.update_yaxes(title_text="정밀도", range=[0, 1.05], row=1, col=2)
+fig.update_xaxes(title_text="false positive률 (FPR)", row=1, col=1)
+fig.update_yaxes(title_text="recall (TPR)", row=1, col=1)
+fig.update_xaxes(title_text="recall", row=1, col=2)
+fig.update_yaxes(title_text="precision", range=[0, 1.05], row=1, col=2)
 viz.fig_defaults(fig, height=400,
-                 title="같은 분리력, 다른 양성 비율 (점선 = 무작위 기준선)")
+                 title="같은 분리력, 다른 양성 비율 (점선 = 무작위 baseline)")
 fig.update_layout(legend=dict(x=0.55, y=0.35))
 fig.show()
 ```
@@ -265,16 +265,16 @@ fig.show()
 #| label: roc-pr-numbers
 #| code-fold: false
 
-print(f"{'양성 비율':>10} {'ROC-AUC':>10} {'PR-AUC':>10} {'PR 기준선':>11} {'기준선 대비'}")
+print(f"{'양성 비율':>10} {'ROC-AUC':>10} {'PR-AUC':>10} {'PR baseline':>12} {'baseline 대비'}")
 print("-" * 58)
 for r in rates:
     *_, aroc, apr, _ = data[r]
     print(f"{r:>10.0%} {aroc:>10.3f} {apr:>10.3f} {r:>11.3f} {apr/r:>10.1f}배")
 ```
 
-ROC-AUC 는 양성 비율이 1% 로 떨어져도 거의 그대로다.
-PR-AUC 는 크게 낮아진다 — 양성을 찾는 일이 실제로 어려워졌다는 사실을 반영한다.
-다만 PR 기준선(무작위 예측기의 값 = 양성 비율)도 함께 떨어지므로 '기준선 대비 몇 배'로 봐야 공정하다.
+ROC-AUC는 양성 비율이 1%로 떨어져도 거의 그대로다.
+PR-AUC는 크게 낮아진다 — 양성을 찾는 일이 실제로 어려워졌다는 사실을 반영한다.
+다만 PR baseline(무작위 예측기의 값 = 양성 비율)도 함께 떨어지므로 'baseline 대비 몇 배'로 봐야 공정하다.
 
 ::: {.key-concept}
 **언제 무엇을 쓰나**
@@ -286,10 +286,10 @@ PR-AUC 는 크게 낮아진다 — 양성을 찾는 일이 실제로 어려워�
 ROC-AUC의 확률적 해석: **무작위 양성 하나가 무작위 음성 하나보다 높은 점수를 받을 확률.**
 :::
 
-### 그 해석이 왜 맞는가, 그리고 기준선이 다르다는 것
+### 그 해석이 왜 맞는가, 그리고 baseline이 다르다는 것
 
 AUC가 곧 순위쌍 비율이라는 사실은 정의를 풀어 쓰면 나온다.
-임계값 $t$ 에서 $\text{TPR}(t)=P(s\ge t\mid y=1)$, $\text{FPR}(t)=P(s\ge t\mid y=0)$ 이므로
+threshold $t$ 에서 $\text{TPR}(t)=P(s\ge t\mid y=1)$, $\text{FPR}(t)=P(s\ge t\mid y=0)$ 이므로
 
 $$\text{AUC} = \int_0^1 \text{TPR}\,d(\text{FPR})
 = P\big(s(X^+) > s(X^-)\big) + \tfrac{1}{2}P\big(s(X^+) = s(X^-)\big)$$
@@ -297,12 +297,12 @@ $$\text{AUC} = \int_0^1 \text{TPR}\,d(\text{FPR})
 **즉 AUC는 양성·음성을 하나씩 무작위로 뽑아 순위를 비교한 것의 기댓값**이고,
 이것이 Mann-Whitney $U$ 통계량과 같다. 여기서 두 가지가 따라온다.
 
-- **점수의 순증가 변환에 완전히 불변**이다. 순위만 보기 때문이다
-  ([1.0의 허용 변환](../01_data_science/00_data_and_types.qmd) 관점에서 AUC는 순서 척도만 쓴다).
-  그래서 [2.4의 임계값 조정](04_logistic_regression.qmd)이나 확률 보정으로는 AUC가 변하지 않는다.
+- **점수의 순서를 지키는 변환에 완전히 불변**이다. 순위만 보기 때문이다
+  ([1.0의 admissible transformation](../01_data_science/00_data_and_types.qmd) 관점에서 AUC는 ordinal scale만 쓴다).
+  그래서 [2.4의 threshold 조정](04_logistic_regression.qmd)이나 calibration으로는 AUC가 변하지 않는다.
 - **양성 비율에 불변**이다. 조건부 분포만 쓰기 때문이다.
 
-두 번째가 장점이자 함정이다. **기준선이 다르다.**
+두 번째가 장점이자 함정이다. **baseline이 다르다.**
 
 | 지표 | 무작위 예측기의 값 | 양성 비율 의존 |
 |---|---|---|
@@ -328,7 +328,7 @@ def roc_auc(y, s):
     return (r[y == 1].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)
 
 # 양성 비율만 바꿔가며 같은 신호 세기를 유지
-print(f"{'양성 비율 π':>12}{'ROC-AUC':>10}{'PR-AUC':>9}{'PR 기준선':>11}")
+print(f"{'양성 비율 π':>12}{'ROC-AUC':>10}{'PR-AUC':>9}{'PR baseline':>12}")
 for pi in [0.5, 0.1, 0.01]:
     n = 200_000
     y = (rng.random(n) < pi).astype(int)
@@ -351,23 +351,24 @@ print(f"\nAUC = {auc_direct:.6f}")
 print(f"양성>음성 순위쌍 비율 = {pairs:.6f}")
 ```
 
-신호 세기를 고정한 채 $\pi$ 만 50배 바꿔도 ROC-AUC 는 거의 그대로다 — 조건부 분포만 보기 때문이다.
-PR-AUC 는 크게 떨어진다 — 기준선 자체가 $\pi$ 로 내려가기 때문이다.
+신호 세기를 고정한 채 $\pi$ 만 50배 바꿔도 ROC-AUC는 거의 그대로다 — 조건부 분포만 보기 때문이다.
+PR-AUC는 크게 떨어진다 — baseline 자체가 $\pi$ 로 내려가기 때문이다.
 그리고 마지막 두 줄에서 순위로 계산한 AUC(`{python} f"{auc_direct:.4f}"`)와
 양성>음성 순위쌍의 비율(`{python} f"{pairs:.4f}"`)이 같은 값임이 확인된다.
 
 ---
 
-## 확률 캘리브레이션
+## 확률 calibration
 
 분류 정확도와 확률의 정확성은 **다른 문제**다.
-[2.8에서 본 나이브 베이즈](08_knn_naive_bayes.qmd)가 그 예였다.
+[2.8에서 본 naive Bayes](08_knn_naive_bayes.qmd)가 그 예였다.
+**calibration**(보정)은 "비 올 확률 70%"라고 한 날들 중 실제로 70%에 비가 오는가의 문제다.
 
-$$\text{완벽한 캘리브레이션}: \quad P(y=1 \mid \hat{p}=q) = q \quad \forall q$$
+$$\text{완벽한 calibration}: \quad P(y=1 \mid \hat{p}=q) = q \quad \forall q$$
 
 ```{python}
 #| label: fig-calibration
-#| fig-cap: "온도 스케일링으로 과신/과소 모델을 대각선에 맞춥니다."
+#| fig-cap: "temperature scaling으로 과신/과소 모델을 대각선에 맞춥니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -399,10 +400,10 @@ temps = [0.4, 0.6, 0.8, 1.0, 1.5, 2.0, 3.0]
 probs = {T: sigmoid(z_true / T) for T in temps}
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
-                    subplot_titles=("신뢰도 다이어그램", "온도에 따른 ECE"))
+                    subplot_titles=("reliability diagram", "temperature에 따른 ECE"))
 T0 = 1.0
 xs, ys, _ = reliability(probs[T0], y)
-fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines", name="완벽 캘리브레이션",
+fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines", name="완벽 calibration",
                          line=dict(color=viz.YELLOW, dash="dash", width=2)), row=1, col=1)
 fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines+markers", name="모델",
                          line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
@@ -424,7 +425,7 @@ fig.update_xaxes(title_text="평균 예측 확률", row=1, col=1)
 fig.update_yaxes(title_text="실제 양성 비율", row=1, col=1)
 fig.update_xaxes(title_text="온도 T", row=1, col=2)
 fig.update_yaxes(title_text="ECE (낮을수록 좋음)", row=1, col=2)
-viz.fig_defaults(fig, height=420, title="온도 스케일링")
+viz.fig_defaults(fig, height=420, title="temperature scaling")
 fig.update_layout(legend=dict(x=0.02, y=0.98))
 fig.show()
 ```
@@ -435,7 +436,7 @@ fig.show()
 
 import numpy as np
 
-print(f"{'온도 T':>8} {'ECE':>10} {'정확도':>10}   해석")
+print(f"{'temp. T':>8} {'ECE':>10} {'정확도':>10}   해석")
 print("-" * 52)
 for T in temps:
     p = probs[T]
@@ -444,17 +445,17 @@ for T in temps:
     print(f"{T:>8.1f} {ece(p, y):>10.4f} {acc:>10.4f}   {note}")
 ```
 
-온도는 정확도를 전혀 바꾸지 않는다 — 단조 변환이라 순서가 보존된다.
-바뀌는 것은 확률의 신뢰도(ECE)뿐이다.
+temperature는 정확도를 전혀 바꾸지 않는다 — 순서를 지키는 변환이라 순위가 보존된다.
+바뀌는 것은 확률의 신뢰도(ECE — expected calibration error, 예측 확률과 실제 비율의 평균 차이)뿐이다.
 
 ::: {.key-concept}
-**온도 스케일링이 정확도를 바꾸지 않는 이유**
+**temperature scaling이 정확도를 바꾸지 않는 이유**
 
-$\sigma(z/T)$ 는 $z$ 에 대한 **단조 증가 함수**다.
-따라서 점수의 순서가 보존되고, ROC-AUC와 (임계값을 함께 조정하면) 정확도가 그대로다.
+$\sigma(z/T)$ 는 $z$ 에 대한 **증가 함수**다.
+따라서 점수의 순서가 보존되고, ROC-AUC와 (threshold를 함께 조정하면) 정확도가 그대로다.
 
 바뀌는 것은 확률값 자체다. 그래서 **분류 성능은 그대로 두고 확률만 고칠 수 있다.**
-파라미터가 $T$ 하나뿐이라 검증셋이 작아도 과적합하지 않는다.
+파라미터가 $T$ 하나뿐이라 검증셋이 작아도 overfitting하지 않는다.
 [12.2 불확실성](../12_trust/02_uncertainty.qmd)에서 자세히 다룬다.
 :::
 
@@ -462,9 +463,11 @@ $\sigma(z/T)$ 는 $z$ 에 대한 **단조 증가 함수**다.
 
 ## 하이퍼파라미터 탐색
 
+하이퍼파라미터는 모델이 학습하지 않고 사람이 정해 주는 손잡이(learning rate, 트리 깊이, $\lambda$ 등)다. 어떤 값이 좋은지는 검증 점수로 찾는다.
+
 ```{python}
 #| label: fig-hpo
-#| fig-cap: "같은 예산에서 랜덤 탐색이 그리드보다 유리한 이유"
+#| fig-cap: "같은 예산에서 random search가 grid search보다 유리한 이유"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -486,8 +489,8 @@ grid_pts = np.array([[x, y] for x in np.linspace(0.1, 0.9, 4)
 rng = np.random.default_rng(2)
 rand_pts = rng.uniform(0.02, 0.98, (n_trials, 2))
 
-fig = make_subplots(rows=1, cols=2, subplot_titles=("그리드 탐색 (4×4)",
-                                                    "랜덤 탐색 (16회)"))
+fig = make_subplots(rows=1, cols=2, subplot_titles=("grid search (4×4)",
+                                                    "random search (16회)"))
 for c, pts in enumerate([grid_pts, rand_pts], start=1):
     fig.add_trace(go.Contour(x=g, y=g, z=Z, colorscale="Blues", showscale=False,
                              opacity=0.85, contours=dict(showlines=False)),
@@ -517,31 +520,31 @@ fig.show()
 
 import numpy as np
 
-print(f"그리드 탐색: 중요한 축에서 서로 다른 값을 {len(np.unique(grid_pts[:,0]))}개만 시도")
-print(f"랜덤 탐색  : 중요한 축에서 서로 다른 값을 {len(np.unique(rand_pts[:,0].round(3)))}개 시도")
+print(f"grid search  : 중요한 축에서 서로 다른 값을 {len(np.unique(grid_pts[:,0]))}개만 시도")
+print(f"random search: 중요한 축에서 서로 다른 값을 {len(np.unique(rand_pts[:,0].round(3)))}개 시도")
 print()
-print(f"  그리드 최고 점수: {score(grid_pts[:,0], grid_pts[:,1]).max():.4f}")
-print(f"  랜덤   최고 점수: {score(rand_pts[:,0], rand_pts[:,1]).max():.4f}")
+print(f"  grid   최고 점수: {score(grid_pts[:,0], grid_pts[:,1]).max():.4f}")
+print(f"  random 최고 점수: {score(rand_pts[:,0], rand_pts[:,1]).max():.4f}")
 ```
 
-그리드는 중요한 축에서 같은 값을 반복 시도하느라 예산을 낭비한다.
-어떤 파라미터가 중요한지 모를 때 랜덤이 유리하다 (Bergstra & Bengio 2012).
+grid search는 중요한 축에서 같은 값을 반복 시도하느라 예산을 낭비한다 — 바둑판 위의 점만 찍으면 한 축에서는 값이 4개뿐이다.
+어떤 파라미터가 중요한지 모를 때 random search가 유리하다 (Bergstra & Bengio 2012).
 
 | 방법 | 특징 | 언제 |
 |------|------|------|
-| 그리드 | 완전 탐색, 축별 값 재사용 | 파라미터 1~2개, 범위가 명확 |
-| **랜덤** | 축마다 다른 값을 시도 | **기본 선택** |
-| 베이지안 최적화 | 대리 모델([GP](08_knn_naive_bayes.qmd))로 다음 지점 제안 | 평가가 매우 비쌀 때 |
-| Hyperband / ASHA | 나쁜 설정을 조기 중단 | 학습이 오래 걸릴 때 |
+| grid search | 완전 탐색, 축별 값 재사용 | 파라미터 1~2개, 범위가 명확 |
+| **random search** | 축마다 다른 값을 시도 | **기본 선택** |
+| Bayesian optimization | surrogate model([GP](08_knn_naive_bayes.qmd))로 다음 지점 제안 | 평가가 매우 비쌀 때 |
+| Hyperband / ASHA | 나쁜 설정을 early stopping | 학습이 오래 걸릴 때 |
 
 ---
 
-## 중첩 교차검증: 선택 편향 제거
+## nested cross-validation: selection bias 제거
 
 여기가 가장 자주 틀리는 부분이다.
 
 **CV로 하이퍼파라미터를 고르고, 그 CV 점수를 성능으로 보고하면 낙관적이다.**
-그 데이터로 선택을 했기 때문이다.
+그 데이터로 선택을 했기 때문이다 — 모의고사 스무 번 중 최고점을 실력이라 말하는 것이다.
 
 ```{python}
 #| label: fig-nested-cv
@@ -564,23 +567,23 @@ for n_cfg in n_configs_list:
         inner = rng.normal(0.5, 0.05, n_cfg)
         k = int(np.argmax(inner))
         best_scores.append(inner[k])                 # 순진한 보고: 최고 검증 점수
-        honest_scores.append(rng.normal(0.5, 0.05))  # 바깥 폴드의 독립 평가
+        honest_scores.append(rng.normal(0.5, 0.05))  # 바깥 fold의 독립 평가
     naive.append(np.mean(best_scores))
     nested.append(np.mean(honest_scores))
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=n_configs_list, y=naive, mode="lines+markers",
-                         name="순진한 보고 (최고 검증 점수)",
+                         name="naive 보고 (최고 검증 점수)",
                          line=dict(color=viz.WARM, width=2.5)))
 fig.add_trace(go.Scatter(x=n_configs_list, y=nested, mode="lines+markers",
-                         name="중첩 CV (바깥 폴드 평가)",
+                         name="nested CV (바깥 fold 평가)",
                          line=dict(color=viz.ACCENT, width=2.5)))
 fig.add_hline(y=0.5, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="참 성능 0.5")
 fig.update_layout(xaxis_title="시도한 설정 수", xaxis_type="log",
                   yaxis_title="보고되는 점수", legend=dict(x=0.02, y=0.98))
 viz.fig_defaults(fig, height=400,
-                 title="설정을 많이 시도할수록 낙관 편향이 커진다")
+                 title="설정을 많이 시도할수록 낙관 bias 가 커진다")
 fig.show()
 ```
 
@@ -588,7 +591,7 @@ fig.show()
 #| label: nested-numbers
 #| code-fold: false
 
-print(f"{'설정 수':>9} {'순진한 보고':>13} {'중첩 CV':>11} {'편향':>10}")
+print(f"{'설정 수':>9} {'naive 보고':>13} {'nested CV':>11} {'bias':>10}")
 print("-" * 48)
 for c, nv, ns in zip(n_configs_list, naive, nested):
     print(f"{c:>9} {nv:>13.4f} {ns:>11.4f} {nv-ns:>+10.4f}")
@@ -596,17 +599,19 @@ for c, nv, ns in zip(n_configs_list, naive, nested):
 
 참 성능은 0.5 다 (모든 설정이 무의미한 잡음).
 100개 설정을 시도하면 검증 점수가 `{python} f"{naive[-1]:.2f}"` 까지 부풀려지는데,
-중첩 CV 는 `{python} f"{nested[-1]:.2f}"` 를 유지한다.
+nested CV는 `{python} f"{nested[-1]:.2f}"` 를 유지한다.
 
 ::: {.callout-warning}
-## 중첩 CV의 구조
+## nested CV의 구조
+
+선택용 CV를 평가용 CV 안에 한 번 더 넣는다 — 모의고사로 공부법을 고르고, 그 공부법의 실력은 아직 안 본 시험으로 잰다.
 
 ```
 바깥 루프 (성능 추정)
-├── 폴드 1: 안쪽 CV 로 하이퍼파라미터 선택 → 바깥 검증셋에서 평가
-├── 폴드 2: (같은 절차, 독립적으로)
+├── fold 1: 안쪽 CV 로 하이퍼파라미터 선택 → 바깥 검증셋에서 평가
+├── fold 2: (같은 절차, 독립적으로)
 └── ...
-최종 성능 = 바깥 폴드 점수들의 평균
+최종 성능 = 바깥 fold 점수들의 평균
 ```
 
 비용이 $k_{\text{out}} \times k_{\text{in}}$ 배로 늘어난다.
@@ -618,16 +623,16 @@ for c, nv, ns in zip(n_configs_list, naive, nested):
 
 ## 모델 비교: 차이가 유의한가
 
-CV 폴드 점수를 그냥 t-검정에 넣으면 안 된다
+CV fold 점수를 그냥 t-검정에 넣으면 안 된다
 ([0.3](../00_foundations/03_statistics.qmd)에서 예고한 문제).
-$k$-겹의 폴드들은 훈련 데이터의 $(k-2)/(k-1)$ 을 서로 공유하므로,
-두 모델의 **폴드별 점수 차이 $d_1,\dots,d_k$ 가 서로 양의 상관**을 갖는다.
-대응 t-검정은 $d_k$ 가 독립이라 보고 표준오차를 $s/\sqrt{k}$ 로 계산하는데,
-상관이 있으면 실제 표준오차는 그보다 크다 — 분산이 과소추정되어 거짓 양성이 는다.
+$k$-fold의 fold들은 훈련 데이터의 $(k-2)/(k-1)$ 을 서로 공유하므로,
+두 모델의 **fold별 점수 차이 $d_1,\dots,d_k$ 가 서로 양의 상관**을 갖는다 — 같은 학생이 비슷한 시험을 열 번 본 것이지 열 명의 학생이 아니다.
+paired t-검정은 $d_k$ 가 독립이라 보고 standard error를 $s/\sqrt{k}$ 로 계산하는데,
+상관이 있으면 실제 standard error는 그보다 크다 — 분산이 실제보다 작게 추정되어 false positive가 는다.
 
-폴드 간 상관을 $\rho$ 라 하면 실제 분산은 $s^2\big(\tfrac{1}{k} + \tfrac{\rho}{1-\rho}\big)$ 이고,
+fold 간 상관을 $\rho$ 라 하면 실제 분산은 $s^2\big(\tfrac{1}{k} + \tfrac{\rho}{1-\rho}\big)$ 이고,
 Nadeau-Bengio 보정은 $\rho$ 자리에 $n_{\text{test}}/n_{\text{train}}$ 을 넣는다.
-두 모델의 참 성능이 같을 때 보정 전후의 거짓 양성률을 재 본다.
+두 모델의 참 성능이 같을 때 보정 전후의 false positive 비율을 재 본다.
 
 ```{python}
 #| label: model-comparison
@@ -640,11 +645,11 @@ k, n_sim, sigma = 10, 4000, 0.02
 t_crit = 2.262                                     # df=9, α=0.05
 
 fpr = {}
-print(f"{'폴드 간 상관 ρ':>14}{'순진한 t-검정':>15}{'보정 t-검정':>13}")
+print(f"{'fold 간 상관 ρ':>14}{'naive t-검정':>15}{'보정 t-검정':>13}")
 for rho in [0.0, 0.2, 0.4, 0.6]:
     fp_naive = fp_corr = 0
     for _ in range(n_sim):
-        common = rng.normal(0, sigma*np.sqrt(rho))              # 폴드가 공유하는 성분
+        common = rng.normal(0, sigma*np.sqrt(rho))              # fold가 공유하는 성분
         d = common + rng.normal(0, sigma*np.sqrt(1-rho), k)     # 참 차이는 0
         sd = d.std(ddof=1)
         fp_naive += abs(d.mean() / (sd/np.sqrt(k))) > t_crit
@@ -653,17 +658,17 @@ for rho in [0.0, 0.2, 0.4, 0.6]:
     print(f"{rho:>14.1f}{fpr[rho][0]:>15.1%}{fpr[rho][1]:>13.1%}")
 ```
 
-의도한 유의수준은 5% 인데, 폴드 간 상관이 `{python} f"{0.2}"` 만 되어도 순진한 t-검정은
+의도한 significance level은 5%인데, fold 간 상관이 `{python} f"{0.2}"` 만 되어도 naive t-검정은
 차이가 없는 두 모델을 `{python} f"{fpr[0.2][0]:.0%}"` 의 확률로 "유의하게 다르다"고 판정한다.
 상관을 반영한 보정은 `{python} f"{fpr[0.2][1]:.1%}"` 로 돌아온다
-(여기서는 시뮬레이션의 참 $\rho$ 를 썼고, 실무에서는 Nadeau-Bengio 의 근사값을 쓴다).
+(여기서는 시뮬레이션의 참 $\rho$ 를 썼고, 실무에서는 Nadeau-Bengio의 근사값을 쓴다).
 
 안전한 실무 지침은 넷이다.
 
 1. 시드를 여러 개(5~10) 돌려 **완전히 재학습**한 결과를 비교한다
 2. 점수를 "91.2 ± 0.4 (시드 5개)" 형태로 보고한다
 3. 차이가 시드 간 변동보다 작으면 "차이 없음"으로 취급한다
-4. 교정된 t-검정(Nadeau-Bengio) 또는 부트스트랩 신뢰구간을 쓴다
+4. 보정된 t-검정(Nadeau-Bengio) 또는 bootstrap confidence interval을 쓴다
 
 ---
 
@@ -697,15 +702,15 @@ for nm, v, note in rows:
     print(f"{nm:<8} {v:>12.3f}{unit:<1}  {note}")
 ```
 
-치우친 데이터에서는 RMSE 가 큰 값에 지배된다.
-상대 오차가 중요하면 로그 변환 후 RMSE 를 쓰거나 MAPE 계열을 쓴다.
+치우친 데이터에서는 RMSE가 큰 값에 지배된다.
+상대 오차가 중요하면 로그 변환 후 RMSE를 쓰거나 MAPE 계열을 쓴다.
 
 | 랭킹·추천 지표 | 의미 |
 |----------------|------|
 | Precision@k | 상위 $k$ 개 중 적중 비율 |
 | Recall@k | 전체 정답 중 상위 $k$ 에 든 비율 |
-| MRR | 첫 정답의 역순위 평균 |
-| **NDCG@k** | 순위 할인 + 관련도 등급 반영 |
+| MRR (mean reciprocal rank) | 첫 정답의 순위의 역수(1등이면 1, 3등이면 1/3)의 평균 |
+| **NDCG@k** | 순위가 낮을수록 점수를 깎고(discount) 관련도 등급을 반영 |
 
 [7.10 RAG](../07_language/10_rag.qmd)의 검색 평가가 이 지표들을 쓴다.
 
@@ -718,33 +723,34 @@ for nm, v, note in rows:
 `auc-interpretation` 의 순위쌍 비율을 $O(n\log n)$ 으로 계산하는 코드를 짜고
 $O(n^2)$ 방식과 결과·속도를 비교하라.
 
-**② 보정이 AUC를 바꾸지 않음을 확인한다**
-예측 확률에 Platt 보정(로지스틱 재적합)을 적용하고 AUC·로그손실·ECE를 재라.
+**② calibration이 AUC를 바꾸지 않음을 확인한다**
+예측 확률에 Platt scaling(logistic 재적합)을 적용하고 AUC·log loss·ECE를 재라.
 무엇이 변하고 무엇이 변하지 않는가?
 
-**③ 중첩 CV의 낙관을 잰다**
+**③ nested CV의 낙관을 잰다**
 `nested-numbers` 에서 하이퍼파라미터 후보를 5개에서 50개로 늘리면
-단순 CV와 중첩 CV의 차이가 어떻게 벌어지는가?
+단순 CV와 nested CV의 차이가 어떻게 벌어지는가?
 :::
 
 ## 요약
 
 | 개념 | 핵심 |
 |------|------|
-| CV 전략 | **i.i.d. 가정을 반영해야** (그룹·시간 분할) |
-| 정확도 | 불균형에서 무의미 |
+| CV 전략 | **i.i.d. 가정을 반영해야** (group·시간 분할) — 같은 환자 사진을 나누지 않기 |
+| accuracy | imbalance에서 무의미 |
+| precision / recall | 경보 중 진짜 화재 / 화재 중 울린 경보 |
 | ROC-AUC | 양성 비율에 불변 → 희소 양성에서 낙관적 |
-| **PR-AUC** | 양성이 희소할 때. 기준선 = 양성 비율 |
-| 캘리브레이션 | 분류 성능과 **다른 문제** |
-| 온도 스케일링 | 정확도 불변, 확률만 교정 |
-| 랜덤 탐색 | 그리드보다 대체로 유리 |
-| **중첩 CV** | 설정 100개 시도 시 0.5 → `{python} f"{naive[-1]:.2f}"` 부풀림을 제거 |
-| 모델 비교 | 폴드는 독립 아님 (ρ=0.2 에서 거짓 양성 `{python} f"{fpr[0.2][0]:.0%}"`) → 보정 또는 시드 반복 |
+| **PR-AUC** | 양성이 희소할 때. baseline = 양성 비율 |
+| calibration | "70%"라고 한 날의 70%에 비가 오는가 — 분류 성능과 **다른 문제** |
+| temperature scaling | 정확도 불변, 확률만 교정 |
+| random search | 바둑판 점보다 대체로 유리 |
+| **nested CV** | 모의고사 최고점 금지. 설정 100개 시도 시 0.5 → `{python} f"{naive[-1]:.2f}"` 부풀림을 제거 |
+| 모델 비교 | fold는 독립 아님 — 같은 학생의 시험 열 번 (ρ=0.2에서 false positive `{python} f"{fpr[0.2][0]:.0%}"`) → 보정 또는 시드 반복 |
 
 평가 절차를 세웠다. 마지막 장은 **그럼에도 실전에서 무너지는 지점들**을 다룬다.
 
 ---
 
-**다음**: [2.12 실전에서 무너지는 지점](12_practical_issues.qmd) — 누수·불균형·드리프트
+**다음**: [2.12 실전에서 무너지는 지점](12_practical_issues.qmd) — leakage·imbalance·drift
 
-**이전**: [2.10 차원 축소](10_dimensionality_reduction.qmd)
+**이전**: [2.10 dimensionality reduction](10_dimensionality_reduction.qmd)
