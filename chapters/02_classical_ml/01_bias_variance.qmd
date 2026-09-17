@@ -1,19 +1,19 @@
 ---
-title: "2.1 편향-분산과 일반화"
-subtitle: "과적합·학습곡선·이중하강 — 왜 훈련 성능은 믿을 수 없는가"
+title: "2.1 bias–variance와 generalization"
+subtitle: "overfitting·learning curve·double descent — 왜 훈련 성능은 믿을 수 없는가"
 jupyter: ai-ml-study
 ---
 
 머신러닝의 목표는 훈련 데이터를 잘 맞히는 것이 **아니다**.
 
 훈련 데이터만 맞히는 것은 쉽다. 데이터를 통째로 외우면 훈련 오차가 0이 된다.
-하지만 그런 모델은 새 데이터 앞에서 무력하다.
-우리가 실제로 원하는 것은 **아직 보지 못한 데이터에서의 성능** — 일반화다.
+하지만 그런 모델은 새 데이터 앞에서 무력하다 — 기출 문제의 답을 통째로 외운 학생이 새 문제 앞에서 무력한 것과 같다.
+우리가 실제로 원하는 것은 **아직 보지 못한 데이터에서의 성능** — **generalization**(generalization)이다.
 
-문제는 일반화 오차를 직접 볼 수 없다는 것이다. 우리 손에는 훈련 데이터뿐이다.
+문제는 generalization 오차를 직접 볼 수 없다는 것이다. 우리 손에는 훈련 데이터뿐이다.
 그래서 이 장은 두 가지를 한다.
 
-1. 일반화 오차를 **분해**해서, 무엇이 우리가 조절할 수 있는 손잡이인지 밝힌다.
+1. generalization 오차를 **분해**해서, 무엇이 우리가 조절할 수 있는 손잡이인지 밝힌다.
 2. 그 오차를 **추정**하는 절차를 세운다.
 
 ---
@@ -28,25 +28,27 @@ $$y = f(x) + \varepsilon, \qquad \mathbb{E}[\varepsilon]=0, \quad \mathrm{Var}(\
 $D$ 가 무작위이므로 $\hat{f}_D$ 도 확률변수다.
 
 한 점 $x_0$ 에서의 기대 제곱오차는 **정확히 세 항으로 분해된다.**
+다트로 치면, **bias**(편향)는 자국들의 평균 위치가 과녁 중심에서 벗어난 거리이고, **variance**(분산)는 자국들이 서로 퍼진 정도다.
 
 $$
 \mathbb{E}_{D,\varepsilon}\big[(y_0 - \hat{f}_D(x_0))^2\big] =
-\underbrace{\big(\mathbb{E}_D[\hat{f}_D(x_0)] - f(x_0)\big)^2}_{\text{편향}^2} +
-\underbrace{\mathrm{Var}_D\big(\hat{f}_D(x_0)\big)}_{\text{분산}} +
-\underbrace{\sigma^2}_{\text{잡음}}
+\underbrace{\big(\mathbb{E}_D[\hat{f}_D(x_0)] - f(x_0)\big)^2}_{\text{bias}^2} +
+\underbrace{\mathrm{Var}_D\big(\hat{f}_D(x_0)\big)}_{\text{variance}} +
+\underbrace{\sigma^2}_{\text{noise}}
 $$
 
 | 항 | 뜻 | 원인 | 줄이는 법 |
 |----|-----|------|-----------|
-| **편향²** | 평균적으로 얼마나 빗나가는가 | 모델이 참 함수를 표현할 능력이 없음 | 모델을 더 유연하게 |
-| **분산** | 데이터가 바뀌면 얼마나 흔들리는가 | 모델이 훈련 데이터의 잡음까지 따라감 | 모델을 더 단순하게, 정규화, 데이터 추가 |
-| **잡음** | 데이터 자체의 무작위성 | 측정 오차, 관측되지 않은 변수 | **줄일 수 없음** — 성능의 하한 |
+| **bias²** | 평균적으로 얼마나 빗나가는가 | 모델이 참 함수를 표현할 능력이 없음 | 모델을 더 유연하게 |
+| **variance** | 데이터가 바뀌면 얼마나 흔들리는가 | 모델이 훈련 데이터의 잡음까지 따라감 | 모델을 더 단순하게, regularization, 데이터 추가 |
+| **noise(잡음)** | 데이터 자체의 무작위성 | 측정 오차, 관측되지 않은 변수 | **줄일 수 없음** — 성능의 하한 |
 
 ::: {.key-concept}
 세 번째 항이 중요하다. $\sigma^2$ 는 **아무리 좋은 모델도 넘을 수 없는 벽**이다.
+초점이 나간 사진은 아무리 좋은 안경을 써도 선명해지지 않는다.
 
-"정확도 95%가 한계인 것 같다"는 상황은 대개 모델 문제가 아니라 잡음 하한에 닿은 것이다.
-그럴 때 필요한 것은 더 큰 모델이 아니라 **더 나은 특성이나 더 나은 레이블**이다.
+"정확도 95%가 한계인 것 같다"는 상황은 대개 모델 문제가 아니라 noise 하한에 닿은 것이다.
+그럴 때 필요한 것은 더 큰 모델이 아니라 **더 나은 특성이나 더 나은 label**이다.
 :::
 
 ### 분해는 어디서 나오는가
@@ -55,7 +57,7 @@ $$
 $\bar{f} = \mathbb{E}_D[\hat{f}_D(x_0)]$ 라 두고, 오차 안에 $\bar{f}$ 를 **더했다 빼면** 된다.
 
 $$y_0 - \hat{f}_D(x_0)
-= \underbrace{\varepsilon}_{\text{잡음}}
+= \underbrace{\varepsilon}_{\text{noise}}
 + \underbrace{\big(f(x_0) - \bar{f}\big)}_{\text{상수}}
 + \underbrace{\big(\bar{f} - \hat{f}_D(x_0)\big)}_{\text{평균이 0}}$$
 
@@ -69,7 +71,7 @@ $$y_0 - \hat{f}_D(x_0)
 $$\mathbb{E}\big[(y_0-\hat{f}_D(x_0))^2\big]
 = \sigma^2 + \big(f(x_0)-\bar{f}\big)^2 + \mathbb{E}_D\big[(\hat{f}_D(x_0)-\bar{f})^2\big]$$
 
-$$= \text{잡음} + \text{편향}^2 + \text{분산}$$
+$$= \text{noise} + \text{bias}^2 + \text{variance}$$
 
 $\bar{f}$ 를 기준점으로 삼은 것이 전부다 —
 [0.2에서 $\mathrm{Var}=\mathbb{E}[X^2]-\mu^2$ 를 유도한 것](../00_foundations/02_probability.qmd)과 같은 수법이다.
@@ -79,21 +81,22 @@ $\bar{f}$ 를 기준점으로 삼은 것이 전부다 —
 
 깔끔한 덧셈 분해는 **제곱손실의 특권**이다.
 0-1 손실(분류 정확도)에는 이런 형태의 보편적 분해가 없다.
-여러 제안이 있지만 어느 것도 "편향² + 분산 + 잡음"처럼 항이 독립적으로 더해지지 않고,
-편향과 분산이 곱해지거나 부호가 상쇄되는 항이 생긴다.
+여러 제안이 있지만 어느 것도 "bias² + variance + noise"처럼 항이 독립적으로 더해지지 않고,
+bias와 variance가 곱해지거나 부호가 상쇄되는 항이 생긴다.
 
-실제로 분류에서는 **분산이 정확도를 올리는** 경우도 있다.
-결정 경계 근처에서 예측이 흔들려도 다수결이 맞는 쪽으로 떨어지면 되기 때문이다.
-"편향-분산 트레이드오프"를 분류에 그대로 옮겨 말할 때는
+실제로 분류에서는 **variance가 정확도를 올리는** 경우도 있다.
+decision boundary(결정 경계 — 두 클래스를 가르는 선) 근처에서 예측이 흔들려도 다수결이 맞는 쪽으로 떨어지면 되기 때문이다.
+"bias–variance tradeoff"를 분류에 그대로 옮겨 말할 때는
 정확한 정리가 아니라 **비유**로 쓰고 있다는 점을 알고 있어야 한다.
 :::
 
-앞의 두 항은 대개 **서로 반대로 움직인다.** 모델을 유연하게 하면 편향이 줄지만 분산이 는다.
-이것이 편향-분산 트레이드오프다.
+앞의 두 항은 대개 **서로 반대로 움직인다.** 모델을 유연하게 하면 bias가 줄지만 variance가 는다.
+이것이 **bias–variance tradeoff**(bias–variance 상충)다. 개념 요약만 외운 학생은 어떤 시험이든 비슷하게 못 보고(bias),
+기출 답만 통째로 외운 학생은 문제가 조금만 바뀌어도 점수가 널뛴다(variance).
 
 ---
 
-## G2.1.1 — 다항 차수와 과적합
+## G2.1.1 — 다항 차수와 overfitting
 
 가장 단순한 실험. 참 함수 $\sin(2\pi x)$ 에서 25개 점을 뽑고, 다항식 차수를 올려가며 맞춘다.
 
@@ -167,14 +170,14 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-차수 0~2는 **과소적합**(편향 지배) — 곡선이 참 함수를 따라가지 못합니다. 차수 10 이상은 **과적합**(분산 지배) — 훈련 점은 정확히 지나지만 그 사이에서 요동칩니다. 오른쪽 시험 오차 곡선의 U자 바닥이 최적점입니다.
+차수 0~2는 **underfitting**(underfitting — bias 지배) — 곡선이 참 함수를 따라가지 못합니다. 차수 10 이상은 **overfitting**(overfitting — variance 지배) — 훈련 점은 정확히 지나지만 그 사이에서 요동칩니다. 오른쪽 시험 오차 곡선의 U자 바닥이 최적점입니다.
 :::
 
 ::: {.callout-note}
 ## 훈련 오차는 왜 항상 내려가기만 하는가
 
-훈련 오차는 **모델이 최소화하도록 명시적으로 지시받은 값**이다.
-자유도를 늘리면 최적화가 그 자유도를 써서 훈련 오차를 더 낮춘다 — 정의상 그렇게 된다.
+훈련 오차는 **모델이 최소화하도록 명시적으로 지시받은 값**이다. 자기가 낸 문제를 자기가 푸는 시험이다.
+자유도(degrees of freedom — 모델이 마음대로 움직일 수 있는 손잡이의 수)를 늘리면 최적화가 그 자유도를 써서 훈련 오차를 더 낮춘다 — 정의상 그렇게 된다.
 
 그래서 훈련 오차는 모델 선택의 근거가 될 수 없다.
 차수를 훈련 오차로 고르면 항상 "가장 복잡한 모델"이 선택된다.
@@ -182,7 +185,7 @@ fig.show()
 
 ---
 
-## G2.1.2 — 편향과 분산을 직접 보기
+## G2.1.2 — bias와 variance를 직접 보기
 
 앞 그림은 훈련 집합 **하나**로 그린 것이다.
 분해식의 기댓값 $\mathbb{E}_D$ 를 눈으로 보려면, 훈련 집합을 여러 번 다시 뽑아야 한다.
@@ -191,7 +194,7 @@ fig.show()
 
 ```{python}
 #| label: fig-bias-variance
-#| fig-cap: "훈련 집합을 60번 다시 뽑아 학습한 결과. 퍼짐 = 분산, 평균의 이탈 = 편향."
+#| fig-cap: "훈련 집합을 60번 다시 뽑아 학습한 결과. 퍼짐 = variance, 평균의 이탈 = bias."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -232,12 +235,12 @@ fig.add_trace(go.Scatter(x=xs, y=fits[d0].mean(axis=0), mode="lines", name="예�
 fig.add_trace(go.Scatter(x=xs, y=f_true, mode="lines", name="참 함수",
                          line=dict(color=viz.YELLOW, width=2.5, dash="dash")), row=1, col=1)
 
-fig.add_trace(go.Bar(x=[str(d) for d in degrees], y=bias2, name="편향²",
+fig.add_trace(go.Bar(x=[str(d) for d in degrees], y=bias2, name="bias²",
                      marker_color=viz.WARM), row=1, col=2)
-fig.add_trace(go.Bar(x=[str(d) for d in degrees], y=variance, name="분산",
+fig.add_trace(go.Bar(x=[str(d) for d in degrees], y=variance, name="variance",
                      marker_color=viz.ACCENT), row=1, col=2)
 fig.add_trace(go.Bar(x=[str(d) for d in degrees], y=np.full(len(degrees), noise ** 2),
-                     name="잡음 σ²", marker_color="rgba(255,255,255,0.28)"), row=1, col=2)
+                     name="noise σ²", marker_color="rgba(255,255,255,0.28)"), row=1, col=2)
 
 steps = []
 for d in degrees:
@@ -256,26 +259,27 @@ fig.update_yaxes(title_text="y", range=[-2.0, 2.0], row=1, col=1)
 fig.update_xaxes(title_text="다항 차수", row=1, col=2)
 fig.update_yaxes(title_text="기대 제곱오차 분해", row=1, col=2)
 
-viz.fig_defaults(fig, height=470, title="편향-분산 분해 (훈련 집합 60회 재표집)")
+viz.fig_defaults(fig, height=470, title="bias–variance 분해 (훈련 집합 60회 resampling)")
 fig.update_layout(margin=dict(l=55, r=30, t=70, b=100), legend=dict(x=0.01, y=0.99))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-차수 0~1: 곡선들이 **서로 비슷하지만**(분산 낮음) 참 함수에서 멀리 떨어져 있습니다(편향 높음).
-차수 12: 곡선들이 **제각각으로 요동치지만**(분산 높음) 평균은 참 함수에 가깝습니다(편향 낮음).
+차수 0~1: 곡선들이 **서로 비슷하지만**(variance 낮음) 참 함수에서 멀리 떨어져 있습니다(bias 높음).
+차수 12: 곡선들이 **제각각으로 요동치지만**(variance 높음) 평균은 참 함수에 가깝습니다(bias 낮음).
 오른쪽 막대에서 주황이 줄고 파랑이 느는 교환을 보세요.
 :::
 
 ---
 
-## 학습곡선: 데이터를 더 모으면 해결되는가
+## learning curve: 데이터를 더 모으면 해결되는가
 
 실무에서 가장 자주 묻는 질문이다. 답은 **어느 쪽이 문제인가에 따라 다르다.**
+**learning curve**(learning curve)는 훈련 데이터 개수를 늘려 가며 오차가 어떻게 변하는지 그린 그림이다.
 
 ```{python}
 #| label: fig-learning-curve
-#| fig-cap: "고편향 모델과 고분산 모델은 학습곡선 모양이 다릅니다."
+#| fig-cap: "high-bias 모델과 high-variance 모델은 learning curve 모양이 다릅니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -287,7 +291,7 @@ sizes = [8, 12, 18, 25, 35, 50, 75, 110, 160, 240, 350, 500]
 n_rep, noise = 24, 0.25
 x_te, y_te, _ = datasets.polynomial(n=400, noise=noise, seed=7)
 
-cases = {"고편향 (차수 1)": 1, "적절 (차수 3)": 3, "고분산 (차수 12)": 12}
+cases = {"high bias (차수 1)": 1, "적절 (차수 3)": 3, "high variance (차수 12)": 12}
 curves = {}
 
 for name, d in cases.items():
@@ -327,31 +331,32 @@ fig.show()
 ```
 
 ::: {.key-concept}
-**학습곡선으로 진단하기**
+**learning curve로 진단하기**
 
 | 관찰 | 진단 | 처방 |
 |------|------|------|
-| 훈련·시험 오차가 **둘 다 높고 붙어 있다** | 고편향(과소적합) | 모델 용량↑, 특성 추가, 정규화↓ — **데이터 추가는 소용없다** |
-| 훈련은 낮고 시험은 높다, **간격이 크다** | 고분산(과적합) | 데이터 추가, 정규화↑, 모델 단순화 |
-| 둘 다 낮고 하한에 수렴 | 적절 | 여기가 끝. 더 가려면 잡음 자체를 줄여야 함 |
+| 훈련·시험 오차가 **둘 다 높고 붙어 있다** | high bias (underfitting) | 모델 capacity(용량 — 표현할 수 있는 함수의 폭)↑, 특성 추가, regularization↓ — **데이터 추가는 소용없다** |
+| 훈련은 낮고 시험은 높다, **간격이 크다** | high variance (overfitting) | 데이터 추가, regularization↑, 모델 단순화 |
+| 둘 다 낮고 하한에 수렴 | 적절 | 여기가 끝. 더 가려면 noise 자체를 줄여야 함 |
 
 왼쪽 그림에서 차수 1 모델은 데이터를 500개로 늘려도 오차가 내려가지 않는다.
-표현할 능력 자체가 없기 때문이다.
+표현할 능력 자체가 없기 때문이다 — 개념을 이해 못 한 학생에게 문제집을 더 사 줘도 점수는 그대로다.
 :::
 
 ---
 
-## 왜 교차검증이 필요한가
+## 왜 cross-validation이 필요한가
 
-일반화 오차를 추정하려면 학습에 쓰지 않은 데이터가 필요하다.
-하지만 한 번의 홀드아웃 분할은 **운에 좌우된다** — 특히 데이터가 적을 때.
+generalization 오차를 추정하려면 학습에 쓰지 않은 데이터가 필요하다.
+하지만 한 번의 holdout(데이터 일부를 떼어 두기) 분할은 **운에 좌우된다** — 특히 데이터가 적을 때.
+모의고사 한 번의 점수로 실력을 판단하는 셈이다.
 
-$k$-겹 교차검증은 데이터를 $k$ 조각으로 나눠, 각 조각을 한 번씩 검증에 쓰고 나머지로 학습한다.
-모든 데이터가 정확히 한 번씩 검증에 쓰인다.
+$k$-fold **cross-validation**(cross-validation)은 데이터를 $k$ 조각으로 나눠, 각 조각을 한 번씩 검증에 쓰고 나머지로 학습한다.
+모든 데이터가 정확히 한 번씩 검증에 쓰인다 — 모의고사를 다섯 번 보고 평균을 내는 것이다.
 
 ```{python}
 #| label: fig-cv-variance
-#| fig-cap: "홀드아웃 한 번의 추정치는 분할 운에 크게 흔들립니다."
+#| fig-cap: "holdout 한 번의 추정치는 분할 운에 크게 흔들립니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -367,14 +372,14 @@ def fit_eval(idx_tr, idx_va):
     pred = np.clip(np.polyval(coef, x_all[idx_va]), -5, 5)
     return np.mean((pred - y_all[idx_va]) ** 2)
 
-# (1) 홀드아웃을 200번 다르게 나눠본다
+# (1) holdout 을 200번 다르게 나눠본다
 holdout = []
 for _ in range(200):
     perm = rng.permutation(len(x_all))
     cut = int(0.8 * len(x_all))
     holdout.append(fit_eval(perm[:cut], perm[cut:]))
 
-# (2) 5-겹 CV 를 200번 (셔플만 다르게)
+# (2) 5-fold CV 를 200번 (셔플만 다르게)
 cv5 = []
 for _ in range(200):
     perm = rng.permutation(len(x_all))
@@ -386,9 +391,9 @@ for _ in range(200):
 holdout, cv5 = np.array(holdout), np.array(cv5)
 
 fig = go.Figure()
-fig.add_trace(go.Histogram(x=holdout, name=f"홀드아웃 80/20 (표준편차 {holdout.std():.3f})",
+fig.add_trace(go.Histogram(x=holdout, name=f"holdout 80/20 (표준편차 {holdout.std():.3f})",
                            marker_color=viz.hex_rgba(viz.WARM, 0.65), nbinsx=45))
-fig.add_trace(go.Histogram(x=cv5, name=f"5-겹 CV 평균 (표준편차 {cv5.std():.3f})",
+fig.add_trace(go.Histogram(x=cv5, name=f"5-fold CV 평균 (표준편차 {cv5.std():.3f})",
                            marker_color=viz.hex_rgba(viz.ACCENT, 0.75), nbinsx=45))
 
 fig.update_layout(barmode="overlay", xaxis_title="추정된 검증 오차",
@@ -399,40 +404,40 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-주황(홀드아웃 한 번)이 훨씬 넓게 퍼져 있습니다. 운 나쁜 분할 하나로 모델을 판단하면 잘못된 결론에 이릅니다. 파랑(5겹 평균)은 같은 데이터로 훨씬 안정적인 추정을 줍니다.
+주황(holdout 한 번)이 훨씬 넓게 퍼져 있습니다. 운 나쁜 분할 하나로 모델을 판단하면 잘못된 결론에 이릅니다. 파랑(5-fold 평균)은 같은 데이터로 훨씬 안정적인 추정을 줍니다.
 :::
 
 ::: {.callout-warning}
-## 교차검증 점수도 낙관적이다
+## cross-validation 점수도 낙관적이다
 
-CV 점수를 보고 하이퍼파라미터를 고르면, 그 순간 **CV 점수는 더 이상 일반화 오차의 불편 추정치가 아니다.**
-검증 데이터가 선택에 쓰였기 때문이다 — 검증 집합에 대한 과적합이다.
+CV 점수를 보고 하이퍼파라미터를 고르면, 그 순간 **CV 점수는 더 이상 generalization 오차의 unbiased 추정치가 아니다.**
+검증 데이터가 선택에 쓰였기 때문이다 — 검증 집합에 대한 overfitting이다. 모의고사 열 번 중 최고점을 실력이라 말하는 것과 같다.
 
-정직한 추정이 필요하면 **중첩 교차검증**을 쓰거나, 마지막까지 손대지 않은 시험 집합을 따로 남긴다.
+정직한 추정이 필요하면 **nested cross-validation**(중첩 cross-validation — 선택용 CV를 평가용 CV 안에 한 번 더 넣기)을 쓰거나, 마지막까지 손대지 않은 시험 집합을 따로 남긴다.
 자세한 절차는 [2.11 모델 평가와 선택](11_model_evaluation.qmd)에서 다룬다.
 :::
 
 ---
 
-## 고전 이론이 틀린 곳: 이중하강
+## 고전 이론이 틀린 곳: double descent
 
 지금까지의 그림은 1990년대에 완성된 이야기다.
 그리고 이 이야기대로라면 **파라미터가 데이터보다 100배 많은 딥러닝 모델은 작동하면 안 된다.**
 
 실제로는 잘 작동한다. 그리고 그 이유를 그림으로 볼 수 있다.
 
-모델 복잡도를 계속 키우면, 시험 오차는 U자를 그린 뒤 **다시 내려간다.**
+모델 복잡도를 계속 키우면, 시험 오차는 U자를 그린 뒤 **다시 내려간다.** 두 번 내려간다고 해서 **double descent**(double descent)라 부른다.
 
 ```{python}
 #| label: fig-double-descent
-#| fig-cap: "보간 임계점(파라미터 수 = 표본 수)을 지나면 시험 오차가 다시 감소합니다."
+#| fig-cap: "interpolation threshold(파라미터 수 = 표본 수)를 지나면 시험 오차가 다시 감소합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
 import plotly.graph_objects as go
 from src import viz
 
-# 무작위 특성 회귀: 특성 수 p 를 늘리며 최소norm 해를 구한다
+# random feature 회귀: 특성 수 p 를 늘리며 minimum-norm 해를 구한다
 rng = np.random.default_rng(1)
 n_train, n_test, d_in, noise = 40, 400, 20, 0.35
 
@@ -448,7 +453,7 @@ tr_e, te_e = [], []
 for p in ps:
     F = rng.normal(size=(d_in, p)) / np.sqrt(d_in)   # 무작위 사영 특성
     Z_tr, Z_te = np.tanh(X_tr @ F), np.tanh(X_te @ F)
-    # 최소norm 최소제곱 해 (p > n 이면 pinv 가 최소norm 보간해를 준다)
+    # minimum-norm least squares 해 (p > n 이면 pinv 가 minimum-norm interpolation 해를 준다)
     beta = np.linalg.pinv(Z_tr) @ y_tr
     tr_e.append(np.mean((Z_tr @ beta - y_tr) ** 2))
     te_e.append(np.mean((Z_te @ beta - y_te) ** 2))
@@ -459,40 +464,40 @@ fig.add_trace(go.Scatter(x=ps, y=tr_e, mode="lines+markers", name="훈련 오차
 fig.add_trace(go.Scatter(x=ps, y=te_e, mode="lines+markers", name="시험 오차",
                          line=dict(color=viz.WARM, width=3)))
 fig.add_vline(x=n_train, line=dict(color=viz.ACCENT, dash="dash", width=2),
-              annotation_text=f"보간 임계점<br>p = n = {n_train}",
+              annotation_text=f"interpolation threshold<br>p = n = {n_train}",
               annotation_position="top")
 
 fig.update_layout(xaxis_title="특성 수 p (모델 복잡도)", xaxis_type="log",
                   yaxis_title="평균제곱오차", yaxis_type="log",
                   legend=dict(x=0.65, y=0.98))
 viz.fig_defaults(fig, height=430,
-                 title=f"이중하강 · 훈련 표본 {n_train}개, 잡음 σ = {noise}")
+                 title=f"double descent · 훈련 표본 {n_train}개, 잡음 σ = {noise}")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-$p < n$ 구간은 고전적 U자입니다. $p = n$ 근처에서 시험 오차가 **치솟고**, 그 너머에서 **다시 내려갑니다**. 임계점에서는 해가 유일하게 결정되어 잡음까지 정확히 맞춰야 하지만, $p > n$ 에서는 무수한 보간해 중 **가장 norm이 작은 것**을 고를 수 있기 때문입니다.
+$p < n$ 구간은 고전적 U자입니다. $p = n$ 근처에서 시험 오차가 **치솟고**, 그 너머에서 **다시 내려갑니다**. threshold에서는 해가 유일하게 결정되어 noise까지 정확히 맞춰야 하지만, $p > n$ 에서는 훈련 점을 전부 지나는(interpolation, 보간) 무수한 해 중 **가장 norm이 작은 것**을 고를 수 있기 때문입니다. 퍼즐 조각 수가 빈칸 수와 딱 같으면 억지로라도 끼워 맞춰야 하지만, 조각이 남아돌면 가장 잘 맞는 것을 고를 수 있습니다.
 :::
 
 ### 왜 하필 $p=n$ 에서 치솟는가
 
-첨두의 정체는 [0.0의 조건수](../00_foundations/00_linear_algebra.qmd)다.
+peak(peak)의 정체는 [0.0의 condition number](../00_foundations/00_linear_algebra.qmd)다.
 
-$p < n$ 에서는 최소제곱해가 $\hat\beta = (X^\top X)^{-1}X^\top y$ 이고,
-$p > n$ 에서는 보간해 중 최소 norm인 $\hat\beta = X^\top(XX^\top)^{-1}y$ 다.
-어느 쪽이든 **가장 작은 특이값이 분모에 들어간다.**
+$p < n$ 에서는 least squares 해가 $\hat\beta = (X^\top X)^{-1}X^\top y$ 이고,
+$p > n$ 에서는 interpolation 해 중 minimum-norm인 $\hat\beta = X^\top(XX^\top)^{-1}y$ 다.
+어느 쪽이든 **가장 작은 singular value가 분모에 들어간다.**
 
 $$\|\hat\beta\| \;\lesssim\; \frac{\|y\|}{\sigma_{\min}(X)}$$
 
-무작위 설계행렬 $X \in \mathbb{R}^{n\times p}$ 의 특이값 분포는
-$p/n$ 비에 따라 달라진다(마르첸코-파스투르). 핵심은 이것이다.
+무작위 design matrix(설계행렬 — 특성을 열로 늘어놓은 입력 행렬) $X \in \mathbb{R}^{n\times p}$ 의 singular value 분포는
+$p/n$ 비에 따라 달라진다(Marchenko–Pastur). 핵심은 이것이다.
 
 - $p \ll n$ 또는 $p \gg n$ — $\sigma_{\min}$ 이 0에서 충분히 떨어져 있다
-- $p \to n$ — 행렬이 정사각에 가까워지며 $\sigma_{\min} \to 0$, **조건수가 발산**한다
+- $p \to n$ — 행렬이 정사각에 가까워지며 $\sigma_{\min} \to 0$, **condition number가 발산**한다
 
-즉 $p=n$ 은 **자유도가 딱 맞아떨어져 잡음까지 정확히 맞춰야 하는 지점**이고,
-그러려면 계수가 폭발해야 한다. 그 폭발이 곧 분산이다.
-$p$ 를 더 키우면 방향이 남아돌아 최소 norm 해가 여유를 갖고, 계수가 다시 작아진다.
+즉 $p=n$ 은 **자유도가 딱 맞아떨어져 noise까지 정확히 맞춰야 하는 지점**이고,
+그러려면 계수가 폭발해야 한다. 그 폭발이 곧 variance다.
+$p$ 를 더 키우면 방향이 남아돌아 minimum-norm 해가 여유를 갖고, 계수가 다시 작아진다.
 
 ```{python}
 #| label: interpolation-peak
@@ -504,7 +509,7 @@ rng = np.random.default_rng(0)
 n, reps = 60, 200
 
 print(f"n = {n} 고정, p 를 바꿔가며 (무작위 설계, 잡음 있는 타깃)\n")
-print(f"{'p':>6}{'p/n':>7}{'σ_min(X)':>12}{'조건수 κ(X)':>14}{'‖β̂‖':>12}")
+print(f"{'p':>6}{'p/n':>7}{'σ_min(X)':>12}{'κ(X)':>14}{'‖β̂‖':>12}")
 for p in [10, 30, 50, 58, 60, 62, 70, 120, 400]:
     smin, kappa, nrm = [], [], []
     for _ in range(reps):
@@ -520,24 +525,24 @@ for p in [10, 30, 50, 58, 60, 62, 70, 120, 400]:
 ```
 
 $\|\hat\beta\|$ 가 $p=n$ 근처에서 최대가 되고 양쪽으로 내려간다.
-$\sigma_{\min}$ 이 0 으로 붙는 지점과 정확히 일치한다 — 첨두의 원인은 조건수다.
+$\sigma_{\min}$ 이 0으로 붙는 지점과 정확히 일치한다 — peak의 원인은 condition number다.
 
-이것이 [2.3 정규화](03_regularization.qmd)와 연결되는 지점이기도 하다.
-Ridge의 $(X^\top X + \lambda I)^{-1}$ 은 작은 특이값에 $\lambda$ 를 더해
-바로 이 발산을 막는다. **충분한 정규화를 걸면 이중하강의 첨두 자체가 사라진다** —
-첨두는 과매개변수화의 본질이 아니라 정규화 부재의 증상이다.
+이것이 [2.3 regularization](03_regularization.qmd)과 연결되는 지점이기도 하다.
+Ridge의 $(X^\top X + \lambda I)^{-1}$ 은 작은 singular value에 $\lambda$ 를 더해
+바로 이 발산을 막는다. **충분한 regularization을 걸면 double descent의 peak 자체가 사라진다** —
+peak는 overparameterization(과매개변수화 — 파라미터가 데이터보다 많은 상태)의 본질이 아니라 regularization 부재의 증상이다.
 
 ::: {.callout-note}
-## 과매개변수화가 작동하는 이유 (현재까지의 이해)
+## overparameterization이 작동하는 이유 (현재까지의 이해)
 
 $p > n$ 이면 훈련 오차를 0으로 만드는 해가 무한히 많다.
-어떤 해를 고르느냐가 일반화를 결정하고, 최적화 알고리즘이 그 선택을 한다.
+어떤 해를 고르느냐가 generalization을 결정하고, 최적화 알고리즘이 그 선택을 한다.
 
-- 경사하강은 초기값에서 가까운 해로 수렴하는 경향이 있다 — **암묵적 정규화**
-- 결과적으로 "작은 norm", "평평한 최소점" 쪽 해가 선택된다
-- 그래서 명시적 정규화 없이도 일반화가 된다
+- gradient descent는 초기값에서 가까운 해로 수렴하는 경향이 있다 — **implicit regularization**(암묵적 regularization — 벌점을 걸지 않았는데도 단순한 해를 고르게 되는 것)
+- 결과적으로 "작은 norm", "flat minimum(평평한 최소점 — 파라미터를 조금 흔들어도 손실이 거의 안 변하는 곳)" 쪽 해가 선택된다
+- 그래서 명시적 regularization 없이도 generalization이 된다
 
-이것은 편향-분산 분해가 **틀렸다**는 뜻이 아니다. 분해식 자체는 항상 참이다.
+이것은 bias–variance 분해가 **틀렸다**는 뜻이 아니다. 분해식 자체는 항상 참이다.
 틀린 것은 "파라미터 수 = 복잡도"라는 **대응 관계**다.
 실효 복잡도는 파라미터 수가 아니라 최적화가 실제로 도달하는 해의 성질로 결정된다.
 :::
@@ -548,10 +553,10 @@ $p > n$ 이면 훈련 오차를 0으로 만드는 해가 무한히 많다.
 
 이 장의 내용을 실제 프로젝트에서 쓰는 순서.
 
-1. **먼저 잡음 하한을 가늠한다.** 같은 입력에 레이블이 엇갈리는가? 사람은 몇 %를 맞히는가?
-2. **작은 데이터에 일부러 과적합시켜 본다.** 훈련 손실이 0으로 안 가면 버그거나 용량 부족이다 ([3.9 학습 실전](../03_deep_learning/09_training_practice.qmd)).
-3. **학습곡선을 그린다.** 위 진단표로 편향 문제인지 분산 문제인지 판정한다.
-4. **진단에 맞는 처방만 적용한다.** 고편향에 데이터를 더 넣는 것은 시간 낭비다.
+1. **먼저 noise 하한을 가늠한다.** 같은 입력에 label이 엇갈리는가? 사람은 몇 %를 맞히는가?
+2. **작은 데이터에 일부러 overfitting시켜 본다.** 훈련 손실이 0으로 안 가면 버그거나 capacity 부족이다 ([3.9 학습 실전](../03_deep_learning/09_training_practice.qmd)).
+3. **learning curve를 그린다.** 위 진단표로 bias 문제인지 variance 문제인지 판정한다.
+4. **진단에 맞는 처방만 적용한다.** high bias에 데이터를 더 넣는 것은 시간 낭비다.
 5. **선택에 쓴 검증 점수를 최종 성능으로 보고하지 않는다.**
 
 ---
@@ -559,16 +564,16 @@ $p > n$ 이면 훈련 오차를 0으로 만드는 해가 무한히 많다.
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 첨두를 정규화로 없앤다**
+**① peak를 regularization으로 없앤다**
 `interpolation-peak` 에 Ridge($\lambda>0$)를 추가하고 $\|\hat\beta\|$ 를 다시 재라.
-$\lambda$ 를 얼마로 하면 $p=n$ 의 첨두가 사라지는가?
+$\lambda$ 를 얼마로 하면 $p=n$ 의 peak가 사라지는가?
 
-**② 잡음을 키운다**
-같은 실험에서 타깃 잡음 $\sigma$ 를 2배로 하면 첨두 높이가 어떻게 변하는가.
+**② noise를 키운다**
+같은 실험에서 타깃 noise $\sigma$ 를 2배로 하면 peak 높이가 어떻게 변하는가.
 $\|\hat\beta\| \lesssim \|y\|/\sigma_{\min}$ 이 예측하는 대로인가?
 
 **③ 분류에서 분해를 시도한다**
-0-1 손실로 편향²+분산을 계산해 보고 합이 총오차와 맞지 않음을 확인하라.
+0-1 손실로 bias²+variance를 계산해 보고 합이 총오차와 맞지 않음을 확인하라.
 왜 맞지 않는지 설명하라.
 :::
 
@@ -576,20 +581,20 @@ $\|\hat\beta\| \lesssim \|y\|/\sigma_{\min}$ 이 예측하는 대로인가?
 
 | 개념 | 수식·정의 | 실무적 함의 |
 |------|-----------|-------------|
-| 오차 분해 | 편향² + 분산 + 잡음 | 손잡이는 둘, 벽은 하나 |
-| 편향 | $\mathbb{E}_D[\hat{f}] - f$ | 모델이 참 함수를 못 담음 → 용량↑ |
-| 분산 | $\mathrm{Var}_D(\hat{f})$ | 데이터 잡음을 따라감 → 정규화·데이터↑ |
-| 잡음 $\sigma^2$ | 데이터 자체의 무작위성 | 줄일 수 없음. 성능 하한 |
-| 과적합 | 훈련↓ 시험↑, 간격 큼 | 분산 지배 |
-| 과소적합 | 훈련·시험 둘 다 높음 | 편향 지배 — 데이터 추가는 무의미 |
-| 교차검증 | $k$-겹 평균 | 홀드아웃보다 훨씬 안정적인 추정 |
-| 이중하강 | $p>n$ 에서 시험 오차 재하강 | 파라미터 수 ≠ 실효 복잡도 |
+| 오차 분해 | bias² + variance + noise — 다트의 평균 위치 이탈 + 퍼짐 + 손떨림 | 손잡이는 둘, 벽은 하나 |
+| bias | $\mathbb{E}_D[\hat{f}] - f$ | 모델이 참 함수를 못 담음 → capacity↑ |
+| variance | $\mathrm{Var}_D(\hat{f})$ | 데이터 noise를 따라감 → regularization·데이터↑ |
+| noise $\sigma^2$ | 데이터 자체의 무작위성 — 초점 나간 사진 | 줄일 수 없음. 성능 하한 |
+| overfitting | 훈련↓ 시험↑, 간격 큼 — 기출 답만 외운 학생 | variance 지배 |
+| underfitting | 훈련·시험 둘 다 높음 — 개념을 이해 못 한 학생 | bias 지배 — 문제집(데이터) 추가는 무의미 |
+| cross-validation | $k$-fold 평균 — 모의고사 다섯 번 평균 | holdout보다 훨씬 안정적인 추정 |
+| double descent | $p>n$ 에서 시험 오차 재하강 — 퍼즐 조각이 남아돌면 잘 맞는 것을 고른다 | 파라미터 수 ≠ 실효 복잡도 |
 
 다음 장부터는 구체적인 알고리즘으로 들어간다.
-가장 단순하면서 닫힌 해가 존재하는 모델 — 선형회귀에서 시작한다.
+가장 단순하면서 closed form 해가 존재하는 모델 — 선형회귀에서 시작한다.
 
 ---
 
-**다음**: [2.2 선형회귀](02_linear_regression.qmd) — 최소제곱·정규방정식·기하학
+**다음**: [2.2 선형회귀](02_linear_regression.qmd) — least squares·normal equation·기하학
 
 **이전**: [2.0 학습이란 무엇인가](00_learning_problem.qmd)
