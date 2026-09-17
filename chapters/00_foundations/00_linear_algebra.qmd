@@ -4,7 +4,8 @@ subtitle: "벡터·행렬·고유값·SVD — 데이터와 모델의 공통 언�
 jupyter: ai-ml-study
 ---
 
-데이터는 행렬이고, 모델은 그 행렬에 가하는 변환이다.
+데이터는 행렬이고, 모델은 그 행렬을 입력받아 다른 행렬로 바꾸는 함수다 —
+그리고 그 함수의 기본 부품이 행렬 곱셈, 즉 **선형변환**이다.
 
 이미지 한 장은 픽셀 값의 행렬이고, 문장 하나는 토큰 임베딩을 쌓은 행렬이며,
 사용자-상품 구매 기록도 행렬이다. 그리고 신경망의 층 하나는 결국 행렬 곱셈 하나다.
@@ -17,9 +18,10 @@ $$\text{임베딩} \cdot W_Q, \quad QK^\top, \quad \text{PCA}, \quad \text{LoRA�
 
 ---
 
-## 벡터: 데이터 한 점
+## 벡터: 데이터 하나를 숫자로 적으면
 
-$n$ 개의 숫자를 묶은 것이 벡터다. 하지만 세 가지로 읽을 수 있고, 셋 다 필요하다.
+표본 하나 — 사람 한 명, 이미지 한 장, 단어 하나 — 를 $n$ 개의 숫자로 적은 것이 벡터다.
+같은 벡터를 세 가지로 읽을 수 있고, 셋 다 필요하다.
 
 | 읽는 법 | 예시 | 쓰이는 곳 |
 |---------|------|-----------|
@@ -44,7 +46,8 @@ $$\cos\theta = \frac{\mathbf{u}\cdot\mathbf{v}}{\|\mathbf{u}\|\|\mathbf{v}\|}$$
 
 ::: {.key-concept}
 [5.0 어텐션](../05_transformer/00_attention_mechanism.qmd)의 $QK^\top$ 은 **모든 쿼리와 모든 키의 내적**이다.
-"토큰 $i$ 가 토큰 $j$ 에 얼마나 주목하는가"는 결국 두 벡터가 얼마나 같은 방향을 보는가다.
+어텐션 가중치 — 토큰 $i$ 의 표현을 만들 때 토큰 $j$ 의 정보를 얼마나 섞어 넣을 것인가 — 는
+결국 두 벡터(쿼리 $q_i$ 와 키 $k_j$)가 얼마나 같은 방향을 보는가로 정해진다.
 :::
 
 ### norm: 크기를 재는 여러 방법
@@ -60,21 +63,27 @@ $p\to\infty$ 는 가장 큰 성분의 절댓값이다.
 
 ---
 
-## G0.0.1 — norm 단위구: 왜 L1이 희소해를 만드는가
+## G0.0.1 — norm 의 unit sphere: 왜 L1이 희소해를 만드는가
 
-"크기가 1인 점들의 집합"이 norm마다 다른 모양을 갖는다.
+"크기가 1인 점들의 집합" $\{\mathbf{x} : \|\mathbf{x}\|_p = 1\}$ 을 **unit sphere** 라 한다.
+$p = 2$ 면 우리가 아는 원(구)이지만, norm 이 바뀌면 모양이 달라진다.
 이 모양 차이 하나가 [2.3 정규화](../02_classical_ml/03_regularization.qmd)에서 Lasso와 Ridge의 성질을 가른다.
+
+그림을 읽는 데 필요한 개념이 하나 더 있다. 손실 $L(\mathbf{x})$ 는 $\mathbf{x}$ 마다 값을 하나씩 주는 함수인데,
+**손실 값이 같은 $\mathbf{x}$ 들을 이으면 2차원에서는 선이 된다** (지도의 등고선이 "높이가 같은 점"을 잇는 것과 같은 구성이다).
+정규화란 "$\|\mathbf{x}\|_p \le 1$ 안에서 손실이 가장 낮은 점을 찾아라"이므로, 손실이 낮은 선부터 차례로 키워 가다
+**제약 영역과 처음 닿는 점**이 답이다. 아래 그림의 주황 점선이 그런 "손실이 같은 값인 선" 하나를 예시로 그린 것이다.
 
 ```{python}
 #| label: fig-norm-balls
-#| fig-cap: "p-norm 단위구. p를 바꾸면 모양이 마름모(p=1)에서 원(p=2), 정사각형(p→∞)으로 변합니다."
+#| fig-cap: "p-norm 의 unit sphere. p를 바꾸면 모양이 마름모(p=1)에서 원(p=2), 정사각형(p→∞)으로 변합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
 import plotly.graph_objects as go
 from src import viz
 
-# 단위구 {x : ||x||_p = 1} 를 극좌표로 그린다
+# unit sphere {x : ||x||_p = 1} 를 극좌표로 그린다
 theta = np.linspace(0, 2 * np.pi, 721)
 c, s = np.cos(theta), np.sin(theta)
 
@@ -94,10 +103,10 @@ line_y = 1.15 - 0.55 * line_x
 fig = go.Figure()
 
 x0, y0 = balls[2.0]
-fig.add_trace(go.Scatter(x=x0, y=y0, mode="lines", name="단위구 ‖x‖ₚ = 1",
+fig.add_trace(go.Scatter(x=x0, y=y0, mode="lines", name="unit sphere ‖x‖ₚ = 1",
                          line=dict(color=viz.ACCENT, width=3),
                          fill="toself", fillcolor=viz.hex_rgba(viz.ACCENT, 0.12)))
-fig.add_trace(go.Scatter(x=line_x, y=line_y, mode="lines", name="손실 등고선(예시)",
+fig.add_trace(go.Scatter(x=line_x, y=line_y, mode="lines", name="손실이 같은 값인 선 (예시)",
                          line=dict(color=viz.WARM, width=2, dash="dash")))
 
 # 축 강조 — L1에서 해가 여기 걸리면 그 좌표가 정확히 0이 된다
@@ -117,12 +126,12 @@ fig.update_layout(
     yaxis=dict(range=[-1.9, 1.9], title="x₂", zeroline=False),
     legend=dict(x=0.02, y=0.98),
 )
-viz.fig_defaults(fig, title="p-norm 단위구", height=480)
+viz.fig_defaults(fig, title="p-norm unit sphere", height=480)
 fig.show()
 ```
 
 ::: {.interaction-hint}
-$p=1$ 로 내려보세요. 마름모의 **꼭짓점이 축 위에** 있습니다. 손실 등고선(주황)이 이 제약 영역과 처음 만나는 지점은 대개 꼭짓점이고, 거기서는 한 좌표가 정확히 0입니다 — 이것이 Lasso가 특성을 골라내는 기하학적 이유입니다. $p=2$ 의 원에는 튀어나온 꼭짓점이 없어 정확히 0이 되는 일이 거의 없습니다.
+$p=1$ 로 내려보세요. 마름모의 **꼭짓점이 축 위에** 있습니다. 손실이 같은 값인 선(주황)을 제약 영역 쪽으로 밀어 오면 처음 닿는 지점은 대개 꼭짓점이고, 거기서는 한 좌표가 정확히 0입니다 — 이것이 Lasso가 특성을 골라내는 기하학적 이유입니다. $p=2$ 의 원에는 튀어나온 꼭짓점이 없어 닿는 점의 좌표가 정확히 0이 되는 일이 거의 없습니다.
 :::
 
 ---
@@ -697,7 +706,7 @@ $k=1$ 에서 시작해 올려보세요. 큰 밝기 구조가 먼저 잡히고 �
 ### 특이값이 재는 것은 '정보'가 아니라 에너지
 
 $\sigma_i$ 가 큰 성분부터 남긴다는 것은 알겠는데, **무엇을** 많이 남긴다는 걸까.
-답은 정확히 하나로 적힌다 — 프로베니우스 노름의 제곱이다.
+답은 정확히 하나로 적힌다 — Frobenius norm 의 제곱이다.
 
 $$\|A\|_F^2 = \sum_i \sigma_i^2, \qquad \|A - A_k\|_F^2 = \sum_{i>k}\sigma_i^2$$
 
@@ -1224,7 +1233,7 @@ $m=n=256$ 일 때 SVD 저장이 원본보다 이득인 $k$ 의 상한을 먼저 
 | 개념 | 수식 | 기하학적 의미 | 이 책에서 다시 나오는 곳 |
 |------|------|---------------|--------------------------|
 | 내적 | $\mathbf{u}\cdot\mathbf{v} = \|u\|\|v\|\cos\theta$ | 방향 일치도 × 크기 | 어텐션 점수, 코사인 유사도 |
-| $p$-norm | $(\sum|x_i|^p)^{1/p}$ | 단위구의 모양 | L1 희소성, 그래디언트 클리핑 |
+| $p$-norm | $(\sum|x_i|^p)^{1/p}$ | unit sphere 의 모양 | L1 희소성, 그래디언트 클리핑 |
 | 행렬 | $A\mathbf{x}$ | 격자를 늘리고 기울이는 변환 | 모든 신경망 층 |
 | 행렬식 | $\det A$ | 부피 배율 | 정규화 흐름의 야코비안 |
 | 고유값 | $A\mathbf{v}=\lambda\mathbf{v}$ | 변환이 회전시키지 않는 축 | RNN 그래디언트 소실, PCA |
