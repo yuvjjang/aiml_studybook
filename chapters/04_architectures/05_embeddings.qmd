@@ -1,11 +1,15 @@
 ---
-title: "4.5 임베딩"
+title: "4.5 embedding"
 subtitle: "이산 기호를 벡터로 — 표현 공간의 기하학"
 jupyter: ai-ml-study
 ---
 
-토큰·사용자·상품·이미지가 **같은 벡터 공간의 시민**이 되는 순간,
-검색과 추천과 멀티모달이 하나의 문제가 된다.
+**embedding**(임베딩)은 단어·사용자·상품처럼 "번호"로만 구별되는 이산 기호(discrete symbol)를
+실수 벡터로 바꿔 놓은 것이다. 학번은 학생을 구별할 뿐 누가 누구와 비슷한지 말해 주지 않지만,
+각 학생을 지도 위 한 점으로 놓으면 "가까운 점 = 비슷한 학생"이 된다. 그 지도가 embedding 공간이다.
+
+token·사용자·상품·이미지가 **같은 벡터 공간의 시민**이 되는 순간,
+검색과 추천과 multimodal이 하나의 문제가 된다.
 
 "고양이 사진을 찾아줘"가 텍스트 벡터와 이미지 벡터의 내적으로 풀리고,
 "이 사람이 좋아할 상품"이 사용자 벡터와 상품 벡터의 내적으로 풀린다.
@@ -17,6 +21,8 @@ jupyter: ai-ml-study
 
 ## one-hot의 문제
 
+가장 단순한 벡터 표현은 **one-hot**(원핫)이다 — 어휘 크기만큼 긴 벡터에서 그 단어 자리만 1, 나머지는 0.
+
 ```{python}
 #| label: onehot-problem
 #| code-fold: false
@@ -24,32 +30,33 @@ jupyter: ai-ml-study
 import numpy as np
 
 V, d = 32000, 512
-print(f"{'':<14} {'벡터 차원':>10} {'벡터 1개':>12} {'배치 512개':>13} "
+print(f"{'':<14} {'벡터 차원':>10} {'벡터 1개':>12} {'batch 512개':>13} "
       f"{'테이블':>12} {'두 단어의 내적'}")
 print("-" * 82)
 print(f"{'one-hot':<14} {V:>10,} {V*4/1024:>10.0f}KB {V*512*4/1e6:>11.1f}MB "
       f"{'불필요':>12}   항상 0")
-print(f"{'밀집 임베딩':<14} {d:>10,} {d*4/1024:>10.0f}KB {d*512*4/1e6:>11.1f}MB "
+print(f"{'dense embedding':<14} {d:>10,} {d*4/1024:>10.0f}KB {d*512*4/1e6:>11.1f}MB "
       f"{V*d*4/1e6:>10.1f}MB   학습으로 정해짐")
 oh = np.eye(5)
 print()
-print("one-hot 벡터들의 코사인 유사도 행렬 (5개 단어):")
+print("one-hot 벡터들의 cosine similarity 행렬 (5개 단어):")
 print(oh @ oh.T)
 ```
 
-어휘 `{python} f"{V:,}"`개를 표현하는 두 방법이다. 밀집 임베딩은 **테이블을
-`{python} f"{V*d*4/1e6:.0f}"`MB 들고 있는 대신** 흘러다니는 벡터가 `{python} f"{V//d}"`배 작아진다 —
-배치 512개를 넘길 때 `{python} f"{V*512*4/1e6:.0f}"`MB 대 `{python} f"{d*512*4/1e6:.1f}"`MB 다.
+어휘 `{python} f"{V:,}"`개를 표현하는 두 방법이다. dense(밀집 — 0이 아닌 값으로 꽉 찬) embedding은 **테이블을
+`{python} f"{V*d*4/1e6:.0f}"` MB 들고 있는 대신** 흘러다니는 벡터가 `{python} f"{V//d}"`배 작아진다 —
+batch 512개를 넘길 때 `{python} f"{V*512*4/1e6:.0f}"` MB 대 `{python} f"{d*512*4/1e6:.1f}"` MB다.
 
 더 근본적인 문제는 아래 행렬이다. **모든 단어 쌍이 정확히 직교한다.** '고양이'와 '개'의 유사도가
-'고양이'와 '행정절차'의 유사도와 똑같이 0 이다. 의미의 구조를 담을 자리가 아예 없다.
+'고양이'와 '행정절차'의 유사도와 똑같이 0이다. 의미의 구조를 담을 자리가 아예 없다 — 학번끼리 아무 관계가 없는 것과 같다.
 그리고 어휘가 커지면 벡터 하나가 어휘 크기만큼 길어진다 — 단어 하나에 `{python} f"{V:,}"` 차원이다.
 
 ---
 
-## 임베딩 층 = 룩업 = one-hot 행렬곱
+## embedding 층 = lookup = one-hot 행렬곱
 
-임베딩 층은 별도의 연산이 아니다. **one-hot 벡터에 행렬을 곱한 것과 정확히 같다.**
+embedding 층은 별도의 연산이 아니다. **one-hot 벡터에 행렬을 곱한 것과 정확히 같다.**
+$E$ 는 $V \times d$ 행렬이고, one-hot의 1이 있는 자리 $i$ 의 행 $E_{i,:}$ 만 남는다.
 
 $$\text{onehot}(i)^\top E = E_{i,:}$$
 
@@ -65,12 +72,12 @@ Vv, dd = 5000, 128
 E = rng.normal(0, 0.1, (Vv, dd))
 ids = rng.integers(0, Vv, 256)
 
-# 방법 A: 원핫 행렬곱
+# 방법 A: one-hot 행렬곱
 onehot = np.zeros((len(ids), Vv))
 onehot[np.arange(len(ids)), ids] = 1.0
 a = onehot @ E
 
-# 방법 B: 룩업 (인덱싱)
+# 방법 B: lookup (indexing)
 b = E[ids]
 
 print(f"두 결과가 같은가: {np.array_equal(a, b)}")
@@ -89,43 +96,45 @@ for _ in range(50):
     _ = E[ids]
 t_lu = (time.perf_counter()-t0)/50
 
-print(f"원핫 행렬곱 : {t_mm*1e6:>9.1f} µs   ({len(ids)}×{Vv}×{dd} 곱셈)")
-print(f"룩업        : {t_lu*1e6:>9.1f} µs   (메모리 복사만)")
+print(f"one-hot 행렬곱 : {t_mm*1e6:>9.1f} µs   ({len(ids)}×{Vv}×{dd} 곱셈)")
+print(f"lookup         : {t_lu*1e6:>9.1f} µs   (메모리 복사만)")
 speedup = float(t_mm/t_lu)
 ```
 
-**수학적으로는 같지만 계산은 전혀 다르다.** 이 크기에서도 룩업이 `{python} f"{speedup:,.0f}"`배 빠르다.
-행렬곱은 대부분 0 을 곱하는 낭비다. 그래서 프레임워크는 룩업으로 구현한다.
-역전파도 마찬가지다. 등장한 인덱스의 행에만 그래디언트를 더하면 된다 —
-`E.grad[ids] += dout`, 나머지 행은 건드리지 않는다. 이것이 sparse gradient 이고,
+**수학적으로는 같지만 계산은 전혀 다르다.** 이 크기에서도 lookup이 `{python} f"{speedup:,.0f}"`배 빠르다.
+행렬곱은 대부분 0을 곱하는 낭비다 — 사물함 번호를 알면서 모든 사물함을 다 열어 보는 셈이다. 그래서 framework는 lookup으로 구현한다.
+backpropagation도 마찬가지다. 등장한 index의 행에만 gradient를 더하면 된다 —
+`E.grad[ids] += dout`, 나머지 행은 건드리지 않는다. 이것이 sparse gradient이고,
 큰 어휘에서 필수적인 최적화다.
 
 ---
 
 ### 768차원에 5만 개가 어떻게 들어가는가
 
-one-hot은 어휘 $V$ 개에 $V$ 차원을 쓴다. 임베딩은 $d \ll V$ 로 줄인다.
+one-hot은 어휘 $V$ 개에 $V$ 차원을 쓴다. embedding은 $d \ll V$ 로 줄인다.
 $d=768$ 에 $V=50{,}000$ 을 넣는다는 것이 이상하게 들린다 —
 **직교 벡터는 $d$ 차원에 최대 $d$ 개**뿐인데 5만 개를 어떻게 구별하는가?
 
 답은 **완전 직교를 포기하는 것**이다. 서로 "거의" 직교하기만 하면 되고,
 그런 벡터는 차원에 대해 **지수적으로 많이** 넣을 수 있다.
+2차원 평면에서는 서로 직각인 방향이 2개뿐이지만, "거의 직각"까지 허용하면 차원이 높아질수록 그런 방향이 폭발적으로 늘어난다.
 
-$d$ 차원 구면에서 무작위로 뽑은 두 단위벡터의 내적은 평균 0, 표준편차 $1/\sqrt{d}$ 다.
-따라서 $\varepsilon$ 보다 큰 겹침이 생길 확률이 가우스 꼬리로 눌린다.
+$d$ 차원 구면에서 무작위로 뽑은 두 단위벡터의 내적은 평균 0, 표준편차 $1/\sqrt{d}$ 다
+($d$ 개 항의 합이고 각 항의 크기가 $1/d$ 정도라서). 따라서 $\varepsilon$ 보다 큰 겹침이 생길 확률이 Gaussian 꼬리로 눌린다.
 
 $$P\big(|\langle u,v\rangle| > \varepsilon\big) \;\lesssim\; 2e^{-d\varepsilon^2/2}$$
 
-쌍이 $\binom{N}{2}$ 개이므로 [0.3의 합집합 상한](../00_foundations/03_statistics.qmd)을 씌우면,
+쌍이 $\binom{N}{2}$ 개이므로 [0.3의 union bound](../00_foundations/03_statistics.qmd)(합집합 상한 — "여러 사건 중 하나라도 일어날 확률 ≤ 각 확률의 합")를 씌우면,
 $N \lesssim e^{d\varepsilon^2/4}$ 까지는 **모든 쌍이 $\varepsilon$ 이내로 거의 직교**하다.
 $d$ 에 대해 지수적이라 768차원이면 천문학적인 수가 들어간다.
 
-같은 사실의 정량적 형태가 **존슨-린덴슈트라우스 보조정리**다.
+같은 사실의 정량적 형태가 **Johnson–Lindenstrauss lemma**(존슨-린덴슈트라우스 보조정리)다.
 $N$ 개 점의 쌍별 거리를 $(1\pm\varepsilon)$ 안에서 보존하는 데 필요한 차원은
 
 $$d = O\!\left(\frac{\log N}{\varepsilon^2}\right)$$
 
 **$N$ 이 아니라 $\log N$ 이다.** 어휘를 10배 늘려도 필요한 차원은 조금만 늘어난다.
+사진을 훨씬 작게 줄여도 얼굴을 구분할 수 있는 것과 같다 — 구분에 필요한 정보는 화소 수보다 훨씬 적다.
 
 ```{python}
 #| label: near-orthogonal
@@ -157,29 +166,31 @@ for N in [1_000, 50_000, 1_000_000]:
 
 표준편차가 $1/\sqrt d$ 와 정확히 일치한다. $d=768$ 이면 무작위 벡터 `{python} f"{NV}"`개가 이미 최대 겹침
 `{python} f"{max_ov[768]:.2f}"` 수준으로 거의 직교다. 그리고 $N$ 이 1000배 늘어도 필요한 차원은
-2배가 안 된다 — $\log N$ 이기 때문이다. (이 상한은 최악의 경우 보장이고 상수 8 도 예시라,
-실무의 768/1024 보다 훨씬 크게 나온다.)
+2배가 안 된다 — $\log N$ 이기 때문이다. (이 상한은 최악의 경우 보장이고 상수 8도 예시라,
+실무의 768/1024보다 훨씬 크게 나온다.)
 
 ::: {.key-concept}
-이것이 임베딩이 성립하는 수학적 근거다. 다만 **거의 직교**라는 것은
+이것이 embedding이 성립하는 수학적 근거다. 다만 **거의 직교**라는 것은
 겹침이 정확히 0이 아니라는 뜻이고, 그 잔여 겹침이 간섭으로 나타난다.
 
-- 자주 쓰이는 토큰일수록 학습이 많이 되어 다른 벡터와의 간섭이 정리되고,
-  희귀 토큰은 무작위 초기값에 가깝게 남는다.
-- 문헌이 보고하는 **이방성**은 이 그림이 이상적이지 않다는 증거다 —
+- 자주 쓰이는 token일수록 학습이 많이 되어 다른 벡터와의 간섭이 정리되고,
+  희귀 token은 무작위 초기값에 가깝게 남는다.
+- 문헌이 보고하는 **anisotropy**(이방성 — 모든 벡터가 한쪽으로 쏠려 있음)는 이 그림이 이상적이지 않다는 증거다 —
   깊은 모델의 표현은 구면에 고르게 퍼지지 않고 좁은 원뿔에 몰린다.
   그만큼 유효 차원이 $d$ 보다 작아지고, 간섭이 이론값보다 커진다.
-  (아래 이방성 절에서 재 보는데, 이 장의 얕은 합성 실험에서는 재현되지 않는다.)
+  (아래 anisotropy 절에서 재 보는데, 이 장의 얕은 합성 실험에서는 재현되지 않는다.)
 
-[12.1 기계적 해석](../12_trust/01_mechanistic.qmd)의 **중첩(superposition)** 가설이
-같은 계산 위에 서 있다 — 뉴런 수보다 많은 특성을 거의 직교하게 욱여넣는다는 주장이다.
+[12.1 mechanistic interpretability](../12_trust/01_mechanistic.qmd)의 **superposition**(중첩) 가설이
+같은 계산 위에 서 있다 — neuron 수보다 많은 특성을 거의 직교하게 욱여넣는다는 주장이다.
 :::
 
 ---
 
-## 임베딩은 어디서 오는가
+## embedding은 어디서 오는가
 
-구조를 **미리 아는** 합성 코퍼스를 만들어, 학습이 그 구조를 회복하는지 확인한다.
+embedding 값은 사람이 정하지 않고 학습으로 얻는다. 가장 고전적인 방법이 **skip-gram**(word2vec, 2013)이다:
+"같은 문장에서 같이 나오는 단어들의 벡터는 내적이 크게, 무작위로 뽑은 단어와는 작게" 만든다.
+구조를 **미리 아는** 합성 corpus(말뭉치 — 학습용 문장 모음)를 만들어, 학습이 그 구조를 회복하는지 확인한다.
 
 ```{python}
 #| label: sgns-setup
@@ -205,16 +216,16 @@ def make_corpus(K=60, C=6, n_sent=4000, sent_len=8, cross=0.15, seed=0):
     return np.array(sents), label
 
 def train_sgns(sents, K, d, n_neg=5, epochs=3, lr=0.05, window=2, seed=0):
-    """Skip-gram with negative sampling.
+    """Skip-gram with negative sampling (negative — 무작위로 뽑은 "짝이 아닌" 단어).
 
     중심 단어 c 와 실제 문맥 o 의 내적은 키우고, 무작위 음성 n 과는 줄인다:
       max  log σ(v_c · u_o) + Σ log σ(−v_c · u_n)
     """
     rng = np.random.default_rng(seed)
-    V = rng.normal(0, 0.5/np.sqrt(d), (K, d))       # 중심 벡터
+    V = rng.normal(0, 0.5/np.sqrt(d), (K, d))       # 중심 단어 벡터
     U = np.zeros((K, d))                             # 문맥 벡터
     counts = np.bincount(sents.ravel(), minlength=K).astype(float)
-    pneg = counts**0.75; pneg /= pneg.sum()          # 유니그램^0.75 음성 분포
+    pneg = counts**0.75; pneg /= pneg.sum()          # unigram(단어 빈도)^0.75 negative 분포
 
     n_sent, L = sents.shape
     for _ in range(epochs):
@@ -241,13 +252,13 @@ def cos_mat(X):
 
 K_V, C_V = 60, 6
 sents, label = make_corpus(K=K_V, C=C_V)
-print(f"합성 코퍼스: 어휘 {K_V}, 주제 {C_V}개(주제당 {K_V//C_V}단어), "
+print(f"합성 corpus: 어휘 {K_V}, 주제 {C_V}개(주제당 {K_V//C_V}단어), "
       f"문장 {len(sents):,}개")
 print(f"문장 예: {sents[0].tolist()}  (주제 {label[sents[0][0]]})")
-print(f"단어별 주제 레이블: {label[:12].tolist()} ...")
+print(f"단어별 주제 label: {label[:12].tolist()} ...")
 ```
 
-**학습은 레이블을 전혀 보지 않는다.** 같이 등장한다는 사실만 쓴다.
+**학습은 label을 전혀 보지 않는다.** 같이 등장한다는 사실만 쓴다.
 그럼에도 주제 구조가 벡터 기하로 나타나는지가 관심사다.
 
 ---
@@ -256,7 +267,7 @@ print(f"단어별 주제 레이블: {label[:12].tolist()} ...")
 
 ```{python}
 #| label: fig-dimension-capacity
-#| fig-cap: "임베딩 차원을 바꿔가며 — 주제 구조가 얼마나 분리되는가"
+#| fig-cap: "embedding 차원을 바꿔가며 — 주제 구조가 얼마나 분리되는가"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -276,7 +287,7 @@ for d in DIMS:
     stats[d] = (float(Cm[same & off].mean()), float(Cm[~same].mean()))
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("주제 내 / 주제 간 코사인 유사도", "분리 격차"))
+                    subplot_titles=("주제 내 / 주제 간 cosine similarity", "분리 격차"))
 fig.add_trace(go.Scatter(x=DIMS, y=[stats[d][0] for d in DIMS], mode="lines+markers",
                          name="같은 주제", line=dict(color=viz.GREEN, width=2.5),
                          marker=dict(size=10)), row=1, col=1)
@@ -288,11 +299,11 @@ fig.add_trace(go.Scatter(x=DIMS, y=[stats[d][0]-stats[d][1] for d in DIMS],
                          line=dict(color=viz.ACCENT, width=2.5),
                          marker=dict(size=10)), row=1, col=2)
 fig.add_hline(y=0, line=dict(color=viz.YELLOW, dash="dash"), row=1, col=1)
-fig.update_xaxes(title_text="임베딩 차원 d", type="log")
-fig.update_yaxes(title_text="평균 코사인", row=1, col=1)
+fig.update_xaxes(title_text="embedding 차원 d", type="log")
+fig.update_yaxes(title_text="평균 cosine", row=1, col=1)
 fig.update_yaxes(title_text="주제내 − 주제간", row=1, col=2)
 viz.fig_defaults(fig, height=400,
-                 title=f"skip-gram (음성 5개, 3 에폭) · 어휘 {K_V} · 주제 {C_V}")
+                 title=f"skip-gram (negative 5개, 3 epoch) · 어휘 {K_V} · 주제 {C_V}")
 fig.update_layout(legend=dict(x=0.02, y=0.5, font=dict(size=11)))
 fig.show()
 ```
@@ -303,8 +314,8 @@ fig.show()
 
 import numpy as np
 
-print(f"{'차원 d':>7} {'주제 내 코사인':>15} {'주제 간 코사인':>15} {'격차':>10} "
-      f"{'파라미터':>10}")
+print(f"{'차원 d':>7} {'주제 내 cosine':>15} {'주제 간 cosine':>15} {'격차':>10} "
+      f"{'parameter':>10}")
 print("-" * 62)
 for d in DIMS:
     a, b = stats[d]
@@ -314,9 +325,9 @@ gap2 = stats[2][0]-stats[2][1]; gap32 = stats[32][0]-stats[32][1]
 within_lo = min(stats[d][0] for d in DIMS); within_hi = max(stats[d][0] for d in DIMS)
 ```
 
-**레이블을 한 번도 보지 않았는데 주제 구조가 나왔다.** 같은 주제 단어끼리 코사인이
+**label을 한 번도 보지 않았는데 주제 구조가 나왔다.** 같은 주제 단어끼리 cosine이
 `{python} f"{within_lo:.2f}"`~`{python} f"{within_hi:.2f}"`, 다른 주제와는 0 근처다.
-'같이 등장하는 것은 비슷하다'는 분포 가설(distributional hypothesis)이 기하 구조로 번역된 것이다.
+'같이 등장하는 것은 비슷하다'는 **distributional hypothesis**(분포 가설 — "친구를 보면 그 사람을 안다")가 기하 구조로 번역된 것이다.
 
 차원을 늘려도 격차가 더 커지지는 않는다 — 격차가 가장 큰 차원은 `{python} f"{best_d}"` 이고,
 $d=2$ 의 `{python} f"{gap2:.3f}"` 와 $d=32$ 의 `{python} f"{gap32:.3f}"` 가 비슷하다.
@@ -325,21 +336,22 @@ $d=2$ 의 `{python} f"{gap2:.3f}"` 와 $d=32$ 의 `{python} f"{gap32:.3f}"` 가 
 
 | 용도 | 관례값 |
 |---|---|
-| 추천 시스템 범주형 특성 | 8 ~ 64 |
+| 추천 시스템 categorical 특성 | 8 ~ 64 |
 | word2vec/GloVe 단어 벡터 | 100 ~ 300 |
-| 문장 임베딩 (검색용) | 384 ~ 1024 |
-| LLM 토큰 임베딩 | $d_{\text{model}}$ 과 동일 (2048 ~ 8192) |
+| 문장 embedding (검색용) | 384 ~ 1024 |
+| LLM token embedding | $d_{\text{model}}$ 과 동일 (2048 ~ 8192) |
 
 ---
 
 ## G4.5.2 — 같은 데이터, 다른 지도
 
-임베딩을 2차원으로 줄여 보는 것은 흔한 진단이다.
-**그런데 방법에 따라 그림이 달라진다.**
+embedding을 2차원으로 줄여 보는 것은 흔한 진단이다.
+**그런데 방법에 따라 그림이 달라진다.** 지구본을 평면 지도로 펼치는 방법이 여럿이고 저마다 다른 곳을 왜곡하는 것과 같다.
+[1.5의 PCA](../01_data/05_dimensionality_reduction.qmd)와 t-SNE(가까운 점은 가깝게 유지하는 데 집중하는 비선형 방법)를 비교한다.
 
 ```{python}
 #| label: fig-embedding-map
-#| fig-cap: "같은 임베딩을 세 가지 방법으로 2차원에 그린 결과"
+#| fig-cap: "같은 embedding을 세 가지 방법으로 2차원에 그린 결과"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -359,7 +371,7 @@ def tsne_2d(X, perp=8.0, n_iter=400, lr=100.0, seed=0):
     n = len(X)
     D = ((X[:, None]-X[None, :])**2).sum(-1)
     P = np.zeros((n, n))
-    for i in range(n):                                  # perplexity 이진 탐색
+    for i in range(n):                                  # perplexity(유효 이웃 수) 이진 탐색
         lo, hi, beta = 1e-20, 1e20, 1.0
         Di = np.delete(D[i], i)
         for _ in range(50):
@@ -392,7 +404,7 @@ def tsne_2d(X, perp=8.0, n_iter=400, lr=100.0, seed=0):
 
 maps = {}
 p2, var = pca_2d(X)
-maps[f"PCA (설명 분산 {var.sum():.1%})"] = p2
+maps[f"PCA (explained variance {var.sum():.1%})"] = p2
 maps["t-SNE (perplexity 5)"] = tsne_2d(X, perp=5.0)
 maps["t-SNE (perplexity 20)"] = tsne_2d(X, perp=20.0)
 
@@ -415,7 +427,7 @@ for nm in names:
 fig.update_layout(sliders=[viz.slider(steps, prefix="방법: ", pad_t=52)])
 fig.update_xaxes(title_text="축 1"); fig.update_yaxes(title_text="축 2")
 viz.fig_defaults(fig, height=430,
-                 title="같은 16차원 임베딩의 2차원 투영 (색 = 실제 주제)")
+                 title="같은 16차원 embedding의 2차원 투영 (색 = 실제 주제)")
 fig.update_layout(legend=dict(font=dict(size=10)))
 fig.show()
 ```
@@ -436,7 +448,7 @@ def neighbor_preservation(X, Y, k=5):
     return float(np.mean([len(set(a[i]) & set(b[i]))/k for i in range(len(X))]))
 
 def cluster_sep(Y):
-    """저차원에서 주제가 얼마나 분리됐는가 (클러스터 간 거리 / 클러스터 내 거리)."""
+    """저차원에서 주제가 얼마나 분리됐는가 (cluster 간 거리 / cluster 내 거리)."""
     cen = np.stack([Y[label == c].mean(0) for c in range(C_V)])
     within = np.mean([np.linalg.norm(Y[label == c]-cen[c], axis=1).mean()
                       for c in range(C_V)])
@@ -451,26 +463,27 @@ for nm, Y in maps.items():
 pca_var = float(var.sum())
 ```
 
-PCA 는 16차원 중 2차원만 남기므로 설명 분산이 `{python} f"{pca_var:.0%}"` 다. 나머지는
+PCA는 16차원 중 2차원만 남기므로 explained variance(설명 분산 — 남긴 축이 전체 퍼짐의 몇 %를 담는가)가 `{python} f"{pca_var:.0%}"` 다. 나머지는
 버려진다 — 그림에서 겹쳐 보이는 점들이 원공간에서는 멀 수 있다.
-**t-SNE 는 perplexity 에 따라 그림이 달라진다.** 작으면 지역 구조를, 크면 전역 구조를 강조한다.
+**t-SNE는 perplexity에 따라 그림이 달라진다.** 작으면 local 구조를, 크면 global 구조를 강조한다.
 같은 데이터에서 나온 서로 다른 그림이고, 어느 하나가 '진짜'가 아니다. 진단 시 지켜야 할 것은 셋이다.
 
-- 군집의 **크기와 간격**은 t-SNE 에서 의미가 없다 (Wattenberg et al. 2016)
-- 여러 perplexity 로 그려 보고 공통으로 나타나는 구조만 믿는다
+- cluster의 **크기와 간격**은 t-SNE에서 의미가 없다 (Wattenberg et al. 2016)
+- 여러 perplexity로 그려 보고 공통으로 나타나는 구조만 믿는다
 - 그림으로 결론 내지 말고 원공간에서 수치로 확인한다 (위 표처럼)
 
 ---
 
-## 코사인이냐 내적이냐
+## cosine이냐 내적이냐
 
 검색에서 무엇으로 순위를 매기느냐가 결과를 바꾼다.
 
 $$\text{내적} = \|a\|\|b\|\cos\theta
 \qquad\qquad
-\text{코사인} = \cos\theta$$
+\text{cosine} = \cos\theta$$
 
-내적은 **norm이 큰 항목을 선호**한다.
+cosine은 두 벡터의 **방향**만 보고, 내적은 방향에 **크기(norm)**까지 곱한다.
+내적은 **norm이 큰 항목을 선호**한다 — 같은 말을 해도 목소리가 큰 사람이 먼저 들리는 셈이다.
 
 ```{python}
 #| label: fig-cosine-vs-dot
@@ -489,7 +502,7 @@ base /= np.linalg.norm(base, axis=1, keepdims=True)      # 방향만 남김
 spreads = np.linspace(0.0, 1.5, 13)
 overlap, top1_same = [], []
 for sp in spreads:
-    norms = np.exp(rng.normal(0, sp, N_I))               # 로그정규 norm
+    norms = np.exp(rng.normal(0, sp, N_I))               # log-normal norm
     X_ = base * norms[:, None]
     q = X_[:50]
     dot = q @ X_.T
@@ -509,10 +522,10 @@ fig.add_trace(go.Scatter(x=spreads, y=overlap, mode="lines+markers",
 fig.add_trace(go.Scatter(x=spreads, y=top1_same, mode="lines+markers",
                          name="1위가 같은 비율",
                          line=dict(color=viz.WARM, width=2.5)))
-fig.update_layout(xaxis_title="norm의 로그정규 표준편차 (0 = 모두 같은 norm)",
+fig.update_layout(xaxis_title="norm의 log-normal 표준편차 (0 = 모두 같은 norm)",
                   yaxis_title="일치 비율", yaxis=dict(range=[0, 1.05]),
                   legend=dict(x=0.02, y=0.25))
-viz.fig_defaults(fig, height=390, title="내적 검색과 코사인 검색이 같은 답을 주는가")
+viz.fig_defaults(fig, height=390, title="내적 검색과 cosine 검색이 같은 답을 주는가")
 fig.show()
 ```
 
@@ -532,25 +545,27 @@ norm이 모두 같으면(표준편차 0) 두 척도는 **정확히 같은 순위
 `{python} f"{overlap[0]:.3f}"`. norm이 흩어질수록 갈라져서 표준편차 `{python} f"{spreads[-1]:.1f}"` 에서는
 겹침이 `{python} f"{overlap[-1]:.3f}"` 다. 어느 쪽이 옳은가는 **norm이 무엇을 뜻하느냐**에 달렸다.
 
-| norm 의 의미 | 선택 |
+| norm의 의미 | 선택 |
 |---|---|
 | 인기도·신뢰도 | 내적 — 인기 항목을 위로 올리고 싶을 때 |
-| 학습 아티팩트 | 코사인 — 빈도 때문에 커진 norm 은 잡음 |
-| 모르겠음 | 정규화하고 코사인 — 대부분의 검색 시스템이 이렇게 한다 |
+| 학습 artifact(우연한 부산물) | cosine — 빈도 때문에 커진 norm은 잡음 |
+| 모르겠음 | normalize하고 cosine — 대부분의 검색 시스템이 이렇게 한다 |
 
-실무에서는 **벡터 DB 의 기본 척도를 확인하라.** 학습은 코사인으로 하고 검색은 내적으로 하면
+실무에서는 **vector DB의 기본 척도를 확인하라.** 학습은 cosine으로 하고 검색은 내적으로 하면
 조용히 다른 결과가 나온다.
 
 ---
 
-## G4.5.3 — 허브니스: 고차원의 함정
+## G4.5.3 — hubness: 고차원의 함정
 
 고차원에서는 **아무하고나 가까운 점**이 생긴다.
-$k$-최근접 목록에 비정상적으로 자주 등장하는 점을 **허브(hub)** 라 부른다.
+$k$-nearest neighbor(최근접 이웃) 목록에 비정상적으로 자주 등장하는 점을 **hub**(허브)라 부르고, 이 현상을 **hubness**라 한다.
+도시 한복판에 사는 사람은 누구에게나 "비교적 가까운 이웃"이 되는 것과 같다.
+아래 실험은 무작위 점 1000개에서 각 점이 남들의 10-nearest neighbor 목록에 몇 번 등장하는지($N_{10}$)를 세고, 그 분포가 얼마나 치우쳤는지(skewness — skewness)를 잰다.
 
 ```{python}
 #| label: fig-hubness
-#| fig-cap: "차원과 거리 척도에 따른 허브 발생"
+#| fig-cap: "차원과 거리 척도에 따른 hub 발생"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -591,10 +606,10 @@ for metric in ["euc", "cos"]:
         hub[(metric, d)] = hub_stats(Xh, metric)
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("N_10 분포의 왜도 (클수록 허브가 심함)",
+                    subplot_titles=("N_10 분포의 skewness (클수록 hub가 심함)",
                                     "상위 1% 점이 차지한 이웃 자리 비율"))
-for i, (metric, lbl) in enumerate([("euc", "유클리드 (정규화 안 함)"),
-                                    ("cos", "코사인 (단위구 정규화)")]):
+for i, (metric, lbl) in enumerate([("euc", "Euclidean (normalize 안 함)"),
+                                    ("cos", "cosine (unit sphere normalize)")]):
     fig.add_trace(go.Scatter(x=DIMS_H, y=[hub[(metric, d)][0] for d in DIMS_H],
                              mode="lines+markers", name=lbl,
                              line=dict(color=viz.color(i), width=2.5),
@@ -606,10 +621,10 @@ for i, (metric, lbl) in enumerate([("euc", "유클리드 (정규화 안 함)"),
 fig.add_hline(y=0.01, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="균등하면 1%", row=1, col=2)
 fig.update_xaxes(title_text="차원 d", type="log")
-fig.update_yaxes(title_text="왜도", row=1, col=1)
+fig.update_yaxes(title_text="skewness", row=1, col=1)
 fig.update_yaxes(title_text="비율", row=1, col=2)
 viz.fig_defaults(fig, height=410,
-                 title=f"{N_H}개 가우스 점, {K_H}-최근접 이웃")
+                 title=f"{N_H}개 Gaussian 점, {K_H}-nearest neighbor")
 fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=11)))
 fig.show()
 ```
@@ -620,9 +635,9 @@ fig.show()
 
 import numpy as np
 
-for metric, lbl in [("euc", "유클리드 (정규화 안 함)"), ("cos", "코사인 (단위구 정규화)")]:
+for metric, lbl in [("euc", "Euclidean (normalize 안 함)"), ("cos", "cosine (unit sphere normalize)")]:
     print(f"[{lbl}]")
-    print(f"{'d':>6} {'왜도':>9} {'최대 N_10':>11} {'상위1% 점유':>13} {'중심거리 상관':>14}")
+    print(f"{'d':>6} {'skewness':>9} {'최대 N_10':>11} {'상위1% 점유':>13} {'중심거리 상관':>14}")
     print("-" * 58)
     for d in DIMS_H:
         sk, mx, top, corr, _ = hub[(metric, d)]
@@ -635,39 +650,39 @@ c300 = hub[("cos", 300)]
 
 읽어야 할 것이 셋이다.
 
-1. 유클리드에서는 차원과 함께 허브가 심해진다. 왜도가 `{python} f"{e2[0]:.2f}"` ($d=2$) 에서
-   `{python} f"{e300[0]:.2f}"` ($d=300$) 로 오르고, 가장 심한 점은 `{python} f"{e300[1]}"`개의 이웃 목록에
-   등장한다(평균은 `{python} f"{K_H}"`개). 상위 1% 의 점이 전체 이웃 자리의 `{python} f"{e300[2]:.1%}"` 를 차지한다.
-2. **중심에 가까운 점이 허브가 된다.** 중심거리와 $N_{10}$ 의 상관이 `{python} f"{e300[3]:.2f}"` 로
+1. Euclidean에서는 차원과 함께 hub가 심해진다. skewness가 `{python} f"{e2[0]:.2f}"` ($d=2$)에서
+   `{python} f"{e300[0]:.2f}"` ($d=300$)로 오르고, 가장 심한 점은 `{python} f"{e300[1]}"`개의 이웃 목록에
+   등장한다(평균은 `{python} f"{K_H}"`개). 상위 1%의 점이 전체 이웃 자리의 `{python} f"{e300[2]:.1%}"` 를 차지한다.
+2. **중심에 가까운 점이 hub가 된다.** 중심거리와 $N_{10}$ 의 상관이 `{python} f"{e300[3]:.2f}"` 로
    강한 음수다. 데이터 중심 근처에 있으면 모두에게 '적당히 가깝기' 때문이다.
-3. **그런데 단위구에 정규화하면 허브가 거의 사라진다.** 코사인 $d=300$ 의 왜도
-   `{python} f"{c300[0]:.2f}"`, 상위 1% 점유 `{python} f"{c300[2]:.1%}"` 로 균등값 1% 에 근접한다.
-   정규화하면 모든 점이 원점에서 같은 거리에 놓여 **밀도 기울기가 없어진다.** 중심에 가까운
-   점이라는 개념 자체가 사라지므로 허브가 생길 이유가 없다.
+3. **그런데 unit sphere에 normalize하면 hub가 거의 사라진다.** cosine $d=300$ 의 skewness
+   `{python} f"{c300[0]:.2f}"`, 상위 1% 점유 `{python} f"{c300[2]:.1%}"` 로 균등값 1%에 근접한다.
+   normalize하면 모든 점이 원점에서 같은 거리에 놓여 **밀도 기울기가 없어진다.** 중심에 가까운
+   점이라는 개념 자체가 사라지므로 hub가 생길 이유가 없다 — 모두를 도시 외곽 원둘레에 고르게 세운 셈이다.
 
-**허브니스는 차원 그 자체의 저주가 아니라 '척도 + 분포'의 성질이다.**
-검색 시스템이 임베딩을 정규화하고 코사인을 쓰는 데에는 이 이유도 있다.
+**hubness는 차원 그 자체의 저주가 아니라 '척도 + 분포'의 성질이다.**
+검색 시스템이 embedding을 normalize하고 cosine을 쓰는 데에는 이 이유도 있다.
 
 ::: {.callout-warning}
 ## 이 실험의 범위
 
-여기서 쓴 데이터는 **등방 가우스**다. 실제 임베딩은 그렇지 않다.
+여기서 쓴 데이터는 **isotropic Gaussian**(등방 가우스 — 모든 방향으로 똑같이 퍼진 정규분포)이다. 실제 embedding은 그렇지 않다.
 
-문헌(Radovanović et al. 2010)이 보고한 허브니스는 실제 텍스트·이미지 데이터에서도
-관측되며, 정규화만으로 항상 사라지지는 않는다.
-분포가 여러 덩어리로 나뉘어 있으면 정규화 후에도 밀도 차이가 남기 때문이다.
+문헌(Radovanović et al. 2010)이 보고한 hubness는 실제 텍스트·이미지 데이터에서도
+관측되며, normalize만으로 항상 사라지지는 않는다.
+분포가 여러 덩어리로 나뉘어 있으면 normalize 후에도 밀도 차이가 남기 때문이다.
 
 여기서 확인한 것은 **메커니즘**까지다 —
-"중심 근처의 점이 허브가 되고, 밀도 기울기를 없애면 그 원인이 사라진다."
+"중심 근처의 점이 hub가 되고, 밀도 기울기를 없애면 그 원인이 사라진다."
 실제 데이터에서는 반드시 직접 측정해야 한다.
 :::
 
 ---
 
-## 이방성: 임베딩이 좁은 원뿔에 몰리는가
+## anisotropy: embedding이 좁은 원뿔에 몰리는가
 
-무작위 벡터라면 평균 쌍별 코사인이 0에 가까워야 한다.
-실제 모델의 표현은 그렇지 않다는 보고가 많다 — **이방성(anisotropy)** 이다.
+무작위 벡터라면 평균 쌍별 cosine이 0에 가까워야 한다.
+실제 모델의 표현은 그렇지 않다는 보고가 많다 — **anisotropy**(이방성)다. 바람에 쏠린 풀밭처럼 모든 벡터가 한 방향으로 기울어져 있는 것이다.
 
 ```{python}
 #| label: anisotropy
@@ -690,15 +705,15 @@ X16 = embs[16]
 rngA = np.random.default_rng(0)
 R16 = rngA.normal(0, 1, (K_V, 16))
 
-# 인위적으로 이방성을 넣은 대조군
+# 인위적으로 anisotropy를 넣은 대조군
 common = rngA.normal(0, 1, 16); common /= np.linalg.norm(common)
 X_aniso = X16/np.linalg.norm(X16, axis=1, keepdims=True) + 1.5*common
 
-print(f"{'표현':<26} {'평균 쌍별 코사인':>16} {'중심화 후':>12} {'화이트닝 후':>13}")
+print(f"{'표현':<26} {'평균 쌍별 cosine':>16} {'centering 후':>12} {'whitening 후':>13}")
 print("-" * 72)
-for nm, Z in [("무작위 가우스 (기준)", R16),
+for nm, Z in [("무작위 Gaussian (기준)", R16),
               ("학습된 skip-gram (d=16)", X16),
-              ("인위적 이방성 (대조군)", X_aniso)]:
+              ("인위적 anisotropy (대조군)", X_aniso)]:
     print(f"{nm:<26} {aniso(Z):>16.4f} {aniso(Z-Z.mean(0)):>12.4f} "
           f"{aniso(whiten(Z)):>13.4f}")
 print()
@@ -706,31 +721,32 @@ print()
 cov = np.cov((X16 - X16.mean(0)).T)
 ev = np.linalg.eigvalsh(cov)[::-1]
 top_ev = float(ev[0]/ev.sum())
-print(f"학습된 임베딩 공분산의 고윳값 분포 (d=16)")
-print(f"  최대 고윳값이 차지하는 비중 : {top_ev:.3f}  (균등하면 {1/16:.3f})")
+print(f"학습된 embedding covariance의 eigenvalue 분포 (d=16)")
+print(f"  최대 eigenvalue가 차지하는 비중 : {top_ev:.3f}  (균등하면 {1/16:.3f})")
 print(f"  상위 3개 누적               : {ev[:3].sum()/ev.sum():.3f}")
 an_learned, an_rand, an_ctrl = aniso(X16), aniso(R16), aniso(X_aniso)
 ```
 
-**이 합성 실험에서는 이방성이 거의 나타나지 않았다.** 학습된 임베딩의 평균 코사인
+표의 centering(중심화)은 평균 벡터를 빼는 것, whitening(화이트닝)은 거기에 더해 모든 방향의 분산을 1로 맞추는 것이다.
+**이 합성 실험에서는 anisotropy가 거의 나타나지 않았다.** 학습된 embedding의 평균 cosine
 `{python} f"{an_learned:.3f}"` 은 무작위의 `{python} f"{an_rand:.3f}"` 보다 크지만 절대값은 여전히 0 근처다 —
-'좁은 원뿔'이라 부를 수준이 아니다. 다만 최대 고윳값 비중이 균등값의 `{python} f"{top_ev*16:.1f}"`배로,
+'좁은 원뿔'이라 부를 수준이 아니다. 다만 최대 eigenvalue 비중이 균등값의 `{python} f"{top_ev*16:.1f}"`배로,
 지배적 방향 자체는 존재한다.
 
-문헌이 보고하는 강한 이방성(평균 코사인 0.5 이상)은 **깊은 Transformer 의 문맥 표현**에서
-관측된 것이다(Ethayarajh 2019). 정적 임베딩을 얕은 목적함수로 학습한 이 설정은 거기에
+문헌이 보고하는 강한 anisotropy(평균 cosine 0.5 이상)는 **깊은 Transformer의 contextual 표현**에서
+관측된 것이다(Ethayarajh 2019). static embedding을 얕은 목적함수로 학습한 이 설정은 거기에
 도달하지 않는다. **재현하지 못했다는 사실을 그대로 적어 둔다.**
 
-그럼에도 진단 도구는 유효하다 — 대조군(평균 코사인 `{python} f"{an_ctrl:.2f}"`)에서 확인했듯,
-이방성이 있으면 평균 코사인이 치솟고 중심화만으로 대부분 사라진다. 실무에서 임베딩을 받으면
-**먼저 평균 쌍별 코사인부터 찍어 보라.** 0.5 를 넘으면 검색 품질이 이미 망가져 있을 가능성이 크다.
+그럼에도 진단 도구는 유효하다 — 대조군(평균 cosine `{python} f"{an_ctrl:.2f}"`)에서 확인했듯,
+anisotropy가 있으면 평균 cosine이 치솟고 centering만으로 대부분 사라진다. 실무에서 embedding을 받으면
+**먼저 평균 쌍별 cosine부터 찍어 보라.** 0.5를 넘으면 검색 품질이 이미 망가져 있을 가능성이 크다.
 
 ---
 
-## weight tying: 입력과 출력 임베딩 공유
+## weight tying: 입력과 출력 embedding 공유
 
-언어 모델에는 임베딩이 두 벌 있다 — 입력 룩업과 출력 softmax 행렬.
-**같은 행렬을 쓰면** 파라미터가 줄고 성능도 대개 좋아진다.
+언어 모델에는 embedding이 두 벌 있다 — 입력 lookup(token → 벡터)과 출력 softmax 행렬(벡터 → 다음 token 점수).
+읽기용 사전과 쓰기용 사전이 따로 있는 셈인데, **같은 행렬을 쓰면**(weight tying) parameter가 줄고 성능도 대개 좋아진다.
 
 ```{python}
 #| label: weight-tying
@@ -739,7 +755,7 @@ an_learned, an_rand, an_ctrl = aniso(X16), aniso(R16), aniso(X_aniso)
 import numpy as np
 
 print(f"{'모델':<20} {'어휘':>9} {'d_model':>9} {'전체(M)':>10} "
-      f"{'임베딩 1벌(M)':>15} {'묶으면 절약':>12}")
+      f"{'embedding 1벌(M)':>15} {'묶으면 절약':>12}")
 print("-" * 82)
 saves = {}
 for name, Vv, dm, total in [("GPT-2 small", 50257, 768, 124),
@@ -754,23 +770,23 @@ hi = max(saves, key=saves.get)
 lo = min(saves, key=saves.get)
 ```
 
-입출력 임베딩을 묶으면(Press & Wolf 2017, Inan et al. 2017) 절약률이 `{python} f"{saves[lo]:.1%}"`
+입출력 embedding을 묶으면(Press & Wolf 2017, Inan et al. 2017) 절약률이 `{python} f"{saves[lo]:.1%}"`
 (`{python} lo`)에서 `{python} f"{saves[hi]:.1%}"` (`{python} hi`)까지 벌어진다.
 **'작은 모델일수록 이득이 크다'는 단순한 규칙은 성립하지 않는다.** 소형 LM(60M)이
 `{python} f"{saves['소형 LM']:.1%}"` 인데 GPT-2 small(124M)은 `{python} f"{saves['GPT-2 small']:.1%}"` 로
-더 크다. 절약률 = $V d$ / 전체 파라미터이므로, 모델 크기가 아니라 **어휘×차원이 나머지 층 대비
-얼마나 큰가**가 정한다. Llama-2 7B 는 층이 32개나 되어 임베딩 비중이
+더 크다. 절약률 = $V d$ / 전체 parameter이므로, 모델 크기가 아니라 **어휘×차원이 나머지 층 대비
+얼마나 큰가**가 정한다. Llama-2 7B는 층이 32개나 되어 embedding 비중이
 `{python} f"{saves['Llama-2 7B']:.1%}"` 로 작다.
 
 성능까지 좋아지는 이유는 셋이다.
 
 - 입력에서 배운 유사도 구조가 출력에도 그대로 쓰인다
-- 희귀 단어의 출력 행이 입력 등장으로도 갱신된다 (그래디언트 신호 2배)
-- 정규화 효과 — 자유도가 줄어 과적합이 억제된다
+- 희귀 단어의 출력 행이 입력 등장으로도 갱신된다 (gradient 신호 2배 — [3.1](../03_deep_learning/01_backpropagation.qmd)의 "분기는 합")
+- regularization 효과 — 자유도가 줄어 overfitting이 억제된다
 
-주의할 점도 있다. 입력 임베딩과 출력 로짓의 적정 스케일이 다를 수 있어 스케일 계수를 따로
-두기도 하고, 묶으면 $d_{\text{model}}$ 과 임베딩 차원이 강제로 같아진다. 최신 대형 모델은
-묶지 않는 쪽도 많다 — 임베딩 비중이 작아 이득이 적다.
+주의할 점도 있다. 입력 embedding과 출력 logit의 적정 scale이 다를 수 있어 scale 계수를 따로
+두기도 하고, 묶으면 $d_{\text{model}}$ 과 embedding 차원이 강제로 같아진다. 최신 대형 모델은
+묶지 않는 쪽도 많다 — embedding 비중이 작아 이득이 적다.
 
 ```python
 # PyTorch 에서의 weight tying — 실행하지 않음
@@ -779,7 +795,7 @@ class TinyLM(nn.Module):
         super().__init__()
         self.emb = nn.Embedding(vocab, d)
         self.head = nn.Linear(d, vocab, bias=False)
-        self.head.weight = self.emb.weight        # ← 같은 텐서를 공유
+        self.head.weight = self.emb.weight        # ← 같은 tensor를 공유
 ```
 
 ---
@@ -789,16 +805,16 @@ class TinyLM(nn.Module):
 
 **① 거의 직교한 벡터를 실제로 몇 개까지 넣을 수 있는가**
 $d=64$ 에서 무작위 단위벡터를 하나씩 뽑아, 기존 벡터 모두와 $|\langle u,v\rangle| < 0.3$ 이면
-받아들이는 greedy 로 몇 개까지 쌓이는지 세라. $d$ 를 128·256 으로 올리면 지수적으로 느는가?
+받아들이는 greedy로 몇 개까지 쌓이는지 세라. $d$ 를 128·256으로 올리면 지수적으로 느는가?
 `near-orthogonal` 의 상한 $e^{d\varepsilon^2/4}$ 과 비교하라.
 
-**② 정규화로도 안 사라지는 허브를 만든다**
-`hub_stats` 를 두 덩어리 가우스 혼합(중심 거리 3, 크기 비 9:1)에 적용하라.
-단위구 정규화 후에도 왜도와 상위 1% 점유가 남는가? callout 의 주장을 확인하라.
+**② normalize로도 안 사라지는 hub를 만든다**
+`hub_stats` 를 두 덩어리 Gaussian mixture(중심 거리 3, 크기 비 9:1)에 적용하라.
+unit sphere normalize 후에도 skewness와 상위 1% 점유가 남는가? callout의 주장을 확인하라.
 
-**③ 유추 과제를 만들고 깨뜨린다**
+**③ analogy 과제를 만들고 깨뜨린다**
 `make_corpus` 에 관계 구조를 넣어라 — 주제 $c$ 의 $i$ 번째 단어와 주제 $c'$ 의 $i$ 번째 단어가
-항상 같이 등장하게. 학습 후 $a - b + c$ 유추가 되는지 재고, 정답 후보에서 $a,b,c$ 를
+항상 같이 등장하게. 학습 후 $a - b + c$ analogy(유추 — "왕 − 남자 + 여자 = 여왕")가 되는지 재고, 정답 후보에서 $a,b,c$ 를
 **제외하지 않으면** 정확도가 얼마나 떨어지는지 확인하라. 이 관행이 결과를 얼마나 부풀리는가?
 :::
 
@@ -806,24 +822,24 @@ $d=64$ 에서 무작위 단위벡터를 하나씩 뽑아, 기존 벡터 모두�
 
 | 개념 | 핵심 |
 |------|------|
-| one-hot | 모든 쌍이 직교 — 유사도 구조 없음 |
-| 임베딩 층 | one-hot 행렬곱과 **수학적으로 동일**, 룩업으로 구현 |
-| 분포 가설 | 같이 등장 → 가까운 벡터. 레이블 없이 구조 회복 (실측) |
-| 필요 차원 | 어휘 크기가 아니라 **내재 구조**가 정함 |
-| 차원축소 지도 | 방법·perplexity마다 다른 그림 — 그림으로 결론 금지 |
-| 코사인 vs 내적 | norm이 같으면 동일, 흩어지면 다른 이웃 |
-| 허브니스 | 중심 근처 점이 허브. **정규화하면 크게 완화** |
-| 이방성 | 진단은 평균 쌍별 코사인. 이 합성 실험에선 재현 안 됨 |
-| weight tying | 절약률은 $V\!\cdot\!d$ / 전체 — 모델 크기와 단조 관계 아님 |
+| one-hot | 모든 쌍이 직교 — 유사도 구조 없음 (학번) |
+| embedding 층 | one-hot 행렬곱과 **수학적으로 동일**, lookup으로 구현 (사물함 번호) |
+| distributional hypothesis | 같이 등장 → 가까운 벡터. label 없이 구조 회복 (실측) — 친구를 보면 그 사람을 안다 |
+| 필요 차원 | 어휘 크기가 아니라 **내재 구조**가 정함 — $\log N$ |
+| 차원축소 지도 | 방법·perplexity마다 다른 그림 — 그림으로 결론 금지 (지구본을 펴는 법) |
+| cosine vs 내적 | norm이 같으면 동일, 흩어지면 다른 이웃 (방향 vs 방향+목소리 크기) |
+| hubness | 중심 근처 점이 hub. **normalize하면 크게 완화** (도시 한복판) |
+| anisotropy | 진단은 평균 쌍별 cosine. 이 합성 실험에선 재현 안 됨 (바람에 쏠린 풀) |
+| weight tying | 절약률은 $V\!\cdot\!d$ / 전체 — 모델 크기와 단조 관계 아님 (읽기·쓰기 사전 하나로) |
 
-임베딩은 **이산 기호를 기하학으로 바꾸는 장치**다.
-그 기하학이 검색·추천·멀티모달을 하나의 내적 문제로 만든다.
+embedding은 **이산 기호를 기하학으로 바꾸는 장치**다.
+그 기하학이 검색·추천·multimodal을 하나의 내적 문제로 만든다.
 
 다음 장은 그 발상을 **관계 구조**로 확장한다.
-노드와 엣지가 있는 데이터, 즉 그래프다.
+node와 edge가 있는 데이터, 즉 graph다.
 
 ---
 
-**다음**: [4.6 그래프 신경망](06_gnn.qmd) — 메시지 전달·GCN·GAT
+**다음**: [4.6 GNN](06_gnn.qmd) — message passing·GCN·GAT
 
-**이전**: [4.4 seq2seq와 어텐션의 탄생](04_seq2seq_attention.qmd)
+**이전**: [4.4 seq2seq와 attention의 탄생](04_seq2seq_attention.qmd)
