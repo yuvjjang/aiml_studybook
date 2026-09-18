@@ -1,77 +1,78 @@
 ---
-title: "6.8 흐름 매칭과 최신 생성 기법"
-subtitle: "rectified flow·consistency·일관된 속도장 — 확산 이후"
+title: "6.8 flow matching과 최신 생성 기법"
+subtitle: "rectified flow·consistency·곧은 velocity field — diffusion 이후"
 jupyter: ai-ml-study
 ---
 
-Part 6을 여기까지 오면서 확산 모델은 하나씩 문제를 해결했다.
+Part 6을 여기까지 오면서 diffusion model은 하나씩 문제를 해결했다.
 
-- 흐릿함 → 다단계 샘플링으로 해결 ([6.5](05_diffusion.qmd))
-- 모드 붕괴 → 확률 과정이라 위상 제약이 없다 ([6.5](05_diffusion.qmd))
-- 비용 → 잠재 공간으로 해결 ([6.7](07_latent_diffusion.qmd))
+- 흐릿함 → 다단계 sampling으로 해결 ([6.5](05_diffusion.qmd))
+- mode collapse → 확률 과정이라 topology 제약이 없다 ([6.5](05_diffusion.qmd))
+- 비용 → latent space로 해결 ([6.7](07_latent_diffusion.qmd))
 
-**남은 것은 스텝 수 하나다.**
-[6.5](05_diffusion.qmd)에서 DDIM 스텝을 줄이자 5스텝에서 모드 균형이 무너졌다.
-샘플러를 아무리 개선해도 그 아래로는 안 내려간다.
+**남은 것은 step 수 하나다.**
+[6.5](05_diffusion.qmd)에서 DDIM step을 줄이자 5 step에서 mode 균형이 무너졌다.
+sampler를 아무리 개선해도 그 아래로는 안 내려간다.
 
-이 장의 답은 샘플러가 아니라 **경로 자체**를 바꾸는 것이다.
+이 장의 답은 sampler가 아니라 **경로 자체**를 바꾸는 것이다.
 
-> 확산의 궤적은 구불구불하다.
-> **곧은 경로를 학습하면 큰 스텝으로 건너뛸 수 있다.**
+> diffusion의 궤적은 구불구불하다.
+> **곧은 경로를 학습하면 큰 step으로 건너뛸 수 있다.**
 
+구불구불한 산길은 조금씩 가야 하지만, 곧은 고속도로는 한 번에 멀리 갈 수 있다.
 그리고 이것이 지금 대형 이미지·비디오 모델의 표준이 되었다 —
-SD3, Flux, Movie Gen은 DDPM이 아니라 **flow matching** 으로 학습된다.
+SD3, Flux, Movie Gen은 DDPM이 아니라 **flow matching**으로 학습된다.
 
 ---
 
-## 연속 정규화 흐름으로 되돌아가기
+## continuous normalizing flow로 되돌아가기
 
 [6.4](04_normalizing_flows.qmd) 끝에서 예고한 형태다.
 
 $$\frac{dx}{dt} = v_\theta(x, t)$$
 
-시간에 따라 변하는 속도장이 잡음을 데이터로 실어 나른다.
-결합 층 같은 구조 제약이 전혀 없다 — $v_\theta$ 는 아무 신경망이어도 된다.
+시간에 따라 변하는 velocity field(velocity field)가 noise를 데이터로 실어 나른다.
+coupling layer 같은 구조 제약이 전혀 없다 — $v_\theta$ 는 아무 신경망이어도 된다.
 
-문제는 학습이었다. CNF의 원래 학습법은 **ODE를 끝까지 풀고 역전파**하는 것이라
-한 스텝이 수십 번의 함수 평가를 요구했다.
+문제는 학습이었다. CNF의 원래 학습법은 **ODE를 끝까지 풀고 backpropagation**하는 것이라
+한 step이 수십 번의 함수 평가를 요구했다.
 
-**흐름 매칭(Lipman et al. 2023)의 기여는 그 시뮬레이션을 없앤 것이다.**
+**flow matching(Lipman et al. 2023)의 기여는 그 simulation을 없앤 것이다.**
 
 ---
 
-## 조건부 흐름 매칭
+## conditional flow matching
 
-우리가 원하는 것은 주변 속도장 $u_t(x)$ 를 맞히는 것이다.
+우리가 원하는 것은 marginal velocity field(marginal velocity field — 모든 데이터를 통틀어 봤을 때 점 $x$ 가 시각 $t$ 에 움직여야 할 방향) $u_t(x)$ 를 맞히는 것이다.
 
 $$\mathcal{L}_{\text{FM}} = \mathbb{E}_{t, x \sim p_t}\big\|v_\theta(x,t) - u_t(x)\big\|^2$$
 
 그런데 $u_t(x)$ 를 모른다. 여기서 핵심 정리가 등장한다.
 
 ::: {.key-concept}
-**조건부 흐름 매칭 정리**
+**conditional flow matching 정리**
 
 $$\nabla_\theta \mathcal{L}_{\text{FM}} = \nabla_\theta \mathcal{L}_{\text{CFM}},
 \qquad
 \mathcal{L}_{\text{CFM}} = \mathbb{E}_{t, x_0, x_1}\big\|v_\theta(x_t,t) - u_t(x_t \mid x_0, x_1)\big\|^2$$
 
-**주변 속도장을 맞히는 것과, 조건부 속도장을 맞히는 것의 그래디언트가 같다.**
+**marginal velocity field를 맞히는 것과, conditional velocity field를 맞히는 것의 gradient가 같다.**
 
-조건부 경로는 우리가 **직접 고를 수 있다.** 가장 단순한 선택은 직선이다.
+conditional 경로 — 데이터 점 $x_0$ 하나와 noise 점 $x_1$ 하나를 잇는 경로 — 는 우리가 **직접 고를 수 있다.** 가장 단순한 선택은 직선이다.
 
 $$x_t = (1-t)\,x_0 + t\,x_1,
 \qquad u_t(x_t \mid x_0, x_1) = \frac{dx_t}{dt} = x_1 - x_0$$
 
-목표가 **상수**다. 시뮬레이션도, 스코어도, 잡음 스케줄도 필요 없다.
+목표가 **상수**다. simulation도, score도, noise schedule도 필요 없다.
 :::
 
 논리 구조가 [6.2](02_vae.qmd)의 ELBO, [6.5](05_diffusion.qmd)의 $L_\text{simple}$ 과 같다 —
-**계산 불가능한 목표를, 그래디언트가 같은 계산 가능한 목표로 바꾼다.**
+**계산 불가능한 목표를, gradient가 같은 계산 가능한 목표로 바꾼다.**
 
-흐름 매칭 학습 루프를 DDPM 과 나란히 놓고 보자.
+flow matching 학습 loop를 DDPM과 나란히 놓고 보자.
 
 ```
-[DDPM]                          [흐름 매칭]
+[DDPM]                          [flow matching]
 x0 = batch                      x0 = batch
 t  = randint(0, T)              t  = uniform(0, 1)
 ε  = randn_like(x0)             x1 = randn_like(x0)
@@ -81,14 +82,14 @@ loss = mse(net(xt,t), ε)        loss = mse(net(xt,t), x1 − x0)
 
 **차이는 두 줄뿐이다.**
 
-- 잡음 스케줄 ᾱ 가 사라지고 선형 보간이 들어간다
-- 목표가 ε 가 아니라 속도 (x₁ − x₀) 다
+- noise schedule ᾱ가 사라지고 선형 interpolation이 들어간다
+- 목표가 ε가 아니라 속도 (x₁ − x₀)다
 
 사라진 것들:
 
-- 잡음 스케줄 설계 (linear? cosine? shift?)
-- 이산 타임스텝 T의 선택
-- ε / x₀ / v 파라미터화 고민
+- noise schedule 설계 (linear? cosine? shift?)
+- discrete timestep T의 선택
+- ε / x₀ / v parameterization 고민
 - SNR 가중치 설계
 
 **남은 것은 '어떤 경로를 고를 것인가' 하나다.**
@@ -97,9 +98,9 @@ loss = mse(net(xt,t), ε)        loss = mse(net(xt,t), x1 − x0)
 
 ---
 
-## G6.8.1 — 구현과 소수 스텝 성능
+## G6.8.1 — 구현과 소수 step 성능
 
-[6.5](05_diffusion.qmd)와 같은 8-모드 링 데이터로 확산과 흐름 매칭을 나란히 학습한다.
+[6.5](05_diffusion.qmd)와 같은 8-mode ring 데이터로 diffusion과 flow matching을 나란히 학습한다.
 
 ```{python}
 #| label: fm-vs-diffusion
@@ -122,9 +123,9 @@ FM = FlowMatching(2, hidden=128, seed=0)
 FM.fit(X_R, steps=8000, lr=2e-3, batch=256, seed=0)
 
 STEPS = [50, 20, 8, 4, 2, 1]
-print(f"{'샘플링 스텝':>12} | {'확산 (DDIM)':>22} | {'흐름 매칭':>22}")
-print(f"{'':>12} | {'균형도':>10} {'모드 근처':>11} | "
-      f"{'균형도':>10} {'모드 근처':>11}")
+print(f"{'sampling step':>13} | {'diffusion (DDIM)':>22} | {'flow matching':>22}")
+print(f"{'':>13} | {'균형도':>10} {'mode 근처':>11} | "
+      f"{'균형도':>10} {'mode 근처':>11}")
 print("-" * 66)
 CMP = []
 for ns in STEPS:
@@ -133,39 +134,39 @@ for ns in STEPS:
     _, ed, nd = mode_stats(Sd, CEN)
     _, ef, nf = mode_stats(Sf, CEN)
     CMP.append((ns, ed, nd, ef, nf))
-    print(f"{ns:>12} | {ed:>10.2f} {nd:>11.1%} | {ef:>10.2f} {nf:>11.1%}")
+    print(f"{ns:>13} | {ed:>10.2f} {nd:>11.1%} | {ef:>10.2f} {nf:>11.1%}")
 print("-" * 66)
-print(f"{'실제 데이터':>12} | {ENT_R:>10.2f} {NEAR_R:>11.1%} | "
+print(f"{'실제 데이터':>13} | {ENT_R:>10.2f} {NEAR_R:>11.1%} | "
       f"{ENT_R:>10.2f} {NEAR_R:>11.1%}")
 g = {c[0]: c for c in CMP}
 ```
 
-같은 데이터·같은 폭·같은 학습 스텝 수로 학습한 두 모델이다.
-균형도는 8 이 완전 균등이고, 모드 근처는 충실도다.
+같은 데이터·같은 폭·같은 학습 step 수로 학습한 두 모델이다.
+균형도는 8이 완전 균등이고, mode 근처는 fidelity다.
 
-**20스텝까지는 둘 다 괜찮다** (균형도 확산 `{python} f"{g[20][1]:.2f}"`,
-흐름 매칭 `{python} f"{g[20][3]:.2f}"`).
-**8스텝부터 확산이 먼저 무너지기 시작한다**: `{python} f"{g[20][1]:.2f}"` →
+**20 step까지는 둘 다 괜찮다** (균형도 diffusion `{python} f"{g[20][1]:.2f}"`,
+flow matching `{python} f"{g[20][3]:.2f}"`).
+**8 step부터 diffusion이 먼저 무너지기 시작한다**: `{python} f"{g[20][1]:.2f}"` →
 `{python} f"{g[8][1]:.2f}"` → `{python} f"{g[4][1]:.2f}"`.
-같은 구간에서 흐름 매칭의 균형도는 `{python} f"{g[20][3]:.2f}"` →
-`{python} f"{g[8][3]:.2f}"` → `{python} f"{g[4][3]:.2f}"` 로 거의 그대로다.
-**2스텝에서는 격차가 결정적이다**: 확산은 `{python} f"{g[2][1]:.2f}"` (완전 실패)인데
-흐름 매칭은 `{python} f"{g[2][3]:.2f}"` 로 여덟 모드를 모두 지킨다.
-다만 흐름 매칭도 공짜는 아니다 — 모드 근처 비율이 4스텝 `{python} f"{g[4][4]:.0%}"`,
-2스텝 `{python} f"{g[2][4]:.0%}"` 로 떨어진다. 모드는 다 찾지만 샘플이 모드 주변에 퍼진다.
+같은 구간에서 flow matching의 균형도는 `{python} f"{g[20][3]:.2f}"` →
+`{python} f"{g[8][3]:.2f}"` → `{python} f"{g[4][3]:.2f}"`로 거의 그대로다.
+**2 step에서는 격차가 결정적이다**: diffusion은 `{python} f"{g[2][1]:.2f}"` (완전 실패)인데
+flow matching은 `{python} f"{g[2][3]:.2f}"`로 여덟 mode를 모두 지킨다.
+다만 flow matching도 공짜는 아니다 — mode 근처 비율이 4 step `{python} f"{g[4][4]:.0%}"`,
+2 step `{python} f"{g[2][4]:.0%}"`로 떨어진다. mode는 다 찾지만 sample이 mode marginal에 퍼진다.
 
-**그리고 1스텝은 흐름 매칭도 실패한다** (`{python} f"{g[1][3]:.2f}"`).
+**그리고 1 step은 flow matching도 실패한다** (`{python} f"{g[1][3]:.2f}"`).
 경로가 아직 곧지 않기 때문이다. 다음 절에서 측정한다.
 
 ---
 
 ## G6.8.2 — 경로는 얼마나 굽었는가, 그리고 Rectified Flow
 
-**직선도** 지표를 정의한다.
+**straightness**(직선도) 지표를 정의한다.
 
 $$\text{straightness} = \frac{\text{경로 길이}}{\text{시작점과 끝점의 직선 거리}}$$
 
-1.0이면 완전한 직선이다. 직선이면 **한 번의 오일러 스텝으로 정확히 도달**한다.
+1.0이면 완전한 직선이다. 직선이면 **한 번의 Euler step**(현재 속도 × 시간을 더하는 가장 단순한 ODE 한 걸음)**으로 정확히 도달**한다.
 
 ```{python}
 #| label: straightness
@@ -186,35 +187,35 @@ def ddim_path(dm, n, n_steps, seed):
 P_dm = ddim_path(DM, 1500, 50, 7)
 
 ST_DM, ST_FM = straightness(P_dm), straightness(P_fm)
-print(f"{'모델':<24} {'직선도 (50스텝 궤적)':>22}")
+print(f"{'모델':<24} {'straightness (50 step)':>22}")
 print("-" * 48)
-print(f"{'확산 (DDIM ODE)':<24} {ST_DM:>22.4f}")
-print(f"{'흐름 매칭':<24} {ST_FM:>22.4f}")
+print(f"{'diffusion (DDIM ODE)':<24} {ST_DM:>22.4f}")
+print(f"{'flow matching':<24} {ST_FM:>22.4f}")
 print(f"{'완전한 직선':<24} {1.0:>22.4f}")
 ```
 
-흐름 매칭의 궤적(`{python} f"{ST_FM:.4f}"`)은 확산(`{python} f"{ST_DM:.4f}"`)보다 곧지만
-직선은 아니다. **조건부 경로는 정의상 직선인데, 왜 1.0 이 아닌가?**
-학습하는 것은 **주변** 속도장이기 때문이다.
+flow matching의 궤적(`{python} f"{ST_FM:.4f}"`)은 diffusion(`{python} f"{ST_DM:.4f}"`)보다 곧지만
+직선은 아니다. **conditional 경로는 정의상 직선인데, 왜 1.0이 아닌가?**
+학습하는 것은 **marginal** velocity field이기 때문이다.
 
-- 조건부 경로 ($x_0, x_1$ 한 쌍) — 직선이다
-- 주변 속도장 — 같은 $x_t$ 를 지나는 **여러 조건부 경로의 평균**이다
+- conditional 경로 ($x_0, x_1$ 한 쌍) — 직선이다
+- marginal velocity field — 같은 $x_t$ 를 지나는 **여러 conditional 경로의 평균**이다
 - 평균낸 벡터장을 따라가면 어느 직선과도 다른 곡선이 나온다
 
-이 "경로가 서로 교차한다"는 것이 굽음의 원인이다.
+이 "경로가 서로 교차한다"는 것이 굽음의 원인이다. 사거리에서 여러 방향의 차가 지나가는데 "이 지점의 평균 진행 방향"을 따라가면 어느 차의 길도 아닌 길이 나오는 것이다.
 **Rectified Flow(Liu et al. 2023)의 아이디어는 교차를 없애는 것이다.**
 
 ::: {.key-concept}
 **reflow 절차**
 
-1. 학습된 모델로 $x_1 \to x_0$ 를 **여러 스텝으로 정확히** 풀어 짝을 만든다
-2. 그 짝 $(x_1, x_0)$ 를 **그대로 써서** 흐름 매칭을 다시 학습한다
+1. 학습된 모델로 $x_1 \to x_0$ 를 **여러 step으로 정확히** 풀어 짝을 만든다
+2. 그 짝 $(x_1, x_0)$ 를 **그대로 써서** flow matching을 다시 학습한다
 
 원래 학습에서는 $x_0$ 와 $x_1$ 이 **독립적으로** 뽑혀 경로가 마구 교차한다.
-reflow의 짝은 **모델이 실제로 연결한 것**이라 교차가 훨씬 적다.
+reflow의 짝은 **모델이 실제로 연결한 것**이라 교차가 훨씬 적다 — 아무 출발지와 아무 목적지를 짝지은 것이 아니라, 실제로 갔던 출발지-목적지 쌍이다.
 
-교차가 없으면 주변 속도장이 곧 조건부 속도장이고, **경로가 직선이 된다.**
-그리고 결정적으로, reflow는 **잡음-데이터 결합만 바꿀 뿐 주변분포는 보존한다.**
+교차가 없으면 marginal velocity field가 곧 conditional velocity field이고, **경로가 직선이 된다.**
+그리고 결정적으로, reflow는 **noise-데이터 짝짓기(coupling)만 바꿀 뿐 marginal 분포는 보존한다.**
 :::
 
 ```{python}
@@ -224,7 +225,7 @@ reflow의 짝은 **모델이 실제로 연결한 것**이라 교차가 훨씬 �
 import numpy as np
 from src.generative import FlowMatching, straightness, mode_stats
 
-MODELS = {"흐름 매칭 (원본)": FM}
+MODELS = {"flow matching (원본)": FM}
 cur = FM
 for k in [1, 2]:
     pairs = cur.make_pairs(8000, n_steps=100, seed=100+k)
@@ -233,9 +234,9 @@ for k in [1, 2]:
     MODELS[f"reflow {k}회"] = nxt
     cur = nxt
 
-hdr = " ".join(f"{f'{s}스텝':>13}" for s in [8, 4, 2, 1])
-print(f"{'모델':<18} {'직선도':>9} {hdr}")
-print(f"{'':<18} {'':>9} " + " ".join(f"{'균형도/근처':>13}" for _ in range(4)))
+hdr = " ".join(f"{f'{s} step':>13}" for s in [8, 4, 2, 1])
+print(f"{'모델':<20} {'straightness':>12} {hdr}")
+print(f"{'':<20} {'':>12} " + " ".join(f"{'균형도/근처':>13}" for _ in range(4)))
 print("-" * 82)
 RF = {}
 for nm, m in MODELS.items():
@@ -248,39 +249,39 @@ for nm, m in MODELS.items():
         vals.append((s, e_, n_))
         row.append(f"{e_:.2f} / {n_:.0%}")
     RF[nm] = (st, vals)
-    print(f"{nm:<18} {st:>9.4f} " + " ".join(f"{v:>13}" for v in row))
+    print(f"{nm:<20} {st:>12.4f} " + " ".join(f"{v:>13}" for v in row))
 print("-" * 82)
-print(f"{'확산 (DDIM)':<18} {ST_DM:>9.4f} "
+print(f"{'diffusion (DDIM)':<20} {ST_DM:>12.4f} "
       + " ".join(f"{f'{c[1]:.2f} / {c[2]:.0%}':>13}"
                  for c in CMP if c[0] in (8, 4, 2, 1)))
-print(f"{'실제 데이터':<18} {'—':>9} "
+print(f"{'실제 데이터':<20} {'—':>12} "
       + " ".join(f"{f'{ENT_R:.2f} / {NEAR_R:.0%}':>13}" for _ in range(4)))
-st0, v0 = RF["흐름 매칭 (원본)"]
+st0, v0 = RF["flow matching (원본)"]
 st1, v1 = RF["reflow 1회"]
 st2, v2 = RF["reflow 2회"]
 ```
 
-reflow 를 돌릴 때마다 경로가 얼마나 곧아지는지, 그리고 소수 스텝 성능이 어떻게 변하는지 잰 표다.
-**reflow 한 번으로 직선도가 `{python} f"{st0:.4f}"` → `{python} f"{st1:.4f}"` 가 된다.**
+reflow를 돌릴 때마다 경로가 얼마나 곧아지는지, 그리고 소수 step 성능이 어떻게 변하는지 잰 표다.
+**reflow 한 번으로 straightness가 `{python} f"{st0:.4f}"` → `{python} f"{st1:.4f}"`가 된다.**
 사실상 완전한 직선이다.
 
-**그리고 1스텝 생성이 가능해진다:** 균형도 `{python} f"{v0[3][1]:.2f}"` →
-`{python} f"{v1[3][1]:.2f}"`, 모드 근처 `{python} f"{v0[3][2]:.0%}"` →
+**그리고 1 step 생성이 가능해진다:** 균형도 `{python} f"{v0[3][1]:.2f}"` →
+`{python} f"{v1[3][1]:.2f}"`, mode 근처 `{python} f"{v0[3][2]:.0%}"` →
 `{python} f"{v1[3][2]:.0%}"`.
-원본 모델은 1스텝에서 완전히 실패했는데, reflow 후에는 균형도가 50스텝(`{python} f"{g[50][3]:.2f}"`)과
-같은 수준이다. 모드 근처 비율은 50스텝의 `{python} f"{g[50][4]:.0%}"` 보다 조금 낮다 —
-직선이 된 것은 경로이지 교사 모델의 오차까지 사라진 것은 아니다.
+원본 모델은 1 step에서 완전히 실패했는데, reflow 후에는 균형도가 50 step(`{python} f"{g[50][3]:.2f}"`)과
+같은 수준이다. mode 근처 비율은 50 step의 `{python} f"{g[50][4]:.0%}"`보다 조금 낮다 —
+직선이 된 것은 경로이지 teacher 모델의 오차까지 사라진 것은 아니다.
 
-**두 번째 reflow 는 거의 이득이 없다** (`{python} f"{st1:.4f}"` → `{python} f"{st2:.4f}"`).
+**두 번째 reflow는 거의 이득이 없다** (`{python} f"{st1:.4f}"` → `{python} f"{st2:.4f}"`).
 이미 직선이라 더 곧게 만들 여지가 없다. 실전에서도 1~2회면 충분하다.
 
-**대가**: reflow 마다 (a) 짝 생성용 다스텝 샘플링과 (b) 재학습이 필요하다.
-그리고 짝을 만드는 교사 모델의 오차가 학생에게 그대로 상속된다 —
-reflow 를 반복할수록 원본 분포에서 조금씩 멀어질 수 있다.
+**대가**: reflow마다 (a) 짝 생성용 다 step sampling과 (b) 재학습이 필요하다.
+그리고 짝을 만드는 teacher 모델의 오차가 student에게 그대로 상속된다 —
+reflow를 반복할수록 원본 분포에서 조금씩 멀어질 수 있다. 복사본의 복사본을 뜨면 조금씩 흐려지는 것과 같다.
 
 ```{python}
 #| label: fig-paths
-#| fig-cap: "확산·흐름 매칭·reflow 의 궤적과 스텝 수 대비 균형도"
+#| fig-cap: "diffusion·flow matching·reflow의 궤적과 step 수 대비 균형도"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -288,15 +289,15 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import viz
 
-PANELS = [("확산 (DDIM 50스텝)", P_dm, straightness(P_dm)),
-          ("흐름 매칭", P_fm, RF["흐름 매칭 (원본)"][0])]
+PANELS = [("diffusion (DDIM 50 step)", P_dm, straightness(P_dm)),
+          ("flow matching", P_fm, RF["flow matching (원본)"][0])]
 _, P_rf = MODELS["reflow 1회"].sample(1500, n_steps=50, seed=7, return_path=True)
 PANELS.append(("reflow 1회", P_rf, RF["reflow 1회"][0]))
 
 fig = make_subplots(rows=1, cols=4, column_widths=[0.25, 0.25, 0.25, 0.25],
-                    subplot_titles=tuple(f"{p[0]}<br>직선도 {p[2]:.3f}"
+                    subplot_titles=tuple(f"{p[0]}<br>straightness {p[2]:.3f}"
                                          for p in PANELS)
-                    + ("스텝 수 대비 균형도",))
+                    + ("step 수 대비 균형도",))
 for ci, (nm, P, st) in enumerate(PANELS, start=1):
     for j in range(28):
         tr = P[::2, j]
@@ -314,9 +315,9 @@ for ci, (nm, P, st) in enumerate(PANELS, start=1):
                      scaleanchor=f"x{ci if ci > 1 else ''}", row=1, col=ci)
 
 SS = [8, 4, 2, 1]
-for nm, c in [("확산 (DDIM)", viz.YELLOW), ("흐름 매칭 (원본)", viz.WARM),
+for nm, c in [("diffusion (DDIM)", viz.YELLOW), ("flow matching (원본)", viz.WARM),
               ("reflow 1회", viz.ACCENT)]:
-    if nm == "확산 (DDIM)":
+    if nm == "diffusion (DDIM)":
         ys = [c_[1] for c_ in CMP if c_[0] in SS]
     else:
         ys = [v[1] for v in RF[nm][1]]
@@ -325,7 +326,7 @@ for nm, c in [("확산 (DDIM)", viz.YELLOW), ("흐름 매칭 (원본)", viz.WARM
                              marker=dict(size=8)), row=1, col=4)
 fig.add_hline(y=ENT_R, line=dict(color=viz.GREEN, dash="dash"),
               annotation_text="실제 데이터", row=1, col=4)
-fig.update_xaxes(title_text="샘플링 스텝", type="log", row=1, col=4)
+fig.update_xaxes(title_text="sampling step", type="log", row=1, col=4)
 fig.update_yaxes(title_text="균형도", range=[0, 8.6], row=1, col=4)
 viz.fig_defaults(fig, height=380, title="궤적 28개")
 fig.show()
@@ -333,75 +334,75 @@ fig.show()
 
 ---
 
-## 증류 계보
+## distillation 계보
 
-reflow는 소수 스텝으로 가는 여러 길 중 하나다.
+reflow는 소수 step으로 가는 여러 길 중 하나다.
 전체 지형을 정리한다.
 
-| 방법 | 원리 | 스텝 | 특징 |
+| 방법 | 원리 | step | 특징 |
 |---|---|---|---|
-| Progressive Distillation | 교사의 2스텝 = 학생의 1스텝, 반복 | 4~8 | 단순, 반복마다 재학습 |
-| Rectified Flow / reflow | 경로를 곧게 펴 큰 스텝을 가능하게 | **1~4** | **이 장에서 구현** |
-| Consistency Models | 궤적 위 **모든** 점을 같은 끝점으로 사상 | 1~4 | 자기 일관성 조건으로 학습 |
-| LCM | 잠재 공간 일관성 증류 + CFG를 조건으로 흡수 | 2~8 | SD에 LoRA로 얹을 수 있음 |
-| ADD (SDXL-Turbo) | 점수 증류 + **판별자** | 1~4 | GAN 손실이 결정적 |
-| DMD / DMD2 | 분포 매칭 (역 KL) 증류 | 1~4 | 품질이 교사에 근접 |
-| LADD (SD3-Turbo) | 잠재 공간 적대적 증류 | 1~4 | 픽셀 판별자가 필요 없음 |
+| Progressive Distillation | teacher의 2 step = student의 1 step, 반복 | 4~8 | 단순, 반복마다 재학습 |
+| Rectified Flow / reflow | 경로를 곧게 펴 큰 step을 가능하게 | **1~4** | **이 장에서 구현** |
+| Consistency Models | 궤적 위 **모든** 점을 같은 끝점으로 사상 | 1~4 | self-consistency 조건으로 학습 |
+| LCM | latent space consistency distillation + CFG를 조건으로 흡수 | 2~8 | SD에 LoRA로 얹을 수 있음 |
+| ADD (SDXL-Turbo) | score distillation + **discriminator** | 1~4 | GAN loss가 결정적 |
+| DMD / DMD2 | distribution matching (reverse KL) distillation | 1~4 | 품질이 teacher에 근접 |
+| LADD (SD3-Turbo) | latent space adversarial distillation | 1~4 | pixel discriminator가 필요 없음 |
 
-**일관성 모델의 조건**
+**consistency model의 조건**
 
 $$f_\theta(x_t, t) = f_\theta(x_s, s)\quad\text{(같은 궤적 위의 모든 } s, t\text{)},
 \qquad f_\theta(x_0, 0) = x_0\quad\text{(경계 조건)}$$
 
-궤적 위 어느 점에서 출발해도 **같은 끝점**을 내야 한다는 제약이다.
-그러면 잡음에서 한 번에 데이터로 갈 수 있다.
+궤적 위 어느 점에서 출발해도 **같은 끝점**을 내야 한다는 제약이다 — 강물 어디에 배를 띄우든 같은 바다에 닿아야 한다.
+그러면 noise에서 한 번에 데이터로 갈 수 있다.
 
 reflow와 목적이 같고 방법이 다르다:
 
-- reflow  — **경로를 곧게** 만들어 큰 스텝의 오차를 줄인다
-- 일관성  — 경로는 그대로 두고 **끝점을 직접** 예측하게 한다
+- reflow  — **경로를 곧게** 만들어 큰 step의 오차를 줄인다
+- consistency  — 경로는 그대로 두고 **끝점을 직접** 예측하게 한다
 
-**공통점: 둘 다 교사 모델의 다스텝 샘플링이 필요하다.**
-공짜가 아니다 — 학습 시간을 미리 지불하고 추론 시간을 산다.
+**공통점: 둘 다 teacher 모델의 다 step sampling이 필요하다.**
+공짜가 아니다 — 학습 시간을 미리 지불하고 inference 시간을 산다.
 
-그리고 앞의 표에서 **뒤쪽 절반이 전부 판별자를 쓴다.**
+그리고 앞의 표에서 **뒤쪽 절반이 전부 discriminator를 쓴다.**
 [6.3](03_gan.qmd)에서 'GAN은 밀려난 것이 아니라 역할이 바뀌었다'고 한 것이 이것이다.
-소수 스텝 생성에서 순수 회귀 손실은 흐릿한 결과를 낸다 —
-[6.2](02_vae.qmd)의 '조건부 평균' 문제가 그대로 돌아오기 때문이다.
-적대적 손실이 그 흐릿함을 막는다.
+소수 step 생성에서 순수 regression loss는 흐릿한 결과를 낸다 —
+[6.2](02_vae.qmd)의 'conditional mean' 문제가 그대로 돌아오기 때문이다.
+adversarial loss가 그 흐릿함을 막는다.
 
 
 ---
 
-## 이산 데이터로
+## discrete 데이터로
 
-| 방법 | 전방 과정 | 대상 | 비고 |
+| 방법 | forward process | 대상 | 비고 |
 |---|---|---|---|
-| D3PM | 이산 상태 전이 행렬로 전방 과정 정의 | 텍스트·이미지 토큰 | 연속 확산의 직접 번역 |
-| 마스크 확산 (MDLM 등) | 토큰을 [MASK] 로 바꾸는 것이 '잡음' | 언어 | **BERT와 사실상 같은 학습 신호** |
-| 연속 완화 | 임베딩 공간에서 연속 확산 후 최근접 토큰 | Diffusion-LM | 어휘가 크면 어렵다 |
-| 이산 흐름 매칭 | 이산 상태 위의 CTMC로 흐름 매칭 일반화 | 최근 연구 | 연속과 통일된 틀 |
+| D3PM | discrete 상태 전이 행렬로 forward process 정의 | 텍스트·이미지 token | 연속 diffusion의 직접 번역 |
+| masked diffusion (MDLM 등) | token을 [MASK]로 바꾸는 것이 'noise' | 언어 | **BERT와 사실상 같은 학습 신호** |
+| 연속 완화 | embedding 공간에서 연속 diffusion 후 최근접 token | Diffusion-LM | 어휘가 크면 어렵다 |
+| discrete flow matching | discrete 상태 위의 CTMC로 flow matching 일반화 | 최근 연구 | 연속과 통일된 틀 |
 
-**언어에서 확산이 자기회귀를 이겼는가? 아직 아니다.**
+**언어에서 diffusion이 autoregressive를 이겼는가? 아직 아니다.**
 
-| 축 | 자기회귀 (GPT) | 확산 언어모델 |
+| 축 | autoregressive (GPT) | diffusion language model |
 |---|---|---|
 | 품질 | **압도적 우위** | 따라잡는 중 |
 | 생성 방식 | 왼쪽→오른쪽 순차 | **병렬·임의 순서** |
-| 스텝 수 | 토큰 수 L | L보다 적을 수 있음 |
-| 수정 가능성 | 되돌릴 수 없음 | **이전 토큰을 고칠 수 있음** |
-| KV 캐시 | 쓸 수 있음 | 매 스텝 전체 재계산 |
+| step 수 | token 수 L | L보다 적을 수 있음 |
+| 수정 가능성 | 되돌릴 수 없음 | **이전 token을 고칠 수 있음** |
+| KV cache | 쓸 수 있음 | 매 step 전체 재계산 |
 | 가변 길이 | 자연스러움 | 길이를 미리 정해야 함 |
 
-**확산의 구조적 이점은 '고칠 수 있다'는 것이다.**
-자기회귀는 한 번 뱉은 토큰을 되돌릴 수 없다.
-확산은 매 스텝 전체를 다시 본다 — 계획이 필요한 생성(코드, 수식, 제약 만족)에
+**diffusion의 구조적 이점은 '고칠 수 있다'는 것이다.**
+autoregressive는 한 번 뱉은 token을 되돌릴 수 없다 — 볼펜으로 쓰는 글이다.
+diffusion은 매 step 전체를 다시 본다 — 연필로 초안을 쓰고 전체를 고쳐 나가는 것이라, 계획이 필요한 생성(코드, 수식, 제약 만족)에
 유리할 수 있다는 기대가 여기서 나온다.
 
-다만 **KV 캐시를 못 쓴다**는 점이 실용적으로 크다.
-자기회귀는 L 토큰을 만드는 데 L 번의 **증분** 계산이면 되지만,
-확산은 매 스텝 전체 시퀀스를 다시 계산한다.
-Part 7에서 언어 모델을 다룰 때 이 대비를 다시 본다.
+다만 **KV cache를 못 쓴다**는 점이 실용적으로 크다.
+autoregressive는 L token을 만드는 데 L번의 **증분** 계산이면 되지만,
+diffusion은 매 step 전체 sequence를 다시 계산한다.
+Part 7에서 language model을 다룰 때 이 대비를 다시 본다.
 
 
 ---
@@ -412,32 +413,32 @@ Part 6을 지나며 계열들이 서로에게 흡수되었다
 
 | 계열 | 현재 위치 | 구체적으로 |
 |---|---|---|
-| 오토인코더 | **부품으로 생존** | 잠재 확산의 1단계 — 모든 대형 이미지 모델이 쓴다 |
-| VAE | **부품으로 생존** | SD의 오토인코더 (VQGAN 레시피로 학습). ELBO는 확산 유도의 뼈대 |
-| GAN | **손실함수로 생존** | VQGAN의 판별자, 증류(ADD·DMD·LADD)의 핵심 |
-| 정규화 흐름 | **관점으로 생존** | CNF → flow matching. 밀도 추정·SBI에서는 여전히 현역 |
-| 확산 | **중심** | 이미지·오디오·비디오의 기본값 |
-| 흐름 매칭 | **확산을 대체하는 중** | SD3, Flux, Movie Gen — 더 단순한 목적함수 |
-| 자기회귀 | **언어의 왕** | 이미지에서도 부활 중 (VAR, 토큰 기반) |
+| autoencoder | **부품으로 생존** | latent diffusion의 1단계 — 모든 대형 이미지 모델이 쓴다 |
+| VAE | **부품으로 생존** | SD의 autoencoder (VQGAN recipe로 학습). ELBO는 diffusion 유도의 뼈대 |
+| GAN | **loss function으로 생존** | VQGAN의 discriminator, distillation(ADD·DMD·LADD)의 핵심 |
+| normalizing flow | **관점으로 생존** | CNF → flow matching. density estimation·SBI에서는 여전히 현역 |
+| diffusion | **중심** | 이미지·오디오·비디오의 기본값 |
+| flow matching | **diffusion을 대체하는 중** | SD3, Flux, Movie Gen — 더 단순한 목적함수 |
+| autoregressive | **언어의 왕** | 이미지에서도 부활 중 (VAR, token 기반) |
 
 **하나가 이긴 것이 아니라, 부품들이 재조립되었다.**
 
 실제로 Stable Diffusion 3 한 대 안에 이 장 전체가 들어 있다:
 
-- 오토인코더 — 지각 압축 (6.1)
-- VAE + GAN 손실 — 그 오토인코더의 학습법 (6.2, 6.3)
-- 흐름 매칭 — 생성 목적함수 (6.4의 CNF, 6.8)
-- Transformer(DiT) — 백본 (Part 5, 6.7)
+- autoencoder — perceptual compression (6.1)
+- VAE + GAN loss — 그 autoencoder의 학습법 (6.2, 6.3)
+- flow matching — 생성 목적함수 (6.4의 CNF, 6.8)
+- Transformer(DiT) — backbone (Part 5, 6.7)
 - CFG — 조건 제어 (6.5)
-- 적대적 증류 — Turbo 판본의 가속 (6.3, 6.8)
+- adversarial distillation — Turbo 판본의 가속 (6.3, 6.8)
 
 **그리고 반복해서 나타난 원리들이 있었다:**
 
-- 항등에서 출발하라 — 잔차 스케일링, zero-conv, adaLN-Zero
-- 계산 불가능한 목표를 그래디언트가 같은 목표로 — ELBO, L_simple, CFM
-- 확률성이 결정론보다 견고하다 — DDPM vs DDIM, 위상 제약
-- 지표 하나로 분포를 대신할 수 없다 — FID, 우도, 커버리지
-- 품질과 다양성은 손잡이 하나로 이어져 있다 — CFG, 절단, 판별자 강도
+- identity에서 출발하라 — residual scaling, zero-conv, adaLN-Zero
+- 계산 불가능한 목표를 gradient가 같은 목표로 — ELBO, L_simple, CFM
+- 확률성이 결정론보다 견고하다 — DDPM vs DDIM, topology 제약
+- 지표 하나로 분포를 대신할 수 없다 — FID, likelihood, coverage
+- 품질과 다양성은 손잡이 하나로 이어져 있다 — CFG, truncation, discriminator 강도
 
 
 ---
@@ -445,16 +446,16 @@ Part 6을 지나며 계열들이 서로에게 흡수되었다
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 직선도는 이산화의 산물인가**
-`straightness` 에서 궤적의 스텝 수 50 을 10·200 으로 바꿔 두 모델의 직선도를 다시 재라.
-값이 스텝 수에 따라 움직이는가, 아니면 벡터장 자체의 성질인가?
+**① straightness는 discretization의 산물인가**
+`straightness` 에서 궤적의 step 수 50을 10·200으로 바꿔 두 모델의 straightness를 다시 재라.
+값이 step 수에 따라 움직이는가, 아니면 벡터장 자체의 성질인가?
 
 **② Reflow를 계속 돌리면**
 `reflow` 의 `for k in [1, 2]` 를 4회까지 늘려라.
-직선도는 이미 1.0 인데 모드 근처 비율은 어떻게 변하는가 — 교사 오차의 상속이 보이는가?
+straightness는 이미 1.0인데 mode 근처 비율은 어떻게 변하는가 — teacher 오차의 상속이 보이는가?
 
-**③ 어떤 확산 스케줄에 해당하는가**
-$x_t = (1-t)x_0 + t\,x_1$ 을 확산 표기 $\sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\varepsilon$ 와
+**③ 어떤 diffusion schedule에 해당하는가**
+$x_t = (1-t)x_0 + t\,x_1$ 을 diffusion 표기 $\sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\varepsilon$ 와
 비교해, 선형 경로가 어떤 $\bar\alpha_t$ 에 해당하는지 유도하라 (분산이 보존되지 않음에 주목).
 그 경로에서 속도 목표 $x_1 - x_0$ 가 [6.5](05_diffusion.qmd)의 $v$-예측 목표와 어떤 관계인지 써라.
 :::
@@ -464,30 +465,30 @@ $x_t = (1-t)x_0 + t\,x_1$ 을 확산 표기 $\sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-
 | 개념 | 핵심 |
 |------|------|
 | CNF | $dx/dt = v_\theta(x,t)$ — 구조 제약 없음, 학습이 비쌌다 |
-| 흐름 매칭 | 주변 속도장 대신 **조건부** 속도장을 맞힌다 (그래디언트 동일) |
+| flow matching | marginal velocity field 대신 **conditional** velocity field를 맞힌다 (gradient 동일) |
 | 선형 경로 | $x_t=(1-t)x_0+tx_1$, 목표 $=x_1-x_0$ — **상수** |
-| DDPM과의 차이 | 학습 루프에서 **두 줄**만 다르다 |
-| 사라진 것 | 잡음 스케줄, 타임스텝 T, 파라미터화, SNR 가중치 |
-| 8스텝 성능 | 확산 균형도 `{python} f"{g[8][1]:.2f}"` vs 흐름 매칭 `{python} f"{g[8][3]:.2f}"` — 확산이 먼저 무너진다 |
-| 2스텝 | 확산 `{python} f"{g[2][1]:.2f}"` (완전 실패) vs 흐름 매칭 `{python} f"{g[2][3]:.2f}"` (모드 근처 `{python} f"{g[2][4]:.0%}"`). **1스텝은 둘 다 실패** |
-| 직선도 지표 | 경로 길이 / 직선 거리. 1.0 = 직선 |
-| 왜 안 곧은가 | 학습하는 것은 **주변** 속도장 — 조건부 경로들이 교차한다 |
-| **reflow** | 모델이 만든 짝으로 재학습 → 직선도 `{python} f"{st0:.2f}"` → **`{python} f"{st1:.4f}"`** |
-| **reflow의 효과** | 1스텝 균형도 `{python} f"{v0[3][1]:.2f}"` → `{python} f"{v1[3][1]:.2f}"` (50스텝과 동등), 모드 근처 `{python} f"{v1[3][2]:.0%}"` |
+| DDPM과의 차이 | 학습 loop에서 **두 줄**만 다르다 |
+| 사라진 것 | noise schedule, timestep T, parameterization, SNR 가중치 |
+| 8 step 성능 | diffusion 균형도 `{python} f"{g[8][1]:.2f}"` vs flow matching `{python} f"{g[8][3]:.2f}"` — diffusion이 먼저 무너진다 |
+| 2 step | diffusion `{python} f"{g[2][1]:.2f}"` (완전 실패) vs flow matching `{python} f"{g[2][3]:.2f}"` (mode 근처 `{python} f"{g[2][4]:.0%}"`). **1 step은 둘 다 실패** |
+| straightness 지표 | 경로 길이 / 직선 거리. 1.0 = 직선 (산길 vs 고속도로) |
+| 왜 안 곧은가 | 학습하는 것은 **marginal** velocity field — conditional 경로들이 교차한다 (사거리의 평균 방향) |
+| **reflow** | 모델이 만든 짝으로 재학습 → straightness `{python} f"{st0:.2f}"` → **`{python} f"{st1:.4f}"`** |
+| **reflow의 효과** | 1 step 균형도 `{python} f"{v0[3][1]:.2f}"` → `{python} f"{v1[3][1]:.2f}"` (50 step과 동등), mode 근처 `{python} f"{v1[3][2]:.0%}"` |
 | reflow 2회 | 이득 거의 없음 — 이미 직선이다 |
-| 대가 | 짝 생성 + 재학습. 교사의 오차가 상속된다 |
-| 증류 계보 | 뒤쪽 절반이 전부 **판별자를 쓴다** (ADD, DMD, LADD) |
-| 이유 | 소수 스텝 회귀는 조건부 평균 문제로 흐려진다 |
-| 이산 데이터 | 확산의 이점은 '고칠 수 있다', 약점은 KV 캐시 불가 |
+| 대가 | 짝 생성 + 재학습. teacher의 오차가 상속된다 (복사본의 복사본) |
+| distillation 계보 | 뒤쪽 절반이 전부 **discriminator를 쓴다** (ADD, DMD, LADD) |
+| 이유 | 소수 step regression은 conditional mean 문제로 흐려진다 |
+| discrete 데이터 | diffusion의 이점은 '고칠 수 있다'(연필 초안), 약점은 KV cache 불가 |
 | 계열의 수렴 | 하나가 이긴 게 아니라 **부품들이 재조립**되었다 |
 
 Part 6이 끝났다.
 분포를 다루는 여섯 가지 방법을 직접 구현하고, 각각이 무엇을 포기했는지 측정했다.
 
-다음 파트부터는 이 도구들이 **특정 도메인**에서 어떻게 쓰이는지 본다.
+다음 Part부터는 이 도구들이 **특정 domain**에서 어떻게 쓰이는지 본다.
 
 ---
 
-**다음**: [7.0 텍스트 표현](../07_language/00_text_representation.qmd)
+**다음**: [7.0 텍스트 representation](../07_language/00_text_representation.qmd)
 
-**이전**: [6.7 잠재 확산과 텍스트-이미지](07_latent_diffusion.qmd)
+**이전**: [6.7 latent diffusion과 텍스트-이미지](07_latent_diffusion.qmd)
