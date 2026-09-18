@@ -1,38 +1,41 @@
 ---
-title: "5.10 트랜스포머의 대안"
-subtitle: "상태공간 모델·Mamba·하이브리드 — 이차 병목 없는 시퀀스 모델"
+title: "5.10 Transformer의 대안"
+subtitle: "state space model·Mamba·hybrid — 이차 병목 없는 sequence 모델"
 jupyter: ai-ml-study
 ---
 
 [5.7](07_efficient_attention.qmd)에서 $n^2$ 을 우회하는 방법들을 봤다.
-전부 어텐션을 **유지한 채** 비용을 깎는 접근이었다.
+전부 attention을 **유지한 채** 비용을 깎는 접근이었다.
 
-이 장은 다른 질문을 던진다. **어텐션을 아예 쓰지 않으면 어떤가?**
+이 장은 다른 질문을 던진다. **attention을 아예 쓰지 않으면 어떤가?**
 
-[4.2 RNN](../04_architectures/02_rnn.qmd)이 그랬다. 순환은 선형 시간이고 상수 메모리다.
+[4.2 RNN](../04_architectures/02_rnn.qmd)이 그랬다. 순환(recurrence — 앞 step의 결과를 다음 step에 넘기는 구조)은 선형 시간이고 상수 메모리다.
 문제는 순차 처리라 학습이 병렬화되지 않는다는 것이었고, 그래서 Transformer에 밀렸다.
 
-상태공간 모델(SSM)은 그 문제를 푼다.
-**학습은 병렬로, 추론은 순차로** — 두 세계의 이점을 동시에 갖는다.
+**state space model**(상태공간 모델, SSM)은 그 문제를 푼다.
+**학습은 병렬로, inference는 순차로** — 두 세계의 이점을 동시에 갖는다.
 
 ---
 
-## 상태공간 모델
+## state space model
 
-제어이론에서 온 형식이다. 연속 시간에서
+제어이론(control theory — 로봇이나 비행기처럼 시간에 따라 변하는 시스템을 다루는 분야)에서 온 형식이다. 연속 시간에서
 
 $$h'(t) = \mathbf{A}h(t) + \mathbf{B}u(t), \qquad y(t) = \mathbf{C}h(t)$$
 
-이산화하면 RNN과 똑같은 모양이 된다.
+$h$ 는 시스템의 내부 상태(state), $u$ 는 입력, $y$ 는 출력이다. 상태의 변화율 $h'$ 이 현재 상태와 입력의 선형 결합이라는 뜻이다.
+이것을 discretization(이산화 — 연속 시간을 일정 간격 $\Delta$ 의 step으로 자르기)하면 RNN과 똑같은 모양이 된다.
 
 $$h_t = \bar{\mathbf{A}}h_{t-1} + \bar{\mathbf{B}}u_t, \qquad y_t = \mathbf{C}h_t$$
 
+($\bar{\mathbf{A}}, \bar{\mathbf{B}}$ 는 $\mathbf{A}, \mathbf{B}$ 를 간격 $\Delta$ 에 맞게 고친 행렬이다.)
+
 여기서 결정적인 차이가 하나 있다. **비선형이 없다.**
 
-RNN은 $h_t = \tanh(Wh_{t-1} + Ux_t)$ 처럼 매 스텝 비선형을 통과시킨다.
-그래서 앞 스텝을 계산해야만 다음을 계산할 수 있다.
+RNN은 $h_t = \tanh(Wh_{t-1} + Ux_t)$ 처럼 매 step 비선형을 통과시킨다.
+그래서 앞 step을 계산해야만 다음을 계산할 수 있다.
 
-SSM은 선형이라 **펼칠 수 있다.**
+SSM은 선형이라 **펼칠 수 있다.** 한 step 전 상태를 그 전 상태로, 또 그 전 상태로 계속 대입하면
 
 $$
 h_t = \sum_{k=0}^{t}\bar{\mathbf{A}}^k \bar{\mathbf{B}} u_{t-k}
@@ -41,13 +44,15 @@ y_t = \sum_{k=0}^{t} \underbrace{\mathbf{C}\bar{\mathbf{A}}^k\bar{\mathbf{B}}}_{
 = (u * K)_t
 $$
 
-즉 **합성곱**이다. 그리고 합성곱은 FFT로 병렬 계산할 수 있다.
+즉 [4.0](../04_architectures/00_cnn.qmd)의 **convolution**(합성곱)이다 — 출력은 과거 입력들에 고정된 가중치 $K_k$ 를 곱해 더한 것이고, 그 가중치 열 $K$ 가 kernel이다. 그리고 convolution은 FFT(fast Fourier transform)로 병렬 계산할 수 있다.
+
+같은 모델을 두 방식으로 계산할 수 있는 것이다. 매달 이자를 한 번씩 계산해 잔고를 갱신하는 것(순환)과, 처음부터 "몇 달 전 입금액 × 그 기간의 이자율"을 전부 한 번에 더하는 것(convolution)이 같은 잔고를 내는 것과 같다.
 
 ---
 
 ## G5.10.1 — 같은 모델의 두 얼굴
 
-이론이 아니라 수치로 확인한다. 순환으로 계산한 값과 합성곱으로 계산한 값이 같아야 한다.
+이론이 아니라 수치로 확인한다. 순환으로 계산한 값과 convolution으로 계산한 값이 같아야 한다.
 
 ```{python}
 #| label: ssm-duality
@@ -57,7 +62,7 @@ import sys; sys.path.append("../..")
 import numpy as np
 
 def ssm_recurrent(u, A, B, C, D=0.0):
-    """순환 뷰 — 추론에 쓴다. 상태 하나만 들고 한 스텝씩."""
+    """순환 view — inference에 쓴다. 상태 하나만 들고 한 step씩."""
     h = np.zeros(len(A))
     ys = []
     for t in range(len(u)):
@@ -66,9 +71,9 @@ def ssm_recurrent(u, A, B, C, D=0.0):
     return np.array(ys)
 
 def ssm_convolutional(u, A, B, C, D=0.0):
-    """합성곱 뷰 — 학습에 쓴다. 커널을 만들어 한 번에."""
+    """convolution view — 학습에 쓴다. kernel을 만들어 한 번에."""
     L = len(u)
-    K = np.array([C @ (A**k * B) for k in range(L)])   # 커널 C A^k B
+    K = np.array([C @ (A**k * B) for k in range(L)])   # kernel C A^k B
     return np.convolve(u, K)[:L] + D * u
 
 rng = np.random.default_rng(0)
@@ -80,34 +85,37 @@ D, u = 0.4, rng.normal(size=n)
 y_rec = ssm_recurrent(u, A, B, C, D)
 y_conv = ssm_convolutional(u, A, B, C, D)
 
-print(f"순환 뷰   출력 앞 3개: {np.round(y_rec[:3], 6)}")
-print(f"합성곱 뷰 출력 앞 3개: {np.round(y_conv[:3], 6)}")
+print(f"순환 view        출력 앞 3개: {np.round(y_rec[:3], 6)}")
+print(f"convolution view 출력 앞 3개: {np.round(y_conv[:3], 6)}")
 print(f"최대 차이: {np.abs(y_rec - y_conv).max():.2e}   ← 같은 모델이다")
 ```
 
 ::: {.key-concept}
-**이 이중성이 SSM의 전부다.**
+**이 duality(이중성 — 같은 것을 두 방식으로 볼 수 있음)가 SSM의 전부다.**
 
 | | 형태 | 쓰는 곳 | 특성 |
 |---|---|---|---|
-| 순환 | $h_t = \bar A h_{t-1} + \bar B u_t$ | **추론** | $O(1)$ 메모리, 토큰당 $O(1)$ |
-| 합성곱 | $y = u * K$ | **학습** | 시퀀스 전체 병렬, FFT로 $O(n\log n)$ |
+| 순환 | $h_t = \bar A h_{t-1} + \bar B u_t$ | **inference** | $O(1)$ 메모리, token당 $O(1)$ |
+| convolution | $y = u * K$ | **학습** | sequence 전체 병렬, FFT로 $O(n\log n)$ |
 
 RNN은 순환만 가능했고, Transformer는 병렬만 가능했다.
-SSM은 **같은 파라미터로 둘 다** 할 수 있다.
+SSM은 **같은 parameter로 둘 다** 할 수 있다 — 학습할 때는 convolution으로 sequence 전체를 한 번에 처리하고, 배포한 뒤에는 순환으로 상태 하나만 들고 한 token씩 낸다.
 :::
 
 ---
 
 ## HiPPO: 무엇을 기억할 것인가
 
-$\bar{\mathbf{A}}$ 를 아무렇게나 초기화하면 SSM은 학습되지 않는다.
+$\bar{\mathbf{A}}$ 를 아무렇게나 initialization하면 SSM은 학습되지 않는다.
 $\bar{\mathbf{A}}^k$ 가 지수적으로 사라지거나 폭발하기 때문이다 —
-[0.0 선형대수](../00_foundations/00_linear_algebra.qmd)의 고유값 거듭제곱이고,
-[4.2 RNN](../04_architectures/02_rnn.qmd)에서 스펙트럼 반지름 $\sigma^T$ 로 측정한 바로 그 문제다.
+[0.0 선형대수](../00_foundations/00_linear_algebra.qmd)의 eigenvalue(고유값) 거듭제곱이고,
+[4.2 RNN](../04_architectures/02_rnn.qmd)에서 spectral radius $\sigma^T$ 로 측정한 바로 그 문제다.
+$k$ step 전 입력은 $\bar{\mathbf{A}}^k$ 배로 남는데, 이 값이 $0.5^k$ 처럼 급히 0이 되면 기억이 없고 $1.1^k$ 처럼 커지면 폭발한다.
 
-HiPPO는 **과거를 다항식 기저로 압축하는** 특정 $\mathbf{A}$ 를 유도한다.
-그 행렬로 초기화하면 상태가 "지금까지의 입력 전체를 근사하는 계수"가 된다.
+HiPPO는 **과거를 다항식 기저로 압축하는** 특정 $\mathbf{A}$ 를 유도한다 —
+지금까지 들어온 입력 곡선을 "다항식 몇 개의 계수"로 요약해 두는 것이다.
+그 행렬로 initialization하면 상태가 "지금까지의 입력 전체를 근사하는 계수"가 된다.
+곡선을 점 하나하나 다 기억하는 대신 "2차 곡선에 가깝고 계수는 이렇다"로 기억하는 셈이다.
 
 ```{python}
 #| label: fig-hippo-decay
@@ -127,21 +135,21 @@ for i, a in enumerate([0.5, 0.9, 0.98, 0.995, 0.999]):
 fig.add_hline(y=0.01, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="기여도 1%")
 
-fig.update_layout(xaxis_title="과거로 거슬러 간 스텝 수 k",
+fig.update_layout(xaxis_title="과거로 거슬러 간 step 수 k",
                   yaxis_title="Aᵏ (그 입력이 현재 상태에 남긴 크기)",
                   yaxis_type="log", legend=dict(x=0.72, y=0.98))
-viz.fig_defaults(fig, height=400, title="상태 감쇠율이 기억 길이를 정한다")
+viz.fig_defaults(fig, height=400, title="상태 decay율이 기억 길이를 정한다")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-$|A|=0.9$ 면 44스텝 뒤에 1%로 줄지만, $0.999$ 면 4600스텝까지 남습니다. 실제 SSM은 **여러 개의 서로 다른 $A$** 를 병렬로 둡니다 — 어떤 채널은 짧은 기억, 어떤 채널은 긴 기억을 담당하도록.
+$|A|=0.9$ 면 44 step 뒤에 1%로 줄지만, $0.999$ 면 4600 step까지 남습니다. 실제 SSM은 **여러 개의 서로 다른 $A$** 를 병렬로 둡니다 — 어떤 channel은 짧은 기억, 어떤 channel은 긴 기억을 담당하도록.
 :::
 
 S4는 여기에 두 가지를 더한다.
 
-- **대각 + 저계수(DPLR) 구조** — 커널 $K$ 를 효율적으로 계산할 수 있게 $\mathbf{A}$ 를 제약
-- **주파수 영역 계산** — 긴 커널을 FFT로 처리
+- **DPLR(diagonal plus low-rank — 대각 행렬 + 낮은 rank 행렬) 구조** — kernel $K$ 를 효율적으로 계산할 수 있게 $\mathbf{A}$ 를 제약
+- **주파수 영역 계산** — 긴 kernel을 FFT로 처리
 
 ---
 
@@ -150,19 +158,21 @@ S4는 여기에 두 가지를 더한다.
 S4까지의 SSM에는 결정적 약점이 있었다. $\bar{\mathbf{A}}, \bar{\mathbf{B}}, \mathbf{C}$ 가
 **입력과 무관한 고정 상수**라는 것이다.
 
-이 성질이 합성곱 뷰를 가능하게 하지만(그래서 병렬 학습이 되지만),
-동시에 **"이 토큰은 중요하니 기억하고, 저건 무시하라"를 표현할 수 없게** 만든다.
+이 성질이 convolution view를 가능하게 하지만(그래서 병렬 학습이 되지만),
+동시에 **"이 token은 중요하니 기억하고, 저건 무시하라"를 표현할 수 없게** 만든다.
+무슨 말이 들어오든 같은 비율로 잊고 같은 비율로 받아들이는 것이다 — 강의 중 중요한 말과 잡담을 똑같은 무게로 필기하는 학생과 같다.
 
-Mamba의 처방: 파라미터를 **입력의 함수**로 만든다.
+Mamba의 처방: parameter를 **입력의 함수**로 만든다.
 
 $$\bar{\mathbf{B}}_t = f_B(u_t), \qquad \mathbf{C}_t = f_C(u_t), \qquad \Delta_t = f_\Delta(u_t)$$
 
-$\Delta_t$ 는 이산화 간격으로, 사실상 **게이트**다.
+$\Delta_t$ 는 discretization 간격으로, 사실상 **gate**([4.2](../04_architectures/02_rnn.qmd)의 LSTM gate처럼 정보를 얼마나 통과시킬지 정하는 밸브)다.
 크면 상태를 크게 갱신하고, 0에 가까우면 현재 상태를 그대로 통과시킨다.
+이것이 "selective"(선택적)라는 이름의 뜻이다 — 입력을 보고 기억할지 말지 고른다.
 
 ```{python}
 #| label: fig-selective
-#| fig-cap: "특정 구간의 정보만 상태에 반영하는 선택적 게이트"
+#| fig-cap: "특정 구간의 정보만 상태에 반영하는 selective gate"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -183,7 +193,7 @@ u[75:85] -= 2.5
 def ssm_gated(u, A, B, C, gate):
     h = np.zeros(len(A)); ys = []; norms = []
     for t in range(len(u)):
-        a_t = A ** np.maximum(gate[t], 1e-6)   # 게이트↓ → A^≈0 = 1 → 상태 보존
+        a_t = A ** np.maximum(gate[t], 1e-6)   # gate↓ → A^≈0 = 1 → 상태 보존
         h = a_t * h + B * gate[t] * u[t]
         ys.append(C @ h); norms.append(np.linalg.norm(h))
     return np.array(ys), np.array(norms)
@@ -198,7 +208,7 @@ y_sel, h_sel = ssm_gated(u, A, B, C, gate_sel)
 
 fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                     row_heights=[0.32, 0.24, 0.44], vertical_spacing=0.07,
-                    subplot_titles=("입력 신호", "게이트 Δ", "상태 크기 ‖h‖"))
+                    subplot_titles=("입력 신호", "gate Δ", "상태 크기 ‖h‖"))
 
 fig.add_trace(go.Scatter(x=np.arange(n), y=u, mode="lines", showlegend=False,
                          line=dict(color=viz.YELLOW, width=1.5)), row=1, col=1)
@@ -220,31 +230,31 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-주황(고정 게이트)은 잡음까지 계속 상태에 섞어 넣습니다. 파랑(선택적)은 게이트가 닫힌 구간에서 상태를 **거의 그대로 보존**하다가, 중요한 두 구간에서만 크게 반응합니다.
+주황(고정 gate)은 잡음까지 계속 상태에 섞어 넣습니다. 파랑(selective)은 gate가 닫힌 구간에서 상태를 **거의 그대로 보존**하다가, 중요한 두 구간에서만 크게 반응합니다.
 :::
 
 ::: {.callout-warning}
 ## 선택성의 대가
 
-파라미터가 입력에 의존하면 **합성곱 뷰를 쓸 수 없다.**
-커널 $K_k = \mathbf{C}\bar{\mathbf{A}}^k\bar{\mathbf{B}}$ 가 시점마다 달라지기 때문이다.
+parameter가 입력에 의존하면 **convolution view를 쓸 수 없다.**
+kernel $K_k = \mathbf{C}\bar{\mathbf{A}}^k\bar{\mathbf{B}}$ 가 시점마다 달라지기 때문이다 — 고정된 kernel 하나로 sequence 전체를 한 번에 처리하는 것이 convolution의 전제였다.
 
-Mamba는 이 문제를 알고리즘이 아니라 **하드웨어 인지 구현**으로 푼다 —
-병렬 스캔(parallel scan)을 GPU의 SRAM 안에서 수행해,
+Mamba는 이 문제를 알고리즘이 아니라 **hardware-aware 구현**(GPU의 메모리 구조를 알고 짠 구현)으로 푼다 —
+parallel scan(병렬 스캔 — $a_1, a_1a_2, a_1a_2a_3, \ldots$ 같은 누적 곱을 $\log n$ 단계 만에 병렬로 구하는 방법)을 GPU의 SRAM 안에서 수행해,
 순차 재귀를 $O(\log n)$ 깊이로 병렬화한다.
 
-FlashAttention과 같은 종류의 승부다. 알고리즘을 바꾸는 대신 메모리 계층을 다시 설계한다.
+[5.7의 FlashAttention](07_efficient_attention.qmd)과 같은 종류의 승부다. 알고리즘을 바꾸는 대신 메모리 계층을 다시 설계한다.
 :::
 
 ---
 
-## G5.10.2 — 추론 메모리: 상수 vs 선형
+## G5.10.2 — inference 메모리: 상수 vs 선형
 
 SSM 계열의 가장 명확한 이점이 이것이다.
 
 ```{python}
 #| label: fig-inference-memory
-#| fig-cap: "문맥이 길어질 때 선형으로 느는 KV 캐시와 일정한 SSM 상태"
+#| fig-cap: "문맥이 길어질 때 선형으로 느는 KV cache와 일정한 SSM 상태"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -254,12 +264,12 @@ from src import viz
 d, L = 4096, 32
 lens = np.array([1024, 4096, 16384, 65536, 262144, 1048576])
 
-kv_gb = 2 * L * 8 * 128 * lens * 2 / 1024**3        # GQA 8 KV헤드, fp16
+kv_gb = 2 * L * 8 * 128 * lens * 2 / 1024**3        # GQA 8 KV head, fp16
 ssm_gb = np.full_like(lens, L * d * 16 * 2 / 1024**3, dtype=float)  # 상태차원 16
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=lens, y=kv_gb, mode="lines+markers",
-                         name="Transformer KV 캐시 (선형)",
+                         name="Transformer KV cache (선형)",
                          line=dict(color=viz.WARM, width=2.5)))
 fig.add_trace(go.Scatter(x=lens, y=ssm_gb, mode="lines+markers",
                          name="SSM 상태 (상수)",
@@ -267,10 +277,10 @@ fig.add_trace(go.Scatter(x=lens, y=ssm_gb, mode="lines+markers",
 fig.add_hline(y=80, line=dict(color=viz.GREEN, dash="dash"),
               annotation_text="H100 80GB")
 
-fig.update_layout(xaxis_title="문맥 길이 (토큰)", xaxis_type="log",
-                  yaxis_title="추론 상태 메모리 (GB)", yaxis_type="log",
+fig.update_layout(xaxis_title="문맥 길이 (token)", xaxis_type="log",
+                  yaxis_title="inference 상태 메모리 (GB)", yaxis_type="log",
                   legend=dict(x=0.02, y=0.98))
-viz.fig_defaults(fig, height=410, title=f"d={d}, {L}층 기준 (배치 1)")
+viz.fig_defaults(fig, height=410, title=f"d={d}, {L}층 기준 (batch 1)")
 fig.show()
 ```
 
@@ -278,7 +288,7 @@ fig.show()
 #| label: memory-numbers
 #| code-fold: false
 
-print(f"{'문맥 길이':>12} {'KV 캐시':>12} {'SSM 상태':>12} {'비율'}")
+print(f"{'문맥 길이':>12} {'KV cache':>12} {'SSM 상태':>12} {'비율'}")
 print("-" * 50)
 for l, k, s in zip(lens, kv_gb, ssm_gb):
     print(f"{l:>12,} {k:>10.3f}GB {s:>10.3f}GB {k/s:>8.0f}x")
@@ -286,47 +296,49 @@ kv_1m_gb, ssm_mb = float(kv_gb[-1]), float(ssm_gb[0] * 1024)
 ```
 
 ::: {.interaction-hint}
-100만 토큰에서 KV 캐시는 `{python} f"{kv_1m_gb:.0f}"`GB 로 GPU 한 장을 넘어서지만, SSM 상태는 여전히 `{python} f"{ssm_mb:.0f}"`MB입니다. 이것이 SSM 계열이 긴 시퀀스에서 주목받는 근본 이유입니다.
+100만 token에서 KV cache는 `{python} f"{kv_1m_gb:.0f}"`GB로 GPU 한 장을 넘어서지만, SSM 상태는 여전히 `{python} f"{ssm_mb:.0f}"`MB입니다. 이것이 SSM 계열이 긴 sequence에서 주목받는 근본 이유입니다.
 :::
 
 ---
 
 ## 그런데 왜 아직 Transformer가 지배하는가
 
-이론적 이점이 이렇게 명확한데도 프런티어 모델은 여전히 어텐션 중심이다.
-이유는 **정확한 회상(recall)** 이다.
+이론적 이점이 이렇게 명확한데도 frontier 모델(가장 앞선 대형 모델들)은 여전히 attention 중심이다.
+이유는 **정확한 recall(recall — 앞에서 본 것을 그대로 꺼내 오기)**이다.
 
 ::: {.key-concept}
-어텐션은 과거 **모든 토큰을 그대로 보관**한다. 100만 번째 토큰에서도
-3번째 토큰의 정확한 값을 무손실로 가져올 수 있다.
+attention은 과거 **모든 token을 그대로 보관**한다. 100만 번째 token에서도
+3번째 token의 정확한 값을 무손실로 가져올 수 있다.
 
 SSM은 과거를 고정 크기 상태 $h \in \mathbb{R}^{N}$ 에 **압축**한다.
 $N$ 이 아무리 커도 유한하므로, 문맥이 길어지면 반드시 정보가 소실된다.
+회의록 전체를 보관하는 것(attention)과 한 장짜리 요약만 남기는 것(SSM)의 차이다 — 요약이 아무리 좋아도 "3번째 발언의 정확한 문장"은 되살릴 수 없다.
 
 이 차이는 특정 과제에서 극명하게 드러난다.
 
-| 과제 | 어텐션 | SSM |
+| 과제 | attention | SSM |
 |------|--------|-----|
-| 언어 모델링(퍼플렉서티) | 기준 | 대등 |
+| language modeling(perplexity) | 기준 | 대등 |
 | 요약·분류 | 기준 | 대등 |
 | **문맥에서 정확한 값 복사** | 강함 | **약함** |
-| **다중 검색(multi-query)** | 강함 | **약함** |
-| 문맥 내 학습 | 강함 | 상대적으로 약함 |
+| **multi-query retrieval(한 문맥에서 여러 항목 찾기)** | 강함 | **약함** |
+| in-context learning(문맥 안의 예시로 배우기) | 강함 | 상대적으로 약함 |
 
-퍼플렉서티가 비슷해도 실사용 능력이 다를 수 있다는 뜻이다 —
-[5.9](09_scaling_laws.qmd)에서 말한 "손실 ≠ 유용성"의 구체적 사례다.
+perplexity가 비슷해도 실사용 능력이 다를 수 있다는 뜻이다 —
+[5.9](09_scaling_laws.qmd)에서 말한 "loss ≠ 유용성"의 구체적 사례다.
 :::
 
 ---
 
-## 하이브리드: 현재의 실용적 답
+## hybrid: 현재의 실용적 답
 
-두 계열의 장단이 상보적이므로, 섞는 것이 자연스럽다.
-**대부분의 층은 SSM/선형, 소수의 층만 완전 어텐션.**
+두 계열의 장단이 상보적이므로, 섞는 것이 자연스럽다 — **hybrid**(혼합) 모델이다.
+**대부분의 layer는 SSM/선형, 소수의 layer만 완전 attention.**
+요약본을 주로 쓰되 원본 회의록을 몇 권만 곁에 두는 셈이다.
 
 ```{python}
 #| label: fig-hybrid
-#| fig-cap: "어텐션 층 비율에 따른 비용과 회상 능력 (개념적 트레이드오프)"
+#| fig-cap: "attention layer 비율에 따른 비용과 recall 능력 (개념적 trade-off)"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -339,116 +351,116 @@ n_attn = ratios * L_total
 
 kv_per_layer = 2 * 8 * 128 * ctx * 2 / 1024**3
 mem = n_attn * kv_per_layer
-# 회상 능력은 어텐션 층이 몇 개만 있어도 상당 부분 회복된다는 보고를 반영
+# recall 능력은 attention layer가 몇 개만 있어도 상당 부분 회복된다는 보고를 반영
 recall = 1 - np.exp(-n_attn / 2.5)
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=ratios * 100, y=mem, mode="lines", name="KV 캐시 (GB)",
+fig.add_trace(go.Scatter(x=ratios * 100, y=mem, mode="lines", name="KV cache (GB)",
                          line=dict(color=viz.WARM, width=2.5), yaxis="y"))
 fig.add_trace(go.Scatter(x=ratios * 100, y=recall * 100, mode="lines",
-                         name="상대 회상 능력 (%)",
+                         name="상대 recall 능력 (%)",
                          line=dict(color=viz.ACCENT, width=2.5), yaxis="y2"))
 fig.add_vrect(x0=6, x1=25, fillcolor=viz.hex_rgba(viz.GREEN, 0.12), line_width=0,
-              annotation_text="실제 하이브리드가 쓰는 구간", annotation_position="top")
+              annotation_text="실제 hybrid가 쓰는 구간", annotation_position="top")
 
 fig.update_layout(
-    xaxis_title="전체 층 중 어텐션 층 비율 (%)",
-    yaxis=dict(title="KV 캐시 (GB)", side="left"),
-    yaxis2=dict(title="회상 능력 (%)", overlaying="y", side="right", range=[0, 105]),
+    xaxis_title="전체 layer 중 attention layer 비율 (%)",
+    yaxis=dict(title="KV cache (GB)", side="left"),
+    yaxis2=dict(title="recall 능력 (%)", overlaying="y", side="right", range=[0, 105]),
     legend=dict(x=0.35, y=0.5),
 )
 viz.fig_defaults(fig, height=410,
-                 title=f"{L_total}층, 문맥 {ctx:,} 토큰 (개념적 곡선)")
+                 title=f"{L_total}층, 문맥 {ctx:,} token (개념적 곡선)")
 fig.show()
 ```
 
 ::: {.callout-warning}
-위 회상 곡선은 **개념적 형태**입니다. "어텐션 층 몇 개만 섞어도 회상 능력이 크게 회복된다"는
+위 recall 곡선은 **개념적 형태**입니다. "attention layer 몇 개만 섞어도 recall 능력이 크게 회복된다"는
 정성적 관찰을 재현한 것이며, 실측 데이터가 아닙니다.
 :::
 
-실제 하이브리드 모델들(Jamba, Zamba, Samba 계열 등)은
-어텐션 층을 6~25% 정도만 두는 설계를 쓴다.
-그것만으로 회상 능력을 거의 유지하면서 KV 캐시를 대폭 줄인다.
+실제 hybrid 모델들(Jamba, Zamba, Samba 계열 등)은
+attention layer를 6~25% 정도만 두는 설계를 쓴다.
+그것만으로 recall 능력을 거의 유지하면서 KV cache를 대폭 줄인다.
 
 ---
 
 ## 통일된 관점
 
-최근 연구는 어텐션·선형 어텐션·SSM을 **하나의 틀**로 본다.
+최근 연구는 attention·linear attention·SSM을 **하나의 틀**로 본다.
 
 $$y_t = \sum_{s \le t} \alpha(t, s)\, v_s$$
 
-셋 다 "과거 값들의 가중합"이고, 차이는 $\alpha(t,s)$ 를 어떻게 만드느냐다.
+셋 다 "과거 값들의 가중합"이고, 차이는 $\alpha(t,s)$ — "시점 $t$ 가 시점 $s$ 를 얼마나 참고하는가" — 를 어떻게 만드느냐다.
 
 | 모델 | $\alpha(t,s)$ | 성질 |
 |------|---------------|------|
-| 소프트맥스 어텐션 | $\text{softmax}(q_t^\top k_s)$ | 데이터 의존, 정규화, $O(n^2)$ |
-| 선형 어텐션 | $\phi(q_t)^\top\phi(k_s)$ | 결합법칙 가능 |
-| SSM (S4) | $\mathbf{C}\bar{\mathbf{A}}^{t-s}\bar{\mathbf{B}}$ | 거리에만 의존, 고정 감쇠 |
-| Mamba | $\mathbf{C}_t\left(\prod_{r=s+1}^{t}\bar{\mathbf{A}}_r\right)\bar{\mathbf{B}}_s$ | 데이터 의존 감쇠 |
+| softmax attention | $\text{softmax}(q_t^\top k_s)$ | 데이터 의존, normalization, $O(n^2)$ |
+| linear attention ([5.7](07_efficient_attention.qmd)) | $\phi(q_t)^\top\phi(k_s)$ | 결합법칙 가능 — 곱하는 순서를 바꿔 $n^2$ 을 피함 |
+| SSM (S4) | $\mathbf{C}\bar{\mathbf{A}}^{t-s}\bar{\mathbf{B}}$ | 거리에만 의존, 고정 decay(감쇠 — 멀수록 작아짐) |
+| Mamba | $\mathbf{C}_t\left(\prod_{r=s+1}^{t}\bar{\mathbf{A}}_r\right)\bar{\mathbf{B}}_s$ | 데이터 의존 decay |
 
-이 관점에서 보면 Mamba는 "곱셈적 감쇠를 쓰는 데이터 의존 선형 어텐션"이다.
-그리고 [5.3에서 본 ALiBi](03_positional_encoding.qmd)의 거리 감쇠와도 친척 관계다.
+이 관점에서 보면 Mamba는 "곱셈적 decay를 쓰는 데이터 의존 linear attention"이다.
+그리고 [5.3에서 본 ALiBi](03_positional_encoding.qmd)의 거리 decay와도 친척 관계다.
 
 ---
 
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 순환형과 합성곱형이 같음을 확인한다**
+**① 순환형과 convolution형이 같음을 확인한다**
 `ssm-duality` 에서 두 방식의 출력을 비교하라. 길이가 길어지면
-수치 차이가 얼마나 벌어지는가? 어느 쪽이 학습에, 어느 쪽이 추론에 유리한가?
+수치 차이가 얼마나 벌어지는가? 어느 쪽이 학습에, 어느 쪽이 inference에 유리한가?
 
 **② 상태 크기와 기억 길이**
 `ssm_recurrent` 로 복사 과제를 만들어라 — 길이 $T$ 의 무작위 입력을 넣고 마지막 상태 $h_T$ 에서
-$u_{T-k}$ 를 최소제곱으로 복원할 때(무작위 시퀀스 여러 개로 회귀), 상태 차원 $N$ = 8·64·256 에서
-복원 오차가 거리 $k$ 에 따라 어떻게 커지는가? "정확한 회상" 이 왜 어려운지 이 곡선으로 설명하라.
+$u_{T-k}$ 를 least squares(최소제곱)로 복원할 때(무작위 sequence 여러 개로 regression), 상태 차원 $N$ = 8·64·256에서
+복원 오차가 거리 $k$ 에 따라 어떻게 커지는가? "정확한 recall"이 왜 어려운지 이 곡선으로 설명하라.
 
-**③ 하이브리드를 직접 만든다**
-[5.6](06_build_gpt.qmd)의 MiniGPT 3층 중 앞 2층을 `ssm_gated` 류의 선택적 SSM 층으로 바꿔라
-(역전파는 순환을 그대로 미분하면 된다). 같은 텍스트에 학습시켜 손실과 생성 시 캐시 크기를
-원본과 비교하라. 어텐션 층 하나가 왜 회상을 상당 부분 되살리는지 설명하라.
+**③ hybrid를 직접 만든다**
+[5.6](06_build_gpt.qmd)의 MiniGPT 3층 중 앞 2층을 `ssm_gated` 류의 selective SSM layer로 바꿔라
+(backpropagation은 순환을 그대로 미분하면 된다). 같은 텍스트에 학습시켜 loss와 생성 시 cache 크기를
+원본과 비교하라. attention layer 하나가 왜 recall을 상당 부분 되살리는지 설명하라.
 :::
 
 ## 요약
 
 | 개념 | 핵심 |
 |------|------|
-| SSM | 선형 순환 → 합성곱으로 펼칠 수 있다 |
-| **이중성** | 학습=합성곱(병렬), 추론=순환(상수 메모리). 수치로 동일 확인 |
-| HiPPO | $\mathbf{A}$ 초기화가 기억 길이를 결정 |
-| S4 | DPLR 구조 + FFT로 긴 커널 처리 |
-| **Mamba** | 파라미터를 입력 의존으로 → 선택적 기억 |
-| 선택성의 대가 | 합성곱 뷰 불가 → 하드웨어 인지 병렬 스캔으로 해결 |
-| 추론 메모리 | KV 캐시는 선형, SSM 상태는 **상수** |
-| **약점** | 정확한 회상·복사·다중 검색 |
-| 하이브리드 | 어텐션 층 6~25%만 섞어 양쪽 이점 |
+| SSM | 선형 순환 → convolution으로 펼칠 수 있다 |
+| **duality** | 학습=convolution(병렬), inference=순환(상수 메모리). 수치로 동일 확인 — 매달 이자 계산 vs 한 번에 합산 |
+| HiPPO | $\mathbf{A}$ initialization이 기억 길이를 결정 — 곡선을 다항식 계수로 요약 |
+| S4 | DPLR 구조 + FFT로 긴 kernel 처리 |
+| **Mamba** | parameter를 입력 의존으로 → selective 기억 — 중요한 말만 필기 |
+| 선택성의 대가 | convolution view 불가 → hardware-aware parallel scan으로 해결 |
+| inference 메모리 | KV cache는 선형, SSM 상태는 **상수** |
+| **약점** | 정확한 recall·복사·multi-query retrieval — 요약본으로는 원문을 못 되살림 |
+| hybrid | attention layer 6~25%만 섞어 양쪽 이점 |
 | 통일 관점 | 전부 $\sum \alpha(t,s)v_s$, $\alpha$ 의 형태만 다름 |
 
 ---
 
 ## Part 5를 마치며
 
-어텐션 한 줄의 식에서 시작해 여기까지 왔다.
+attention 한 줄의 식에서 시작해 여기까지 왔다.
 
-- **[5.0](00_attention_mechanism.qmd)** 미분 가능한 딕셔너리 조회, $\sqrt{d_k}$ 의 이유
-- **[5.1](01_self_attention.qmd)** 순열 등변성과 마스크 한 장이 만드는 계열
-- **[5.2](02_multi_head.qmd)** 파라미터를 늘리지 않고 쪼개기
+- **[5.0](00_attention_mechanism.qmd)** 미분 가능한 dictionary 조회, $\sqrt{d_k}$ 의 이유
+- **[5.1](01_self_attention.qmd)** permutation equivariance와 mask 한 장이 만드는 계열
+- **[5.2](02_multi_head.qmd)** parameter를 늘리지 않고 쪼개기
 - **[5.3](03_positional_encoding.qmd)** 순서를 되돌려 넣기, RoPE의 상대성
-- **[5.4](04_transformer_block.qmd)** 블록 하나의 완전한 해부, $12d^2$
+- **[5.4](04_transformer_block.qmd)** block 하나의 완전한 해부, $12d^2$
 - **[5.5](05_encoder_decoder.qmd)** 같은 부품의 세 가지 조립
-- **[5.6](06_build_gpt.qmd)** 직접 만들고 역전파를 유도하고 학습시키기
+- **[5.6](06_build_gpt.qmd)** 직접 만들고 backpropagation을 유도하고 학습시키기
 - **[5.7](07_efficient_attention.qmd)** 병목은 메모리였다
-- **[5.8](08_mixture_of_experts.qmd)** 파라미터와 연산의 분리
+- **[5.8](08_mixture_of_experts.qmd)** parameter와 연산의 분리
 - **[5.9](09_scaling_laws.qmd)** 얼마나 키우고 얼마나 먹일 것인가
 - **5.10** 그리고 대안들
 
 이제 이 구조를 **무엇에 쓸 것인가**로 넘어간다.
-Part 6은 생성 모델, Part 7은 언어와 LLM 스택 전체를 다룬다.
+Part 6은 generative model, Part 7은 언어와 LLM stack 전체를 다룬다.
 
 ---
 
-**다음**: [6.0 생성 모델 지형도](../06_generative/00_generative_overview.qmd) — 분포를 학습한다는 것의 여러 의미
+**다음**: [6.0 generative model 지형도](../06_generative/00_generative_overview.qmd) — 분포를 학습한다는 것의 여러 의미
 
-**이전**: [5.9 스케일링 법칙](09_scaling_laws.qmd)
+**이전**: [5.9 scaling law](09_scaling_laws.qmd)
