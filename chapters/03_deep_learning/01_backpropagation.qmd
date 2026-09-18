@@ -1,33 +1,56 @@
 ---
-title: "3.1 역전파"
-subtitle: "연쇄법칙의 효율적 구현 — 딥러닝을 가능하게 한 알고리즘"
+title: "3.1 backpropagation"
+subtitle: "chain rule의 효율적 구현 — 딥러닝을 가능하게 한 알고리즘"
 jupyter: ai-ml-study
 ---
 
-역전파는 새로운 수학이 아니다. **연쇄법칙을 영리한 순서로 적용하는 것**뿐이다.
+**backpropagation**(backpropagation — 손실에서 출발해 거꾸로 각 parameter의 gradient를 계산하는 절차)은
+새로운 수학이 아니다. [0.1에서 본 **chain rule**](../00_foundations/01_calculus_optimization.qmd)(chain rule —
+"겉 함수의 미분 × 속 함수의 미분"으로 합성함수를 미분하는 규칙)을 **영리한 순서로 적용하는 것**뿐이다.
 
 그런데 그 순서가 전부를 바꾼다.
-같은 그래디언트를 계산하는데 순서를 잘못 잡으면 수천 배 느려진다.
+같은 gradient를 계산하는데 순서를 잘못 잡으면 수천 배 느려진다.
 
-그리고 역전파를 손으로 유도해보지 않으면
-그래디언트 소실·폭발, 잔차 연결, 그래디언트 클리핑이 전부 마법처럼 보인다.
+비유하면 이렇다. 회사가 손실을 냈을 때 "누구 책임이 얼마인가"를 따진다고 하자.
+사장이 각 직원을 한 명씩 불러 "당신이 한 일이 회사 손실에 얼마나 기여했나"를 처음부터 다시 계산하면
+직원 수만큼 전체 계산을 반복해야 한다.
+대신 손실을 본부에 배분하고, 각 본부가 다시 팀에, 팀이 다시 개인에게 내려보내면
+**전체를 한 번만 훑고** 모든 사람의 몫이 나온다. backpropagation은 후자다.
+
+그리고 backpropagation을 손으로 유도해보지 않으면
+vanishing/exploding gradient(gradient 소실·폭발), residual connection(residual connection), gradient clipping이 전부 마법처럼 보인다.
 [5.6에서 GPT를 만들 때](../05_transformer/06_build_gpt.qmd) 이 기계를 다시 조립하게 되는데,
 여기서 먼저 처음부터 한 번 만들어 둔다.
 
 ---
 
-## 계산 그래프
+## computation graph
 
-모든 신경망은 기본 연산의 그래프다.
-각 노드는 국소 연산이고, **국소 미분만 알면** 전체 그래디언트를 조립할 수 있다.
+**computation graph**(계산 그래프)는 큰 계산을 덧셈·곱셈 같은 기본 연산 하나하나로 쪼개어,
+연산을 점(node)으로, 값이 흘러가는 방향을 화살표로 그린 그림이다.
+모든 신경망은 이런 기본 연산의 graph다.
+각 node는 자기 앞뒤만 아는 **local**(국소적) 연산이고,
+각 node가 **자기 입력에 대한 자기 출력의 미분(local derivative — 국소 미분)만 알면**
+전체 gradient를 조립할 수 있다.
+
+조립 라인에 비유하면, 각 작업자는 "내 앞 사람이 준 부품이 1 mm 달라지면 내 결과물은 몇 mm 달라지는가"만 알면 된다.
+맨 끝 검수자가 "최종 제품이 1 mm 틀렸다"고 알려주면,
+그 정보를 각 작업자의 배율로 곱해가며 거꾸로 전달하는 것만으로
+"맨 앞 작업자가 얼마나 조정해야 하는가"까지 알 수 있다.
 
 간단한 예로 시작한다.
 
 $$f(x, y, z) = (x + y)\cdot z$$
 
+먼저 앞에서 뒤로 값을 계산하는 것이 **forward pass**(forward pass)다: $q = x+y$ 를 구하고, $f = q\cdot z$ 를 구한다.
+그 다음 뒤에서 앞으로 미분을 흘려보내는 것이 **backward pass**(backpropagation)다:
+$\partial f/\partial f = 1$ 에서 시작해, 곱셈 node를 지나며 $\partial f/\partial q = z$, $\partial f/\partial z = q$ 를 얻고,
+덧셈 node를 지나며 $\partial f/\partial x = \partial f/\partial q \cdot 1$, $\partial f/\partial y = \partial f/\partial q \cdot 1$ 을 얻는다.
+아래 코드에서 이 과정을 그대로 따라간다.
+
 ```{python}
 #| label: fig-computation-graph
-#| fig-cap: "순전파는 값을, 역전파는 그래디언트를 흘려보냅니다."
+#| fig-cap: "forward pass는 값을, backward pass는 gradient를 흘려보냅니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -38,11 +61,11 @@ x, y, z = 2.0, -3.0, 4.0
 q = x + y          # -1
 f = q * z          # -4
 
-# 역전파: 출력에서 시작해 국소 미분을 곱해가며 뒤로
+# backward pass: 출력에서 시작해 local derivative를 곱해가며 뒤로
 df_df = 1.0
-df_dq = z * df_df          # 곱셈 노드: 상대편 값
+df_dq = z * df_df          # 곱셈 node: 상대편 값
 df_dz = q * df_df
-df_dx = 1.0 * df_dq        # 덧셈 노드: 그대로 전달
+df_dx = 1.0 * df_dq        # 덧셈 node: 그대로 전달
 df_dy = 1.0 * df_dq
 
 nodes = {
@@ -73,7 +96,7 @@ for name, (px, py, val, grad) in nodes.items():
 fig.update_layout(xaxis=dict(visible=False, range=[-0.5, 2.6]),
                   yaxis=dict(visible=False, range=[-0.7, 2.5]))
 viz.fig_defaults(fig, height=380,
-                 title="초록 = 순전파 값 · 주황 = 역전파 그래디언트")
+                 title="초록 = forward pass 값 · 주황 = backward pass gradient")
 fig.show()
 ```
 
@@ -86,6 +109,7 @@ import numpy as np
 def f_fn(x, y, z):
     return (x + y) * z
 
+# 검산: 손으로 유도한 값(해석적)과, 입력을 아주 조금 흔들어 재본 값(수치적)이 일치하는가
 eps = 1e-6
 print(f"{'변수':>4} {'해석적':>10} {'수치적':>12}")
 print("-" * 30)
@@ -96,27 +120,42 @@ for name, (vx, vy, vz), ana in [("x", (x+eps, y, z), df_dx),
     print(f"{name:>4} {ana:>10.4f} {num:>12.4f}")
 ```
 
-::: {.key-concept}
-**노드별 국소 규칙**
+위 표에서 해석적 값과 수치적 값이 소수점 넷째 자리까지 같다.
+손으로 유도한 backward pass가 맞다는 뜻이다.
 
-| 연산 | 순전파 | 역전파 (들어온 그래디언트 $g$) |
+::: {.key-concept}
+**node별 local 규칙**
+
+$g$ 는 "뒤(출력 쪽)에서 이 node로 들어온 gradient", 즉 $\partial L/\partial(\text{이 node의 출력})$ 이다.
+각 node는 $g$ 에 자기 local derivative를 곱해 입력 쪽으로 넘긴다.
+
+| 연산 | forward pass | backward pass (들어온 gradient $g$) |
 |------|--------|-------------------------------|
-| $a+b$ | $a+b$ | 양쪽 모두 $g$ — **분배기** |
-| $a\cdot b$ | $ab$ | $a$ 로 $bg$, $b$ 로 $ag$ — **교환기** |
-| $\max(a,b)$ | 큰 쪽 | 큰 쪽만 $g$, 나머지 0 — **라우터** |
+| $a+b$ | $a+b$ | 양쪽 모두 $g$ — **분배기**(distributor): 받은 것을 그대로 양쪽에 복사 |
+| $a\cdot b$ | $ab$ | $a$ 로 $bg$, $b$ 로 $ag$ — **교환기**(switch): 상대편 값을 곱해 서로 바꿔 보냄 |
+| $\max(a,b)$ | 큰 쪽 | 큰 쪽만 $g$, 나머지 0 — **라우터**(router): 이긴 쪽 한 길로만 보냄 |
 | 분기 (같은 값 재사용) | 복사 | 들어온 것들의 **합** |
 
+덧셈이 분배기인 이유: $\partial(a+b)/\partial a = 1$ 이므로 $g \times 1 = g$ 가 그대로 간다.
+곱셈이 교환기인 이유: $\partial(ab)/\partial a = b$ 이므로 $a$ 쪽으로는 $g \times b$ 가 간다 — 상대편 값이 곱해진다.
+
 마지막 규칙이 자주 실수가 나는 곳이다.
-한 변수를 여러 곳에서 쓰면 그래디언트가 **더해진다**.
+한 변수를 여러 곳에서 쓰면 gradient가 **더해진다**.
+한 사람이 두 부서 일을 겸직하면 회사 손실에 대한 그 사람의 책임은 두 부서 몫의 합인 것과 같다.
 [5.6의 weight tying](../05_transformer/06_build_gpt.qmd)에서
-임베딩 행렬에 그래디언트가 두 번 기여하게 되는 것이 이 규칙이다.
+embedding 행렬에 gradient가 두 번 기여하게 되는 것이 이 규칙이다.
 :::
 
 ---
 
 ## 왜 역방향인가
 
-핵심 질문. 연쇄법칙을 앞에서부터 곱해도 되는데 왜 뒤에서부터 하는가?
+핵심 질문. chain rule을 앞에서부터 곱해도 되는데 왜 뒤에서부터 하는가?
+
+$N$ 층 신경망에서 $h_1, \dots, h_N$ 을 각 층의 출력(각각 길이 $d_1, \dots, d_N$ 인 벡터),
+$\theta$ 를 parameter 전체(길이 $P$ 인 벡터), $L$ 을 손실(숫자 하나)이라 하자.
+chain rule을 여러 층에 걸쳐 쓰면 gradient는 [Jacobian](../00_foundations/01_calculus_optimization.qmd)(Jacobian —
+벡터 출력을 벡터 입력으로 미분한 행렬, 원소 $(i,j)$ 가 $\partial \text{출력}_i / \partial \text{입력}_j$)들의 곱이 된다.
 
 $$\frac{\partial L}{\partial \theta} =
 \underbrace{\frac{\partial L}{\partial h_N}}_{1\times d_N}
@@ -126,22 +165,30 @@ $$\frac{\partial L}{\partial \theta} =
 행렬 곱은 결합법칙이 성립하므로 어느 쪽부터 곱해도 결과가 같다.
 그런데 **비용이 완전히 다르다.**
 
+- **뒤에서부터**(왼쪽부터) 곱하면: $1\times d_N$ 행벡터에 $d_N \times d_{N-1}$ 행렬을 곱해 $1 \times d_{N-1}$ 행벡터가 되고,
+  다시 다음 행렬을 곱해도 계속 **행벡터 하나**만 유지된다. 매 단계 비용은 행렬 하나 크기 정도다.
+- **앞에서부터**(오른쪽부터) 곱하면: $d_1 \times P$ 행렬에 $d_2 \times d_1$ 행렬을 곱해 $d_2 \times P$ 행렬이 되고,
+  매 단계 **$P$ 개 열을 가진 행렬**을 통째로 끌고 간다. $P$ 가 수십억이면 매 단계가 수십억 배 비싸다.
+
+앞에서부터 곱하는 방식을 **forward-mode**, 뒤에서부터 곱하는 방식을 **reverse-mode**라 부르고,
+backpropagation은 reverse-mode다. 아래 그림에서 두 방식의 비용을 parameter 수에 따라 비교한다.
+
 ```{python}
 #| label: fig-forward-vs-reverse
-#| fig-cap: "출력이 하나(손실)이므로 역방향이 압도적으로 싸다"
+#| fig-cap: "출력이 하나(손실)이므로 역방향(reverse-mode)이 압도적으로 싸다"
 
 import sys; sys.path.append("../..")
 import numpy as np
 import plotly.graph_objects as go
 from src import viz
 
-# 층 크기 d, 층 수 L, 입력 파라미터 수 P
+# 층 크기 d, 층 수 L, 입력 parameter 수 P
 d, L = 512, 24
 Ps = np.array([10, 100, 1000, 10_000, 100_000, 1_000_000])
 
 # forward-mode: 각 입력 방향마다 전체를 한 번씩 → P 번
 fwd = Ps * L * d * d * 2
-# reverse-mode: 출력이 스칼라 1개 → 한 번의 역방향 순회
+# reverse-mode: 출력이 scalar 1개 → 한 번의 역방향 순회
 rev = np.full_like(Ps, L * d * d * 2, dtype=float)
 
 fig = go.Figure()
@@ -149,13 +196,13 @@ fig.add_trace(go.Scatter(x=Ps, y=fwd, mode="lines+markers",
                          name="forward-mode (입력 수에 비례)",
                          line=dict(color=viz.WARM, width=2.5)))
 fig.add_trace(go.Scatter(x=Ps, y=rev, mode="lines+markers",
-                         name="reverse-mode (역전파)",
+                         name="reverse-mode (backpropagation)",
                          line=dict(color=viz.ACCENT, width=2.5)))
-fig.update_layout(xaxis_title="파라미터 수 P", xaxis_type="log",
-                  yaxis_title="그래디언트 계산 FLOPs", yaxis_type="log",
+fig.update_layout(xaxis_title="parameter 수 P", xaxis_type="log",
+                  yaxis_title="gradient 계산 FLOPs", yaxis_type="log",
                   legend=dict(x=0.02, y=0.98))
 viz.fig_defaults(fig, height=400,
-                 title=f"{L}층, 폭 {d} · 손실은 스칼라 하나")
+                 title=f"{L}층, 폭 {d} · 손실은 scalar 하나")
 fig.show()
 ```
 
@@ -174,26 +221,32 @@ for n_in, n_out, best in cases:
     print(f"{n_in:>10,} {n_out:>10,} {best:>16}   {reason}")
 ```
 
-딥러닝은 항상 두 번째 경우다 — 파라미터 수십억 개, 손실 스칼라 1개.
-그래서 reverse-mode(역전파)가 유일하게 현실적인 선택이다.
+딥러닝은 항상 두 번째 경우다 — parameter 수십억 개, 손실 scalar(scalar — 숫자 하나) 1개.
+그래서 reverse-mode(backpropagation)가 유일하게 현실적인 선택이다.
 
 ::: {.key-concept}
 **비용의 비대칭**
 
-- **forward-mode**: 입력 방향 하나당 한 번 순회 → 비용이 **입력 수**에 비례
-- **reverse-mode**: 출력 하나당 한 번 순회 → 비용이 **출력 수**에 비례
+- **forward-mode**: 입력 방향 하나당 한 번 순회 → 비용이 **입력 수**에 비례.
+  "입력 $\theta_i$ 를 조금 흔들면 출력들이 전부 어떻게 변하나"를 입력마다 한 번씩 묻는다.
+- **reverse-mode**: 출력 하나당 한 번 순회 → 비용이 **출력 수**에 비례.
+  "출력 $L$ 은 입력들 각각에 얼마나 민감한가"를 출력마다 한 번씩 묻는다.
 
-딥러닝의 손실은 항상 **스칼라 하나**다.
-그래서 역방향 한 번이면 **모든 파라미터의 그래디언트**가 나온다.
+질문 하나에 답이 백만 개 필요하면 답을 하나씩 찾아야 하지만,
+백만 개 질문에 답이 하나뿐이면 그 답에서 거꾸로 한 번에 정리할 수 있다.
+딥러닝의 손실은 항상 **scalar 하나**다.
+그래서 역방향 한 번이면 **모든 parameter의 gradient**가 나온다.
 
-이것이 "역전파는 순전파의 약 2배 비용"이라는 경험칙의 근거이고,
+이것이 "backpropagation은 forward pass의 약 2배 비용"이라는 경험칙의 근거이고,
 [0.5에서 본 $C \approx 6ND$](../00_foundations/05_numerical_computing.qmd)의
-6이라는 숫자(순전파 2 + 역전파 4)가 나오는 곳이다.
+6이라는 숫자(forward pass 2 + backward pass 4)가 나오는 곳이다.
+backward pass가 2배인 이유는 다음 절에서 볼 세 줄 중 $\partial L/\partial W$ 와 $\partial L/\partial h$ 두 개가
+각각 forward pass의 행렬 곱과 같은 크기의 행렬 곱이기 때문이다.
 :::
 
 ---
 
-## MLP의 역전파 유도
+## MLP의 backpropagation 유도
 
 이제 실제 신경망에 적용한다. 한 층은 세 단계다.
 
@@ -201,28 +254,45 @@ $$\mathbf{z} = \mathbf{h}W + \mathbf{b}, \qquad
 \mathbf{a} = \sigma(\mathbf{z}), \qquad
 \text{다음 층으로}$$
 
-역방향으로 가면:
+기호를 정리하면: $\mathbf{h}$ 는 이 층에 들어오는 입력(batch 크기 × 입력 폭 행렬), $W$ 는 weight 행렬, $\mathbf{b}$ 는 bias 벡터,
+$\mathbf{z}$ 는 activation function을 거치기 **전**의 값(pre-activation), $\sigma$ 는 activation function,
+$\mathbf{a}$ 는 그것을 거친 **후**의 값이며 다음 층의 $\mathbf{h}$ 가 된다.
+
+역방향으로 가면 (각 줄은 위 표의 규칙을 행렬 버전으로 쓴 것이다):
 
 $$\begin{aligned}
 \frac{\partial L}{\partial W} &= \mathbf{h}^\top \frac{\partial L}{\partial \mathbf{z}} \\
-\frac{\partial L}{\partial \mathbf{b}} &= \textstyle\sum_{\text{배치}} \frac{\partial L}{\partial \mathbf{z}} \\
+\frac{\partial L}{\partial \mathbf{b}} &= \textstyle\sum_{\text{batch}} \frac{\partial L}{\partial \mathbf{z}} \\
 \frac{\partial L}{\partial \mathbf{h}} &= \frac{\partial L}{\partial \mathbf{z}} W^\top \\
 \frac{\partial L}{\partial \mathbf{z}_{\text{이전}}} &= \frac{\partial L}{\partial \mathbf{h}} \odot \sigma'(\mathbf{z}_{\text{이전}})
 \end{aligned}$$
 
-**세 줄이면 어떤 MLP든 역전파할 수 있다.**
+각 줄의 뜻을 풀면:
+
+- ① $\partial L/\partial W = \mathbf{h}^\top \, \partial L/\partial \mathbf{z}$ — 곱셈 node의 "교환기" 규칙. $W$ 의 gradient에는 **상대편 값 $\mathbf{h}$** 가 곱해진다.
+  전치($\top$)가 붙는 이유는 모양을 맞추기 위해서다: $\mathbf{h}$ 가 $B\times d_{\text{in}}$, $\partial L/\partial \mathbf{z}$ 가 $B\times d_{\text{out}}$ 이면
+  $\mathbf{h}^\top \, \partial L/\partial \mathbf{z}$ 는 $d_{\text{in}}\times d_{\text{out}}$ 으로 $W$ 와 같은 모양이 된다.
+  batch 축 $B$ 가 곱셈 안에서 자동으로 합산된다.
+- ② $\partial L/\partial \mathbf{b} = \sum_{\text{batch}} \partial L/\partial \mathbf{z}$ — 덧셈 node의 "분배기" 규칙. $\mathbf{b}$ 는 batch의 모든 행에 똑같이 더해졌으므로("분기"),
+  gradient는 행마다 들어온 것을 **합**한다.
+- ③ $\partial L/\partial \mathbf{h} = \partial L/\partial \mathbf{z} \, W^\top$ — 다시 교환기 규칙. 이번엔 $\mathbf{h}$ 의 gradient에 상대편 $W$ 가 곱해진다.
+  이것이 아래 층으로 넘겨주는 값이다.
+- ④ 아래 층의 $\mathbf{z}$ 로 가려면 activation function을 거꾸로 통과한다. $\sigma$ 는 원소마다 따로 작용하므로
+  원소별 곱($\odot$)으로 $\sigma'$ 를 곱하면 된다.
+
+**세 줄(①②③)이면 어떤 MLP든 backpropagation할 수 있다.** ④는 층과 층 사이를 잇는 접착제다.
 
 ```{python}
 #| label: backprop-core
 #| code-fold: show
-#| code-summary: "역전파 핵심 (src/nn.py 에서 발췌)"
+#| code-summary: "backpropagation 핵심 (src/nn.py 에서 발췌)"
 
 import sys; sys.path.append("../..")
 import numpy as np
 from src import nn
 
 def backward_core(model, cache, dout):
-    """MLP 역전파 — 층을 역순으로 훑으며 세 규칙을 적용."""
+    """MLP backpropagation — 층을 역순으로 훑으며 세 규칙을 적용."""
     act, dact = nn.ACTIVATIONS[model.act_name]
     grads = {}
     d = dout                                    # dL/dz (출력층)
@@ -230,12 +300,12 @@ def backward_core(model, cache, dout):
     for i in reversed(range(len(model.W))):
         h_in = cache["a"][i-1] if i > 0 else cache["X"]
 
-        grads[f"W{i}"] = h_in.T @ d             # ① 가중치
-        grads[f"b{i}"] = d.sum(0)               # ② 편향 (배치 합)
+        grads[f"W{i}"] = h_in.T @ d             # ① weight
+        grads[f"b{i}"] = d.sum(0)               # ② bias (batch 합)
         if i == 0:
             break
         dh = d @ model.W[i].T                   # ③ 아래 층으로
-        d = dh * dact(cache["z"][i-1], cache["a"][i-1])   # 활성화 통과
+        d = dh * dact(cache["z"][i-1], cache["a"][i-1])   # ④ activation 통과
     return grads
 
 # 검증: src/nn.py 구현과 일치하는가
@@ -253,20 +323,32 @@ print("위 구현과 src/nn.py 의 최대 차이:",
 
 ---
 
-## 그래디언트 검사: 유일한 신뢰 근거
+차이가 $10^{-16}$ 수준이면 부동소수점 반올림 범위 안이므로 두 구현이 같은 것이다.
 
-역전파는 **조용히 틀린다.** 손실이 여전히 조금 내려가서 버그를 눈치채기 어렵다.
+---
 
-유일한 방어책은 수치 미분과 대조하는 것이다.
+## gradient check: 유일한 신뢰 근거
+
+backpropagation은 **조용히 틀린다.** 전치를 하나 빠뜨려도 gradient가 "대략 맞는 방향"이라
+손실이 여전히 조금 내려가고, 그래서 버그를 눈치채기 어렵다.
+
+유일한 방어책은 **gradient check**(gradient 검사)다 — backpropagation이 낸 값을
+**numerical differentiation**(수치 미분 — 미분의 정의 그대로, 입력을 아주 조금 바꿔 출력이 얼마나 변하는지 나눠 보는 것)과 대조한다.
+계산기로 긴 암산을 검산하는 것과 같다. 느리지만 독립적인 방법이라 같은 실수를 반복하지 않는다.
 
 $$\frac{\partial L}{\partial\theta_i} \approx \frac{L(\theta+\epsilon e_i) - L(\theta-\epsilon e_i)}{2\epsilon}$$
 
-**중심 차분**을 쓰는 이유는 오차가 $O(\epsilon^2)$ 이기 때문이다
-(전방 차분은 $O(\epsilon)$).
+$e_i$ 는 $i$ 번째 자리만 1이고 나머지는 0인 벡터다. 즉 parameter 하나만 $\epsilon$ 만큼 올리고 내려서 손실을 두 번 재고,
+그 차이를 $2\epsilon$ 으로 나눈다.
+
+양쪽으로 흔드는 이 방식을 **central difference**(중심 차분)라 하고, 한쪽으로만 흔드는
+$(L(\theta+\epsilon e_i) - L(\theta))/\epsilon$ 을 **forward difference**(전방 차분)라 한다.
+central difference를 쓰는 이유는 오차가 $O(\epsilon^2)$ 이기 때문이다
+(forward difference는 $O(\epsilon)$). $\epsilon = 10^{-4}$ 라면 오차가 $10^{-4}$ 대신 $10^{-8}$ 수준으로 떨어진다는 뜻이다.
 
 ```{python}
 #| label: fig-grad-check-eps
-#| fig-cap: "ε이 너무 크면 근사 오차, 너무 작으면 소거 오차가 지배합니다."
+#| fig-cap: "ε이 너무 크면 근사 오차, 너무 작으면 cancellation(소거) 오차가 지배합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -294,10 +376,10 @@ for e in epss:
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=epss, y=err_center, mode="lines+markers",
-                         name="중심 차분 O(ε²)",
+                         name="central difference O(ε²)",
                          line=dict(color=viz.ACCENT, width=2.5)))
 fig.add_trace(go.Scatter(x=epss, y=err_forward, mode="lines+markers",
-                         name="전방 차분 O(ε)",
+                         name="forward difference O(ε)",
                          line=dict(color=viz.WARM, width=2.5)))
 best = epss[int(np.argmin(err_center))]
 fig.add_vline(x=best, line=dict(color=viz.YELLOW, dash="dash"),
@@ -305,12 +387,12 @@ fig.add_vline(x=best, line=dict(color=viz.YELLOW, dash="dash"),
 fig.update_layout(xaxis_title="ε", xaxis_type="log",
                   yaxis_title="상대오차", yaxis_type="log",
                   legend=dict(x=0.35, y=0.98))
-viz.fig_defaults(fig, height=410, title="유한차분의 ε 선택")
+viz.fig_defaults(fig, height=410, title="finite difference의 ε 선택")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-V자 곡선입니다. **오른쪽**(큰 ε)은 테일러 근사 오차가 지배하고, **왼쪽**(작은 ε)은 [0.5의 치명적 소거](../00_foundations/05_numerical_computing.qmd)가 지배합니다. 중심 차분이 전방 차분보다 훨씬 낮은 바닥에 도달합니다.
+V자 곡선입니다. **오른쪽**(큰 ε)은 Taylor 근사 오차가 지배합니다 — ε이 크면 "아주 조금 흔든다"는 전제가 깨져서 곡선을 직선으로 본 오차가 커집니다. **왼쪽**(작은 ε)은 [0.5의 catastrophic cancellation](../00_foundations/05_numerical_computing.qmd)(치명적 소거 — 거의 같은 두 수를 빼면 유효 숫자가 사라지는 현상)이 지배합니다 — 손실 두 값이 소수점 열 자리까지 같으면 그 차이는 반올림 잡음뿐입니다. central difference가 forward difference보다 훨씬 낮은 바닥에 도달합니다.
 :::
 
 ```{python}
@@ -340,25 +422,35 @@ for name, kw, X, y, ls in cases:
     print(f"{name:<24} {w:>14.2e}  {'통과' if w < 1e-6 else '실패'}")
 ```
 
+표의 "최대 상대오차"는 검사한 parameter들 가운데 backpropagation 값과 numerical 값의 상대 차이가 가장 큰 것이다.
 $10^{-6}$ 이하면 유도가 맞다. $10^{-2}$ 이상이면 어딘가 틀렸다 —
-대개 전치를 빠뜨렸거나 배치 축 합산을 잘못한 것이다.
+대개 전치를 빠뜨렸거나 batch 축 합산을 잘못한 것이다.
+그 사이($10^{-4}$ 근처)면 activation function의 꺾이는 점(ReLU의 0) 근처를 흔들었을 가능성이 있으니 다른 parameter로 다시 검사한다.
 
 ---
 
-## 그래디언트가 사라지고 폭발하는 이유
+## gradient가 사라지고 폭발하는 이유
 
-역전파는 **야코비안의 곱**이다.
+backpropagation은 **Jacobian의 곱**이다.
 
 $$\frac{\partial L}{\partial \mathbf{h}_1} =
 \frac{\partial L}{\partial \mathbf{h}_L}\prod_{\ell=2}^{L}\frac{\partial \mathbf{h}_\ell}{\partial \mathbf{h}_{\ell-1}}$$
 
-$L$ 개의 행렬을 곱한다. 각 항의 크기가 평균적으로 $c$ 라면 전체는 $c^L$ 이다.
+$L$ 개의 행렬을 곱한다. 각 항이 벡터 크기를 평균적으로 $c$ 배로 바꾼다면 전체는 $c^L$ 배다.
 
 **$c$ 가 1에서 조금만 벗어나도 지수적으로 벌어진다.**
+$c = 0.9$ 면 24층 뒤 $0.9^{24} \approx 0.08$, $c = 1.1$ 이면 $1.1^{24} \approx 9.8$ 이다.
+$c = 0.5$ 면 $0.5^{24} \approx 6 \times 10^{-8}$ 로 사실상 0이다.
+
+전화 게임과 같다. 한 사람이 다음 사람에게 속삭일 때마다 소리가 0.25배로 줄어들면
+스물네 명을 거친 뒤에는 아무것도 들리지 않는다.
+반대로 매번 조금씩 크게 말하면 끝에서는 고함이 된다.
+앞의 경우가 **vanishing gradient**(vanishing gradient), 뒤의 경우가 **exploding gradient**(exploding gradient)다.
+입력에 가까운 층은 gradient가 0에 가까워 학습이 멈추거나, 반대로 너무 커서 weight가 튀어버린다.
 
 ```{python}
 #| label: fig-vanishing-exploding
-#| fig-cap: "층을 거슬러 갈수록 그래디언트 norm이 지수적으로 변합니다."
+#| fig-cap: "층을 거슬러 갈수록 gradient의 norm(크기)이 지수적으로 변합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -394,7 +486,7 @@ fig.update_layout(xaxis_title="층 (1 = 입력에 가장 가까움)",
                   yaxis_title="‖∂L/∂W‖", yaxis_type="log",
                   legend=dict(x=0.02, y=0.02))
 viz.fig_defaults(fig, height=430,
-                 title=f"{depth}층 망의 층별 그래디언트 norm")
+                 title=f"{depth}층 망의 층별 gradient norm")
 fig.show()
 ```
 
@@ -411,44 +503,55 @@ for name, ns in norms.items():
     print(f"{name:<26} {ns[0]:>12.3e} {ns[11]:>12.3e} {ns[-1]:>12.3e} {r:>12.2e}")
 ```
 
-sigmoid + 작은 초기화는 입력층 그래디언트가 사실상 0 이다. 그 층들은 학습되지 않는다.
+표의 마지막 열 "1층/24층"은 입력에 가장 가까운 층의 gradient 크기를 출력에 가장 가까운 층의 것으로 나눈 비율이다.
+1에 가까우면 모든 층이 비슷하게 학습되고, $10^{-20}$ 같은 값이면 입력 쪽 층은 사실상 학습되지 않는다.
+
+sigmoid + 작은 initialization(initialization — 학습 시작 전 weight에 넣는 난수의 크기)은 입력층 gradient가 사실상 0이다. 그 층들은 학습되지 않는다.
 이것이 1990~2000년대 딥러닝의 벽이었다.
 
 ::: {.interaction-hint}
-**sigmoid + small init**(파랑)은 입력 쪽으로 갈수록 그래디언트가 수십 자릿수 떨어집니다. **relu + he**는 층이 깊어져도 비슷한 크기를 유지합니다. 이 차이가 [3.7 초기화](07_initialization.qmd)의 전부입니다.
+**sigmoid + small init**(파랑)은 입력 쪽으로 갈수록 gradient가 수십 자릿수 떨어집니다. **relu + he**는 층이 깊어져도 비슷한 크기를 유지합니다. 이 차이가 [3.7 initialization](07_initialization.qmd)의 전부입니다.
 :::
 
 ::: {.key-concept}
-**시그모이드가 특히 나쁜 이유**
+**sigmoid가 특히 나쁜 이유**
 
-$\sigma'(z) = \sigma(z)(1-\sigma(z))$ 의 **최댓값이 0.25**다
-([3.2 활성화](02_activations.qmd)에서 다시 본다).
+sigmoid $\sigma(z) = 1/(1+e^{-z})$ 의 미분은 $\sigma'(z) = \sigma(z)(1-\sigma(z))$ 이고, 이 값의 **최댓값이 0.25**다
+($\sigma = 0.5$ 일 때 $0.5 \times 0.5$; [3.2 activation function](02_activations.qmd)에서 다시 본다).
 
 층마다 최대 0.25를 곱하니, 24층이면 최선의 경우에도 $0.25^{24} \approx 10^{-15}$ 다.
-실제로는 포화 영역에서 더 작다.
+실제로는 $z$ 가 크거나 작아 $\sigma$ 가 0이나 1에 붙어버린 **saturation**(포화) 영역에서 $\sigma'$ 가 거의 0이라 더 작다.
 
-ReLU의 도함수는 활성 영역에서 정확히 **1**이다.
-곱해도 크기가 변하지 않는다 — 그래서 깊은 망이 학습 가능해졌다.
+ReLU $\max(0, z)$ 의 도함수는 $z > 0$ 인 활성 영역에서 정확히 **1**이다.
+곱해도 크기가 변하지 않는다 — 전화 게임에서 목소리를 그대로 전달하는 사람이다. 그래서 깊은 망이 학습 가능해졌다.
 :::
 
 ---
 
-## 잔차 연결이 하는 일
+## residual connection이 하는 일
+
+**residual connection**(residual connection, skip connection이라고도 부른다)은 한 층의 출력을
+"입력을 그대로 통과시킨 것 + 층이 계산한 것"으로 만드는 배선이다.
+층이 계산하는 부분 $F(\mathbf{x})$ 를 입력 $\mathbf{x}$ 와의 **차이(residual, 잔차)**만 맡게 한다는 뜻에서 이런 이름이 붙었다.
 
 $\mathbf{y} = \mathbf{x} + F(\mathbf{x})$ 의 미분을 보자.
 
 $$\frac{\partial \mathbf{y}}{\partial \mathbf{x}} = I + \frac{\partial F}{\partial \mathbf{x}}$$
 
-**항등행렬이 더해져 있다.** 곱의 사슬에서 각 항이
+$I$ 는 항등행렬(대각선만 1인 행렬 — 벡터에 곱해도 그대로인 행렬)이다. **항등행렬이 더해져 있다.** 곱의 사슬에서 각 항이
 
 $$\prod_\ell \left(I + \frac{\partial F_\ell}{\partial \mathbf{h}}\right)$$
 
 가 되어, $\partial F/\partial h$ 가 아무리 작아도 **1이 남는다.**
-그래디언트가 완전히 죽지 않는다.
+gradient가 완전히 죽지 않는다.
+
+고속도로에 비유하면, residual connection이 없는 망은 매 층이 톨게이트라서 층마다 차가 줄어들지만,
+residual connection은 톨게이트 옆에 항상 열린 우회로를 둔 것이다.
+gradient는 톨게이트를 지나든 우회로로 가든 다음 층에 도달한다.
 
 ```{python}
 #| label: fig-residual-gradient
-#| fig-cap: "잔차 연결 유무에 따른 층별 그래디언트 전달"
+#| fig-cap: "residual connection 유무에 따른 층별 gradient 전달"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -459,7 +562,7 @@ rng = np.random.default_rng(1)
 depth, d = 40, 64
 
 def propagate(residual, gain=0.6, n_trials=20):
-    """야코비안 곱을 시뮬레이션 — 잔차 유무만 다르게"""
+    """Jacobian 곱을 시뮬레이션 — residual 유무만 다르게"""
     out = []
     for t in range(n_trials):
         r = np.random.default_rng(t)
@@ -477,18 +580,18 @@ res = propagate(True)
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=np.arange(depth+1), y=plain, mode="lines",
-                         name="잔차 없음 (∏ J)",
+                         name="residual 없음 (∏ J)",
                          line=dict(color=viz.WARM, width=3)))
 fig.add_trace(go.Scatter(x=np.arange(depth+1), y=res, mode="lines",
-                         name="잔차 있음 (∏ (I + J))",
+                         name="residual 있음 (∏ (I + J))",
                          line=dict(color=viz.ACCENT, width=3)))
 fig.add_hline(y=plain[0], line=dict(color=viz.YELLOW, dash="dash"),
-              annotation_text="출력층 그래디언트 크기")
+              annotation_text="출력층 gradient 크기")
 fig.update_layout(xaxis_title="거슬러 올라간 층 수",
-                  yaxis_title="그래디언트 norm (평균 20회)", yaxis_type="log",
+                  yaxis_title="gradient norm (평균 20회)", yaxis_type="log",
                   legend=dict(x=0.02, y=0.15))
 viz.fig_defaults(fig, height=410,
-                 title="잔차 연결은 그래디언트 고속도로를 만든다")
+                 title="residual connection은 gradient 고속도로를 만든다")
 fig.show()
 ```
 
@@ -500,28 +603,35 @@ import numpy as np
 
 print(f"{'':<14} {'0층 (출력)':>12} {'20층':>12} {'40층 (입력)':>14}")
 print("-" * 56)
-print(f"{'잔차 없음':<14} {plain[0]:>12.3e} {plain[20]:>12.3e} {plain[-1]:>14.3e}")
-print(f"{'잔차 있음':<14} {res[0]:>12.3e} {res[20]:>12.3e} {res[-1]:>14.3e}")
+print(f"{'residual 없음':<14} {plain[0]:>12.3e} {plain[20]:>12.3e} {plain[-1]:>14.3e}")
+print(f"{'residual 있음':<14} {res[0]:>12.3e} {res[20]:>12.3e} {res[-1]:>14.3e}")
 print()
-print(f"40층을 거친 뒤 배율:  잔차 없음 {plain[-1]/plain[0]:.2e}   "
-      f"잔차 있음 {res[-1]/res[0]:.2e}")
+print(f"40층을 거친 뒤 배율:  residual 없음 {plain[-1]/plain[0]:.2e}   "
+      f"residual 있음 {res[-1]/res[0]:.2e}")
 ```
 
-잔차 연결은 그래디언트가 '지나가는 길'을 항상 열어둔다.
-ResNet 이전에 깊은 망이 학습되지 않았던 이유이자, 해결책이다.
+이 시뮬레이션에서 각 층의 Jacobian $J$ 는 크기를 0.6배로 줄이는 난수 행렬이다.
+residual이 없으면 40층 뒤 gradient가 $0.6^{40}$ 근처로 사라지지만, $I + J$ 를 곱하면 오히려 조금씩 커진다.
+
+residual connection은 gradient가 '지나가는 길'을 항상 열어둔다.
+ResNet(2015) 이전에 깊은 망이 학습되지 않았던 이유이자, 해결책이다.
+[Part 5의 transformer](../05_transformer/00_attention.qmd)도 모든 층이 이 배선을 쓴다.
 
 ---
 
-## 메모리: 순전파 값을 저장해야 한다
+## 메모리: forward pass 값을 저장해야 한다
 
-역전파는 순전파의 **중간 결과**를 필요로 한다
-($\partial L/\partial W = \mathbf{h}^\top \partial L/\partial\mathbf{z}$ 에서 $\mathbf{h}$).
+backpropagation은 forward pass의 **중간 결과**를 필요로 한다
+($\partial L/\partial W = \mathbf{h}^\top \partial L/\partial\mathbf{z}$ 에서 $\mathbf{h}$ — 교환기 규칙은 상대편 값을 곱하므로,
+forward pass 때 각 층에 들어왔던 값을 기억해 두어야 한다).
+위 코드의 `cache` 가 바로 이것이다.
 
-그래서 메모리 비용이 **깊이에 비례**한다.
+그래서 메모리 비용이 **깊이에 비례**한다. 층이 100개면 100개 층의 activation(각 층이 출력한 값 행렬)을 전부 들고 있어야
+backward pass를 시작할 수 있다.
 
 ```{python}
 #| label: fig-activation-memory
-#| fig-cap: "활성화 저장 메모리와 체크포인팅의 효과"
+#| fig-cap: "activation 저장 메모리와 checkpointing의 효과"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -533,7 +643,7 @@ depths = np.array([12, 24, 48, 96, 192, 384])
 bytes_per = 2                                   # bf16
 
 full = B * d * depths * bytes_per / 1024**3
-# 체크포인팅: sqrt(L) 개만 저장하고 나머지는 재계산
+# checkpointing: sqrt(L) 개만 저장하고 나머지는 재계산
 ckpt = B * d * np.sqrt(depths) * bytes_per / 1024**3
 
 fig = go.Figure()
@@ -541,36 +651,43 @@ fig.add_trace(go.Scatter(x=depths, y=full, mode="lines+markers",
                          name="전부 저장 (O(L))",
                          line=dict(color=viz.WARM, width=2.5)))
 fig.add_trace(go.Scatter(x=depths, y=ckpt, mode="lines+markers",
-                         name="체크포인팅 (O(√L))",
+                         name="checkpointing (O(√L))",
                          line=dict(color=viz.ACCENT, width=2.5)))
 fig.add_hline(y=80, line=dict(color=viz.GREEN, dash="dash"),
               annotation_text="H100 80GB")
 fig.update_layout(xaxis_title="층 수", xaxis_type="log",
-                  yaxis_title="활성화 메모리 (GB)", yaxis_type="log",
+                  yaxis_title="activation 메모리 (GB)", yaxis_type="log",
                   legend=dict(x=0.02, y=0.98))
 viz.fig_defaults(fig, height=400,
-                 title=f"배치 {B}, 폭 {d}, bf16 기준")
+                 title=f"batch {B}, 폭 {d}, bf16 기준")
 fig.show()
 ```
 
 ::: {.key-concept}
-**활성화 체크포인팅**
+**activation checkpointing**
 
-일부 층의 활성화만 저장하고, 역전파 때 **필요한 구간을 다시 순전파해** 복원한다.
+**activation checkpointing**(activation checkpointing)은 일부 층의 activation만 저장하고,
+backward pass 때 **필요한 구간을 다시 forward pass해** 복원하는 기법이다.
+
+게임의 중간 저장점(checkpoint)과 같다. 매 순간을 다 저장하는 대신 몇 군데만 저장해 두고,
+필요하면 가장 가까운 저장점에서 다시 플레이해 그 지점까지 간다.
+$\sqrt{L}$ 개 간격으로 저장점을 두면 저장 개수도 $\sqrt{L}$, 재계산 구간의 길이도 $\sqrt{L}$ 이라 둘의 균형이 맞는다.
 
 - 메모리: $O(L) \to O(\sqrt{L})$
-- 연산: 약 **1.3배** 증가 (순전파를 한 번 더)
+- 연산: 약 **1.3배** 증가 (forward pass를 한 번 더)
 
 [5.7 FlashAttention](../05_transformer/07_efficient_attention.qmd)의 재계산과 같은 발상이다.
 메모리가 병목일 때 연산으로 바꾸는 교환이며,
-[11.2 분산 학습](../11_systems/02_distributed_training.qmd)에서 대형 모델 학습의 필수 기법이 된다.
+[11.2 distributed training](../11_systems/02_distributed_training.qmd)에서 대형 모델 학습의 필수 기법이 된다.
 :::
 
 ---
 
-## 진단: 층별 그래디언트를 보라
+## 진단: 층별 gradient를 보라
 
 학습이 안 될 때 가장 먼저 볼 것 중 하나다.
+층마다 "gradient 크기 ÷ weight 크기"를 재면, 그 층이 한 step에 자기 크기의 몇 %나 움직이는지 알 수 있다.
+건강검진에서 각 장기의 수치를 따로 보는 것과 같다 — 전체 손실 하나만 보면 어느 층이 문제인지 알 수 없다.
 
 ```{python}
 #| label: gradient-diagnostics
@@ -582,7 +699,7 @@ from src import nn, datasets
 
 X, y = datasets.two_moons(n=300, noise=0.2, seed=0)
 
-print("건강한 망 vs 병든 망의 층별 그래디언트/가중치 비율")
+print("건강한 망 vs 병든 망의 층별 gradient/weight 비율")
 print("(이 비율이 1e-3 ~ 1e-2 이면 건강, 1e-6 이하면 그 층은 거의 안 움직인다)")
 print()
 for name, kw in [("relu + he (건강)",      dict(activation="relu", init="he")),
@@ -600,10 +717,10 @@ for name, kw in [("relu + he (건강)",      dict(activation="relu", init="he"))
 
 | 증상 | 원인 후보 |
 |------|-----------|
-| 앞쪽 층 비율이 $10^{-6}$ 이하 | 그래디언트 소실 → 활성화·초기화 |
-| 비율이 $10^{-1}$ 이상 | 그래디언트 폭발 → 클리핑, 학습률↓ |
-| 특정 층만 0 | 죽은 ReLU, 또는 그 층이 우회됨 |
-| 전부 정확히 0 | 순전파에서 그래프가 끊김 (구현 버그) |
+| 앞쪽 층 비율이 $10^{-6}$ 이하 | vanishing gradient → activation function·initialization을 바꾼다 |
+| 비율이 $10^{-1}$ 이상 | exploding gradient → gradient clipping(gradient 크기에 상한을 두는 것), learning rate↓ |
+| 특정 층만 0 | dead ReLU(입력이 항상 음수라 출력과 미분이 0인 unit), 또는 그 층이 우회됨 |
+| 전부 정확히 0 | forward pass에서 graph가 끊김 (구현 버그) |
 | NaN | [수치 불안정](../00_foundations/05_numerical_computing.qmd) |
 
 ---
@@ -611,16 +728,16 @@ for name, kw in [("relu + he (건강)",      dict(activation="relu", init="he"))
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 수치 미분의 최적 스텝은 어디에 달렸는가**
-`fig-grad-check-eps` 의 실험을 6층 망의 **첫 층** 가중치로 반복하라.
-V자 곡선의 바닥 위치와 높이가 달라지는가? 절단오차와 반올림오차의 균형으로 설명하라.
+**① numerical differentiation의 최적 step은 어디에 달렸는가**
+`fig-grad-check-eps` 의 실험을 6층 망의 **첫 층** weight로 반복하라.
+V자 곡선의 바닥 위치와 높이가 달라지는가? truncation error(Taylor 근사를 끊어서 생기는 오차)와 rounding error(반올림 오차)의 균형으로 설명하라.
 
-**② 순전파 모드가 유리한 경우**
+**② forward-mode가 유리한 경우**
 `mode-comparison` 에서 입력 1개, 출력 1000개인 함수를 만들어라.
-어느 모드가 싸지는가? 비용비 $n/m$ 이 예측한 대로인가?
+어느 mode가 싸지는가? 비용비 $n/m$ 이 예측한 대로인가?
 
-**③ 잔차 연결이 곱을 덧셈으로 바꾼다**
-`fig-vanishing-exploding` 의 망에 skip connection 을 넣고 층별 기울기 norm 을 다시 재라.
+**③ residual connection이 곱을 덧셈으로 바꾼다**
+`fig-vanishing-exploding` 의 망에 skip connection을 넣고 층별 gradient norm을 다시 재라.
 $\prod \sigma'$ 가 $\prod(1+\sigma')$ 로 바뀌는 효과가 보이는가?
 :::
 
@@ -628,24 +745,24 @@ $\prod \sigma'$ 가 $\prod(1+\sigma')$ 로 바뀌는 효과가 보이는가?
 
 | 개념 | 핵심 |
 |------|------|
-| 계산 그래프 | 국소 미분만 알면 전체를 조립 |
+| computation graph | 각 node의 local derivative만 알면 전체를 조립 — 조립 라인의 작업자 |
 | 덧셈/곱셈/max | 분배기 / 교환기 / 라우터 |
-| **분기는 합** | 같은 변수를 여러 번 쓰면 그래디언트가 더해짐 |
-| reverse-mode | 출력이 스칼라 → 한 번 순회로 전부 |
+| **분기는 합** | 같은 변수를 여러 번 쓰면 gradient가 더해짐 — 겸직자의 책임 |
+| reverse-mode | 출력이 scalar → 한 번 순회로 전부 — 손실을 부서→팀→개인으로 내려보내기 |
 | forward-mode | 입력이 적을 때만 유리 |
-| MLP 역전파 | 세 줄: $h^\top d$, $\sum d$, $dW^\top$ |
-| **그래디언트 검사** | 중심 차분, $\epsilon\approx10^{-5}$, 목표 $<10^{-6}$ |
-| 소실·폭발 | 야코비안 곱 → $c^L$ |
-| 시그모이드 | $\sigma'$ 최대 0.25 → 깊으면 필연적 소실 |
-| 잔차 연결 | $I + \partial F$ — 1이 남는다 |
-| 활성화 메모리 | $O(L)$, 체크포인팅으로 $O(\sqrt{L})$ |
+| MLP backpropagation | 세 줄: $h^\top d$, $\sum d$, $dW^\top$ |
+| **gradient check** | central difference, $\epsilon\approx10^{-5}$, 목표 $<10^{-6}$ — 계산기 검산 |
+| vanishing·exploding | Jacobian 곱 → $c^L$ — 전화 게임 |
+| sigmoid | $\sigma'$ 최대 0.25 → 깊으면 필연적 vanishing |
+| residual connection | $I + \partial F$ — 1이 남는다 — 항상 열린 우회로 |
+| activation 메모리 | $O(L)$, checkpointing으로 $O(\sqrt{L})$ — 게임 저장점 |
 
-역전파는 그래디언트를 **계산**한다.
-그 그래디언트로 **어떻게 움직일지**는 별개의 문제이고,
-그 전에 각 층에서 무엇을 통과시킬지 — 활성화 함수를 먼저 본다.
+backpropagation은 gradient를 **계산**한다.
+그 gradient로 **어떻게 움직일지**는 별개의 문제이고,
+그 전에 각 층에서 무엇을 통과시킬지 — activation function을 먼저 본다.
 
 ---
 
-**다음**: [3.2 활성화 함수](02_activations.qmd) — sigmoid·ReLU·GELU·SwiGLU
+**다음**: [3.2 activation function](02_activations.qmd) — sigmoid·ReLU·GELU·SwiGLU
 
-**이전**: [3.0 퍼셉트론에서 MLP까지](00_perceptron_mlp.qmd)
+**이전**: [3.0 perceptron에서 MLP까지](00_perceptron_mlp.qmd)
