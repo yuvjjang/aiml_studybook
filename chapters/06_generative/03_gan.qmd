@@ -1,50 +1,53 @@
 ---
-title: "6.3 적대적 생성 신경망"
-subtitle: "미니맥스 게임·모드 붕괴·WGAN — 판별자를 손실로 쓰기"
+title: "6.3 GAN"
+subtitle: "minimax game·mode collapse·WGAN — discriminator를 loss로 쓰기"
 jupyter: ai-ml-study
 ---
 
 [6.2](02_vae.qmd)는 흐릿함을 남기고 끝났다.
-원인은 명확했다 — **가우스 우도가 곧 MSE이고, MSE의 최적해는 조건부 평균**이다.
+원인은 명확했다 — **Gaussian likelihood가 곧 MSE이고, MSE의 최적해는 conditional mean**이다.
 
-그러면 손실함수를 바꾸면 된다. 그런데 "진짜 같은 이미지"를 재는 손실을
-사람이 손으로 쓸 수 있을까? 픽셀 거리는 아니다.
-두 이미지가 1픽셀 어긋나면 MSE는 크지만 사람 눈에는 같다.
+그러면 loss function을 바꾸면 된다. 그런데 "진짜 같은 이미지"를 재는 loss를
+사람이 손으로 쓸 수 있을까? pixel 거리는 아니다.
+두 이미지가 1 pixel 어긋나면 MSE는 크지만 사람 눈에는 같다.
 
-GAN의 답은 대담하다.
+**GAN**(generative adversarial network — 적대적 생성 신경망)의 답은 대담하다.
 
-> **손실함수를 손으로 쓰지 말고 학습시키자.**
+> **loss function을 손으로 쓰지 말고 학습시키자.**
 
-판별자라는 두 번째 신경망이 "진짜인가 가짜인가"를 맞히도록 학습한다.
-생성자는 그 판별자를 속이도록 학습한다.
-판별자가 곧 손실함수이고, 그 손실함수는 생성자가 나아질수록 같이 강해진다.
+**discriminator**(판별자)라는 두 번째 신경망이 "진짜인가 가짜인가"를 맞히도록 학습한다.
+**generator**(생성자)는 그 discriminator를 속이도록 학습한다.
+위조범과 감별사가 서로를 상대로 실력을 키우는 것이다 — 감별사가 곧 위조범의 채점자이고, 위조범이 늘수록 감별사도 는다.
+discriminator가 곧 loss function이고, 그 loss function은 generator가 나아질수록 같이 강해진다.
 
 이 장에서 볼 것은 그 아이디어가 왜 강력한지, 그리고 **왜 학습이 그토록 불안정한지**다.
 불안정성의 원인을 두 개의 통제 실험으로 분리한다.
 
 ---
 
-## 미니맥스 목적함수
+## minimax 목적함수
 
 $$\min_G \max_D V(D, G) =
 \mathbb{E}_{x \sim p_{\text{data}}}\big[\log D(x)\big]
 + \mathbb{E}_{z \sim p_z}\big[\log(1 - D(G(z)))\big]$$
 
-- **판별자** $D$: 진짜에 1, 가짜에 0을 주려 한다 ($V$ 를 최대화)
-- **생성자** $G$: $D$ 가 가짜에 1을 주게 만들려 한다 ($V$ 를 최소화)
+- **discriminator** $D$: 진짜에 1, 가짜에 0을 주려 한다 ($V$ 를 최대화)
+- **generator** $G$: $D$ 가 가짜에 1을 주게 만들려 한다 ($V$ 를 최소화)
 
-### 최적 판별자
+한쪽은 최대화, 다른 쪽은 최소화 — 그래서 **minimax**(미니맥스)다. 첫 항은 "진짜를 진짜라고 할 확률", 둘째 항은 "가짜를 가짜라고 할 확률"의 로그다.
+
+### 최적 discriminator
 
 $G$ 를 고정하면 $V$ 는 각 $x$ 에서 독립적으로 최적화된다.
-$a\log t + b\log(1-t)$ 는 $t = a/(a+b)$ 에서 최대이므로
+$a\log t + b\log(1-t)$ 는 $t = a/(a+b)$ 에서 최대이므로(미분해서 0으로 두면 나온다)
 
 $$D^*(x) = \frac{p_{\text{data}}(x)}{p_{\text{data}}(x) + p_g(x)}$$
 
-이를 대입하면
+"그 점에 진짜 데이터가 있을 확률 대 생성 데이터가 있을 확률의 비"다. 이를 대입하면
 
 $$V(D^*, G) = 2\,D_{JS}(p_{\text{data}} \,\|\, p_g) - 2\log 2$$
 
-**즉 GAN은 젠슨-섀넌 발산을 최소화한다.** $p_g = p_{\text{data}}$ 에서 $-2\log2$ 가 최소다.
+**즉 GAN은 Jensen–Shannon divergence(JS — 두 분포와 그 평균 사이의 KL을 대칭으로 합친 거리, [0.4](../00_foundations/04_information_theory.qmd))를 최소화한다.** $p_g = p_{\text{data}}$ 에서 $-2\log2$ 가 최소다.
 
 ```{python}
 #| label: optimal-d
@@ -81,28 +84,29 @@ print(f"{'JS 상한':>10} {'':>12} {'':>15} {'':>11} {np.log(2):>10.5f}")
 err_to4 = max(OD[g][0] for g in [0.0, 0.5, 1.0, 2.0, 4.0])
 ```
 
-$V(D^*, G) = 2\,JS - 2\log 2$ 를 수치적으로 확인한 것이다. **간격 4 까지 오차
-`{python} f"{err_to4:.0e}"` — 소수점 열두 자리로 일치한다.** 유도가 맞다. 간격 8 에서만
-`{python} f"{OD[8.0][0]:.0e}"` 로 벌어지는데, 이론이 아니라 **수치 한계**다 — 꼬리에서 $p, q$ 가 $10^{-300}$
-아래로 언더플로해 $\log$ 가 잘린다.
+$V(D^*, G) = 2\,JS - 2\log 2$ 를 수치적으로 확인한 것이다. **간격 4까지 오차
+`{python} f"{err_to4:.0e}"` — 소수점 열두 자리로 일치한다.** 유도가 맞다. 간격 8에서만
+`{python} f"{OD[8.0][0]:.0e}"`로 벌어지는데, 이론이 아니라 **수치 한계**다 — 꼬리에서 $p, q$ 가 $10^{-300}$
+아래로 underflow해 $\log$ 가 잘린다.
 
-**그리고 여기에 이미 문제가 보인다.** 간격이 커지면 JS 가 $\log 2 \approx 0.693$ 에 **붙어버린다.**
-간격 4 에서 이미 `{python} f"{OD[4.0][1]:.3f}"`, 간격 8 에서 `{python} f"{OD[8.0][1]:.3f}"` — 거의 상한이다.
-두 분포가 얼마나 먼지 JS 는 더 이상 구별하지 못한다.
+**그리고 여기에 이미 문제가 보인다.** 간격이 커지면 JS가 $\log 2 \approx 0.693$ 에 **붙어버린다.**
+간격 4에서 이미 `{python} f"{OD[4.0][1]:.3f}"`, 간격 8에서 `{python} f"{OD[8.0][1]:.3f}"` — 거의 상한이다.
+두 분포가 얼마나 먼지 JS는 더 이상 구별하지 못한다.
 
 ---
 
-## G6.3.1 — JS 발산의 근본 문제
+## G6.3.1 — JS divergence의 근본 문제
 
-고차원에서 $p_{\text{data}}$ 는 저차원 매니폴드에 있고, 초기 $p_g$ 도 마찬가지다.
-**두 매니폴드가 겹칠 확률은 0이다.** 그러면 JS는 상수 $\log 2$ 이고,
-**그래디언트가 0** 이라 생성자가 어디로 가야 할지 모른다.
+고차원에서 $p_{\text{data}}$ 는 저차원 manifold에 있고, 초기 $p_g$ 도 마찬가지다.
+**두 manifold가 겹칠 확률은 0이다.** 그러면 JS는 상수 $\log 2$ 이고,
+**gradient가 0**이라 generator가 어디로 가야 할지 모른다.
+"틀렸다"고만 말하고 "얼마나, 어느 쪽으로 틀렸는지"는 말해 주지 않는 채점자다.
 
-바서슈타인 거리는 다르다.
+**Wasserstein distance**(바서슈타인 거리)는 다르다.
 
 $$W_1(p, q) = \inf_{\gamma \in \Pi(p,q)} \mathbb{E}_{(x,y)\sim\gamma}\big[\|x - y\|\big]$$
 
-"흙을 옮기는 최소 비용"이다. 겹치지 않아도 **거리에 비례해 커진다.**
+"흙을 옮기는 최소 비용"이다 — 분포 $p$ 모양의 흙더미를 $q$ 모양으로 옮길 때, 흙 양 × 이동 거리의 최솟값. $\gamma$ 는 "어느 흙을 어디로 옮기는가"의 계획(transport plan)이다. 겹치지 않아도 **거리에 비례해 커진다.**
 
 ```{python}
 #| label: js-vs-w
@@ -135,21 +139,21 @@ for gap in [0.1, 0.3, 0.5, 1.0, 2.0, 3.0, 5.0]:
 djs_5 = JS_T[-1][3]
 ```
 
-**$\theta=5$ 에서 $dJS/d\theta$ 가 `{python} f"{djs_5:.1e}"` — 부동소수점 0 이다.** 생성자는 '더 가까이
-가라'는 신호를 전혀 받지 못한다. 반면 $W_1$ 의 기울기는 어디서나 1 이다.
+**$\theta=5$ 에서 $dJS/d\theta$ 가 `{python} f"{djs_5:.1e}"` — floating point 0이다.** generator는 '더 가까이
+가라'는 신호를 전혀 받지 못한다. 반면 $W_1$ 의 기울기는 어디서나 1이다.
 
-**이것이 WGAN 의 출발점이다.** JS 대신 $W_1$ 을 최소화하자는 것. 문제는 $W_1$ 의 정의에 최적
-수송 계획 $\inf$ 가 들어 있어 계산이 어렵다는 것이다. 칸토로비치-루빈스타인 쌍대성이 이를 뒤집는다.
+**이것이 WGAN의 출발점이다.** JS 대신 $W_1$ 을 최소화하자는 것. 문제는 $W_1$ 의 정의에 최적
+transport plan $\inf$ 가 들어 있어 계산이 어렵다는 것이다. Kantorovich–Rubinstein duality(쌍대성 — 같은 문제를 최소화 대신 최대화로 바꿔 쓰는 정리)가 이를 뒤집는다.
 
 $$W_1(p, q) = \sup_{\|f\|_L \le 1} \big[\mathbb{E}_p f(x) - \mathbb{E}_q f(x)\big]$$
 
-**1-립시츠 함수 위에서의 최대화**가 된다. 그 $f$ 를 신경망으로 근사하면 — 그것이 WGAN 의
-'비평자(critic)'다. 판별자와 달리 시그모이드가 없고, 확률이 아니라 점수를 낸다.
-대신 **립시츠 제약을 어떻게든 걸어야 한다.**
+**1-Lipschitz 함수 위에서의 최대화**가 된다. 1-Lipschitz(립시츠)란 "입력이 1만큼 변할 때 출력은 최대 1만큼만 변한다", 즉 기울기가 1을 넘지 않는 함수다. 그 $f$ 를 신경망으로 근사하면 — 그것이 WGAN의
+**critic**(비평자)이다. discriminator와 달리 sigmoid가 없고, 확률이 아니라 점수를 낸다.
+대신 **Lipschitz 제약을 어떻게든 걸어야 한다.**
 
 ```{python}
 #| label: fig-js-w
-#| fig-cap: "두 분포가 멀어질 때 포화하는 JS 와 선형으로 커지는 W₁"
+#| fig-cap: "두 분포가 멀어질 때 saturate하는 JS와 선형으로 커지는 W₁"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -162,7 +166,7 @@ js_c = np.array([js_of(g) for g in gaps])
 d_js = np.array([(js_of(g+0.01) - js_of(g-0.01))/0.02 for g in gaps])
 
 fig = make_subplots(rows=1, cols=3, column_widths=[0.34, 0.33, 0.33],
-                    subplot_titles=("두 분포", "발산 값", "생성자가 받는 기울기"))
+                    subplot_titles=("두 분포", "divergence 값", "generator가 받는 기울기"))
 
 steps = []
 SHOW_G = [0.3, 0.6, 1.0, 2.0, 3.5, 5.0]
@@ -174,7 +178,7 @@ for gi, g in enumerate(SHOW_G):
                                  line=dict(color=c, width=2.5), fill="tozeroy",
                                  fillcolor=viz.hex_rgba(c, 0.18)), row=1, col=1)
 n_stat = 0
-for nm, v, c in [("JS", js_c, viz.ACCENT), ("W₁ (÷5로 스케일)", gaps/5, viz.WARM)]:
+for nm, v, c in [("JS", js_c, viz.ACCENT), ("W₁ (÷5로 scale)", gaps/5, viz.WARM)]:
     fig.add_trace(go.Scatter(x=gaps, y=v, mode="lines", name=nm,
                              line=dict(color=c, width=2.5)), row=1, col=2)
     n_stat += 1
@@ -195,7 +199,7 @@ for gi, g in enumerate(SHOW_G):
 fig.update_xaxes(title_text="x", range=[-2, 7], row=1, col=1)
 fig.update_xaxes(title_text="간격 θ", row=1, col=2)
 fig.update_xaxes(title_text="간격 θ", row=1, col=3)
-fig.update_yaxes(title_text="밀도", row=1, col=1)
+fig.update_yaxes(title_text="density", row=1, col=1)
 fig.update_yaxes(title_text="값", row=1, col=2)
 fig.update_yaxes(title_text="기울기 크기 (로그)", type="log",
                  range=[-18, 1], row=1, col=3)
@@ -206,14 +210,14 @@ fig.show()
 
 ---
 
-## G6.3.2 — 포화 손실과 비포화 손실
+## G6.3.2 — saturating loss와 non-saturating loss
 
 원 논문의 $\log(1 - D(G(z)))$ 에는 실전 문제가 있다.
-학습 초기에는 판별자가 쉽게 이기고 $D(G(z)) \to 0$ 이 되는데,
-**바로 그때 생성자의 그래디언트가 사라진다.**
+학습 초기에는 discriminator가 쉽게 이기고 $D(G(z)) \to 0$ 이 되는데,
+**바로 그때 generator의 gradient가 사라진다.** 이것이 **saturating loss**(포화 손실 — 값이 바닥에 붙어 더 이상 변하지 않는 loss)다.
 
-그래서 실제로는 $-\log D(G(z))$ 를 최소화한다 (**비포화 손실**).
-최적점은 같지만 그래디언트가 다르다.
+그래서 실제로는 $-\log D(G(z))$ 를 최소화한다 (**non-saturating loss** — 비포화 손실).
+최적점은 같지만 gradient가 다르다.
 
 ```{python}
 #| label: saturating
@@ -221,33 +225,33 @@ fig.show()
 
 import numpy as np
 
-print(f"{'D(G(z))':>10} {'포화 |grad|':>14} {'비포화 |grad|':>15} {'비율':>12}")
+print(f"{'D(G(z))':>10} {'saturating':>14} {'non-saturating':>15} {'비율':>12}")
 print("-" * 54)
 for d in [0.5, 0.2, 0.05, 0.01, 0.001]:
     print(f"{d:>10.3f} {d:>14.4f} {1-d:>15.4f} {(1-d)/d:>11.1f}배")
 ```
 
-생성자가 판별자 로짓 $l$ 에 대해 받는 그래디언트 크기다. $D(G(z)) = \sigma(l)$ 로 두면
+generator가 discriminator logit $l$ (sigmoid에 들어가기 전의 값)에 대해 받는 gradient 크기다. $D(G(z)) = \sigma(l)$ 로 두면
 
-$$\text{포화:}\ \frac{\partial}{\partial l}\log(1-\sigma(l)) = -\sigma(l), \qquad
-\text{비포화:}\ \frac{\partial}{\partial l}\big(-\log\sigma(l)\big) = \sigma(l) - 1$$
+$$\text{saturating:}\ \frac{\partial}{\partial l}\log(1-\sigma(l)) = -\sigma(l), \qquad
+\text{non-saturating:}\ \frac{\partial}{\partial l}\big(-\log\sigma(l)\big) = \sigma(l) - 1$$
 
-$D \to 0$ 이면 포화 쪽은 0 으로 사라지고 비포화 쪽은 $-1$ 로 살아 있다. **판별자가 가짜를 99.9%
-확신하면 포화 손실의 그래디언트는 999배 작다.** 생성자가 가장 도움이 필요한 순간에 신호가 끊긴다.
+$D \to 0$ 이면 saturating 쪽은 0으로 사라지고 non-saturating 쪽은 $-1$ 로 살아 있다. **discriminator가 가짜를 99.9%
+확신하면 saturating loss의 gradient는 999배 작다.** generator가 가장 도움이 필요한 순간에 신호가 끊긴다 — 초보자에게 "완전히 틀렸음" 한마디만 하는 선생과 같다.
 
 이 차이가 실제 학습에서 어떻게 나타나는지, **가장 단순한 GAN**으로 본다.
 
 ::: {.key-concept}
 **Dirac GAN** (Mescheder et al. 2018)
 
-파라미터가 각각 하나뿐인 GAN이다.
+parameter가 각각 하나뿐인 GAN이다.
 
 - 실제 분포: $p_{\text{data}} = \delta_0$ (원점의 점 하나)
-- 생성자: 점 $\theta$ 를 낸다
-- 판별자: $D(x) = \sigma(\psi x)$ — 선형 로짓
+- generator: 점 $\theta$ 를 낸다
+- discriminator: $D(x) = \sigma(\psi x)$ — 선형 logit
 
-유일한 내시 균형은 $(\theta, \psi) = (0, 0)$ 이다.
-동시 경사하강이 거기로 갈까?
+유일한 Nash equilibrium(내시 균형 — 어느 쪽도 혼자 움직여서는 이득을 못 보는 상태)은 $(\theta, \psi) = (0, 0)$ 이다.
+동시 gradient descent가 거기로 갈까?
 :::
 
 ```{python}
@@ -266,17 +270,17 @@ def dirac_run(loss, lr, steps=20000, th=1.0, ps=0.0):
     tr = np.empty((steps+1, 2))
     for s in range(steps+1):
         tr[s] = (th, ps)
-        g_psi = -th*sg(ps*th)                       # 판별자 상승
+        g_psi = -th*sg(ps*th)                       # discriminator 상승
         g_th = -ps*sg(-ps*th) if loss == "ns" else ps*sg(ps*th)
         ps, th = ps + lr*g_psi, th - lr*g_th
     return tr
 
 
 TRAJ, RADII = {}, {}
-print(f"{'손실':<10} {'lr':>6} {'r(0)':>8} {'r(5k)':>9} {'r(10k)':>9} "
+print(f"{'loss':<15} {'lr':>6} {'r(0)':>8} {'r(5k)':>9} {'r(10k)':>9} "
       f"{'r(20k)':>9} {'판정'}")
-print("-" * 68)
-for loss, lname in [("ns", "비포화"), ("mm", "포화")]:
+print("-" * 73)
+for loss, lname in [("ns", "non-saturating"), ("mm", "saturating")]:
     for lr in [0.1, 0.02]:
         tr = dirac_run(loss, lr)
         TRAJ[(loss, lr)] = tr
@@ -284,28 +288,29 @@ for loss, lname in [("ns", "비포화"), ("mm", "포화")]:
         RADII[(loss, lr)] = (float(r[0]), float(r[-1]))
         verdict = ("발산" if r[-1] > r[0] else
                    "궤도 (수렴 안 함)" if r[-1] > 0.1 else "수렴")
-        print(f"{lname:<10} {lr:>6.2f} {r[0]:>8.3f} {r[5000]:>9.4f} "
+        print(f"{lname:<15} {lr:>6.2f} {r[0]:>8.3f} {r[5000]:>9.4f} "
               f"{r[10000]:>9.4f} {r[-1]:>9.4f}  {verdict}")
 ```
 
-**포화 손실은 균형점에서 멀어진다** — 반경이 `{python} f"{RADII[('mm', 0.1)][0]:.1f}"` →
-`{python} f"{RADII[('mm', 0.1)][1]:.1f}"` 로 커진다. **비포화 손실도 수렴하지 않는다** — 반경
-`{python} f"{RADII[('ns', 0.1)][1]:.2f}"` 에서 영원히 돈다 (lr 을 줄이면 반경이 천천히 줄지만, 20000 스텝에도
-`{python} f"{RADII[('ns', 0.02)][1]:.2f}"` 다).
+**saturating loss는 균형점에서 멀어진다** — 반경이 `{python} f"{RADII[('mm', 0.1)][0]:.1f}"` →
+`{python} f"{RADII[('mm', 0.1)][1]:.1f}"`로 커진다. **non-saturating loss도 수렴하지 않는다** — 반경
+`{python} f"{RADII[('ns', 0.1)][1]:.2f}"`에서 영원히 돈다 (lr을 줄이면 반경이 천천히 줄지만, 20000 step에도
+`{python} f"{RADII[('ns', 0.02)][1]:.2f}"`다).
 
-**이것이 GAN 학습 불안정성의 핵심이다.** 두 손실을 동시에 내리는 것은 **최소화가 아니라 게임의
-균형 찾기**다. 경사하강은 최소화를 위해 만들어진 도구이고, 게임에는 수렴 보장이 없다.
-고윳값이 순허수면 궤적은 원을 그린다 — 위가 정확히 그 상황이다. 실전의 대응책은 다섯이다.
+**이것이 GAN 학습 불안정성의 핵심이다.** 두 loss를 동시에 내리는 것은 **최소화가 아니라 게임의
+균형 찾기**다. gradient descent는 최소화를 위해 만들어진 도구이고, 게임에는 수렴 보장이 없다.
+가위바위보에서 상대의 지난 수에 맞춰 내 수를 바꾸면 둘 다 영원히 빙빙 도는 것과 같다.
+균형점 근처에서 선형화한 행렬의 eigenvalue가 순허수면 궤적은 원을 그린다 — 위가 정확히 그 상황이다. 실전의 대응책은 다섯이다.
 
-- 비포화 손실 (최소한 발산은 막는다)
-- Adam $\beta_1$ 을 0.5 로 낮춘다 (모멘텀이 진동을 키운다)
-- TTUR — 판별자와 생성자에 다른 학습률
-- 정규화: 스펙트럼 정규화, R1 페널티, WGAN-GP
-- EMA — 생성자 가중치의 이동평균을 샘플링에 쓴다 (궤도의 중심을 잡는다)
+- non-saturating loss (최소한 발산은 막는다)
+- Adam $\beta_1$ 을 0.5로 낮춘다 (momentum이 진동을 키운다)
+- TTUR — discriminator와 generator에 다른 learning rate
+- regularization: spectral normalization, R1 penalty, WGAN-GP
+- EMA — generator weight의 이동평균을 sampling에 쓴다 (궤도의 중심을 잡는다)
 
 ```{python}
 #| label: fig-dirac
-#| fig-cap: "균형점 (0,0)으로 가지 않는 Dirac GAN 의 파라미터 궤적"
+#| fig-cap: "균형점 (0,0)으로 가지 않는 Dirac GAN의 parameter 궤적"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -315,9 +320,9 @@ from src import viz
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
                     subplot_titles=("(θ, ψ) 궤적", "균형점까지의 거리"))
-for (loss, lr), c, nm in [(("ns", 0.1), viz.ACCENT, "비포화 lr=0.1"),
-                          (("mm", 0.1), viz.WARM, "포화 lr=0.1"),
-                          (("ns", 0.02), viz.GREEN, "비포화 lr=0.02")]:
+for (loss, lr), c, nm in [(("ns", 0.1), viz.ACCENT, "non-saturating lr=0.1"),
+                          (("mm", 0.1), viz.WARM, "saturating lr=0.1"),
+                          (("ns", 0.02), viz.GREEN, "non-saturating lr=0.02")]:
     tr = TRAJ[(loss, lr)][::25]
     fig.add_trace(go.Scatter(x=np.round(tr[:, 0], 4), y=np.round(tr[:, 1], 4),
                              mode="lines", name=nm,
@@ -326,26 +331,26 @@ for (loss, lr), c, nm in [(("ns", 0.1), viz.ACCENT, "비포화 lr=0.1"),
     fig.add_trace(go.Scatter(x=np.arange(len(r))*50, y=np.round(r, 4),
                              mode="lines", name=nm, showlegend=False,
                              line=dict(color=c, width=2)), row=1, col=2)
-fig.add_trace(go.Scatter(x=[0], y=[0], mode="markers", name="내시 균형",
+fig.add_trace(go.Scatter(x=[0], y=[0], mode="markers", name="Nash equilibrium",
                          marker=dict(size=13, color=viz.YELLOW, symbol="star")),
               row=1, col=1)
-fig.update_xaxes(title_text="θ (생성자)", range=[-5, 5], row=1, col=1)
-fig.update_yaxes(title_text="ψ (판별자)", range=[-5, 5], scaleanchor="x",
+fig.update_xaxes(title_text="θ (generator)", range=[-5, 5], row=1, col=1)
+fig.update_yaxes(title_text="ψ (discriminator)", range=[-5, 5], scaleanchor="x",
                  row=1, col=1)
-fig.update_xaxes(title_text="스텝", row=1, col=2)
+fig.update_xaxes(title_text="step", row=1, col=2)
 fig.update_yaxes(title_text="‖(θ, ψ)‖", row=1, col=2)
 viz.fig_defaults(fig, height=420,
-                 title="포화 손실(주황)은 바깥으로 나가고, 비포화(파랑)는 궤도를 돕니다")
+                 title="saturating loss(주황)는 바깥으로 나가고, non-saturating(파랑)은 궤도를 돕니다")
 fig.show()
 ```
 
 ---
 
-## G6.3.3 — 진짜 GAN을 학습시킨다: 모드 붕괴
+## G6.3.3 — 진짜 GAN을 학습시킨다: mode collapse
 
-2차원 8-모드 링에서 실제로 GAN을 돌린다.
+2차원 8-mode ring에서 실제로 GAN을 돌린다.
 `src/generative.py` 의 `Net` 과 `gan_step` 을 쓴다 —
-생성자 역전파가 판별자를 통과해야 하므로 **입력 그래디언트**가 필요하다.
+generator backpropagation이 discriminator를 통과해야 하므로 **입력 gradient**(weight가 아니라 입력 $x$ 에 대한 미분)가 필요하다.
 
 ```{python}
 #| label: gan-setup
@@ -368,9 +373,9 @@ X_REAL = sample_real(3000, 1)
 ZD, BATCH = 8, 256
 
 cov, ent, near = mode_stats(sample_real(1500, 77), CEN)
-print(f"실제 데이터 기준선: 커버 {cov}/8, 균형도 {ent:.2f}, 모드 근처 {near:.1%}")
+print(f"실제 데이터 기준선: cover {cov}/8, 균형도 {ent:.2f}, mode 근처 {near:.1%}")
 print()
-print("Net 의 가중치·입력 그래디언트 유한차분 검사")
+print("Net의 weight·입력 gradient finite difference 검사")
 r0 = np.random.default_rng(0)
 net = Net([3, 8, 8, 1], seed=1)
 Xg = r0.normal(size=(5, 3))
@@ -397,13 +402,13 @@ for i in range(5):
         o = Xg[i, j]; Xg[i, j] = o + e; a = L(); Xg[i, j] = o - e; b = L()
         Xg[i, j] = o
         imax = max(imax, abs((a-b)/(2*e) - dX[i, j])/(abs(dX[i, j]) + 1e-9))
-print(f"  가중치 그래디언트 상대오차 {wmax:.2e}")
-print(f"  입력   그래디언트 상대오차 {imax:.2e}")
+print(f"  weight gradient 상대오차 {wmax:.2e}")
+print(f"  입력   gradient 상대오차 {imax:.2e}")
 ```
 
-평가 지표는 셋이다. **커버 모드**는 샘플이 도달한 모드의 개수(최대 8), **균형도**는 모드별 샘플
-비율의 $\exp(\text{엔트로피})$ (8 이면 완전 균등), **모드 근처**는 어떤 모드에서 0.8 이내인 샘플의
-비율(충실도)이다. 입력 그래디언트가 생성자 학습에 필요한 경로이고, 두 경로 모두 유한차분과
+평가 지표는 셋이다. **cover mode**는 sample이 도달한 mode의 개수(최대 8), **균형도**는 mode별 sample
+비율의 $\exp(\text{entropy})$ (8이면 완전 균등 — "실질적으로 몇 개 mode를 고르게 쓰는가"), **mode 근처**는 어떤 mode에서 0.8 이내인 sample의
+비율(fidelity — 충실도)이다. 입력 gradient가 generator 학습에 필요한 경로이고, 두 경로 모두 finite difference와
 $10^{-8}$ 수준에서 일치한다.
 
 ```{python}
@@ -436,24 +441,24 @@ def run_gan(mode="ns", clip=None, sn=False, d_steps=1, seed=0):
 
 
 CONFIGS = [
-    ("표준 GAN (비포화)",   dict(mode="ns")),
-    ("포화 손실",           dict(mode="mm")),
-    ("판별자 5스텝",        dict(mode="ns", d_steps=5)),
-    ("+ 스펙트럼 정규화",    dict(mode="ns", d_steps=5, sn=True)),
-    ("WGAN (가중치 클리핑)", dict(mode="wgan", clip=0.05, d_steps=5)),
+    ("표준 GAN (non-sat.)",  dict(mode="ns")),
+    ("saturating loss",     dict(mode="mm")),
+    ("D 5 step",            dict(mode="ns", d_steps=5)),
+    ("+ spectral norm",     dict(mode="ns", d_steps=5, sn=True)),
+    ("WGAN (weight clip)",  dict(mode="wgan", clip=0.05, d_steps=5)),
 ]
 RUNS = {}
 for nm, kw in CONFIGS:
     RUNS[nm] = run_gan(**kw) + (kw,)
 
-print(f"{'설정':<22} {'스텝':>6} {'커버':>7} {'균형도':>9} {'모드 근처':>10}")
+print(f"{'설정':<22} {'step':>6} {'cover':>7} {'균형도':>9} {'mode 근처':>10}")
 print("-" * 60)
 for nm, _ in CONFIGS:
     G, D, hist, snaps, kw = RUNS[nm]
     for (s, cov_, ent_, near_) in hist:
         label = nm if s == 0 else ""
         print(f"{label:<22} {s:>6} {cov_:>4}/8 {ent_:>9.2f} {near_:>10.1%}")
-    print(f"{'':<22} {'D 립시츠 상한':>16} {D.lipschitz(sn=kw.get('sn', False)):>9.2f}")
+    print(f"{'':<22} {'D Lipschitz 상한':>16} {D.lipschitz(sn=kw.get('sn', False)):>9.2f}")
     print("-" * 60)
 print(f"{'실제 데이터':<22} {'':>6} {cov:>4}/8 {ent:>9.2f} {near:>10.1%}")
 ```
@@ -464,43 +469,43 @@ print(f"{'실제 데이터':<22} {'':>6} {cov:>4}/8 {ent:>9.2f} {near:>10.1%}")
 
 import numpy as np
 
-h_mm = RUNS["포화 손실"][2]
-h5 = RUNS["판별자 5스텝"][2]
-h1 = RUNS["표준 GAN (비포화)"][2]
-print("통제 실험: 판별자 5스텝 고정, 립시츠 제약만 변경")
-print(f"{'설정':<22} {'립시츠 제약':>12} {'균형도':>9} {'모드 근처':>10} {'D 립시츠':>10}")
+h_mm = RUNS["saturating loss"][2]
+h5 = RUNS["D 5 step"][2]
+h1 = RUNS["표준 GAN (non-sat.)"][2]
+print("통제 실험: discriminator 5 step 고정, Lipschitz 제약만 변경")
+print(f"{'설정':<22} {'Lipschitz 제약':>12} {'균형도':>9} {'mode 근처':>10} {'D Lipschitz':>11}")
 print("-" * 68)
 LIP = {}
-for nm, cons in [("판별자 5스텝", "없음"),
-                 ("+ 스펙트럼 정규화", "SN"),
-                 ("WGAN (가중치 클리핑)", "클리핑")]:
+for nm, cons in [("D 5 step", "없음"),
+                 ("+ spectral norm", "SN"),
+                 ("WGAN (weight clip)", "clipping")]:
     G, D, hh, _, kw = RUNS[nm]
     LIP[nm] = float(D.lipschitz(sn=kw.get('sn', False)))
-    print(f"{nm:<22} {cons:>12} {hh[-1][2]:>9.2f} {hh[-1][3]:>10.1%} {LIP[nm]:>10.2f}")
+    print(f"{nm:<22} {cons:>12} {hh[-1][2]:>9.2f} {hh[-1][3]:>10.1%} {LIP[nm]:>11.2f}")
 print(f"{'실제 데이터':<22} {'':>12} {ent:>9.2f} {near:>10.1%}")
-_, _, h_free, _, _ = RUNS["판별자 5스텝"]
-_, _, h_sn, _, _ = RUNS["+ 스펙트럼 정규화"]
+_, _, h_free, _, _ = RUNS["D 5 step"]
+_, _, h_sn, _, _ = RUNS["+ spectral norm"]
 ```
 
 읽어야 할 것이 셋이다.
 
-1. **포화 손실은 완전히 실패한다.** 스텝 1000 이후 커버 모드 `{python} f"{h_mm[1][1]}"`/8 — 아무 모드에도
-   도달하지 못한다. Dirac GAN 에서 본 발산이 그대로 재현되었다.
-2. **판별자를 5스텝 돌리면 커버는 유지되는데 균형이 무너진다.** 표준 GAN 은 균형도
-   `{python} f"{h1[1][2]:.2f}"` → `{python} f"{h1[-1][2]:.2f}"`, 모드 근처 `{python} f"{h1[1][3]:.0%}"` → `{python} f"{h1[-1][3]:.0%}"` 인데
-   판별자 5스텝은 균형도 `{python} f"{h5[1][2]:.2f}"` → `{python} f"{h5[-1][2]:.2f}"`, 모드 근처
-   `{python} f"{h5[1][3]:.0%}"` → `{python} f"{h5[-1][3]:.0%}"` 다. 판별자를 더 훈련하면 **충실도는 오르고 다양성은
-   떨어진다.** [6.0](00_generative_overview.qmd)에서 본 품질-다양성 트레이드오프가 여기 그대로 나타난다.
-3. **통제 실험(위 표): 판별자 스텝 수는 같다. 달라진 것은 립시츠 제약뿐이다.** 균형도가
-   `{python} f"{h_free[-1][2]:.2f}"` → `{python} f"{h_sn[-1][2]:.2f}"` 로 완전히 회복된다 (실제 데이터 `{python} f"{ent:.2f}"`).
-   대가는 충실도 `{python} f"{h_free[-1][3]:.0%}"` → `{python} f"{h_sn[-1][3]:.0%}"` 로
-   `{python} f"{(h_free[-1][3]-h_sn[-1][3])*100:.0f}"`%p 하락 — 훨씬 남는 거래다. 제약 없는 쪽의 높은 충실도는
-   **모드 몇 개에 몰아넣어 얻은 것**이라 분포를 맞춘다는 목표에는 도움이 안 된다.
+1. **saturating loss는 완전히 실패한다.** step 1000 이후 cover mode `{python} f"{h_mm[1][1]}"`/8 — 아무 mode에도
+   도달하지 못한다. Dirac GAN에서 본 발산이 그대로 재현되었다.
+2. **discriminator를 5 step 돌리면 cover는 유지되는데 균형이 무너진다.** 표준 GAN은 균형도
+   `{python} f"{h1[1][2]:.2f}"` → `{python} f"{h1[-1][2]:.2f}"`, mode 근처 `{python} f"{h1[1][3]:.0%}"` → `{python} f"{h1[-1][3]:.0%}"`인데
+   discriminator 5 step은 균형도 `{python} f"{h5[1][2]:.2f}"` → `{python} f"{h5[-1][2]:.2f}"`, mode 근처
+   `{python} f"{h5[1][3]:.0%}"` → `{python} f"{h5[-1][3]:.0%}"`다. discriminator를 더 훈련하면 **fidelity는 오르고 다양성은
+   떨어진다.** [6.0](00_generative_overview.qmd)에서 본 품질-다양성 trade-off가 여기 그대로 나타난다.
+3. **통제 실험(위 표): discriminator step 수는 같다. 달라진 것은 Lipschitz 제약뿐이다.** 균형도가
+   `{python} f"{h_free[-1][2]:.2f}"` → `{python} f"{h_sn[-1][2]:.2f}"`로 완전히 회복된다 (실제 데이터 `{python} f"{ent:.2f}"`).
+   대가는 fidelity `{python} f"{h_free[-1][3]:.0%}"` → `{python} f"{h_sn[-1][3]:.0%}"`로
+   `{python} f"{(h_free[-1][3]-h_sn[-1][3])*100:.0f}"`%p 하락 — 훨씬 남는 거래다. 제약 없는 쪽의 높은 fidelity는
+   **mode 몇 개에 몰아넣어 얻은 것**이라 분포를 맞춘다는 목표에는 도움이 안 된다.
 
-**원인이 분리되었다: 문제는 판별자의 '강함'이 아니라 '거칢'이다.** 제약 없는 판별자는 립시츠
-상수가 `{python} f"{LIP['판별자 5스텝']:.0f}"` 까지 올라간다. 그러면 실제 데이터 근처에서 판별 경계가 매우
-가팔라지고, 생성자는 그 절벽을 피해 **몇 개 모드로 몰린다.** 립시츠를 묶으면 판별자가 완만해지고,
-그래디언트가 모든 모드를 고르게 가리킨다.
+**원인이 분리되었다: 문제는 discriminator의 '강함'이 아니라 '거칢'이다.** 제약 없는 discriminator는 Lipschitz
+상수가 `{python} f"{LIP['D 5 step']:.0f}"`까지 올라간다. 그러면 실제 데이터 근처에서 판별 경계가 매우
+가팔라지고, generator는 그 절벽을 피해 **몇 개 mode로 몰린다.** 채점 기준이 너무 까다로우면 학생이 확실히 점수를 받는 한 유형의 문제만 푸는 것과 같다. Lipschitz를 묶으면 discriminator가 완만해지고,
+gradient가 모든 mode를 고르게 가리킨다.
 
 ```{python}
 #| label: fig-gan
@@ -542,7 +547,7 @@ for ci, nm in enumerate(NAMES):
     fig.add_hline(y=ent, line=dict(color=viz.GREEN, dash="dot"), row=2, col=ci+1)
     fig.update_xaxes(range=[-5.5, 5.5], showticklabels=False, row=1, col=ci+1)
     fig.update_yaxes(range=[-5.5, 5.5], showticklabels=False, row=1, col=ci+1)
-    fig.update_xaxes(title_text="스텝", row=2, col=ci+1)
+    fig.update_xaxes(title_text="step", row=2, col=ci+1)
     fig.update_yaxes(range=[0, 8.6], showticklabels=(ci == 0), row=2, col=ci+1)
 fig.update_yaxes(title_text="균형도", row=2, col=1)
 
@@ -555,83 +560,83 @@ for si, s in enumerate(SNAP_LIST):
         col[1+si] = True
         vis += col
     steps_sl.append((str(s), {"visible": vis}))
-fig.update_layout(sliders=[viz.slider(steps_sl, prefix="학습 스텝 = ",
+fig.update_layout(sliders=[viz.slider(steps_sl, prefix="학습 step = ",
                                       active=len(SNAP_LIST)-1, pad_t=30)])
 viz.fig_defaults(fig, height=560,
-                 title="위: 생성 샘플(파랑) vs 실제(초록) · 아래: 균형도 (초록 점선 = 실제 데이터)")
+                 title="위: 생성 sample(파랑) vs 실제(초록) · 아래: 균형도 (초록 점선 = 실제 데이터)")
 fig.show()
 ```
 
 ---
 
-## 조건부 GAN과 StyleGAN 계보
+## conditional GAN과 StyleGAN 계보
 
 | 모델 | 핵심 아이디어 | 의의 |
 |---|---|---|
-| DCGAN (2015) | 합성곱 생성자·판별자, BN | GAN을 실용화한 구조 표준 |
-| 조건부 GAN (2014) | G, D 모두에 조건 c 주입 | 클래스별 생성의 기본형 |
-| pix2pix (2016) | 쌍 데이터 + L1 + 패치 판별자 | 이미지→이미지 변환, 쌍이 필요 |
-| CycleGAN (2017) | 순환 일관성 손실 | **쌍 없는** 변환 — 말↔얼룩말 |
-| WGAN / WGAN-GP (2017) | W₁ + 립시츠 제약 | 학습 안정화의 분수령 |
-| 스펙트럼 정규화 (2018) | 층마다 W/σ_max(W) | 가장 싸고 효과적인 립시츠 제약 |
+| DCGAN (2015) | convolution generator·discriminator, BN | GAN을 실용화한 구조 표준 |
+| conditional GAN (2014) | G, D 모두에 조건 c 주입 | class별 생성의 기본형 |
+| pix2pix (2016) | 쌍 데이터 + L1 + patch discriminator | 이미지→이미지 변환, 쌍이 필요 |
+| CycleGAN (2017) | cycle consistency loss(변환했다 되돌리면 원본이어야 한다) | **쌍 없는** 변환 — 말↔얼룩말 |
+| WGAN / WGAN-GP (2017) | W₁ + Lipschitz 제약 | 학습 안정화의 분수령 |
+| spectral normalization (2018) | 층마다 W/σ_max(W) — 가장 큰 singular value로 나눠 기울기를 1 이하로 | 가장 싸고 효과적인 Lipschitz 제약 |
 | Progressive GAN (2017) | 저해상도부터 층을 늘려감 | 1024² 고해상도 최초 달성 |
-| StyleGAN 1/2/3 (2019~21) | 매핑망 z→w, AdaIN 스타일 주입 | **W 공간의 편집 가능성** |
-| BigGAN (2018) | 대규모 배치 + 자기 어텐션 + 절단 트릭 | ImageNet 클래스 조건 생성 |
-| StyleGAN-T / GigaGAN (2023) 텍스트 조건 + 대규모 | 확산과 속도로 경쟁 |  |
+| StyleGAN 1/2/3 (2019~21) | mapping network z→w, AdaIN style 주입 | **W 공간의 편집 가능성** |
+| BigGAN (2018) | 대규모 batch + self-attention + truncation trick | ImageNet class 조건 생성 |
+| StyleGAN-T / GigaGAN (2023) | 텍스트 조건 + 대규모 | diffusion과 속도로 경쟁 |
 
 **StyleGAN의 W 공간이 특별한 이유**
 
-z ~ N(0,I) ──매핑망 8층──> w ──AdaIN──> 각 해상도의 스타일
+z ~ N(0,I) ──mapping network 8층──> w ──AdaIN──> 각 해상도의 style
 
-z 공간은 가우스로 **강제**되어 있어 데이터 분포에 맞게 휘어야 한다.
-w 공간은 그런 제약이 없어 **덜 얽힌(disentangled)** 표현이 된다.
+z 공간은 Gaussian으로 **강제**되어 있어 데이터 분포에 맞게 휘어야 한다.
+w 공간은 그런 제약이 없어 **덜 얽힌(disentangled)** representation이 된다.
 그래서 w 공간에서는 '나이', '웃음' 같은 속성이 대체로 직선 방향이 된다 —
 w + α·d로 속성을 조절할 수 있다.
 
 다만 이것은 **경향이지 보장이 아니다.** 속성 방향을 찾으려면
-보조 분류기로 라벨을 붙이고 로지스틱 회귀를 돌리는 등의 작업이 필요하고,
+보조 classifier로 label을 붙이고 logistic regression을 돌리는 등의 작업이 필요하고,
 방향들이 서로 완전히 독립적이지도 않다 (안경 방향이 나이도 바꾼다).
 
-**절단 트릭(truncation)** — 품질-다양성 손잡이
+**truncation trick**(절단 트릭) — 품질-다양성 손잡이
 w' = w̄ + ψ(w − w̄),  ψ < 1
-평균 쪽으로 당길수록 품질↑ 다양성↓. 6.0의 삼중고가 여기서도 나온다.
-CFG의 가이던스 스케일과 정확히 같은 성격의 손잡이다.
+평균 쪽으로 당길수록 품질↑ 다양성↓ — 평균에 가까운 "무난한" 얼굴만 뽑는 것이다. 6.0의 trilemma가 여기서도 나온다.
+CFG의 guidance scale과 정확히 같은 성격의 손잡이다.
 
 
 ---
 
-## 확산 모델 시대의 GAN
+## diffusion model 시대의 GAN
 
 | 축 | 우세 | 근거 |
 |---|---|---|
-| 샘플 품질 | 확산 | 확산이 FID에서 앞선다 (ADM > BigGAN, 2021) |
-| 샘플링 속도 | **GAN** | 1 스텝 — 확산은 20~1000 스텝 |
-| 학습 안정성 | 확산 | GAN은 여전히 하이퍼파라미터에 민감 |
-| 모드 커버리지 | 확산 | GAN의 모드 붕괴는 구조적 약점 |
-| 우도 평가 | 확산 | GAN은 밀도가 없어 우도를 못 잰다 |
-| 초해상·복원 | **GAN** | 실시간 요구가 크고 지각 품질이 좋다 |
-| 증류의 도구 | **GAN** | 확산을 몇 스텝으로 줄일 때 적대적 손실을 쓴다 |
+| sample 품질 | diffusion | diffusion이 FID에서 앞선다 (ADM > BigGAN, 2021) |
+| sampling 속도 | **GAN** | 1 step — diffusion은 20~1000 step |
+| 학습 안정성 | diffusion | GAN은 여전히 hyperparameter에 민감 |
+| mode coverage | diffusion | GAN의 mode collapse는 구조적 약점 |
+| likelihood 평가 | diffusion | GAN은 density가 없어 likelihood를 못 잰다 |
+| super-resolution·복원 | **GAN** | 실시간 요구가 크고 지각 품질이 좋다 |
+| distillation의 도구 | **GAN** | diffusion을 몇 step으로 줄일 때 adversarial loss를 쓴다 |
 
 **GAN은 밀려난 것이 아니라 역할이 바뀌었다.**
 
-가장 중요한 생존 지점은 마지막 줄이다 — **증류**.
+가장 중요한 생존 지점은 마지막 줄이다 — **distillation**(증류 — 큰 모델의 실력을 작은 모델에 옮기기).
 
 - ADD (Adversarial Diffusion Distillation) — SDXL-Turbo
 - DMD (Distribution Matching Distillation)
 - LADD, SD3-Turbo
-모두 '느린 확산 교사 → 빠른 학생'을 만들 때 판별자를 손실로 쓴다.
-**1~4 스텝 생성이 가능한 것은 GAN 손실 덕분이다** (6.8에서 다룬다).
+모두 '느린 diffusion teacher → 빠른 student'를 만들 때 discriminator를 loss로 쓴다.
+**1~4 step 생성이 가능한 것은 GAN loss 덕분이다** (6.8에서 다룬다).
 
-그리고 GAN의 핵심 발상 — **'손실함수를 학습한다'** — 는 이제 도처에 있다:
+그리고 GAN의 핵심 발상 — **'loss function을 학습한다'** — 는 이제 도처에 있다:
 
-- 지각 손실(LPIPS) — 사전학습 신경망의 특징 공간에서 거리를 잰다
-- VQGAN — 오토인코더에 판별자를 붙여 재구성을 선명하게 (Stable Diffusion의 VAE)
-- RLHF의 보상 모델 — '좋은 답'을 학습된 함수로 재는 것도 같은 발상
-- 적대적 견고성 연구 — 최악의 경우를 찾는 내부 최대화
+- perceptual loss(LPIPS) — pretraining된 신경망의 feature 공간에서 거리를 잰다
+- VQGAN — autoencoder에 discriminator를 붙여 reconstruction을 선명하게 (Stable Diffusion의 VAE)
+- RLHF의 reward model — '좋은 답'을 학습된 함수로 재는 것도 같은 발상
+- adversarial robustness 연구 — 최악의 경우를 찾는 내부 최대화
 
-**특히 두 번째가 중요하다.** Stable Diffusion의 잠재 공간을 만드는
-오토인코더는 순수 VAE가 아니라 **VQGAN — 판별자로 학습된 오토인코더**다.
-6.2에서 본 '흐릿함' 문제를 GAN 손실로 해결한 것이다. 6.7에서 다시 만난다.
+**특히 두 번째가 중요하다.** Stable Diffusion의 latent space를 만드는
+autoencoder는 순수 VAE가 아니라 **VQGAN — discriminator로 학습된 autoencoder**다.
+6.2에서 본 '흐릿함' 문제를 GAN loss로 해결한 것이다. 6.7에서 다시 만난다.
 
 
 ---
@@ -639,16 +644,16 @@ CFG의 가이던스 스케일과 정확히 같은 성격의 손잡이다.
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 학습된 판별자를 최적 판별자와 비교한다**
-`RUNS["+ 스펙트럼 정규화"]` 의 판별자 $D$ 를 2차원 격자에서 평가하고, 실제 데이터 밀도와 생성 샘플의
-커널 밀도 추정으로 만든 $D^\star = p/(p+p_g)$ 와 겹쳐 그려라. 어디서 가장 어긋나는가?
+**① 학습된 discriminator를 최적 discriminator와 비교한다**
+`RUNS["+ spectral norm"]` 의 discriminator $D$ 를 2차원 격자에서 평가하고, 실제 데이터 density와 생성 sample의
+kernel density estimation으로 만든 $D^\star = p/(p+p_g)$ 와 겹쳐 그려라. 어디서 가장 어긋나는가?
 
-**② 포화 손실의 생성자 기울기를 잰다**
-`run_gan(mode="mm")` 과 `run_gan(mode="ns")` 에서 처음 200 스텝의 생성자 그래디언트 norm 을
+**② saturating loss의 generator 기울기를 잰다**
+`run_gan(mode="mm")` 과 `run_gan(mode="ns")` 에서 처음 200 step의 generator gradient norm을
 기록해 비교하라. `saturating` 의 표가 예측한 배율과 맞는가?
 
 **③ Dirac GAN으로 진동을 본다**
-`dirac-gan` 의 궤적에 R1 정규화를 넣어라. 나선이 안으로 감기는가?
+`dirac-gan` 의 궤적에 R1 regularization을 넣어라. 나선이 안으로 감기는가?
 계수를 얼마로 해야 수렴하는가?
 :::
 
@@ -656,25 +661,25 @@ CFG의 가이던스 스케일과 정확히 같은 성격의 손잡이다.
 
 | 개념 | 핵심 |
 |------|------|
-| 미니맥스 | $\min_G\max_D \mathbb{E}[\log D(x)] + \mathbb{E}[\log(1-D(G(z)))]$ |
-| 최적 판별자 | $D^*=p/(p+p_g)$ |
+| minimax | $\min_G\max_D \mathbb{E}[\log D(x)] + \mathbb{E}[\log(1-D(G(z)))]$ — 위조범 vs 감별사 |
+| 최적 discriminator | $D^*=p/(p+p_g)$ |
 | 목적함수의 정체 | $V(D^*,G)=2\,JS - 2\log2$ (간격 4까지 오차 `{python} f"{err_to4:.0e}"`) |
-| JS의 문제 | 겹치지 않으면 $\log 2$ 상수 — θ=5에서 기울기가 `{python} f"{djs_5:.0e}"` |
-| Wasserstein | 겹치지 않아도 기울기 1 유지 |
-| 쌍대성 | $W_1 = \sup_{\|f\|_L\le1}[\mathbb{E}_p f - \mathbb{E}_q f]$ — 립시츠 제약이 필수 |
-| 포화 손실 | $D\to0$ 에서 그래디언트 소실 (D=0.001 이면 999배 작다) |
-| Dirac GAN | 포화는 **발산** (반경 1.0→`{python} f"{RADII[('mm', 0.1)][1]:.1f}"`), 비포화는 **궤도** (`{python} f"{RADII[('ns', 0.1)][1]:.2f}"` 고정) |
-| 불안정의 원인 | 최소화가 아니라 게임 — 경사하강에 수렴 보장이 없다 |
-| 모드 붕괴 | 판별자 5스텝 → 커버 유지, 균형도 `{python} f"{h5[1][2]:.1f}"`→`{python} f"{h5[-1][2]:.1f}"` |
-| **원인 분리** | D 스텝 고정하고 립시츠 제약만 추가 → 균형도 `{python} f"{h_free[-1][2]:.1f}"`→`{python} f"{h_sn[-1][2]:.2f}"` |
-| 결론 | 문제는 판별자의 **강함**이 아니라 **거칢**이다 |
-| 오늘의 GAN | 확산 증류(ADD·DMD)와 VQGAN에서 손실함수로 산다 |
+| JS의 문제 | 겹치지 않으면 $\log 2$ 상수 — θ=5에서 기울기가 `{python} f"{djs_5:.0e}"` ("틀렸다"만 말하는 채점자) |
+| Wasserstein | 겹치지 않아도 기울기 1 유지 — 흙 옮기는 비용 |
+| duality | $W_1 = \sup_{\|f\|_L\le1}[\mathbb{E}_p f - \mathbb{E}_q f]$ — Lipschitz 제약이 필수 |
+| saturating loss | $D\to0$ 에서 gradient 소실 (D=0.001이면 999배 작다) |
+| Dirac GAN | saturating은 **발산** (반경 1.0→`{python} f"{RADII[('mm', 0.1)][1]:.1f}"`), non-saturating은 **궤도** (`{python} f"{RADII[('ns', 0.1)][1]:.2f}"` 고정) |
+| 불안정의 원인 | 최소화가 아니라 게임 — gradient descent에 수렴 보장이 없다 (가위바위보) |
+| mode collapse | discriminator 5 step → cover 유지, 균형도 `{python} f"{h5[1][2]:.1f}"`→`{python} f"{h5[-1][2]:.1f}"` |
+| **원인 분리** | D step 고정하고 Lipschitz 제약만 추가 → 균형도 `{python} f"{h_free[-1][2]:.1f}"`→`{python} f"{h_sn[-1][2]:.2f}"` |
+| 결론 | 문제는 discriminator의 **강함**이 아니라 **거칢**이다 — 너무 까다로운 채점 기준 |
+| 오늘의 GAN | diffusion distillation(ADD·DMD)과 VQGAN에서 loss function으로 산다 |
 
-GAN은 밀도를 포기하고 샘플 품질을 얻었다.
-정규화 흐름은 정반대를 선택한다 — **정확한 우도를 절대 포기하지 않는다.**
+GAN은 density를 포기하고 sample 품질을 얻었다.
+normalizing flow는 정반대를 선택한다 — **정확한 likelihood를 절대 포기하지 않는다.**
 
 ---
 
-**다음**: [6.4 정규화 흐름](04_normalizing_flows.qmd) — 가역 변환과 정확한 우도
+**다음**: [6.4 normalizing flow](04_normalizing_flows.qmd) — invertible 변환과 정확한 likelihood
 
-**이전**: [6.2 변분 오토인코더](02_vae.qmd)
+**이전**: [6.2 variational autoencoder](02_vae.qmd)
