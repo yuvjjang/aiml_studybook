@@ -1,13 +1,14 @@
 ---
-title: "5.3 위치 인코딩"
-subtitle: "사인파·학습형·상대·RoPE·ALiBi — 순서를 다시 넣는 방법들"
+title: "5.3 positional encoding"
+subtitle: "sinusoidal·학습형·상대·RoPE·ALiBi — 순서를 다시 넣는 방법들"
 jupyter: ai-ml-study
 ---
 
-[5.1](01_self_attention.qmd)에서 셀프 어텐션이 순서를 모른다는 것을 수치로 확인했다.
-토큰을 섞으면 출력도 그대로 따라 섞일 뿐이었다.
+[5.1](01_self_attention.qmd)에서 self-attention이 순서를 모른다는 것을 수치로 확인했다.
+token을 섞으면 출력도 그대로 따라 섞일 뿐이었다.
 
-그러니 순서를 **다시 넣어줘야 한다.** 문제는 "어떻게"다.
+그러니 순서를 **다시 넣어줘야 한다.** 그 장치가 **positional encoding**(위치 인코딩)이고, 문제는 "어떻게"다.
+[4.4](../04_architectures/04_seq2seq_attention.qmd)의 페이지 번호 비유를 잇는다면, 이 장은 페이지 번호를 어떤 방식으로 매길지에 대한 것이다.
 
 그리고 이 선택은 사소하지 않다. 문맥 길이를 4K에서 128K로 늘릴 수 있느냐,
 학습할 때 본 적 없는 길이에서도 동작하느냐가 전부 여기서 갈린다.
@@ -17,29 +18,30 @@ jupyter: ai-ml-study
 
 ## 절대 위치: 자리마다 번호표 붙이기
 
-가장 단순한 발상. 각 위치 $p$ 에 고유한 벡터를 만들어 임베딩에 **더한다.**
+가장 단순한 발상. 각 위치 $p$ 에 고유한 벡터를 만들어 embedding에 **더한다.**
 
 $$x_p \leftarrow \text{Embed}(\text{token}_p) + \text{PE}(p)$$
 
-곱하지 않고 더하는 것이 관례다. 임베딩 차원을 나눠 쓰지 않고 같은 공간에 얹는 것이다.
+곱하지 않고 더하는 것이 관례다. embedding 차원을 나눠 쓰지 않고 같은 공간에 얹는 것이다.
 
-원 논문은 서로 다른 주파수의 사인·코사인을 썼다.
+원 논문은 서로 다른 주파수의 사인·코사인을 썼다 — **sinusoidal encoding**(사인파 인코딩)이다.
 
 $$\text{PE}(p, 2i) = \sin\!\left(\frac{p}{10000^{2i/d}}\right), \qquad
 \text{PE}(p, 2i+1) = \cos\!\left(\frac{p}{10000^{2i/d}}\right)$$
 
-왜 이런 모양인가? 차원 인덱스 $i$ 가 커질수록 주파수가 낮아진다.
+왜 이런 모양인가? 차원 index $i$ 가 커질수록 분모 $10000^{2i/d}$ 가 커져 주파수가 낮아진다.
 앞쪽 차원은 빠르게 진동해 **가까운 위치를 구별**하고,
 뒤쪽 차원은 느리게 변해 **먼 위치를 구별**한다.
-이진수의 각 자리가 서로 다른 속도로 바뀌는 것과 같은 원리다.
+시계의 초침·분침·시침과 같다 — 초침은 가까운 시각을, 시침은 먼 시각을 구별하고, 셋을 합쳐야 시각 하나가 정해진다.
+이진수의 각 자리가 서로 다른 속도로 바뀌는 것과도 같은 원리다.
 
 ---
 
-## G5.3.1 — 사인파 인코딩의 구조
+## G5.3.1 — sinusoidal encoding의 구조
 
 ```{python}
 #| label: fig-sinusoidal
-#| fig-cap: "위치별 인코딩 벡터 — 왼쪽 차원은 빠르게, 오른쪽은 느리게 진동"
+#| fig-cap: "위치별 encoding 벡터 — 왼쪽 차원은 빠르게, 오른쪽은 느리게 진동"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -51,7 +53,7 @@ n_pos, d = 64, 64
 PE = attention.sinusoidal_encoding(n_pos, d)
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
-                    subplot_titles=("PE 히트맵 (위치 × 차원)",
+                    subplot_titles=("PE heatmap (위치 × 차원)",
                                     "선택한 차원의 위치별 값"))
 
 fig.add_trace(go.Heatmap(z=np.round(PE, 4), colorscale="RdBu", zmid=0,
@@ -70,43 +72,44 @@ fig.update_yaxes(title_text="위치 p", autorange="reversed", row=1, col=1)
 fig.update_xaxes(title_text="위치 p", row=1, col=2)
 fig.update_yaxes(title_text="PE 값", row=1, col=2)
 
-viz.fig_defaults(fig, height=420, title="사인파 절대 위치 인코딩")
+viz.fig_defaults(fig, height=420, title="sinusoidal 절대 positional encoding")
 fig.update_layout(legend=dict(x=0.62, y=0.99, font=dict(size=10)))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-왼쪽 히트맵에서 **왼쪽 열은 촘촘한 줄무늬**, 오른쪽으로 갈수록 넓어집니다. 오른쪽 그래프의 차원 0은 위치마다 요동치고, 차원 56은 64개 위치 전체에 걸쳐 거의 한 주기도 못 돕니다.
+왼쪽 heatmap에서 **왼쪽 열은 촘촘한 줄무늬**, 오른쪽으로 갈수록 넓어집니다. 오른쪽 그래프의 차원 0은 위치마다 요동치고, 차원 56은 64개 위치 전체에 걸쳐 거의 한 주기도 못 돕니다.
 :::
 
 ### 절대 위치의 두 가지 문제
 
-사인파 방식은 우아하지만 실전에서 두 가지가 걸린다.
+sinusoidal 방식은 우아하지만 실전에서 두 가지가 걸린다.
 
 **첫째, 모델이 신경 쓰는 것은 절대 위치가 아니라 상대 위치다.**
 "이 형용사가 꾸미는 명사는 바로 뒤에 있다"는 규칙에서 중요한 것은
 "3번째와 4번째"가 아니라 "바로 다음"이다.
-절대 인코딩에서는 모델이 이 상대성을 **간접적으로 유도해내야** 한다.
+절대 encoding에서는 모델이 이 상대성을 **간접적으로 유도해내야** 한다.
 
 **둘째, 학습 길이를 넘어서면 무너진다.**
-학습형 위치 임베딩(BERT, GPT-2)은 아예 불가능하다 — 2048번 위치를 학습했으면 2049번은 벡터가 없다.
-사인파는 계산은 되지만, 본 적 없는 주파수 조합이라 성능이 급락한다.
+학습형 position embedding(BERT, GPT-2 — 위치마다 벡터를 하나씩 학습해 표로 저장)은 아예 불가능하다 — 2048번 위치를 학습했으면 2049번은 벡터가 없다.
+sinusoidal은 계산은 되지만, 본 적 없는 주파수 조합이라 성능이 급락한다.
 
 ---
 
-## RoPE: 위치를 회전으로 인코딩하기
+## RoPE: 위치를 회전으로 encoding하기
 
-현재 LLM의 사실상 표준이 된 방법이다 (LLaMA, Qwen, Mistral, DeepSeek 등).
+**RoPE**(rotary position embedding)는 현재 LLM의 사실상 표준이 된 방법이다 (LLaMA, Qwen, Mistral, DeepSeek 등).
 
-발상이 좋다. 위치 벡터를 **더하는** 대신, 쿼리와 키 벡터를 위치에 따라 **회전**시킨다.
+발상이 좋다. 위치 벡터를 **더하는** 대신, query와 key 벡터를 위치에 따라 **회전**시킨다.
+시계 바늘을 위치만큼 돌려놓는 것이다 — 두 바늘 사이의 각도는 각각을 얼마나 돌렸느냐가 아니라 그 **차이**에만 달려 있다.
 
-차원을 2개씩 짝지어 복소수처럼 보고, 위치 $p$ 에서 각도 $p\theta_i$ 만큼 돌린다.
+차원을 2개씩 짝지어 2차원 평면의 점(복소수)처럼 보고, 위치 $p$ 에서 각도 $p\theta_i$ 만큼 돌린다.
 
 $$\begin{pmatrix} q'_{2i} \\ q'_{2i+1}\end{pmatrix} =
 \begin{pmatrix} \cos p\theta_i & -\sin p\theta_i \\ \sin p\theta_i & \cos p\theta_i \end{pmatrix}
 \begin{pmatrix} q_{2i} \\ q_{2i+1}\end{pmatrix}$$
 
-여기서 마법이 일어난다. 회전된 두 벡터의 **내적**을 계산하면
+여기서 마법이 일어난다. 위치 $m$ 의 query와 위치 $n$ 의 key를 각각 회전시킨 뒤 **내적**을 계산하면
 
 $$\langle R_m q,\; R_n k\rangle = \langle q,\; R_{n-m}\, k\rangle$$
 
@@ -115,11 +118,11 @@ $$\langle R_m q,\; R_n k\rangle = \langle q,\; R_{n-m}\, k\rangle$$
 ::: {.key-concept}
 RoPE는 절대 위치를 적용하는데 결과는 상대 위치가 된다.
 
-회전 행렬의 성질 $R_m^\top R_n = R_{n-m}$ 이 그 이유다.
+회전 행렬의 성질 $R_m^\top R_n = R_{n-m}$ 이 그 이유다 — $m$ 만큼 돌린 것을 되돌리고 $n$ 만큼 돌리면 $n-m$ 만큼 돌린 것과 같다.
 [0.0 선형대수](../00_foundations/00_linear_algebra.qmd)에서 본 "복소수 곱 = 회전"이 여기서 쓰인다.
 
 덤으로 회전은 **norm을 보존**하므로 벡터 크기를 왜곡하지 않는다.
-더하는 방식(사인파)은 임베딩 값 자체를 바꾸지만, RoPE는 방향만 돌린다.
+더하는 방식(sinusoidal)은 embedding 값 자체를 바꾸지만, RoPE는 방향만 돌린다.
 :::
 
 ---
@@ -175,8 +178,8 @@ fig.add_trace(go.Heatmap(z=np.round(dots, 4), colorscale="RdBu", zmid=0,
 
 fig.update_xaxes(title_text="차원 0", row=1, col=1, scaleanchor="y")
 fig.update_yaxes(title_text="차원 1", row=1, col=1)
-fig.update_xaxes(title_text="키 위치 n", row=1, col=2)
-fig.update_yaxes(title_text="쿼리 위치 m", autorange="reversed", row=1, col=2)
+fig.update_xaxes(title_text="key 위치 n", row=1, col=2)
+fig.update_yaxes(title_text="query 위치 m", autorange="reversed", row=1, col=2)
 
 viz.fig_defaults(fig, height=430, title="RoPE: 절대 위치를 적용하면 상대 위치가 나온다")
 fig.update_layout(legend=dict(x=0.01, y=0.99))
@@ -197,20 +200,20 @@ for dist in [1, 3, 7]:
 ```
 
 절대 위치가 달라도 거리가 같으면 내적이 부동소수점 오차 안에서 동일하다.
-대각선과 평행한 줄무늬가 오른쪽 히트맵에 보이는 이유다.
+대각선과 평행한 줄무늬가 오른쪽 heatmap에 보이는 이유다.
 
 ::: {.interaction-hint}
-오른쪽 히트맵이 **대각선 방향 줄무늬**를 이룹니다. $m-n$ 이 같은 칸들이 전부 같은 값이라는 뜻입니다. 왼쪽에서는 벡터가 위치가 커질수록 원을 따라 도는 것을 볼 수 있습니다 — norm은 그대로입니다.
+오른쪽 heatmap이 **대각선 방향 줄무늬**를 이룹니다. $m-n$ 이 같은 칸들이 전부 같은 값이라는 뜻입니다. 왼쪽에서는 벡터가 위치가 커질수록 원을 따라 도는 것을 볼 수 있습니다 — norm은 그대로입니다.
 :::
 
 ::: {.callout-note}
 ## RoPE의 감쇠 성질
 
 $\theta_i = 10000^{-2i/d}$ 로 주파수를 배치하면, 거리가 멀어질수록 내적이 **평균적으로 줄어드는** 경향이 생긴다.
-여러 주파수의 회전이 서로 다른 속도로 어긋나면서 상쇄되기 때문이다.
+여러 주파수의 회전이 서로 다른 속도로 어긋나면서 상쇄되기 때문이다 — 여러 시계 바늘이 제각각 돌아 멀리 갈수록 정렬이 흐트러진다.
 
 이것은 우연이 아니라 바람직한 성질이다 —
-별다른 학습 없이도 "가까운 토큰에 더 주목한다"는 편향이 공짜로 생긴다.
+별다른 학습 없이도 "가까운 token에 더 주목한다"는 편향이 공짜로 생긴다.
 다만 이 감쇠 때문에 **아주 먼 문맥에서는 신호가 약해지는** 문제도 함께 생긴다.
 :::
 
@@ -218,17 +221,17 @@ $\theta_i = 10000^{-2i/d}$ 로 주파수를 배치하면, 거리가 멀어질수
 
 ## ALiBi: 그냥 거리만큼 빼기
 
-훨씬 단순한 접근도 있다. 위치 인코딩을 아예 쓰지 않고,
-어텐션 **점수에 거리 비례 벌점**을 더한다.
+훨씬 단순한 접근도 있다. **ALiBi**(attention with linear biases)는 positional encoding을 아예 쓰지 않고,
+attention **점수에 거리 비례 벌점**을 더한다. 멀리 있을수록 그만큼 점수를 깎는다.
 
 $$\text{scores}_{ij} \leftarrow \frac{q_i^\top k_j}{\sqrt{d_k}} - m \cdot |i - j|$$
 
-$m$ 은 헤드마다 다른 기울기다 (보통 등비수열: $1/2, 1/4, 1/8, \dots$).
-기울기가 큰 헤드는 아주 가까운 곳만 보고, 작은 헤드는 멀리까지 본다.
+$m$ 은 head마다 다른 기울기다 (보통 등비수열: $1/2, 1/4, 1/8, \dots$).
+기울기가 큰 head는 아주 가까운 곳만 보고, 작은 head는 멀리까지 본다.
 
 ```{python}
 #| label: fig-alibi
-#| fig-cap: "헤드마다 기울기가 달라 서로 다른 범위를 보는 ALiBi 바이어스"
+#| fig-cap: "head마다 기울기가 달라 서로 다른 범위를 보는 ALiBi bias"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -240,8 +243,8 @@ n = 24
 slopes = [2 ** -(i + 1) for i in range(8)]     # 1/2, 1/4, ...
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
-                    subplot_titles=("바이어스 행렬 (인과 마스크 적용)",
-                                    "마지막 토큰의 어텐션 분포"))
+                    subplot_titles=("bias 행렬 (causal mask 적용)",
+                                    "마지막 token의 attention 분포"))
 
 causal = attention.causal_mask(n)
 
@@ -249,11 +252,11 @@ s0 = slopes[2]
 bias0 = np.where(causal, np.nan, attention.alibi_bias(n, s0))
 fig.add_trace(go.Heatmap(z=np.round(bias0, 3), colorscale="Blues_r",
                          colorbar=dict(thickness=12, outlinewidth=0),
-                         hovertemplate="쿼리 %{y}<br>키 %{x}<br>바이어스 %{z:.2f}"
+                         hovertemplate="query %{y}<br>key %{x}<br>bias %{z:.2f}"
                                        "<extra></extra>"),
               row=1, col=1)
 
-# 점수가 전부 0이라 가정하면 어텐션은 순전히 바이어스로 결정된다
+# 점수가 전부 0이라 가정하면 attention은 순전히 bias로 결정된다
 for i, m in enumerate(slopes):
     b = attention.alibi_bias(n, m)[-1]
     w = attention.softmax(b)
@@ -267,29 +270,29 @@ for i, m in enumerate(slopes):
     b = np.where(causal, np.nan, attention.alibi_bias(n, m))
     steps.append((f"1/{2**(i+1)}", {"z": [np.round(b, 3)]}))
 
-fig.update_layout(sliders=[viz.slider(steps, prefix="헤드 기울기 m = ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="head 기울기 m = ",
                                       active=2, pad_t=60)])
-fig.update_xaxes(title_text="키 j", row=1, col=1)
-fig.update_yaxes(title_text="쿼리 i", autorange="reversed", row=1, col=1)
-fig.update_xaxes(title_text="키 위치", row=1, col=2)
-fig.update_yaxes(title_text="어텐션 가중치", row=1, col=2)
+fig.update_xaxes(title_text="key j", row=1, col=1)
+fig.update_yaxes(title_text="query i", autorange="reversed", row=1, col=1)
+fig.update_xaxes(title_text="key 위치", row=1, col=2)
+fig.update_yaxes(title_text="attention 가중치", row=1, col=2)
 
-viz.fig_defaults(fig, height=440, title="ALiBi — 위치 임베딩 없이 거리 벌점만")
+viz.fig_defaults(fig, height=440, title="ALiBi — position embedding 없이 거리 벌점만")
 fig.update_layout(margin=dict(l=55, r=30, t=70, b=100),
                   legend=dict(x=0.53, y=0.99, font=dict(size=9)))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-오른쪽에서 기울기가 큰 헤드(파랑)는 **바로 앞 몇 토큰**에만 가중치를 몰고, 기울기가 작은 헤드(뒤쪽 색)는 훨씬 넓게 퍼집니다. 여러 헤드가 서로 다른 시간 규모를 담당하는 구조입니다.
+오른쪽에서 기울기가 큰 head(파랑)는 **바로 앞 몇 token**에만 가중치를 몰고, 기울기가 작은 head(뒤쪽 색)는 훨씬 넓게 퍼집니다. 여러 head가 서로 다른 시간 규모를 담당하는 구조입니다.
 :::
 
 ---
 
-## 길이 외삽: 학습보다 긴 입력
+## 길이 extrapolation: 학습보다 긴 입력
 
 실무에서 가장 중요한 질문이다.
-4K 토큰으로 학습한 모델에 32K를 넣으면 무슨 일이 일어나는가?
+4K token으로 학습한 모델에 32K를 넣으면 무슨 일이 일어나는가? 학습 범위 밖으로 나가는 것을 **extrapolation**(외삽)이라 한다.
 
 ```{python}
 #| label: fig-extrapolation
@@ -309,7 +312,7 @@ base = 8.0
 curves = {
     "학습형 절대 (GPT-2)": np.where(ratio <= 1, base,
                                      base + 60 * (ratio - 1)),      # 즉시 붕괴
-    "사인파 절대": np.where(ratio <= 1, base, base + 14 * (ratio - 1) ** 1.4),
+    "sinusoidal 절대": np.where(ratio <= 1, base, base + 14 * (ratio - 1) ** 1.4),
     "RoPE (보정 없음)": np.where(ratio <= 1, base, base + 6 * (ratio - 1) ** 1.6),
     "RoPE + YaRN/PI 보정": np.where(ratio <= 1, base, base + 0.55 * (ratio - 1)),
     "ALiBi": np.where(ratio <= 1, base, base + 0.30 * (ratio - 1)),
@@ -323,10 +326,10 @@ for i, (name, y) in enumerate(curves.items()):
 fig.add_vline(x=train_len, line=dict(color=viz.YELLOW, dash="dash", width=2),
               annotation_text=f"학습 길이 {train_len}", annotation_position="top left")
 
-fig.update_layout(xaxis_title="추론 시 문맥 길이 (토큰)", xaxis_type="log",
-                  yaxis_title="퍼플렉서티 (낮을수록 좋음)",
+fig.update_layout(xaxis_title="inference 시 문맥 길이 (token)", xaxis_type="log",
+                  yaxis_title="perplexity (낮을수록 좋음)",
                   yaxis=dict(range=[0, 60]), legend=dict(x=0.02, y=0.98))
-viz.fig_defaults(fig, height=430, title="길이 외삽 거동 — 정성적 비교")
+viz.fig_defaults(fig, height=430, title="길이 extrapolation 거동 — 정성적 비교")
 fig.show()
 ```
 
@@ -337,7 +340,8 @@ fig.show()
 순서(학습형이 가장 취약, ALiBi가 가장 완만)와 "보정을 넣으면 RoPE도 잘 버틴다"는 사실은
 문헌과 일치하지만, 구체적 수치는 모델·데이터·평가 방식에 따라 크게 달라집니다.
 
-실제 모델을 고를 때는 해당 모델의 [긴 문맥 벤치마크](../07_language/13_evaluation.qmd)를 직접 확인하세요.
+perplexity(퍼플렉서티 — 언어모델이 다음 token을 얼마나 "헷갈려" 하는가; $e^{\text{cross-entropy}}$, [0.4](../00_foundations/04_information_theory.qmd))는 낮을수록 좋다.
+실제 모델을 고를 때는 해당 모델의 [긴 문맥 benchmark](../07_language/13_evaluation.qmd)를 직접 확인하세요.
 :::
 
 ### RoPE를 늘리는 방법들
@@ -347,16 +351,16 @@ RoPE가 표준이 되면서, 재학습 없이 문맥을 늘리는 기법들이 �
 
 | 기법 | 아이디어 | 대가 |
 |------|----------|------|
-| **위치 보간 (PI)** | 위치를 $p \to p \cdot L_{\text{train}}/L_{\text{new}}$ 로 압축 | 가까운 위치 구별력 하락 |
-| **NTK-aware** | 고주파는 덜 건드리고 저주파만 늘림 | 미세조정 없이도 어느 정도 동작 |
-| **YaRN** | 주파수 대역별로 다르게 처리 + 온도 보정 | 소량 미세조정 필요 |
+| **position interpolation (PI)** | 위치를 $p \to p \cdot L_{\text{train}}/L_{\text{new}}$ 로 압축 (긴 자를 짧게 눈금 맞추기) | 가까운 위치 구별력 하락 |
+| **NTK-aware** | 고주파는 덜 건드리고 저주파만 늘림 | fine-tuning 없이도 어느 정도 동작 |
+| **YaRN** | 주파수 대역별로 다르게 처리 + temperature 보정 | 소량 fine-tuning 필요 |
 | **base 변경** | $10000 \to 500000$ 등으로 키움 | 재학습 필요, 최근 모델의 기본 |
 
 ::: {.key-concept}
 직관은 이렇다. RoPE의 고주파 차원은 **가까운 위치 구별**을,
-저주파 차원은 **먼 위치 구별**을 담당한다([G5.3.1](#fig-sinusoidal)의 구조와 같다).
+저주파 차원은 **먼 위치 구별**을 담당한다([G5.3.1](#fig-sinusoidal)의 구조와 같다 — 초침과 시침).
 
-문맥을 늘릴 때 모든 주파수를 똑같이 압축하면(PI) 가까운 위치를 구별하는 능력이 망가진다.
+문맥을 늘릴 때 모든 주파수를 똑같이 압축하면(PI) 가까운 위치를 구별하는 능력이 망가진다 — 초침까지 느리게 돌리면 초를 못 읽는다.
 그래서 NTK-aware와 YaRN은 **저주파만 골라서** 늘린다.
 :::
 
@@ -364,27 +368,27 @@ RoPE가 표준이 되면서, 재학습 없이 문맥을 늘리는 기법들이 �
 
 ## 정리: 무엇을 쓸 것인가
 
-| 방식 | 대표 모델 | 길이 외삽 | 속도 | 현재 위상 |
+| 방식 | 대표 모델 | 길이 extrapolation | 속도 | 현재 위상 |
 |---|---|---|---|---|
 | 학습형 절대 | BERT, GPT-2 | 불가 | 쉬움 | 구식 |
-| 사인파 절대 | 원 논문, 초기 모델 | 나쁨 | 쉬움 | 거의 안 씀 |
+| sinusoidal 절대 | 원 논문, 초기 모델 | 나쁨 | 쉬움 | 거의 안 씀 |
 | 상대 (T5 bias) | T5 | 보통 | 느림 | 일부 |
-| RoPE | LLaMA, Qwen, Mistral | 보정시 좋음 | 보통 | 사실상 표준 |
+| RoPE | LLaMA, Qwen, Mistral | 보정 시 좋음 | 보통 | 사실상 표준 |
 | ALiBi | BLOOM, MPT | 좋음 | 빠름 | 일부 |
 | NoPE | 연구 단계 | 미지수 | 가장 빠름 | 연구 |
 
 
 ::: {.callout-note}
-## NoPE — 위치 인코딩이 정말 필요한가
+## NoPE — positional encoding이 정말 필요한가
 
-최근 연구에서, **디코더 전용** 모델은 위치 인코딩을 아예 빼도 어느 정도 동작한다는 결과가 나왔다.
+최근 연구에서, **decoder 전용** 모델은 positional encoding을 아예 빼도 어느 정도 동작한다는 결과가 나왔다.
 
-이유는 [인과 마스크](01_self_attention.qmd) 자체가 위치 정보를 흘리기 때문이다.
+이유는 [causal mask](01_self_attention.qmd) 자체가 위치 정보를 흘리기 때문이다.
 위치 0은 자기 자신만 보고, 위치 5는 6개를 본다 —
-**볼 수 있는 토큰의 개수**가 이미 위치를 알려준다.
+**볼 수 있는 token의 개수**가 이미 위치를 알려준다.
 모델이 이 신호로부터 순서를 유도해낼 수 있다.
 
-인코더(양방향)에서는 이 신호가 없으므로 위치 인코딩이 반드시 필요하다.
+encoder(양방향)에서는 이 신호가 없으므로 positional encoding이 반드시 필요하다.
 :::
 
 ---
@@ -396,13 +400,13 @@ RoPE가 표준이 되면서, 재학습 없이 문맥을 늘리는 기법들이 �
 `rope-check` 에서 두 위치를 동시에 $k$ 만큼 옮겨도 내적이 같은지 확인하라.
 $k$ 를 크게 하면 수치오차가 얼마나 쌓이는가?
 
-**② base 가 감쇠를 어떻게 바꾸는가**
+**② base가 감쇠를 어떻게 바꾸는가**
 `fig-rope` 의 `dots` 를 거리 $0$~$4096$ 까지 계산해 $|\langle R_0 q, R_n k\rangle|$ 의 거리별 평균(무작위
 $q, k$ 여러 쌍)을 그려라. `attention.apply_rope(..., base=500000)` 으로 바꾸면 감쇠가 어떻게
-달라지는가? 최근 모델이 base 를 키우는 이유를 이 곡선으로 설명하라.
+달라지는가? 최근 모델이 base를 키우는 이유를 이 곡선으로 설명하라.
 
 **③ 주파수 대역의 역할**
-`fig-rope` 에서 RoPE 를 적용한 뒤 고주파 차원(앞쪽 쌍)만 0 으로 만들고 `dots` 를 다시 그려라.
+`fig-rope` 에서 RoPE를 적용한 뒤 고주파 차원(앞쪽 쌍)만 0으로 만들고 `dots` 를 다시 그려라.
 가까운 거리의 구별력이 사라지는가? 저주파(뒤쪽 쌍)만 지우면 무엇을 잃는가?
 :::
 
@@ -410,21 +414,21 @@ $q, k$ 여러 쌍)을 그려라. `attention.apply_rope(..., base=500000)` 으로
 
 | 개념 | 핵심 | 이어지는 곳 |
 |------|------|-------------|
-| 왜 필요한가 | 셀프 어텐션은 순열 등변 | [5.1](01_self_attention.qmd) |
-| 사인파 절대 | 주파수 계층으로 위치 부호화, 더하기 | 원 논문 |
+| 왜 필요한가 | self-attention은 permutation equivariant — 페이지 번호가 없는 책 | [5.1](01_self_attention.qmd) |
+| sinusoidal 절대 | 주파수 계층으로 위치 부호화, 더하기 — 초침·분침·시침 | 원 논문 |
 | 학습형 절대 | 단순하지만 길이 고정 | BERT, GPT-2 |
-| **RoPE** | 회전 적용 → 내적이 **상대 거리**에만 의존 | 현재 표준 |
+| **RoPE** | 회전 적용 → 내적이 **상대 거리**에만 의존 — 두 바늘 사이 각도 | 현재 표준 |
 | RoPE 감쇠 | 먼 거리 신호가 자연히 약해짐 | 장단점 양쪽 |
-| ALiBi | 점수에서 거리만큼 빼기, 헤드별 기울기 | 긴 문맥 강점 |
-| 길이 외삽 | 학습 길이 초과 시 거동 | PI, NTK, YaRN |
-| NoPE | 인과 마스크가 위치를 흘림 | 디코더 전용 한정 |
+| ALiBi | 점수에서 거리만큼 빼기, head별 기울기 | 긴 문맥 강점 |
+| 길이 extrapolation | 학습 길이 초과 시 거동 | PI, NTK, YaRN |
+| NoPE | causal mask가 위치를 흘림 | decoder 전용 한정 |
 
-여기까지가 어텐션 블록의 입력 쪽 이야기다.
-다음 장은 블록 **전체**를 조립한다 — 어텐션 뒤에 붙는 FFN, 잔차, 정규화가
+여기까지가 attention block의 입력 쪽 이야기다.
+다음 장은 block **전체**를 조립한다 — attention 뒤에 붙는 FFN, residual, normalization이
 각각 왜 거기 있는지가 남아 있다.
 
 ---
 
-**다음**: [5.4 트랜스포머 블록](04_transformer_block.qmd) — FFN·잔차·정규화 배치
+**다음**: [5.4 Transformer block](04_transformer_block.qmd) — FFN·residual·normalization 배치
 
-**이전**: [5.2 멀티헤드 어텐션](02_multi_head.qmd)
+**이전**: [5.2 multi-head attention](02_multi_head.qmd)
