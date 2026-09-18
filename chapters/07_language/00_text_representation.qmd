@@ -1,6 +1,6 @@
 ---
 title: "7.0 텍스트를 다루기"
-subtitle: "유니코드·정규화·전처리 — 언어 데이터의 현실"
+subtitle: "Unicode·normalization·전처리 — 언어 데이터의 현실"
 jupyter: ai-ml-study
 ---
 
@@ -11,8 +11,8 @@ jupyter: ai-ml-study
 답이 최소 네 가지다 — 그리고 그 답이 어긋나는 곳마다 버그가 생긴다.
 
 이 장은 화려하지 않다. 대신 여기서 생긴 오류는
-토크나이저를 지나 사전학습 데이터를 지나 모델 평가까지
-**끝까지 따라온다.** 그래서 먼저 한다.
+tokenizer를 지나 pretraining 데이터를 지나 모델 평가까지
+**끝까지 따라온다.** 그래서 먼저 한다. 건물의 기초 공사와 같다 — 눈에 안 띄지만 여기가 틀어지면 위층이 전부 기운다.
 
 ---
 
@@ -45,7 +45,8 @@ NFKC_EX = "  ·  ".join(f"{a} → {ud.normalize('NFKC', a)}"
 ```
 
 사람 눈에는 같거나 비슷한데 컴퓨터에게는 다른 문자열들이다.
-유니코드 정규화 형식은 네 가지다.
+같은 사람의 이름이 여권에는 "Kim", 신용카드에는 "KIM", 서류에는 "김"으로 적혀 있어 전산에서 다른 사람으로 잡히는 것과 같다.
+Unicode normalization(유니코드 정규화 — 같은 글자의 여러 표기를 하나의 표준 표기로 통일하기) 형식은 네 가지다.
 
 | 형식 | 하는 일 | 되돌릴 수 있나 |
 |---|---|---|
@@ -54,17 +55,19 @@ NFKC_EX = "  ·  ".join(f"{a} → {ud.normalize('NFKC', a)}"
 | NFKC | NFC + **호환 문자 통합** | **아니오 (정보 손실)** |
 | NFKD | NFD + 호환 문자 통합 | **아니오 (정보 손실)** |
 
-**NFC 는 한글·악센트를 고쳐 주지만 전각·합자·로마숫자는 못 고친다.**
-**NFKC 는 전부 고치는 대신 정보를 지운다**: `{python} NFKC_EX`.
-수식 x² 가 NFKC 를 지나면 x2 가 된다. 의미가 달라진다.
-**그래서 "무조건 NFKC" 는 위험한 기본값이다** — 도메인을 보고 골라야 한다.
+(조합형은 "ㅎ+ㅏ+ㄴ"처럼 부품으로, 완성형은 "한"처럼 한 글자로 저장한 것이다. 호환 문자는 "ＡＢＣ"나 "ﬁ"처럼 옛 규격과의 호환을 위해 따로 등록된 글자다.)
+
+**NFC는 한글·악센트를 고쳐 주지만 전각·합자·로마숫자는 못 고친다.**
+**NFKC는 전부 고치는 대신 정보를 지운다**: `{python} NFKC_EX`.
+수식 x²가 NFKC를 지나면 x2가 된다. 의미가 달라진다.
+**그래서 "무조건 NFKC"는 위험한 기본값이다** — domain을 보고 골라야 한다.
 
 실무 권장:
 
-- 일반 텍스트 코퍼스 — **NFC** (한글·악센트 통일, 정보 보존)
-- 검색 색인·중복 제거 키 — NFKC (원본은 따로 보관)
-- 코드·수식·화학식 — 정규화하지 말거나 NFC 만
-- **어느 쪽이든 파이프라인 전체에서 하나로 고정할 것**
+- 일반 텍스트 corpus(말뭉치 — 모델 학습용 텍스트 모음) — **NFC** (한글·악센트 통일, 정보 보존)
+- 검색 색인·deduplication 키 — NFKC (원본은 따로 보관)
+- 코드·수식·화학식 — normalization하지 말거나 NFC만
+- **어느 쪽이든 pipeline 전체에서 하나로 고정할 것**
 
 ::: {.callout-warning}
 ### macOS 파일명은 NFD다
@@ -74,9 +77,9 @@ Windows·Linux는 보통 NFC다.
 
 그래서 macOS에서 만든 `한글.txt` 를 Linux 서버에 올리면
 파일명이 `한글.txt` 로 보이는데 `open("한글.txt")` 가 실패한다.
-**같아 보이는데 바이트가 다르기 때문이다.**
+**같아 보이는데 byte가 다르기 때문이다.**
 
-데이터 수집 파이프라인에서 가장 흔하게 만나는 유니코드 버그다.
+데이터 수집 pipeline에서 가장 흔하게 만나는 Unicode bug다.
 :::
 
 ---
@@ -91,8 +94,8 @@ import unicodedata as ud
 
 SAMPLES = ["한글", "안녕하세요", "Hello", "こんにちは", "مرحبا", "café"]
 
-print(f"{'문자열':<14} {'코드포인트':>10} {'NFD 후':>8} {'UTF-8 바이트':>13} "
-      f"{'UTF-16 단위':>12} {'바이트/글자':>12}")
+print(f"{'문자열':<14} {'code point':>10} {'NFD 후':>8} {'UTF-8 byte':>13} "
+      f"{'UTF-16 단위':>12} {'byte/글자':>12}")
 print("-" * 74)
 for s in SAMPLES:
     b = len(s.encode("utf-8"))
@@ -100,9 +103,9 @@ for s in SAMPLES:
           f"{len(s.encode('utf-16-le'))//2:>12} {b/len(s):>12.2f}")
 ```
 
-같은 문자열의 길이가 네 가지다. **한글 한 글자 = UTF-8 3바이트, 영어 한 글자 = 1바이트.**
-이 3배 차이가 뒤에서 계속 따라온다 — 바이트 단위 토크나이저에서, API 비용에서, 문맥 창 예산에서.
-그리고 자모로 분해하면 코드포인트가 3배가 된다 (NFD 열).
+같은 문자열의 길이가 네 가지다. code point(코드포인트 — Unicode가 글자 하나하나에 매긴 번호)로 세느냐, byte로 세느냐에 따라 다르다. **한글 한 글자 = UTF-8 3 byte, 영어 한 글자 = 1 byte.**
+이 3배 차이가 뒤에서 계속 따라온다 — byte 단위 tokenizer에서, API 비용에서, context window(문맥 창 — 모델이 한 번에 볼 수 있는 길이) 예산에서.
+그리고 자모로 분해하면 code point가 3배가 된다 (NFD 열).
 **한글은 "문자 하나"가 무엇인지 특히 애매한 문자다.**
 
 ```{python}
@@ -113,7 +116,7 @@ import unicodedata as ud
 
 EMOJI = ["😀", "👨‍👩‍👧‍👦", "🇰🇷", "👍🏽", "é", "é"]
 
-print(f"{'보이는 것':<8} {'코드포인트':>10} {'UTF-8':>7}  {'구성'}")
+print(f"{'보이는 것':<8} {'code point':>10} {'UTF-8':>7}  {'구성'}")
 print("-" * 78)
 for e in EMOJI:
     parts = " + ".join(ud.name(c, "?").replace("ZERO WIDTH JOINER", "ZWJ")
@@ -123,26 +126,28 @@ FAM_CP, FAM_B = len(EMOJI[1]), len(EMOJI[1].encode("utf-8"))
 ```
 
 `len()` 이 사람의 직관과 어긋나는 곳이다.
-**가족 이모지는 코드포인트 `{python} f"{FAM_CP}"`개, 바이트 `{python} f"{FAM_B}"`개, 그런데 사람이 보기엔 1개다.**
-사람이 세는 단위는 코드포인트가 아니라 **자소 클러스터(grapheme cluster)** 다.
+**가족 emoji는 code point `{python} f"{FAM_CP}"`개, byte `{python} f"{FAM_B}"`개, 그런데 사람이 보기엔 1개다.**
+사람이 세는 단위는 code point가 아니라 **grapheme cluster**(자소 클러스터 — 눈에 한 글자로 보이는 단위)다.
 
 실무에서 문제가 되는 지점:
 
-- 문자열 자르기 — 이모지 중간을 자르면 깨진다
-- 글자 수 제한 — 트위터 280자는 코드포인트가 아니라 별도의 가중 규칙이다
-- 역순 뒤집기 — `s[::-1]` 은 ZWJ 시퀀스를 파괴한다
-- **토크나이저 학습 — 바이트 단위로 자르면 이 문제가 사라진다** ([7.1](01_tokenization.qmd))
+- 문자열 자르기 — emoji 중간을 자르면 깨진다
+- 글자 수 제한 — 트위터 280자는 code point가 아니라 별도의 가중 규칙이다
+- 역순 뒤집기 — `s[::-1]` 은 ZWJ(zero width joiner — 글자들을 하나로 묶는 보이지 않는 문자) sequence를 파괴한다
+- **tokenizer 학습 — byte 단위로 자르면 이 문제가 사라진다** ([7.1](01_tokenization.qmd))
 
-마지막 항목이 byte-level BPE 가 사실상 표준이 된 이유 중 하나다.
-어떤 바이트열이든 인코딩할 수 있으면 "UNK 토큰"과 깨짐이 원천적으로 없다.
+마지막 항목이 byte-level BPE가 사실상 표준이 된 이유 중 하나다.
+어떤 byte열이든 encoding할 수 있으면 "UNK token"(unknown — 어휘에 없는 글자를 뭉뚱그리는 token)과 깨짐이 원천적으로 없다.
 
 ---
 
 ## G7.0.3 — 한글 자모: 산술로 분해된다
 
-한글 음절은 유니코드에 **규칙적으로** 배열되어 있다.
+한글 음절은 Unicode에 **규칙적으로** 배열되어 있다.
 
-$$\text{코드포인트} = \texttt{0xAC00} + (\text{초성} \times 588) + (\text{중성} \times 28) + \text{종성}$$
+$$\text{code point} = \texttt{0xAC00} + (\text{초성} \times 588) + (\text{중성} \times 28) + \text{종성}$$
+
+(588 = 중성 21 × 종성 28, 즉 초성 하나가 바뀔 때마다 588칸 뛴다. 자리수 체계와 같다 — 백의 자리, 십의 자리, 일의 자리처럼 초성·중성·종성이 각 자리를 맡는다.)
 
 ```{python}
 #| label: hangul
@@ -165,7 +170,7 @@ def compose(c, j, t="_"):
     return chr(BASE + CHO.index(c)*588 + JUNG.index(j)*28 + JONG.index(t))
 
 
-print(f"{'글자':>4} {'코드포인트':>12} {'초성':>5} {'중성':>5} {'종성':>5}")
+print(f"{'글자':>4} {'code point':>12} {'초성':>5} {'중성':>5} {'종성':>5}")
 print("-" * 38)
 for ch in "한글은 재밌다":
     d = decompose(ch)
@@ -181,15 +186,15 @@ N_SYL = 19*21*28
 ```
 
 완성형 한글 음절은 초성 19 × 중성 21 × 종성 28 = `{python} f"{N_SYL:,}"` 개이고
-U+AC00 ~ U+D7A3 에 차례로 놓여 있다.
+U+AC00 ~ U+D7A3에 차례로 놓여 있다.
 역방향도 산술이다 — 초성 ㅎ + 중성 ㅏ + 종성 ㄴ 을 합성하면 "`{python} HAN`" 이고,
 `{python} f"{N_SYL:,}"` 개 전부 분해→합성 왕복이 일치한다 (`{python} f"{ok}"`).
 
-**이 규칙성이 한국어 NLP 를 특이하게 만든다.**
+**이 규칙성이 한국어 NLP를 특이하게 만든다.**
 
 - 자모 단위 모델링이 가능하다 (오탈자 교정, 음성 합성에 유용)
-- 그런데 자모로 내리면 시퀀스가 3배 길어진다
-- NFD 정규화가 곧 자모 분해다 — 의도치 않게 일어나면 재앙이다
+- 그런데 자모로 내리면 sequence가 3배 길어진다
+- NFD normalization이 곧 자모 분해다 — 의도치 않게 일어나면 재앙이다
 
 ---
 
@@ -206,7 +211,7 @@ SENTS = [
     "그는 학교에서 공부를 하고 있었다",
     "The quick brown fox jumps over the lazy dog",
 ]
-print(f"{'문장':<44} {'어절':>5} {'음절':>6} {'자모':>6} {'바이트':>7}")
+print(f"{'문장':<44} {'어절':>5} {'음절':>6} {'자모':>6} {'byte':>7}")
 print("-" * 74)
 for s in SENTS:
     ns = s.replace(" ", "")
@@ -214,20 +219,20 @@ for s in SENTS:
           f"{len(ud.normalize('NFD', ns)):>6} {len(s.encode('utf-8')):>7}")
 ```
 
-라이브러리 없이 셀 수 있는 단위들이다. **형태소는 이 표에 없다.** 규칙만으로는 못 나누기 때문이다.
+library 없이 셀 수 있는 단위들이다. **형태소(morpheme — 뜻을 가진 가장 작은 단위)는 이 표에 없다.** 규칙만으로는 못 나누기 때문이다.
 
 - 어절 "학교에서" → 형태소 "학교" + "에서" (명사 + 조사)
 - 어절 "있었다" → 형태소 "있" + "었" + "다" (어간 + 선어말 + 어말)
 
 위 분석은 손으로 붙인 것이다 — 자동으로 하려면 형태소 분석기가 필요하다.
-한국어가 **교착어**라 그렇다. 어간에 조사·어미가 줄줄이 붙는다.
+한국어가 **교착어**(agglutinative language — 어간에 조사·어미가 줄줄이 붙는 언어)라 그렇다. 레고 블록을 이어 붙이듯 "학교+에서+도+요"처럼 늘어난다.
 
-| 유형 | 특징 | 예 | 토크나이저 함의 |
+| 유형 | 특징 | 예 | tokenizer 함의 |
 |---|---|---|---|
-| 교착어 | 어간 + 접사가 붙어 늘어난다 | 한국어, 터키어, 일본어 | 어절 어휘가 폭발한다 |
-| 굴절어 | 단어 형태 자체가 변한다 | 라틴어, 러시아어 | 활용형이 전부 다른 토큰 |
-| 고립어 | 형태 변화가 거의 없다 | 중국어, 베트남어 | 형태는 단순하지만 중국어는 **띄어쓰기가 없다** |
-| 분석어 | 어순과 기능어로 문법 표현 | 영어(부분적) | 공백 분리가 잘 먹는다 |
+| 교착어 (agglutinative) | 어간 + 접사가 붙어 늘어난다 | 한국어, 터키어, 일본어 | 어절 vocabulary가 폭발한다 |
+| 굴절어 (inflectional) | 단어 형태 자체가 변한다 | 라틴어, 러시아어 | 활용형이 전부 다른 token |
+| 고립어 (isolating) | 형태 변화가 거의 없다 | 중국어, 베트남어 | 형태는 단순하지만 중국어는 **띄어쓰기가 없다** |
+| 분석어 (analytic) | 어순과 기능어로 문법 표현 | 영어(부분적) | 공백 분리가 잘 먹는다 |
 
 **"단어로 나눈다"는 발상은 영어 중심 편향이다.**
 
@@ -235,14 +240,14 @@ for s in SENTS:
 - 한국어 어절 "학교에서도" 하나에 형태소가 셋이다
 - 독일어 복합명사는 한 단어가 임의로 길어진다
 
-**서브워드 토크나이제이션([7.1](01_tokenization.qmd))이 이 문제 전체를 우회하는 방법이다** —
+**subword tokenization([7.1](01_tokenization.qmd) — 단어보다 작은 조각으로 나누기)이 이 문제 전체를 우회하는 방법이다** —
 언어별 규칙 대신 데이터에서 통계적으로 경계를 배운다.
 
 ---
 
-## G7.0.5 — 중복 제거: 정규화가 왜 먼저인가
+## G7.0.5 — deduplication: normalization이 왜 먼저인가
 
-사전학습 데이터에서 중복 제거는 성능에 직접 영향을 준다.
+pretraining 데이터에서 deduplication(중복 제거)은 성능에 직접 영향을 준다 — 같은 문서를 여러 번 보면 모델이 그것을 외운다.
 그런데 **무엇을 같다고 볼 것인가**가 먼저 정해져야 한다.
 
 ```{python}
@@ -263,7 +268,7 @@ print(f"{'전처리 단계':<28} {'남는 고유 문서 수':>18}")
 print("-" * 48)
 steps = [
     ("전처리 없음", lambda d: d),
-    ("NFC 정규화", lambda d: ud.normalize("NFC", d)),
+    ("NFC normalization", lambda d: ud.normalize("NFC", d)),
     ("NFC + 공백 정리", lambda d: " ".join(ud.normalize("NFC", d).split())),
 ]
 COUNTS = []
@@ -276,31 +281,32 @@ N_DOCS, N_RAW, N_CLEAN = len(DOCS), COUNTS[0][1], COUNTS[-1][1]
 
 문서 `{python} f"{N_DOCS}"`개가 화면에는 전부 "한글 처리"로 보인다.
 **전처리 없이는 `{python} f"{N_RAW}"`개, 제대로 하면 `{python} f"{N_CLEAN}"`개다.**
-사전학습 코퍼스가 수십억 문서라면 이 차이가 통째로 남는다.
+pretraining corpus가 수십억 문서라면 이 차이가 통째로 남는다.
 
-실제 코퍼스에서 흔한 중복의 종류:
+실제 corpus에서 흔한 중복의 종류:
 
-- 완전 중복 — 같은 문서가 여러 번 크롤링됨
-- 정규화 차이 — NFC/NFD, 전각/반각, 공백
-- 보일러플레이트 — 저작권 고지, 쿠키 배너, 내비게이션
-- **근접 중복** — 한두 문장만 다른 문서 (이게 제일 어렵다)
-- 템플릿 생성물 — 자동 생성된 상품 페이지, 스포츠 기사
+- 완전 중복 — 같은 문서가 여러 번 crawling됨
+- normalization 차이 — NFC/NFD, 전각/반각, 공백
+- boilerplate(상용구 — 모든 페이지에 붙는 저작권 고지, 쿠키 배너, navigation)
+- **near-duplicate**(근접 중복) — 한두 문장만 다른 문서 (이게 제일 어렵다)
+- template 생성물 — 자동 생성된 상품 페이지, 스포츠 기사
 
-완전 중복은 해시로 끝난다. 근접 중복은 다르다 —
+완전 중복은 hash(문서를 짧은 고정 길이 번호로 요약하는 함수)로 끝난다 — 번호가 같으면 같은 문서다. near-duplicate는 다르다 —
 문서 $N$ 개를 전부 비교하면 $O(N^2)$ 이고, $N = 10^9$ 이면 불가능하다.
 
 ---
 
-## G7.0.6 — MinHash: 근접 중복을 O(N)에 가깝게
+## G7.0.6 — MinHash: near-duplicate를 O(N)에 가깝게
 
-$k$-shingle 집합의 자카드 유사도를 **작은 서명 벡터**로 추정한다.
+$k$-shingle(문서를 $k$ 글자씩 겹치게 자른 조각) 집합의 Jaccard similarity(자카드 유사도 — 두 집합의 교집합 크기 / 합집합 크기)를 **작은 signature 벡터**로 추정한다.
 
 $$J(A, B) = \frac{|A \cap B|}{|A \cup B|},
 \qquad
 \Pr\big[\min h(A) = \min h(B)\big] = J(A, B)$$
 
-무작위 해시 하나의 최솟값이 일치할 확률이 **정확히 자카드 유사도**다.
-$k$개를 독립적으로 쓰면 일치 비율이 불편추정량이 된다.
+무작위 hash 하나의 최솟값이 일치할 확률이 **정확히 Jaccard similarity**다.
+왜 그런가: 합집합의 모든 원소에 무작위 번호를 매기면 가장 작은 번호를 받는 원소는 어느 것이든 똑같이 가능하고, 그것이 교집합에 속할 확률이 바로 $|A \cap B|/|A \cup B|$ 다.
+$k$개를 독립적으로 쓰면 일치 비율이 unbiased estimator(불편추정량)가 된다 — 여론조사에서 표본 $k$ 명으로 전체 비율을 추정하는 것과 같다.
 
 ```{python}
 #| label: minhash
@@ -313,7 +319,7 @@ P = (1 << 31) - 1
 
 
 def h32(s):
-    """결정론적 해시. 파이썬 내장 hash() 는 프로세스마다 값이 달라 못 쓴다."""
+    """결정론적 hash. Python 내장 hash()는 process마다 값이 달라 못 쓴다."""
     return zlib.crc32(s.encode("utf-8")) % P
 
 
@@ -329,12 +335,12 @@ def minhash(S, k, seed=0):
     return ((A[:, None]*h[None] + B[:, None]) % P).min(1)
 
 
-D1 = "정규화를 하지 않으면 중복 제거가 실패한다"
-D2 = "정규화를 하지 않으면 중복 탐지가 실패한다"
+D1 = "normalization을 하지 않으면 중복 제거가 실패한다"
+D2 = "normalization을 하지 않으면 중복 탐지가 실패한다"
 S1, S2 = shingles(D1), shingles(D2)
 J_TRUE = len(S1 & S2)/len(S1 | S2)
 
-print(f"{'해시 개수 k':>12} {'추정 평균 (40회)':>18} {'실측 표준편차':>14} "
+print(f"{'hash 개수 k':>12} {'추정 평균 (40회)':>18} {'실측 표준편차':>14} "
       f"{'이론 √(J(1−J)/k)':>18}")
 print("-" * 66)
 MH = []
@@ -345,15 +351,15 @@ for k in [16, 64, 256, 1024]:
           f"{np.sqrt(J_TRUE*(1-J_TRUE)/k):>18.4f}")
 ```
 
-두 문서의 3-shingle 집합 크기는 `{python} f"{len(S1)}"`, `{python} f"{len(S2)}"` 이고
-참 자카드 유사도는 `{python} f"{J_TRUE:.4f}"` 다.
-**추정이 불편이고, 오차가 이론대로 $1/\sqrt{k}$ 로 줄어든다** —
+두 문서의 3-shingle 집합 크기는 `{python} f"{len(S1)}"`, `{python} f"{len(S2)}"`이고
+참 Jaccard similarity는 `{python} f"{J_TRUE:.4f}"`다.
+**추정이 unbiased이고, 오차가 이론대로 $1/\sqrt{k}$ 로 줄어든다** —
 $k = 16$ 에서 실측 `{python} f"{MH[0][2]:.4f}"` vs 이론 `{python} f"{MH[0][3]:.4f}"`,
 $k = 1024$ 에서 실측 `{python} f"{MH[3][2]:.4f}"` vs 이론 `{python} f"{MH[3][3]:.4f}"`.
 
 **핵심은 비용이다.** 문서를 `{python} f"{MH[2][0]}"`차원 정수 벡터로 줄여 놓으면
 두 문서 비교가 그 벡터 비교로 끝난다. 원문 길이와 무관하다.
-게다가 LSH 밴딩을 쓰면 **후보 쌍만** 비교해 $O(N^2)$ 을 피할 수 있다.
+게다가 LSH(locality-sensitive hashing) banding — signature를 몇 조각으로 나눠 한 조각이라도 완전히 같은 문서끼리만 후보로 묶기 — 을 쓰면 **후보 쌍만** 비교해 $O(N^2)$ 을 피할 수 있다.
 
 ```{python}
 #| label: dedup-matrix
@@ -362,9 +368,9 @@ $k = 1024$ 에서 실측 `{python} f"{MH[3][2]:.4f}"` vs 이론 `{python} f"{MH[
 import numpy as np
 
 CORPUS = [
-    "정규화를 하지 않으면 중복 제거가 실패한다",
-    "정규화를 하지 않으면 중복 탐지가 실패한다",
-    "정규화를  하지 않으면 중복 제거가 실패한다.",
+    "normalization을 하지 않으면 중복 제거가 실패한다",
+    "normalization을 하지 않으면 중복 탐지가 실패한다",
+    "normalization을  하지 않으면 중복 제거가 실패한다.",
     "오늘 날씨가 매우 좋습니다",
     "고양이가 매트 위에 앉았다",
 ]
@@ -384,25 +390,25 @@ print()
 TH = 0.7
 pairs = [(i, j) for i in range(len(CORPUS)) for j in range(i+1, len(CORPUS))
          if M[i, j] >= TH]
-print(f"임계값 {TH} 이상인 쌍: {pairs}")
+print(f"threshold {TH} 이상인 쌍: {pairs}")
 ```
 
-MinHash 서명 `{python} f"{K}"`차원으로 추정한 유사도 행렬이다.
-문서 0 과 2 는 공백·마침표만 다른데 유사도 `{python} f"{M[0, 2]:.2f}"` — 근접 중복으로 잡힌다.
-문서 0 과 1 은 단어 하나만 다른데 `{python} f"{M[0, 1]:.4f}"` 로 임계값 `{python} f"{TH}"` 에서
-**탈락한다.** 둘째 자리로 반올림하면 `{python} f"{M[0, 1]:.2f}"` 이라 걸릴 것 같지만 아니다 —
-**임계값 근처는 언제나 불안정하다.** 추정값이라 시드에 따라서도 흔들린다.
-무관한 문서 3, 4 는 `{python} f"{M[3, 4]:.2f}"` 다.
+MinHash signature `{python} f"{K}"`차원으로 추정한 유사도 행렬이다.
+문서 0과 2는 공백·마침표만 다른데 유사도 `{python} f"{M[0, 2]:.2f}"` — near-duplicate로 잡힌다.
+문서 0과 1은 단어 하나만 다른데 `{python} f"{M[0, 1]:.4f}"`로 threshold(임계값) `{python} f"{TH}"`에서
+**탈락한다.** 둘째 자리로 반올림하면 `{python} f"{M[0, 1]:.2f}"`이라 걸릴 것 같지만 아니다 —
+**threshold 근처는 언제나 불안정하다.** 추정값이라 seed에 따라서도 흔들린다.
+무관한 문서 3, 4는 `{python} f"{M[3, 4]:.2f}"`다.
 
-**임계값 설정이 곧 정책이다.**
+**threshold 설정이 곧 정책이다.**
 
 - 너무 낮으면 서로 다른 문서를 지운다 (다양성 손실)
-- 너무 높으면 템플릿 문서가 살아남는다 (모델이 그것을 외운다)
-- 실무에서는 0.7~0.9 를 쓰고, 도메인마다 다시 튜닝한다
+- 너무 높으면 template 문서가 살아남는다 (모델이 그것을 외운다)
+- 실무에서는 0.7~0.9를 쓰고, domain마다 다시 tuning한다
 
 ```{python}
 #| label: fig-minhash
-#| fig-cap: "해시 개수에 따른 MinHash 추정 오차 — 1/√k 로 감소"
+#| fig-cap: "hash 개수에 따른 MinHash 추정 오차 — 1/√k로 감소"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -432,9 +438,9 @@ fig.add_trace(go.Scatter(x=ks, y=[m[3] for m in MH], mode="lines+markers",
                          name="이론 √(J(1−J)/k)",
                          line=dict(color=viz.WARM, width=2, dash="dash"),
                          marker=dict(size=8)), row=1, col=2)
-fig.update_xaxes(title_text="자카드 추정값", row=1, col=1)
-fig.update_yaxes(title_text="밀도", row=1, col=1)
-fig.update_xaxes(title_text="해시 개수 k", type="log", row=1, col=2)
+fig.update_xaxes(title_text="Jaccard 추정값", row=1, col=1)
+fig.update_yaxes(title_text="density", row=1, col=1)
+fig.update_xaxes(title_text="hash 개수 k", type="log", row=1, col=2)
 fig.update_yaxes(title_text="표준오차", type="log", row=1, col=2)
 viz.fig_defaults(fig, height=380, title="")
 fig.show()
@@ -442,7 +448,9 @@ fig.show()
 
 ---
 
-## G7.0.7 — 편집거리
+## G7.0.7 — edit distance
+
+**edit distance**(편집거리)는 한 문자열을 다른 문자열로 바꾸는 데 필요한 최소 편집 횟수(삽입·삭제·치환)다 — 오타를 고치려면 키를 몇 번 눌러야 하는가. 아래는 표를 채워 나가는 dynamic programming([0.5](../00_foundations/05_numerical_computing.qmd)) 계산이다.
 
 ```{python}
 #| label: edit-distance
@@ -480,11 +488,11 @@ def backtrace(D, a, b):
 
 PAIRS = [("kitten", "sitting"), ("서울시", "서울특별시"),
          ("한글", ud.normalize("NFD", "한글")), ("않됀다", "안된다")]
-print(f"{'A':<10} {'B':<10} {'편집거리':>8} {'정규화 유사도':>14}")
+print(f"{'A':<10} {'B':<10} {'edit dist':>9} {'정규화 유사도':>14}")
 print("-" * 48)
 for a, b in PAIRS:
     d = int(edit_table(a, b)[-1, -1])
-    print(f"{a:<10} {b:<10} {d:>8} {1 - d/max(len(a), len(b)):>14.3f}")
+    print(f"{a:<10} {b:<10} {d:>9} {1 - d/max(len(a), len(b)):>14.3f}")
 a_, b_ = "한글", ud.normalize("NFD", "한글")
 D_HAN = int(edit_table(a_, b_)[-1, -1])
 print()
@@ -494,13 +502,13 @@ for op, x, y in backtrace(edit_table("kitten", "sitting"), "kitten", "sitting"):
     print(f"    {op}  {x or '∅':>2} → {y or '∅':>2}{mark}")
 ```
 
-**NFC "한글" 과 NFD "한글" 의 편집거리가 `{python} f"{D_HAN}"` 이다.**
+**NFC "한글"과 NFD "한글"의 edit distance가 `{python} f"{D_HAN}"`이다.**
 화면에는 똑같이 보이는 두 문자열인데도 그렇다.
-**정규화를 먼저 하지 않으면 문자열 유사도는 아무 의미가 없다.**
+**normalization을 먼저 하지 않으면 문자열 유사도는 아무 의미가 없다.**
 
 ```{python}
 #| label: fig-edit
-#| fig-cap: "편집거리 DP 표와 최소 편집 경로"
+#| fig-cap: "edit distance DP 표와 최소 편집 경로"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -538,13 +546,15 @@ fig.update_yaxes(title_text="kitten", tickmode="array",
                  tickvals=list(range(len(A)+1)), ticktext=["∅"]+list(A),
                  autorange="reversed")
 viz.fig_defaults(fig, height=420,
-                 title=f"D[i,j] = 앞 i글자와 앞 j글자의 편집거리 · 최종 {D[-1,-1]}")
+                 title=f"D[i,j] = 앞 i글자와 앞 j글자의 edit distance · 최종 {D[-1,-1]}")
 fig.show()
 ```
 
 ---
 
 ## G7.0.8 — BoW와 TF-IDF, 그리고 그 한계
+
+**BoW**(bag of words — 단어 주머니)는 문서를 "어떤 단어가 몇 번 나왔는가"의 개수표로만 보는 것이다. **TF-IDF**는 거기에 "흔한 단어는 할인한다"는 가중치를 곱한다: TF(term frequency — 이 문서에서의 빈도) × IDF(inverse document frequency — 전체 문서 중 얼마나 드문가).
 
 ```{python}
 #| label: tfidf
@@ -561,7 +571,7 @@ CORP = [
 VOCAB = sorted({w for d in CORP for w in d.split()})
 TF = np.array([[d.split().count(w) for w in VOCAB] for d in CORP], float)
 DF = (TF > 0).sum(0)
-IDF = np.log((1 + len(CORP))/(1 + DF)) + 1               # 평활화된 IDF
+IDF = np.log((1 + len(CORP))/(1 + DF)) + 1               # smoothing된 IDF
 TFN = TF/np.maximum(TF.sum(1, keepdims=True), 1)
 TFIDF = TFN*IDF
 
@@ -579,38 +589,38 @@ DF_MAT = int(DF[VOCAB.index("매트")])
 TFIDF_REP, TFIDF_MAX_OTHER = TFIDF[3, VOCAB.index("매트")], TFIDF[:3].max()
 ```
 
-**IDF 가 하는 일**은 여러 문서에 나오는 단어의 가중치를 낮추는 것이다.
+**IDF가 하는 일**은 여러 문서에 나오는 단어의 가중치를 낮추는 것이다 — "은/는/이/가"처럼 어디에나 있는 단어는 문서를 구별하는 데 도움이 안 된다.
 "매트"는 4문서 중 `{python} f"{DF_MAT}"`곳에 나와 IDF `{python} f"{IDF_MAT:.3f}"`,
-"생선을"은 1곳에만 나와 IDF `{python} f"{IDF_FISH:.3f}"` 다.
+"생선을"은 1곳에만 나와 IDF `{python} f"{IDF_FISH:.3f}"`다.
 
-**그런데 문서 3 을 보라.** "매트 매트 매트 매트"의 "매트" TF-IDF 가
+**그런데 문서 3을 보라.** "매트 매트 매트 매트"의 "매트" TF-IDF가
 `{python} f"{TFIDF_REP:.3f}"` — 다른 어느 문서의 어느 단어보다 크다
 (나머지 최대 `{python} f"{TFIDF_MAX_OTHER:.3f}"`).
 **의미 없는 반복이 가장 높은 점수를 받는다.**
 
-BoW·TF-IDF 의 구조적 한계:
+BoW·TF-IDF의 구조적 한계:
 
 - 어순을 버린다 — "개가 사람을 물었다"와 "사람이 개를 물었다"가 같다
 - 동의어를 모른다 — "고양이"와 "냥이"가 완전히 다른 차원
 - 다의어를 구분 못 한다 — "배(과일)"와 "배(선박)"가 한 차원
-- **반복에 취약하다** — 위 문서 3 이 그 사례
-- 어휘 크기만큼 차원이 커지고 대부분 0 이다 (희소)
+- **반복에 취약하다** — 위 문서 3이 그 사례
+- vocabulary 크기만큼 차원이 커지고 대부분 0이다 (sparse)
 
-그럼에도 TF-IDF 는 지금도 쓰인다:
+그럼에도 TF-IDF는 지금도 쓰인다:
 
-- 검색의 기본 점수 (BM25 는 TF-IDF 의 개선판 — 반복에 대한 포화 항이 바로 위 문제를 다룬다)
-- **RAG 의 하이브리드 검색** — 밀집 임베딩과 함께 ([7.10](10_rag.qmd))
+- 검색의 기본 점수 (BM25는 TF-IDF의 개선판 — 반복에 대한 saturation 항이 바로 위 문제를 다룬다)
+- **RAG의 hybrid 검색** — dense embedding과 함께 ([7.10](10_rag.qmd))
 - 빠르고 해석 가능하고 학습이 필요 없다
 
 다음 장들이 이 한계를 하나씩 푼다:
 
-- 어휘 폭발 → 서브워드 토크나이제이션 ([7.1](01_tokenization.qmd))
-- 동의어·다의어 → 분산 표현 ([7.3](03_word_embeddings.qmd))
-- 어순 → 언어모델과 어텐션 ([7.2](02_language_models.qmd), Part 5)
+- vocabulary 폭발 → subword tokenization ([7.1](01_tokenization.qmd))
+- 동의어·다의어 → distributed representation ([7.3](03_word_embeddings.qmd))
+- 어순 → language model과 attention ([7.2](02_language_models.qmd), Part 5)
 
 ---
 
-## G7.0.9 — 어휘는 왜 항상 부족한가
+## G7.0.9 — vocabulary는 왜 항상 부족한가
 
 ```{python}
 #| label: zipf
@@ -618,7 +628,7 @@ BoW·TF-IDF 의 구조적 한계:
 
 import numpy as np
 
-# 지프 분포에서 뽑은 합성 코퍼스 (시드 고정)
+# Zipf 분포에서 뽑은 합성 corpus (seed 고정)
 V_TRUE, S_EXP = 50000, 1.07
 p = 1.0/np.arange(1, V_TRUE+1)**S_EXP
 p /= p.sum()
@@ -628,7 +638,7 @@ test = r.choice(V_TRUE, 100000, p=p)
 cnt = np.bincount(train, minlength=V_TRUE)
 order = np.argsort(cnt)[::-1]
 
-print(f"{'어휘 크기 V':>12} {'훈련 토큰 커버리지':>18} {'테스트 OOV 비율':>16}")
+print(f"{'vocab 크기 V':>12} {'훈련 token coverage':>19} {'test OOV 비율':>16}")
 print("-" * 50)
 ZP = []
 for V in [1000, 5000, 10000, 30000, 50000]:
@@ -636,10 +646,10 @@ for V in [1000, 5000, 10000, 30000, 50000]:
     oov = float(np.mean([t not in keep for t in test[:20000]]))
     cov = float(cnt[order[:V]].sum()/cnt.sum())
     ZP.append((V, cov, oov))
-    print(f"{V:>12,} {cov:>18.2%} {oov:>16.2%}")
+    print(f"{V:>12,} {cov:>19.2%} {oov:>16.2%}")
 print()
-print("Heaps 법칙 — 코퍼스를 키우면 어휘도 계속 자란다")
-print(f"{'토큰 수':>12} {'고유 타입 수':>14} {'타입/토큰':>11}")
+print("Heaps 법칙 — corpus를 키우면 vocabulary도 계속 자란다")
+print(f"{'token 수':>12} {'고유 type 수':>14} {'type/token':>11}")
 print("-" * 40)
 HP = []
 for n in [1000, 10000, 100000, 400000]:
@@ -648,68 +658,68 @@ for n in [1000, 10000, 100000, 400000]:
     print(f"{n:>12,} {u:>14,} {u/n:>11.4f}")
 ```
 
-지프 지수 `{python} f"{S_EXP}"`, 참 어휘 `{python} f"{V_TRUE:,}"`, 훈련 토큰
-`{python} f"{len(train):,}"` 의 합성 코퍼스다. 실제 언어의 어휘는 유한하지 않으므로
-첫 표 마지막 줄의 OOV 0% 는 합성 데이터의 인공물이다.
+Zipf 법칙(지프 법칙 — $r$ 번째로 흔한 단어의 빈도가 $1/r^s$ 에 비례한다는 경험 법칙: 소수의 단어가 대부분을 차지하고 나머지는 긴 꼬리를 이룬다)에서 지수 `{python} f"{S_EXP}"`, 참 vocabulary `{python} f"{V_TRUE:,}"`, 훈련 token
+`{python} f"{len(train):,}"`의 합성 corpus다. OOV(out-of-vocabulary — 어휘에 없는 단어)는 모델이 처음 보는 단어의 비율이다. 실제 언어의 vocabulary는 유한하지 않으므로
+첫 표 마지막 줄의 OOV 0%는 합성 데이터의 인공물이다.
 
-**어휘를 10배 늘려도 OOV 는 절반 남짓으로만 준다**
+**vocabulary를 10배 늘려도 OOV는 절반 남짓으로만 준다**
 (`{python} f"{ZP[0][2]:.1%}"` → `{python} f"{ZP[2][2]:.1%}"`).
-지프 법칙의 긴 꼬리 때문이다 — 드문 단어의 수가 사실상 무한하다.
-Heaps 법칙 표는 같은 사실의 다른 얼굴이다 — 토큰을
-`{python} f"{HP[0][0]:,}"` 에서 `{python} f"{HP[-1][0]:,}"` 으로 늘리는 동안
-고유 타입이 `{python} f"{HP[0][1]:,}"` 에서 `{python} f"{HP[-1][1]:,}"` 으로 계속 자란다.
+Zipf 법칙의 긴 꼬리 때문이다 — 드문 단어의 수가 사실상 무한하다.
+Heaps 법칙 표는 같은 사실의 다른 얼굴이다 — token을
+`{python} f"{HP[0][0]:,}"`에서 `{python} f"{HP[-1][0]:,}"`으로 늘리는 동안
+고유 type(서로 다른 단어의 종류)이 `{python} f"{HP[0][1]:,}"`에서 `{python} f"{HP[-1][1]:,}"`으로 계속 자란다.
 
-**단어 단위 어휘로는 이 문제를 풀 수 없다.**
+**단어 단위 vocabulary로는 이 문제를 풀 수 없다.** 사전을 아무리 두껍게 만들어도 신조어는 계속 생긴다.
 
-- 어휘를 키우면 임베딩 행렬과 출력 소프트맥스가 같이 커진다
+- vocabulary를 키우면 embedding 행렬과 출력 softmax가 같이 커진다
 - 그래도 새 단어(신조어, 오타, 고유명사, 숫자)는 계속 나온다
-- 한국어처럼 교착어면 어절 어휘가 훨씬 빨리 폭발한다
+- 한국어처럼 교착어면 어절 vocabulary가 훨씬 빨리 폭발한다
 
-**해법은 어휘를 키우는 것이 아니라 단위를 바꾸는 것이다.**
-바이트 수준으로 내려가면 어휘가 256 이고 OOV 가 0% 다 —
-대신 시퀀스가 아주 길어진다. 그 사이 어딘가를 고르는 것이 다음 장이다.
+**해법은 vocabulary를 키우는 것이 아니라 단위를 바꾸는 것이다.**
+byte 수준으로 내려가면 vocabulary가 256이고 OOV가 0%다 —
+대신 sequence가 아주 길어진다. 그 사이 어딘가를 고르는 것이 다음 장이다.
 
 ---
 
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 정규화가 무엇을 지우는지 센다**
+**① normalization이 무엇을 지우는지 센다**
 `normalization` 을 NFC·NFKC·casefold 순으로 적용하며 각 단계에서
 문자 수가 얼마나 줄어드는지 세라. 지우면 안 되는 것이 지워지는 예를 찾아라.
 
 **② 한글 자소 분해를 이용한다**
 `hangul` 에서 NFD로 분해하면 "각"과 "ㄱ+ㅏ+ㄱ"이 같아진다.
-검색에서는 유용하고 토크나이저에서는 위험한 이유를 각각 적어라.
+검색에서는 유용하고 tokenizer에서는 위험한 이유를 각각 적어라.
 
-**③ MinHash 임계값의 불안정성을 잰다**
-`dedup-matrix` 의 시드(`minhash(..., K, 0)` 의 0)를 0~19 로 바꾸며 문서 0·1 쌍의
-추정 유사도를 모아라. 임계값 0.7 을 넘는 시드가 몇 개인가?
-$K$ 를 1024 로 올리면 그 비율이 어떻게 변하는가?
+**③ MinHash threshold의 불안정성을 잰다**
+`dedup-matrix` 의 seed(`minhash(..., K, 0)` 의 0)를 0~19로 바꾸며 문서 0·1 쌍의
+추정 유사도를 모아라. threshold 0.7을 넘는 seed가 몇 개인가?
+$K$ 를 1024로 올리면 그 비율이 어떻게 변하는가?
 :::
 
 ## 요약
 
 | 개념 | 핵심 |
 |------|------|
-| 유니코드 정규화 | NFC/NFD는 정보 보존, **NFKC/NFKD는 손실** |
+| Unicode normalization | NFC/NFD는 정보 보존, **NFKC/NFKD는 손실** — 이름 표기 통일 |
 | NFC가 못 고치는 것 | 전각, 합자, 로마숫자 — NFKC가 필요 |
 | NFKC의 위험 | x² → x2. 수식·코드에서는 쓰면 안 된다 |
 | macOS 함정 | 파일명이 NFD — 같아 보이는데 열리지 않는다 |
-| 한글 길이 | 코드포인트 2 / NFD 6 / UTF-8 6바이트 (영어의 3배) |
-| 이모지 | 가족 이모지 = 코드포인트 7, 바이트 25, 보이는 건 1개 |
-| 자모 분해 | $0\text{xAC00} + 초성{\times}588 + 중성{\times}28 + 종성$, 11,172자 왕복 일치 |
+| 한글 길이 | code point 2 / NFD 6 / UTF-8 6 byte (영어의 3배) |
+| emoji | 가족 emoji = code point 7, byte 25, 보이는 건 1개 |
+| 자모 분해 | $0\text{xAC00} + 초성{\times}588 + 중성{\times}28 + 종성$, 11,172자 왕복 일치 — 자리수 체계 |
 | 언어 유형 | 교착어·굴절어·고립어 — '단어로 나누기'는 영어 편향 |
-| 중복 제거 | 전처리 없이 `{python} f"{N_RAW}"`개, NFC+공백 정리 후 `{python} f"{N_CLEAN}"`개 |
-| MinHash | $\Pr[\min h(A)=\min h(B)] = J(A,B)$, 오차 $\sqrt{J(1-J)/k}$ |
+| deduplication | 전처리 없이 `{python} f"{N_RAW}"`개, NFC+공백 정리 후 `{python} f"{N_CLEAN}"`개 |
+| MinHash | $\Pr[\min h(A)=\min h(B)] = J(A,B)$, 오차 $\sqrt{J(1-J)/k}$ — 표본 $k$ 명 여론조사 |
 | 검증 | k=16 실측 `{python} f"{MH[0][2]:.3f}"` vs 이론 `{python} f"{MH[0][3]:.3f}"` · k=1024 실측 `{python} f"{MH[3][2]:.3f}"` vs `{python} f"{MH[3][3]:.3f}"` |
-| 편집거리 | NFC/NFD 한글 쌍의 거리가 **`{python} f"{D_HAN}"`** — 정규화가 먼저다 |
-| TF-IDF | '매트 매트 매트 매트' 가 최고 점수 — 반복에 취약 |
-| Zipf / Heaps | 어휘 10배 늘려도 OOV는 `{python} f"{ZP[0][2]:.0%}"` → `{python} f"{ZP[2][2]:.0%}"` 로만 준다 |
-| 결론 | 어휘를 키우지 말고 **단위를 바꿔야 한다** |
+| edit distance | NFC/NFD 한글 쌍의 거리가 **`{python} f"{D_HAN}"`** — normalization이 먼저다 |
+| TF-IDF | '매트 매트 매트 매트'가 최고 점수 — 반복에 취약 |
+| Zipf / Heaps | vocabulary 10배 늘려도 OOV는 `{python} f"{ZP[0][2]:.0%}"` → `{python} f"{ZP[2][2]:.0%}"`로만 준다 — 사전은 늘 부족 |
+| 결론 | vocabulary를 키우지 말고 **단위를 바꿔야 한다** |
 
 ---
 
-**다음**: [7.1 토크나이제이션](01_tokenization.qmd) — 모델이 보는 최소 단위
+**다음**: [7.1 tokenization](01_tokenization.qmd) — 모델이 보는 최소 단위
 
-**이전**: [6.8 흐름 매칭과 최신 생성 기법](../06_generative/08_flow_matching.qmd)
+**이전**: [6.8 flow matching과 최신 생성 기법](../06_generative/08_flow_matching.qmd)
