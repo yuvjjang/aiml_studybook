@@ -1,56 +1,57 @@
 ---
-title: "6.4 정규화 흐름"
-subtitle: "가역 변환과 변수 변환 공식 — 정확한 우도를 포기하지 않기"
+title: "6.4 normalizing flow"
+subtitle: "invertible 변환과 change of variables 공식 — 정확한 likelihood를 포기하지 않기"
 jupyter: ai-ml-study
 ---
 
 지금까지 두 번의 타협이 있었다.
 
-- **VAE**: 우도를 포기하고 **하한**(ELBO)만 최적화했다
-- **GAN**: 우도를 아예 버리고 샘플러만 남겼다
+- **VAE**: likelihood를 포기하고 **lower bound**(ELBO)만 최적화했다
+- **GAN**: likelihood를 아예 버리고 sampler만 남겼다
 
-정규화 흐름은 셋째 길을 간다. **아무것도 포기하지 않는다.**
+**normalizing flow**(정규화 흐름)는 셋째 길을 간다. **아무것도 포기하지 않는다.**
 
 $$\log p_\theta(x) \;=\; \text{정확한 값}$$
 
-근사도 하한도 아니다. 대신 신경망의 **형태에 강한 제약**을 건다 —
-가역이어야 하고, 야코비안 행렬식을 싸게 계산할 수 있어야 한다.
+근사도 lower bound도 아니다. 대신 신경망의 **형태에 강한 제약**을 건다 —
+invertible(가역 — 되돌릴 수 있는)이어야 하고, Jacobian determinant(야코비안 행렬식)를 싸게 계산할 수 있어야 한다.
 
 이 장에서 RealNVP를 직접 구현해 그 대가와 이득을 재본다.
-그리고 흐름이 **구조적으로 할 수 없는 일**을 하나 측정한다 —
-확산 모델과 flow matching이 왜 필요했는지가 거기서 나온다.
+그리고 flow가 **구조적으로 할 수 없는 일**을 하나 측정한다 —
+diffusion model과 flow matching이 왜 필요했는지가 거기서 나온다.
 
 ---
 
-## 변수 변환 공식
+## change of variables 공식
 
-가역함수 $z = f(x)$ 로 확률변수를 바꾸면 밀도는 이렇게 변한다.
+invertible 함수 $z = f(x)$ 로 확률변수를 바꾸면 density는 이렇게 변한다 — **change of variables**(변수 변환) 공식이다.
 
 $$\boxed{\;p_x(x) = p_z(f(x))\;\left|\det \frac{\partial f}{\partial x}\right|\;}$$
 
 $$\log p_x(x) = \log p_z(f(x)) + \log\left|\det \frac{\partial f}{\partial x}\right|$$
 
 **직관**: $f$ 가 어떤 영역을 $k$ 배로 늘리면, 그 영역의 확률은 보존되어야 하므로
-밀도는 $1/k$ 배가 되어야 한다. 야코비안 행렬식이 바로 그 국소 부피 변화율이다.
+density는 $1/k$ 배가 되어야 한다. 반죽을 두 배로 늘리면 두께가 반이 되는 것과 같다. Jacobian determinant([0.1](../00_foundations/01_calculus_optimization.qmd)의 Jacobian 행렬의 행렬식)가 바로 그 국소 부피 변화율이다.
 
-여러 층을 쌓으면 로그 행렬식이 **더해진다**.
+여러 층을 쌓으면 로그 행렬식이 **더해진다** (합성 함수의 Jacobian은 곱이고, 로그를 취하면 합이다).
 
 $$\log p_x(x) = \log p_z(z_L) + \sum_{\ell=1}^{L} \log\left|\det \frac{\partial f_\ell}{\partial z_{\ell-1}}\right|$$
 
 ### 문제: 행렬식은 $O(d^3)$ 이다
 
-$d = 3072$ (CIFAR-10) 면 매 스텝 $3072^3 \approx 2.9\times10^{10}$ 번의 연산이다.
+$d = 3072$ (CIFAR-10)면 매 step $3072^3 \approx 2.9\times10^{10}$ 번의 연산이다.
 불가능하다.
 
-**해법: 야코비안이 삼각행렬이 되게 신경망을 설계한다.**
+**해법: Jacobian이 삼각행렬(대각선 한쪽이 전부 0인 행렬)이 되게 신경망을 설계한다.**
 그러면 행렬식은 대각원소의 곱이고, 계산은 $O(d)$ 다.
 
 ---
 
-## 결합 층 (RealNVP)
+## coupling layer (RealNVP)
 
 좌표를 두 덩이로 나눈다. 한쪽은 **그대로 통과**시키고,
-다른 쪽만 **통과한 쪽을 조건으로** 아핀 변환한다.
+다른 쪽만 **통과한 쪽을 조건으로** affine 변환(곱하고 더하기)한다 — 이것이 **coupling layer**(coupling layer)다.
+왼손은 가만히 두고, 왼손의 모양을 보고 오른손만 움직이는 것이다.
 
 $$
 \begin{aligned}
@@ -59,7 +60,7 @@ y_b &= x_b \odot \exp\big(s(x_a)\big) + t(x_a)
 \end{aligned}
 $$
 
-야코비안은
+Jacobian은
 
 $$\frac{\partial y}{\partial x} =
 \begin{pmatrix} I & 0 \\ \ast & \operatorname{diag}(e^{s(x_a)}) \end{pmatrix}
@@ -67,12 +68,12 @@ $$\frac{\partial y}{\partial x} =
 \log|\det J| = \sum_b s(x_a)_b$$
 
 **하삼각이라 $\ast$ 부분은 행렬식에 전혀 기여하지 않는다.**
-그래서 $s, t$ 는 **아무리 복잡한 신경망이어도 된다** — 가역일 필요조차 없다.
-역변환도 닫힌 형태다.
+그래서 $s, t$ 는 **아무리 복잡한 신경망이어도 된다** — invertible일 필요조차 없다.
+역변환도 닫힌 형태다 — $y_a = x_a$ 를 이미 아니까 $s(y_a), t(y_a)$ 를 다시 계산해 빼고 나누면 된다.
 
 $$x_b = \big(y_b - t(y_a)\big) \odot \exp\big(-s(y_a)\big)$$
 
-한 층은 절반만 바꾸므로, 층마다 마스크를 뒤집어 쌓는다.
+한 층은 절반만 바꾸므로, 층마다 mask를 뒤집어 쌓는다 — 이번엔 오른손을 두고 왼손을 움직인다.
 
 ```{python}
 #| label: flow-impl
@@ -87,7 +88,7 @@ r = np.random.default_rng(0)
 Xc = r.normal(size=(40, 2))*0.8
 fchk = RealNVP(2, n_layers=4, hidden=16, seed=1)
 Pc = fchk.params()
-for k in Pc:                                   # 항등 초기화를 흔들어 준다
+for k in Pc:                                   # identity initialization을 흔들어 준다
     if k.endswith(("W2", "b2")):
         Pc[k][:] = r.normal(0, 0.1, Pc[k].shape)
 
@@ -106,18 +107,18 @@ for k in Pc:
 
 zc, _, _ = fchk.forward(Xc)
 inv_err = float(np.abs(fchk.inverse(zc) - Xc).max())
-print(f"  그래디언트 상대오차   {worst:.2e}")
+print(f"  gradient 상대오차   {worst:.2e}")
 print(f"  역변환 오차 max|f⁻¹(f(x)) − x|   {inv_err:.2e}")
 ```
 
-`src/generative.py` 의 RealNVP 를 검증한 것이다. **역변환 오차 `{python} f"{inv_err:.0e}"` 는 기계 정밀도다.**
-근사가 아니라 정확한 역함수다. VAE 의 인코더-디코더는 이런 보장이 없다 — 재구성 오차가 항상 남는다.
+`src/generative.py` 의 RealNVP를 검증한 것이다. **역변환 오차 `{python} f"{inv_err:.0e}"`는 기계 정density다.**
+근사가 아니라 정확한 역함수다. VAE의 encoder-decoder는 이런 보장이 없다 — reconstruction 오차가 항상 남는다.
 
 ---
 
-## G6.4.1 — 변수 변환 공식이 정말 성립하는가
+## G6.4.1 — change of variables 공식이 정말 성립하는가
 
-모델이 계산한 $\log p(x)$ 를 **수치 야코비안**으로 독립 검증한다.
+모델이 계산한 $\log p(x)$ 를 **수치 Jacobian**(finite difference로 직접 구한 미분)으로 독립 검증한다.
 
 ```{python}
 #| label: change-of-var
@@ -125,7 +126,7 @@ print(f"  역변환 오차 max|f⁻¹(f(x)) − x|   {inv_err:.2e}")
 
 import numpy as np
 
-print(f"{'점':>20} {'모델 log p(x)':>16} {'수치 야코비안':>16} {'상대 차이':>12}")
+print(f"{'점':>20} {'모델 log p(x)':>16} {'수치 Jacobian':>16} {'상대 차이':>12}")
 print("-" * 68)
 eps_j = 1e-5
 cov_worst = 0.0
@@ -144,15 +145,15 @@ for x0 in r.normal(size=(6, 2)):
           f"{abs(lp_model-lp_num)/abs(lp_num):>12.2e}")
 ```
 
-모델의 $\log p(x)$ 와 수치 야코비안으로 직접 계산한 값의 상대 차이가 최대 `{python} f"{cov_worst:.0e}"` 다.
-**공식이 성립한다.** 흐름의 $\log|\det J| = \sum s$ 는 진짜 야코비안 행렬식이다.
+모델의 $\log p(x)$ 와 수치 Jacobian으로 직접 계산한 값의 상대 차이가 최대 `{python} f"{cov_worst:.0e}"`다.
+**공식이 성립한다.** flow의 $\log|\det J| = \sum s$ 는 진짜 Jacobian determinant다.
 
 ---
 
 ## G6.4.2 — 층을 쌓으면 얼마나 좋아지는가
 
-`two moons` 를 최대우도로 학습한다. 흐름은 **손실이 곧 음의 로그우도**라
-학습 곡선이 그대로 우도 개선을 뜻한다 — GAN 에는 없는 성질이다.
+`two moons` 를 maximum likelihood로 학습한다. flow는 **loss가 곧 NLL**(negative log-likelihood — 음의 로그likelihood)이라
+학습 곡선이 그대로 likelihood 개선을 뜻한다 — GAN에는 없는 성질이다. GAN의 loss는 상대와의 승부 기록이지 점수판이 아니었다.
 
 ```{python}
 #| label: depth
@@ -179,7 +180,7 @@ for L, lr in DEPTHS:
                 float(-fl.log_prob(X_te).mean()),
                 float(np.abs(fl.inverse(z) - X_tr).max())))
 
-print(f"{'층 수':>6} {'파라미터':>10} {'훈련 NLL':>11} {'테스트 NLL':>12} "
+print(f"{'층 수':>6} {'parameter':>10} {'훈련 NLL':>11} {'test NLL':>12} "
       f"{'역변환 오차':>13}")
 print("-" * 58)
 for L, npar, tr, te, ie in DEP:
@@ -188,26 +189,26 @@ print("-" * 58)
 gauss_nll = float(-((-0.5*(X_te**2).sum(1) - np.log(2*np.pi))).mean())
 print(f"{'N(0,I)':>6} {0:>10,} {'':>11} {gauss_nll:>12.4f}")
 
-# 밀도가 정규화되어 있는가 — 격자 적분
+# density가 normalize되어 있는가 — 격자 적분
 gg = np.linspace(-8, 8, 500)
 GX, GY = np.meshgrid(gg, gg)
 lp_grid = FLOWS[8].log_prob(np.stack([GX.ravel(), GY.ravel()], 1))
 Z_int = float(np.exp(lp_grid).sum()*(gg[1]-gg[0])**2)
-print(f"8층 모델 밀도의 격자 적분 ∫p(x)dx = {Z_int:.6f}")
+print(f"8층 모델 density의 격자 적분 ∫p(x)dx = {Z_int:.6f}")
 gen_gap = DEP[-1][3] - DEP[-1][2]
 ```
 
-**깊이를 늘릴수록 테스트 NLL 이 단조 감소한다** (`{python} f"{DEP[0][3]:.3f}"` → `{python} f"{DEP[-1][3]:.3f}"`).
-기준선인 표준정규는 `{python} f"{gauss_nll:.3f}"` 이니, 1층만으로도 이미 데이터를 배운다. 훈련·테스트
-간극은 `{python} f"{gen_gap:.3f}"` 로 심한 과적합은 없고, 역변환 오차는 층을 16개 쌓아도 `{python} f"{DEP[-1][4]:.0e}"` 다.
+**깊이를 늘릴수록 test NLL이 단조 감소한다** (`{python} f"{DEP[0][3]:.3f}"` → `{python} f"{DEP[-1][3]:.3f}"`).
+기준선인 표준정규는 `{python} f"{gauss_nll:.3f}"`이니, 1층만으로도 이미 데이터를 배운다. 훈련·test
+간극은 `{python} f"{gen_gap:.3f}"`로 심한 overfitting은 없고, 역변환 오차는 층을 16개 쌓아도 `{python} f"{DEP[-1][4]:.0e}"`다.
 
-**8층 모델의 밀도를 격자로 적분하면 `{python} f"{Z_int:.4f}"` 다.** 정규화 상수를 따로 계산하지 않았는데도
-1 이 나온다 — 변수 변환 공식이 정규화를 **자동으로 보장**하기 때문이다. 에너지 기반 모델(EBM)이
+**8층 모델의 density를 격자로 적분하면 `{python} f"{Z_int:.4f}"`다.** normalization 상수(전체 확률을 1로 맞추는 나눗수)를 따로 계산하지 않았는데도
+1이 나온다 — change of variables 공식이 normalization을 **자동으로 보장**하기 때문이다. energy-based model(EBM)이
 못 하는 일이 바로 이것이다.
 
 ```{python}
 #| label: fig-flow-depth
-#| fig-cap: "층을 쌓을수록 데이터 분포로 변형되는 가우스"
+#| fig-cap: "층을 쌓을수록 데이터 분포로 변형되는 Gaussian"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -220,8 +221,8 @@ G2X, G2Y = np.meshgrid(gg2, gg2)
 grid2 = np.stack([G2X.ravel(), G2Y.ravel()], 1)
 
 fig = make_subplots(rows=1, cols=3, column_widths=[0.34, 0.33, 0.33],
-                    subplot_titles=("학습된 밀도 p(x)", "생성 샘플",
-                                    "테스트 NLL"),
+                    subplot_titles=("학습된 density p(x)", "생성 sample",
+                                    "test NLL"),
                     specs=[[{"type": "heatmap"}, {"type": "xy"},
                             {"type": "xy"}]])
 
@@ -256,16 +257,16 @@ n_tail = 2
 steps_d = []
 for li, L in enumerate(LS):
     vis = [False]*(2*len(LS)) + [True]*n_tail
-    vis[li] = True                       # 밀도
-    vis[len(LS)+li] = True               # 샘플
+    vis[li] = True                       # density
+    vis[len(LS)+li] = True               # sample
     steps_d.append((str(L), {"visible": vis}))
 fig.update_xaxes(range=[-3.2, 3.2], row=1, col=1)
 fig.update_yaxes(range=[-3.2, 3.2], row=1, col=1)
 fig.update_xaxes(range=[-3.2, 3.2], row=1, col=2)
 fig.update_yaxes(range=[-3.2, 3.2], scaleanchor="x2", row=1, col=2)
 fig.update_xaxes(title_text="층 수", type="log", row=1, col=3)
-fig.update_yaxes(title_text="테스트 NLL", row=1, col=3)
-fig.update_layout(sliders=[viz.slider(steps_d, prefix="결합 층 수 = ",
+fig.update_yaxes(title_text="test NLL", row=1, col=3)
+fig.update_layout(sliders=[viz.slider(steps_d, prefix="coupling layer 수 = ",
                                       active=len(LS)-1, pad_t=45)])
 viz.fig_defaults(fig, height=400, title="")
 fig.show()
@@ -273,9 +274,9 @@ fig.show()
 
 ---
 
-## G6.4.3 — 야코비안 행렬식이 하는 일
+## G6.4.3 — Jacobian determinant가 하는 일
 
-$\log|\det J|$ 를 공간 위에 그려 보면 흐름이 무엇을 하는지 보인다.
+$\log|\det J|$ 를 공간 위에 그려 보면 flow가 무엇을 하는지 보인다.
 
 ```{python}
 #| label: jacobian
@@ -289,28 +290,28 @@ z_all, ld_all, _ = fl8.forward(X_tr)
 print(f"{'':<28} {'평균':>10} {'표준편차':>10} {'최솟값':>10} {'최댓값':>10}")
 print("-" * 72)
 lp_z = -0.5*(z_all**2).sum(1) - np.log(2*np.pi)
-for nm, v in [("log N(z; 0, I)  (사전분포)", lp_z),
+for nm, v in [("log N(z; 0, I)  (prior)", lp_z),
               ("log|det J|      (부피 보정)", ld_all),
               ("log p(x)        (합계)", lp_z + ld_all)]:
     print(f"{nm:<28} {v.mean():>10.4f} {v.std():>10.4f} {v.min():>10.4f} "
           f"{v.max():>10.4f}")
 print()
-print("z 가 표준정규가 되었는가")
-print(f"  z 의 평균     {np.round(z_all.mean(0), 4)}   (목표 [0, 0])")
-print(f"  z 의 표준편차 {np.round(z_all.std(0), 4)}   (목표 [1, 1])")
-print(f"  z 의 상관계수 {np.corrcoef(z_all.T)[0, 1]:>7.4f}   (목표 0)")
+print("z가 표준정규가 되었는가")
+print(f"  z의 평균     {np.round(z_all.mean(0), 4)}   (목표 [0, 0])")
+print(f"  z의 표준편차 {np.round(z_all.std(0), 4)}   (목표 [1, 1])")
+print(f"  z의 상관계수 {np.corrcoef(z_all.T)[0, 1]:>7.4f}   (목표 0)")
 sd_ld, sd_lpz = float(ld_all.std()), float(lp_z.std())
 ```
 
-학습된 8층 흐름을 $\log p(x) = \log \mathcal{N}(z; 0, I) + \log|\det J|$ 로 분해한 것이다.
-**부피 보정항이 사전분포 항과 맞먹는 크기다** (표준편차 `{python} f"{sd_ld:.2f}"` vs `{python} f"{sd_lpz:.2f}"`).
-흐름이 하는 일의 절반은 '어디를 얼마나 늘리고 줄일지' 정하는 것이다. 그리고 $z$ 는 평균 0,
-표준편차 1, 상관 0 에 근접한다 — **'정규화 흐름(normalizing flow)'이라는 이름이 여기서 나왔다.**
-데이터를 정규분포로 흘려보내는(flow) 변환이라는 뜻이다.
+학습된 8층 flow를 $\log p(x) = \log \mathcal{N}(z; 0, I) + \log|\det J|$ 로 분해한 것이다.
+**부피 보정항이 prior 항과 맞먹는 크기다** (표준편차 `{python} f"{sd_ld:.2f}"` vs `{python} f"{sd_lpz:.2f}"`).
+flow가 하는 일의 절반은 '어디를 얼마나 늘리고 줄일지' 정하는 것이다. 그리고 $z$ 는 평균 0,
+표준편차 1, 상관 0에 근접한다 — **'normalizing flow'라는 이름이 여기서 나왔다.**
+데이터를 정규분포(normal)로 흘려보내는(flow) 변환이라는 뜻이다.
 
 ```{python}
 #| label: fig-jacobian
-#| fig-cap: "흐름이 공간을 어떻게 늘리고 줄이는지 — 격자의 변형과 부피 보정"
+#| fig-cap: "flow가 공간을 어떻게 늘리고 줄이는지 — 격자의 변형과 부피 보정"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -325,7 +326,7 @@ fig = make_subplots(rows=1, cols=3, column_widths=[0.34, 0.33, 0.33],
                     specs=[[{"type": "xy"}, {"type": "xy"},
                             {"type": "heatmap"}]])
 
-# 격자선을 흐름에 통과시킨다
+# 격자선을 flow에 통과시킨다
 NL, NP = 11, 60
 lines = []
 for v in np.linspace(-2.6, 2.6, NL):
@@ -358,24 +359,25 @@ for c, rng in [(1, 2.9), (2, 4.2), (3, 3.2)]:
     fig.update_xaxes(range=[-rng, rng], row=1, col=c)
     fig.update_yaxes(range=[-rng, rng], row=1, col=c)
 viz.fig_defaults(fig, height=390,
-                 title="격자가 촘촘해진 곳 = 부피가 줄어든 곳 = 밀도가 커진 곳")
+                 title="격자가 촘촘해진 곳 = 부피가 줄어든 곳 = density가 커진 곳")
 fig.show()
 ```
 
 ---
 
-## G6.4.4 — 흐름이 구조적으로 못 하는 것: 위상
+## G6.4.4 — flow가 구조적으로 못 하는 것: topology
 
 여기가 이 장의 핵심이다.
 
-**흐름은 위상동형사상(homeomorphism)이다.**
-연속이고, 역함수도 연속이다. 그런 사상은 **위상을 바꿀 수 없다.**
+**flow는 homeomorphism(위상동형사상)이다.**
+연속이고, 역함수도 연속이다. 그런 사상은 **topology(위상 — 찢거나 붙이지 않고 늘이고 구부려서는 바뀌지 않는 성질, 예: 구멍의 개수)를 바꿀 수 없다.**
+찰흙 공을 아무리 주물러도 찢지 않는 한 도넛은 만들 수 없다.
 
-$\mathcal{N}(0, I)$ 의 지지집합은 $\mathbb{R}^d$ 전체 — **연결되어 있다.**
-따라서 흐름이 만드는 분포의 지지집합도 **반드시 연결되어 있다.**
+$\mathcal{N}(0, I)$ 의 support(지지집합 — 확률이 0이 아닌 영역)는 $\mathbb{R}^d$ 전체 — **연결되어 있다.**
+따라서 flow가 만드는 분포의 support도 **반드시 연결되어 있다.**
 
-그런데 실제 데이터는 흔히 끊겨 있다 (서로 다른 클래스, 서로 다른 모드).
-흐름은 그 사이에 **반드시 질량을 남긴다.** 얼마나 남는지 재보자.
+그런데 실제 데이터는 흔히 끊겨 있다 (서로 다른 class, 서로 다른 mode).
+flow는 그 사이에 **반드시 질량을 남긴다.** 얼마나 남는지 재보자.
 
 ```{python}
 #| label: topology
@@ -388,8 +390,8 @@ CEN = ring_modes(8, 3.0)
 rr = np.random.default_rng(3)
 X_ring = CEN[rr.integers(0, 8, 3000)] + rr.normal(0, 0.2, (3000, 2))
 
-print(f"{'층 수':>6} {'파라미터':>10} {'NLL':>9} {'모드 근처':>10} "
-      f"{'모드 사이 (다리)':>16}")
+print(f"{'층 수':>6} {'parameter':>10} {'NLL':>9} {'mode 근처':>10} "
+      f"{'mode 사이 (다리)':>16}")
 print("-" * 56)
 TOPO, RING_FLOWS = [], {}
 for L, lr in [(4, 3e-3), (8, 2e-3), (12, 1e-3), (20, 7e-4)]:
@@ -412,11 +414,11 @@ lo, hi = min(t[4] for t in TOPO), max(t[4] for t in TOPO)
 bridge_txt = " → ".join(f"{t[4]:.1%}" for t in TOPO)
 par_ratio = TOPO[-1][1] / TOPO[0][1]
 print()
-print("링 위·링 안쪽 네 지점의 모델 밀도 vs 참 밀도")
+print("ring 위·ring 안쪽 네 지점의 모델 density vs 참 density")
 probe_pts = np.stack([CEN[0], (CEN[0] + CEN[1])/2,
                       1.5*CEN[0]/np.linalg.norm(CEN[0]),
                       np.array([0.0, 0.0])])
-labels = ["모드 0 중심", "인접 모드 중점", "반지름 1.5 지점", "원점 (링의 구멍)"]
+labels = ["mode 0 중심", "인접 mode 중점", "반지름 1.5 지점", "원점 (ring의 구멍)"]
 print()
 print(f"  {'위치':<20} {'모델 log p':>13} {'참 log p':>12} "
       f"{'모델 / 참':>14}")
@@ -437,36 +439,36 @@ excess_origin = float(np.exp(lp_probe[3] - true_origin))
 excess_r15 = float(np.exp(lp_probe[2] - true_logp(probe_pts[2])))
 ```
 
-데이터는 반지름 3 의 원 위에 놓인 8개 모드($\sigma=0.2$, 서로 완전히 분리)다.
-**깊이를 `{python} f"{TOPO[0][0]}"` → `{python} f"{TOPO[-1][0]}"` 으로 늘려도 다리 위 질량은
+데이터는 반지름 3의 원 위에 놓인 8개 mode($\sigma=0.2$, 서로 완전히 분리)다.
+**깊이를 `{python} f"{TOPO[0][0]}"` → `{python} f"{TOPO[-1][0]}"`으로 늘려도 다리 위 질량은
 `{python} f"{lo:.1%}"`~`{python} f"{hi:.1%}"` 사이를 맴돈다.** 단조로 줄지도 않고 (`{python} bridge_txt`), 실제 데이터의
-`{python} f"{1-near_real.mean():.1%}"` 로 가까워지지도 않는다. 파라미터를 `{python} f"{par_ratio:.0f}"`배 늘려도
+`{python} f"{1-near_real.mean():.1%}"`로 가까워지지도 않는다. parameter를 `{python} f"{par_ratio:.0f}"`배 늘려도
 나아지지 않는다면 용량 문제가 아니다.
 
-**왜 0 이 될 수 없는지는 증명할 수 있다.**
+**왜 0이 될 수 없는지는 증명할 수 있다.**
 
 $$\log p(x) = \log \mathcal{N}(f(x); 0, I) + \log|\det J(x)|$$
 
-유한한 $x$ 에서 $f(x)$ 도 유한하고 $\log|\det J| = \sum s$ 도 유한하다($s$ 는 tanh 로 묶여 있다).
-따라서 **모든 유한한 $x$ 에서 $p(x) > 0$ 이다.** 0 을 배정할 방법이 아예 없다.
+유한한 $x$ 에서 $f(x)$ 도 유한하고 $\log|\det J| = \sum s$ 도 유한하다($s$ 는 tanh로 묶여 있다).
+따라서 **모든 유한한 $x$ 에서 $p(x) > 0$ 이다.** 0을 배정할 방법이 아예 없다.
 
-**원점을 보라.** 링의 한가운데는 데이터가 절대 오지 않는 곳이고, 참 밀도는 $\log p$ =
-`{python} f"{true_origin:.0f}"` — 사실상 0 이다. 그런데 흐름은 거기에 $\log p$ = `{python} f"{model_origin:.1f}"` 를
-배정한다. **`{python} f"{excess_origin:.0e}"` 배 과잉이다.** 반지름 1.5 지점도 `{python} f"{excess_r15:.0e}"` 배 과잉이다.
-반면 모드 중심에서는 참 밀도를 거의 맞히고 인접 모드 중점에서도 자릿수 수준으로 맞힌다 —
-**틀리는 곳이 정확히 '데이터가 없어야 하는 안쪽'이다.** 흐름은 링을 재현하면서 가운데 구멍을
-메우지 못한다 — 구멍이 있는 도넛(위상적으로 $S^1 \times \mathbb{R}$)은 원판($\mathbb{R}^2$)의 연속 변형으로
+**원점을 보라.** ring의 한가운데는 데이터가 절대 오지 않는 곳이고, 참 density는 $\log p$ =
+`{python} f"{true_origin:.0f}"` — 사실상 0이다. 그런데 flow는 거기에 $\log p$ = `{python} f"{model_origin:.1f}"`를
+배정한다. **`{python} f"{excess_origin:.0e}"`배 과잉이다.** 반지름 1.5 지점도 `{python} f"{excess_r15:.0e}"`배 과잉이다.
+반면 mode 중심에서는 참 density를 거의 맞히고 인접 mode 중점에서도 자릿수 수준으로 맞힌다 —
+**틀리는 곳이 정확히 '데이터가 없어야 하는 안쪽'이다.** flow는 ring을 재현하면서 가운데 구멍을
+메우지 못한다 — 구멍이 있는 도넛(topology적으로 $S^1 \times \mathbb{R}$)은 원판($\mathbb{R}^2$)의 연속 변형으로
 만들 수 없다.
 
-**다른 계열은 이 제약이 없다.** VAE 는 디코더가 가역일 필요가 없어 여러 $z$ 를 같은 $x$ 로 보낼 수
-있고, GAN 의 생성자도 마찬가지다([6.3](03_gan.qmd)에서 8/8 모드를 끊어서 덮었다). 확산은 매 단계
-**잡음을 새로 더한다** — 결정론적 사상이 아니다. 확률 흐름 ODE([6.6](06_score_sde.qmd))는 확산을
-결정론적 사상으로 다시 쓰는데, 그러면 같은 위상 제약이 돌아온다. 다만 그 사상은 **시간에 따라
-변하는** 속도장의 적분이라 결합 층보다 훨씬 유연하다 — 다리를 극단적으로 가늘게 만든다.
+**다른 계열은 이 제약이 없다.** VAE는 decoder가 invertible일 필요가 없어 여러 $z$ 를 같은 $x$ 로 보낼 수
+있고, GAN의 generator도 마찬가지다([6.3](03_gan.qmd)에서 8/8 mode를 끊어서 덮었다). diffusion은 매 단계
+**noise를 새로 더한다** — 결정론적 사상이 아니다. probability flow ODE([6.6](06_score_sde.qmd))는 diffusion을
+결정론적 사상으로 다시 쓰는데, 그러면 같은 topology 제약이 돌아온다. 다만 그 사상은 **시간에 따라
+변하는** velocity field(속도장 — 각 점이 어느 방향으로 얼마나 빨리 움직이는지)의 적분이라 coupling layer보다 훨씬 유연하다 — 다리를 극단적으로 가늘게 만든다.
 
 ```{python}
 #| label: fig-topology
-#| fig-cap: "가우스에서 8개 모드로 — 다리를 끊지 못하는 흐름"
+#| fig-cap: "Gaussian에서 8개 mode로 — 다리를 끊지 못하는 flow"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -476,8 +478,8 @@ from src import viz
 
 LSR = [t[0] for t in TOPO]
 fig = make_subplots(rows=1, cols=3, column_widths=[0.33, 0.33, 0.34],
-                    subplot_titles=("생성 샘플", "학습된 밀도 (로그)",
-                                    "모드 사이에 남는 질량"),
+                    subplot_titles=("생성 sample", "학습된 density (로그)",
+                                    "mode 사이에 남는 질량"),
                     specs=[[{"type": "xy"}, {"type": "heatmap"},
                             {"type": "xy"}]])
 gr = np.linspace(-4.6, 4.6, 70)
@@ -520,9 +522,9 @@ for c in (1, 2):
     fig.update_xaxes(range=[-4.6, 4.6], row=1, col=c)
     fig.update_yaxes(range=[-4.6, 4.6], row=1, col=c)
 fig.update_xaxes(title_text="층 수", row=1, col=3)
-fig.update_yaxes(title_text="모드 밖 샘플 비율", tickformat=".0%",
+fig.update_yaxes(title_text="mode 밖 sample 비율", tickformat=".0%",
                  rangemode="tozero", row=1, col=3)
-fig.update_layout(sliders=[viz.slider(steps_t, prefix="결합 층 수 = ",
+fig.update_layout(sliders=[viz.slider(steps_t, prefix="coupling layer 수 = ",
                                       active=len(LSR)-1, pad_t=45)])
 viz.fig_defaults(fig, height=400, title="")
 fig.show()
@@ -530,62 +532,62 @@ fig.show()
 
 ---
 
-## 흐름의 종류
+## flow의 종류
 
-| 모델 | 구조 | 밀도 | 샘플링 특징 |
+| 모델 | 구조 | density | sampling 특징 |
 |---|---|---|---|
-| NICE (2014) | 가산 결합 (s=0) | 1 패스 | 1 패스 부피 보존 — 표현력 제한 |
-| RealNVP (2016) | 아핀 결합 | 1 패스 | 1 패스 **이 장의 구현** |
-| MAF (2017) | 자기회귀 (가우스화 방향) | 1 패스 | d 패스 밀도 추정에 적합 |
-| IAF (2016) | 역자기회귀 | d 패스 | 1 패스 VAE 사후분포·빠른 생성 |
-| Glow (2018) | + 1×1 가역 합성곱, 액트놈 | 1 패스 | 1 패스 채널 섞기를 학습으로 |
-| CNF / FFJORD (2018) | Neural ODE + 헛친슨 추정 | ODE 적분 | ODE 적분 구조 제약 없음, 느림 |
-| Residual Flow (2019) | ‖f‖_L<1 인 잔차 블록 | 1 패스 | 고정점 반복 가역성을 립시츠로 보장 |
+| NICE (2014) | additive coupling (s=0) | 1 pass | 1 pass 부피 보존 — 표현력 제한 |
+| RealNVP (2016) | affine coupling | 1 pass | 1 pass **이 장의 구현** |
+| MAF (2017) | autoregressive (Gaussian화 방향) | 1 pass | d pass density estimation에 적합 |
+| IAF (2016) | inverse autoregressive | d pass | 1 pass VAE posterior·빠른 생성 |
+| Glow (2018) | + 1×1 invertible convolution, ActNorm | 1 pass | 1 pass channel 섞기를 학습으로 |
+| CNF / FFJORD (2018) | Neural ODE + Hutchinson 추정 | ODE 적분 | ODE 적분 구조 제약 없음, 느림 |
+| Residual Flow (2019) | ‖f‖_L<1인 residual block | 1 pass | fixed-point 반복 invertibility를 Lipschitz로 보장 |
 
 **MAF와 IAF의 비대칭이 핵심 설계 결정이다.**
 
-자기회귀 변환:  z_i = (x_i − μ_i(x_<i))·exp(−α_i(x_<i))
+autoregressive 변환:  z_i = (x_i − μ_i(x_<i))·exp(−α_i(x_<i))
 
 - x → z (MAF 방향): 모든 x_<i를 이미 아니까 **한 번에** 계산
-- z → x (샘플링):   x_i가 x_<i에 의존하니 **순차적으로 d 번**
+- z → x (sampling):   x_i가 x_<i에 의존하니 **순차적으로 d번** — 도미노처럼 앞이 쓰러져야 다음이 정해진다
 
 IAF는 조건을 z_<i로 바꿔 방향을 뒤집는다.
-샘플링이 1 패스가 되는 대신 학습(밀도 평가)이 d 패스가 된다.
-**둘 다 빠르게 만들 수는 없다.** 그래서 결합 층이 계속 쓰인다 —
-양쪽 다 1 패스지만, 한 층이 좌표의 절반만 바꾼다는 대가를 치른다.
+sampling이 1 pass가 되는 대신 학습(density 평가)이 d pass가 된다.
+**둘 다 빠르게 만들 수는 없다.** 그래서 coupling layer가 계속 쓰인다 —
+양쪽 다 1 pass지만, 한 층이 좌표의 절반만 바꾼다는 대가를 치른다.
 
-(참고: MAF를 IAF로 증류하는 것이 Parallel WaveNet의 아이디어였다 — Part 8)
+(참고: MAF를 IAF로 distillation하는 것이 Parallel WaveNet의 아이디어였다 — Part 8)
 
 
 ---
 
-## 흐름은 어디에 살아남았는가
+## flow는 어디에 살아남았는가
 
 | 분야 | 현황 | 이유 |
 |---|---|---|
-| 이미지 생성 | 밀림 | 표현력 대비 파라미터가 비싸다. 확산이 압도 |
-| 밀도 추정·이상 탐지 | **현역** | 정확한 우도가 필요한 유일한 선택지 |
-| 변분 사후분포 | 현역 | IAF로 q(z\|x) 를 유연하게 (VAE 개선) |
-| 시뮬레이션 기반 추론 | **현역** | 우도를 못 쓰는 과학 시뮬레이션의 사후분포 추정 |
-| 음성 합성 | 밀림→부활 | WaveGlow 후 확산에 밀렸다가 flow matching으로 복귀 |
-| **연속 흐름의 후손** | **핵심** | flow matching이 대형 모델의 표준이 되었다 |
+| 이미지 생성 | 밀림 | 표현력 대비 parameter가 비싸다. diffusion이 압도 |
+| density estimation·anomaly detection | **현역** | 정확한 likelihood가 필요한 유일한 선택지 |
+| variational posterior | 현역 | IAF로 q(z\|x)를 유연하게 (VAE 개선) |
+| simulation-based inference | **현역** | likelihood를 못 쓰는 과학 simulation의 posterior 추정 |
+| 음성 합성 | 밀림→부활 | WaveGlow 후 diffusion에 밀렸다가 flow matching으로 복귀 |
+| **continuous flow의 후손** | **핵심** | flow matching이 대형 모델의 표준이 되었다 |
 
 **마지막 줄이 이 장의 진짜 결론이다.**
 
-이산 결합 층은 밀렸다. 그러나 **연속 정규화 흐름(CNF)** 의 관점 —
-'속도장을 학습해 잡음을 데이터로 옮긴다' — 은 살아남았고,
-확산과 만나 **flow matching** 이 되었다 (6.8).
+discrete coupling layer는 밀렸다. 그러나 **continuous normalizing flow(CNF)**의 관점 —
+'velocity field를 학습해 noise를 데이터로 옮긴다' — 은 살아남았고,
+diffusion과 만나 **flow matching**이 되었다 (6.8).
 SD3, Flux 같은 최신 대형 모델이 그 방식으로 학습된다.
 
-CNF 의 형태는 이렇다.
+CNF의 형태는 이렇다. 층을 하나씩 통과하는 대신, 점이 시간 $t$ 에 따라 연속적으로 흘러간다.
 
 $$\frac{dx}{dt} = v_\theta(x, t), \qquad
 \log p(x_1) = \log p(x_0) - \int_0^1 \operatorname{tr}\!\left(\frac{\partial v_\theta}{\partial x}\right) dt$$
 
-**행렬식이 아니라 대각합(trace)이다** — 가역 구조를 설계할 필요가 없다.
-이 한 줄이 결합 층의 모든 제약을 없앤다.
+**행렬식이 아니라 trace(대각합 — 대각원소의 합)다** — invertible 구조를 설계할 필요가 없다.
+이 한 줄이 coupling layer의 모든 제약을 없앤다.
 대가는 매 평가마다 ODE를 풀어야 한다는 것이었고,
-flow matching이 그 대가마저 없앤다 (시뮬레이션 없는 학습).
+flow matching이 그 대가마저 없앤다 (simulation 없는 학습).
 
 
 ---
@@ -593,44 +595,44 @@ flow matching이 그 대가마저 없앤다 (시뮬레이션 없는 학습).
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 야코비안 항을 빼면 무엇이 어긋나는가**
-`FLOWS[8]` 의 샘플 히스토그램(2D)을 모델 밀도 $\exp(\log p)$ 와 겹쳐 그려라. 그 다음 $\log|\det J|$
-항을 빼고 $\log \mathcal{N}(f(x))$ 만으로 밀도를 그리면 어디가 어긋나는가? 격자 적분이 1 에서 얼마나
+**① Jacobian 항을 빼면 무엇이 어긋나는가**
+`FLOWS[8]` 의 sample histogram(2D)을 모델 density $\exp(\log p)$ 와 겹쳐 그려라. 그 다음 $\log|\det J|$
+항을 빼고 $\log \mathcal{N}(f(x))$ 만으로 density를 그리면 어디가 어긋나는가? 격자 적분이 1에서 얼마나
 벗어나는가?
 
-**② 기저분포로 위상 장벽을 푼다**
-`RealNVP` 의 기저분포를 표준정규 대신 8개 모드 혼합 가우스로 바꿔(log_prob 와 sample 을 수정)
-링 데이터를 다시 학습시켜라. 다리 위 질량이 0 에 가까워지는가? 왜 위상 제약이 풀리는지 설명하라.
+**② base distribution으로 topology 장벽을 푼다**
+`RealNVP` 의 base distribution(기저분포 — $z$ 가 따르는 분포)을 표준정규 대신 8개 mode Gaussian mixture로 바꿔(log_prob와 sample을 수정)
+ring 데이터를 다시 학습시켜라. 다리 위 질량이 0에 가까워지는가? 왜 topology 제약이 풀리는지 설명하라.
 
 **③ 깊이와 너비**
-`FLOWS` 는 hidden=32 로 깊이만 바꿨다. 이번에는 4층을 고정하고 hidden 을 8·48·192 로 바꿔
-같은 파라미터 수에서 깊이와 너비 중 어느 쪽이 NLL 을 더 줄이는지 비교하라.
+`FLOWS` 는 hidden=32로 깊이만 바꿨다. 이번에는 4층을 고정하고 hidden을 8·48·192로 바꿔
+같은 parameter 수에서 깊이와 너비 중 어느 쪽이 NLL을 더 줄이는지 비교하라.
 :::
 
 ## 요약
 
 | 개념 | 핵심 |
 |------|------|
-| 변수 변환 | $\log p_x(x) = \log p_z(f(x)) + \log\lvert\det J\rvert$ |
+| change of variables | $\log p_x(x) = \log p_z(f(x)) + \log\lvert\det J\rvert$ — 반죽을 늘리면 얇아진다 |
 | 왜 어려운가 | 일반 행렬식은 $O(d^3)$ |
-| 결합 층 | 야코비안이 삼각행렬 → $\log\lvert\det J\rvert = \sum s$, $O(d)$ |
-| $s, t$ 의 자유 | 임의의 신경망 — 가역일 필요 없음 |
+| coupling layer | Jacobian이 삼각행렬 → $\log\lvert\det J\rvert = \sum s$, $O(d)$ — 왼손 보고 오른손만 움직이기 |
+| $s, t$ 의 자유 | 임의의 신경망 — invertible일 필요 없음 |
 | 역변환 | 닫힌 형태, 오차 `{python} f"{DEP[-1][4]:.0e}"` (실측) |
-| 정규화 자동 보장 | 학습된 밀도의 격자 적분 = `{python} f"{Z_int:.3f}"` |
-| 깊이 효과 | two moons 테스트 NLL `{python} f"{DEP[0][3]:.2f}"` → `{python} f"{DEP[-1][3]:.2f}"` (1층 → 16층), N(0,I)는 `{python} f"{gauss_nll:.2f}"` |
-| 부피 보정의 비중 | $\log\lvert\det J\rvert$ 의 산포가 사전분포 항과 맞먹는다 |
-| **위상 제약** | 흐름은 위상동형사상 — 연결된 지지집합을 끊을 수 없다 |
-| 측정된 대가 | 링 한가운데 밀도가 참값의 `{python} f"{excess_origin:.0e}"` 배 — 구멍을 못 만든다 |
-| MAF vs IAF | 밀도 1패스/샘플링 d패스 ↔ 그 반대. 둘 다는 안 된다 |
-| 오늘의 위치 | 이미지에서는 밀렸고, 밀도 추정·SBI에서는 현역 |
-| 진짜 후손 | CNF → **flow matching** (6.8) — 행렬식 대신 대각합 |
+| normalization 자동 보장 | 학습된 density의 격자 적분 = `{python} f"{Z_int:.3f}"` |
+| 깊이 효과 | two moons test NLL `{python} f"{DEP[0][3]:.2f}"` → `{python} f"{DEP[-1][3]:.2f}"` (1층 → 16층), N(0,I)는 `{python} f"{gauss_nll:.2f}"` |
+| 부피 보정의 비중 | $\log\lvert\det J\rvert$ 의 산포가 prior 항과 맞먹는다 |
+| **topology 제약** | flow는 homeomorphism — 연결된 support를 끊을 수 없다 (찰흙 공으로 도넛 못 만든다) |
+| 측정된 대가 | ring 한가운데 density가 참값의 `{python} f"{excess_origin:.0e}"`배 — 구멍을 못 만든다 |
+| MAF vs IAF | density 1 pass/sampling d pass ↔ 그 반대. 둘 다는 안 된다 — 도미노 |
+| 오늘의 위치 | 이미지에서는 밀렸고, density estimation·SBI에서는 현역 |
+| 진짜 후손 | CNF → **flow matching** (6.8) — 행렬식 대신 trace |
 
-흐름은 정확한 우도를 지키려다 형태를 잃었다.
-확산 모델은 정반대로 간다 — **형태를 완전히 자유롭게 두고 우도를 하한으로 되돌린다.**
+flow는 정확한 likelihood를 지키려다 형태를 잃었다.
+diffusion model은 정반대로 간다 — **형태를 완전히 자유롭게 두고 likelihood를 lower bound로 되돌린다.**
 그런데 그 결과가 지금 이미지 생성의 표준이다.
 
 ---
 
-**다음**: [6.5 확산 모델](05_diffusion.qmd) — 잡음에서 데이터로
+**다음**: [6.5 diffusion model](05_diffusion.qmd) — noise에서 데이터로
 
-**이전**: [6.3 적대적 생성 신경망](03_gan.qmd)
+**이전**: [6.3 GAN](03_gan.qmd)
