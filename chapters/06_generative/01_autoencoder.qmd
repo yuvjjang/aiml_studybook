@@ -1,24 +1,25 @@
 ---
-title: "6.1 오토인코더"
-subtitle: "압축과 재구성 — 표현 학습의 원형"
+title: "6.1 autoencoder"
+subtitle: "압축과 reconstruction — representation learning의 원형"
 jupyter: ai-ml-study
 ---
 
-가장 단순한 표현 학습은 이렇게 생겼다.
+가장 단순한 representation learning(표현 학습 — 데이터를 쓸모 있는 숫자 벡터로 바꾸는 법을 배우기)은 이렇게 생겼다.
 
 > **입력을 좁은 통로로 밀어 넣었다가, 다시 원래대로 복원하게 시킨다.**
 
 통로가 좁으니 전부는 통과할 수 없다.
 그래서 신경망은 **무엇을 버리고 무엇을 남길지** 스스로 정해야 한다.
-그 결정이 곧 표현이다.
+그 결정이 곧 representation(표현)이다.
+여행 가방이 작으면 꼭 필요한 것만 골라 싸야 하는 것과 같다 — 무엇을 챙겼는지가 곧 "이 여행에서 중요한 것"의 요약이다.
 
-오토인코더는 그 자체로 강력한 생성 모델은 아니다.
+**autoencoder**(오토인코더 — 자기 자신을 부호화했다가 되돌리는 망)는 그 자체로 강력한 generative model은 아니다.
 하지만 이 장에서 만드는 부품은 뒤에서 계속 재등장한다 —
-VAE의 인코더·디코더, Stable Diffusion의 잠재 공간,
-오디오 코덱의 VQ 코드북이 전부 여기서 나온다.
+VAE의 encoder·decoder, Stable Diffusion의 latent space,
+오디오 codec의 VQ codebook이 전부 여기서 나온다.
 
 그리고 이 장에서는 교과서가 흔히 하는 주장 하나를
-**직접 실험해서 반박한다** — "과완비 오토인코더는 항등함수를 배운다"는 말이다.
+**직접 실험해서 반박한다** — "overcomplete autoencoder는 identity function을 배운다"는 말이다.
 
 ---
 
@@ -27,11 +28,12 @@ VAE의 인코더·디코더, Stable Diffusion의 잠재 공간,
 $$\hat{x} = g_\phi(f_\theta(x)), \qquad
 \mathcal{L} = \mathbb{E}_x \big[\|x - g_\phi(f_\theta(x))\|^2\big]$$
 
-- **인코더** $f_\theta: \mathbb{R}^d \to \mathbb{R}^k$ — 잠재 코드 $z$ 를 만든다
-- **디코더** $g_\phi: \mathbb{R}^k \to \mathbb{R}^d$ — $z$ 로부터 $x$ 를 복원한다
-- **병목** $k < d$ — 이 제약이 없으면 배울 것이 없다
+- **encoder**(부호기) $f_\theta: \mathbb{R}^d \to \mathbb{R}^k$ — latent code(잠재 코드) $z$ 를 만든다
+- **decoder**(복호기) $g_\phi: \mathbb{R}^k \to \mathbb{R}^d$ — $z$ 로부터 $x$ 를 복원한다
+- **bottleneck**(병목) $k < d$ — 이 제약이 없으면 배울 것이 없다
 
-레이블이 필요 없다. 입력 자신이 정답이다 (**자기지도**).
+loss는 원본 $x$ 와 복원 $\hat{x}$ 의 차이, 즉 **reconstruction error**(reconstruction 오차)다.
+label이 필요 없다. 입력 자신이 정답이다 (**self-supervised** — 자기지도).
 
 ```{python}
 #| label: setup
@@ -67,7 +69,7 @@ ev = S_**2
 
 print(f"데이터 {X.shape} — 64차원 관측, 실제 자유도 {Z_true.shape[1]}개")
 print()
-print(f"{'주성분':>6} {'설명 분산 비율':>13} {'누적':>9}")
+print(f"{'PC':>6} {'설명 분산 비율':>13} {'누적':>9}")
 print("-" * 32)
 cum = np.cumsum(ev)/ev.sum()
 for i in range(8):
@@ -75,20 +77,21 @@ for i in range(8):
 print()
 ```
 
-5개 주성분으로 `{python} f"{cum[4]:.1%}"`, 10개로 `{python} f"{cum[9]:.1%}"` 를 설명한다.
-자유도가 5개인데 주성분이 5개로 안 끝나는 이유 — **매니폴드가 휘어 있으면 선형 부분공간으로는
-딱 떨어지지 않는다.** 여기서 비선형 오토인코더가 이길 여지가 생긴다.
+데이터는 8×8 = 64차원 이미지지만, 실제로는 중심·폭·밝기 다섯 숫자로 전부 만들어진다.
+PC(principal component — 주성분, [2.10 PCA](../02_classical_ml/10_dimensionality_reduction.qmd)의 그 축) 5개로 `{python} f"{cum[4]:.1%}"`, 10개로 `{python} f"{cum[9]:.1%}"`를 설명한다.
+자유도가 5개인데 PC가 5개로 안 끝나는 이유 — **manifold**(다양체 — 데이터가 실제로 놓여 있는 낮은 차원의 곡면)가 휘어 있으면 선형 부분공간(평면)으로는
+딱 떨어지지 않는다.** 휜 종이를 평평한 판으로 덮으려면 판이 더 커야 하는 것과 같다. 여기서 비선형 autoencoder가 이길 여지가 생긴다.
 
 ---
 
-## G6.1.1 — 병목 차원과 재구성: 선형 오토인코더는 PCA다
+## G6.1.1 — bottleneck 차원과 reconstruction: 선형 autoencoder는 PCA다
 
-**정리.** 활성화가 항등이고 손실이 MSE인 오토인코더의 최적해는
-$k$차원 PCA와 **같은 재구성**을 준다.
+**정리.** activation이 identity(항등 — 아무것도 안 함)이고 loss가 MSE인 autoencoder의 최적해는
+$k$차원 PCA와 **같은 reconstruction**을 준다.
 
-증명 스케치: 재구성 사상은 $x \mapsto xW_e W_d$ 로 랭크 $k$ 이하 행렬이다.
-에카르트-영 정리에 의해 프로베니우스 norm 기준 최적 랭크-$k$ 근사는
-상위 $k$개 특이값만 남긴 것이고, 그것이 곧 PCA다. $\square$
+증명 스케치: reconstruction 사상은 $x \mapsto xW_e W_d$ 로, 두 행렬의 곱이므로 rank가 $k$ 이하다.
+Eckart–Young 정리([0.0](../00_foundations/00_linear_algebra.qmd)의 SVD 절)에 의해 Frobenius norm 기준 최적 rank-$k$ 근사는
+상위 $k$개 singular value만 남긴 것이고, 그것이 곧 PCA다. $\square$
 
 ```{python}
 #| label: pca-vs-ae
@@ -114,7 +117,7 @@ for k in KS:
     res["nonlin"].append(float(((X - nl.forward(X, training=False)[0])**2).mean()))
     NL_MODELS[k] = nl
 
-    # 부분공간 비교: 주각(principal angle)
+    # 부분공간 비교: principal angle(principal angle)
     Qp = np.linalg.qr(Vk.T)[0]
     def max_angle(A):
         Q = np.linalg.qr(A)[0]
@@ -134,13 +137,13 @@ lin_gap = max(abs(a-b)/a for a, b in zip(res["pca"], res["lin"]))
 gain5 = res["pca"][3]/res["nonlin"][3]
 ```
 
-**선형 AE 는 PCA 와 같다** — 재구성 MSE 의 상대 차이가 최대 `{python} f"{lin_gap:.1%}"` 이고
-$k \le 8$ 에서는 소수점 6자리까지 일치한다. 정리 그대로다. 비선형 AE 는 매니폴드의 곡률을 쓸 수
+**선형 AE는 PCA와 같다** — reconstruction MSE의 상대 차이가 최대 `{python} f"{lin_gap:.1%}"`이고
+$k \le 8$ 에서는 소수점 6자리까지 일치한다. 정리 그대로다. 비선형 AE는 manifold의 곡률을 쓸 수
 있어 같은 $k$ 로 더 잘 복원한다 — $k=5$ 에서 `{python} f"{gain5:.0f}"`배 낮은 오차.
 
 ```{python}
 #| label: fig-bottleneck
-#| fig-cap: "병목 차원에 따른 재구성 오차와 실제 복원 결과"
+#| fig-cap: "bottleneck 차원에 따른 reconstruction 오차와 실제 복원 결과"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -148,13 +151,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import viz
 
-SHOW = [3, 17, 42, 91]                  # 보여줄 샘플 인덱스
+SHOW = [3, 17, 42, 91]                  # 보여줄 sample index
 fig = make_subplots(rows=2, cols=len(SHOW)+2,
                     column_widths=[0.30, 0.04] + [0.165]*len(SHOW),
                     specs=[[{"rowspan": 2, "type": "xy"}, None]
                            + [{"type": "heatmap"}]*len(SHOW),
                            [None, None] + [{"type": "heatmap"}]*len(SHOW)],
-                    subplot_titles=("재구성 오차 (MSE)", "", "", "", "",
+                    subplot_titles=("reconstruction 오차 (MSE)", "", "", "", "",
                                     "", "", "", ""),
                     horizontal_spacing=0.02, vertical_spacing=0.06)
 
@@ -165,10 +168,10 @@ for nm, key, c in [("PCA", "pca", viz.YELLOW),
                              line=dict(color=c, width=2.5,
                                        dash="dot" if key == "lin" else None),
                              marker=dict(size=9)), row=1, col=1)
-fig.update_xaxes(title_text="잠재 차원 k", type="log", row=1, col=1)
+fig.update_xaxes(title_text="latent 차원 k", type="log", row=1, col=1)
 fig.update_yaxes(title_text="MSE", type="log", row=1, col=1)
 
-# 오른쪽: k 슬라이더에 따른 원본(위) / 복원(아래)
+# 오른쪽: k slider에 따른 원본(위) / 복원(아래)
 orig = (X[SHOW] + MU).reshape(-1, 8, 8)
 steps = []
 n_static = 3
@@ -194,7 +197,7 @@ for c in range(3, len(SHOW)+3):
         fig.update_xaxes(showticklabels=False, row=r_, col=c)
         fig.update_yaxes(showticklabels=False, autorange="reversed", row=r_, col=c)
 
-fig.update_layout(sliders=[viz.slider(steps, prefix="잠재 차원 k = ", pad_t=30)])
+fig.update_layout(sliders=[viz.slider(steps, prefix="latent 차원 k = ", pad_t=30)])
 viz.fig_defaults(fig, height=440,
                  title="위: 원본 · 아래: 비선형 AE 복원")
 fig.show()
@@ -202,7 +205,7 @@ fig.show()
 
 ### 그런데 "PCA와 같다"가 정확히 무슨 뜻인가
 
-같은 것은 **재구성**이다. 축이 아니다.
+같은 것은 **reconstruction**이다. 축이 아니다. 같은 땅을 그린 두 지도가 북쪽을 다른 방향으로 잡을 수 있는 것처럼, 같은 부분공간을 다른 축으로 표현할 수 있다.
 
 ```{python}
 #| label: subspace-detail
@@ -214,21 +217,21 @@ k = 3
 Vk = Vt_[:k]
 lin = LIN_MODELS[k]
 W0, W1 = lin.W[0], lin.W[1]
-P = Vk.T @ Vk                                    # PCA 사영 행렬
+P = Vk.T @ Vk                                    # PCA projection 행렬
 
 print(f"{'항목':<34} {'값'}")
 print("-" * 56)
-print(f"{'디코더 행공간 ↔ PCA 부분공간 (주각)':<34} {res['ang_dec'][KS.index(k)]:.3f}°")
-print(f"{'인코더 열공간 ↔ PCA 부분공간 (주각)':<34} {res['ang_enc'][KS.index(k)]:.3f}°")
+print(f"{'decoder 행공간 ↔ PCA 부분공간 (principal angle)':<34} {res['ang_dec'][KS.index(k)]:.3f}°")
+print(f"{'encoder 열공간 ↔ PCA 부분공간 (principal angle)':<34} {res['ang_enc'][KS.index(k)]:.3f}°")
 print(f"{'||W_e W_d − P||_F':<34} {np.linalg.norm(W0 @ W1 - P):.4f}")
 print(f"{'||P||_F':<34} {np.linalg.norm(P):.4f}")
 data_gap = float(np.linalg.norm(X @ (W0@W1 - P))/np.linalg.norm(X))
 print(f"{'데이터 위에서의 차이 ||X(W_eW_d − P)||/||X||':<34} {data_gap:.6f}")
 print()
-print("디코더 각 행과 PC1~3 의 |코사인|:")
+print("decoder 각 행과 PC1~3의 |cosine|:")
 for i in range(k):
     d = W1[i]/np.linalg.norm(W1[i])
-    print(f"    디코더 행 {i}: {np.round(np.abs(Vk @ d), 3)}")
+    print(f"    decoder 행 {i}: {np.round(np.abs(Vk @ d), 3)}")
 ang_dec, ang_enc = res['ang_dec'][KS.index(k)], res['ang_enc'][KS.index(k)]
 diff_norm, P_norm = float(np.linalg.norm(W0@W1-P)), float(np.linalg.norm(P))
 cond_X = float(S_[0]/S_[-1])
@@ -236,39 +239,39 @@ cond_X = float(S_[0]/S_[-1])
 
 읽어야 할 것이 셋이다.
 
-1. **디코더는 PCA 부분공간을 정확히 찾는다** — 주각 `{python} f"{ang_dec:.3f}"`°.
-2. **그러나 개별 축은 PCA 축이 아니다.** 위 코사인 표에서 어느 행도 특정 PC 하나에 대응하지
-   않는다. **회전 자유도**다 — $W_e R^{-1}, R W_d$ 로 바꿔도 재구성은 같으므로 축은 정해지지 않는다.
-   PCA 는 '분산 최대'라는 추가 조건으로 축을 고정하지만 AE 에는 그 조건이 없다.
-3. **인코더는 더 느슨하다.** 주각 `{python} f"{ang_enc:.1f}"`°, $\|W_eW_d - P\|$
+1. **decoder는 PCA 부분공간을 정확히 찾는다** — principal angle(주각 — 두 부분공간이 벌어진 최대 각도) `{python} f"{ang_dec:.3f}"`°.
+2. **그러나 개별 축은 PCA 축이 아니다.** 위 cosine 표에서 어느 행도 특정 PC 하나에 대응하지
+   않는다. **회전 자유도**다 — $W_e R^{-1}, R W_d$ 로 바꿔도(encoder 출력을 회전시키고 decoder에서 되돌리면) reconstruction은 같으므로 축은 정해지지 않는다.
+   PCA는 '분산 최대'라는 추가 조건으로 축을 고정하지만 AE에는 그 조건이 없다.
+3. **encoder는 더 느슨하다.** principal angle `{python} f"{ang_enc:.1f}"`°, $\|W_eW_d - P\|$
    (`{python} f"{diff_norm:.2f}"`)와 $\|P\|$ (`{python} f"{P_norm:.2f}"`)가 맞먹는다. 그런데 **데이터 위에서의
-   차이는 `{python} f"{data_gap:.2%}"`** 에 불과하다. $X$ 의 조건수가 `{python} f"{cond_X:,.0f}"` 이라
-   (최대 특이값 `{python} f"{S_[0]:.1f}"`, 최소 `{python} f"{S_[-1]:.4f}"`) 데이터가 거의 차지하지 않는
-   방향에서는 인코더가 무엇을 하든 손실에 안 잡힌다.
+   차이는 `{python} f"{data_gap:.2%}"`**에 불과하다. $X$ 의 condition number(조건수 — 최대 singular value / 최소 singular value)가 `{python} f"{cond_X:,.0f}"`이라
+   (최대 singular value `{python} f"{S_[0]:.1f}"`, 최소 `{python} f"{S_[-1]:.4f}"`) 데이터가 거의 차지하지 않는
+   방향에서는 encoder가 무엇을 하든 loss에 안 잡힌다. 아무도 다니지 않는 길은 표지판이 틀려도 문제가 안 되는 것과 같다.
 
-**교훈: 학습된 가중치를 해석할 때는 손실이 실제로 제약하는 부분만 봐야 한다.**
+**교훈: 학습된 weight를 해석할 때는 loss가 실제로 제약하는 부분만 봐야 한다.**
 
 ::: {.callout-note}
 ### 선형 AE가 PCA를 못 이긴다면 왜 쓰는가
 
-쓰지 않는다. 선형 AE는 **PCA를 SVD 대신 경사하강으로 푸는 느린 방법**일 뿐이다.
+쓰지 않는다. 선형 AE는 **PCA를 SVD 대신 gradient descent로 푸는 느린 방법**일 뿐이다.
 
-오토인코더의 가치는 전부 **비선형성**에서 온다.
+autoencoder의 가치는 전부 **비선형성**에서 온다.
 위 표에서 $k=5$ 일 때 비선형 AE는 PCA 대비 `{python} f"{gain5:.0f}"`배 낮은 오차를 냈다.
 데이터가 곡면 위에 있으면 평면으로 자르는 것보다 곡면을 따라가는 편이 낫다.
 :::
 
 ---
 
-## G6.1.2 — "과완비면 항등함수를 배운다"는 정말인가
+## G6.1.2 — "overcomplete면 identity function을 배운다"는 정말인가
 
-교과서의 경고는 이렇다.
+**overcomplete**(과완비)는 latent 차원이 입력 차원 이상($k \ge d$)인 경우다 — 통로가 입구보다 넓다. 교과서의 경고는 이렇다.
 
-> 병목이 없으면 ($k \ge d$) 오토인코더는 그냥 입력을 복사하는
-> 항등함수를 배우고, 아무것도 학습하지 못한다.
+> bottleneck이 없으면 ($k \ge d$) autoencoder는 그냥 입력을 복사하는
+> identity function(항등함수 — 입력을 그대로 내보내는 함수)을 배우고, 아무것도 학습하지 못한다.
 
-**직접 시험해 보자.** 항등함수라면 **어떤 입력이든** 복원해야 한다.
-학습 데이터 매니폴드 밖의 입력을 넣어보면 바로 드러난다.
+**직접 시험해 보자.** identity function이라면 **어떤 입력이든** 복원해야 한다.
+학습 데이터 manifold 밖의 입력을 넣어보면 바로 드러난다.
 
 ```{python}
 #| label: overcomplete
@@ -278,12 +281,12 @@ import numpy as np
 from src import nn
 
 rng_oc = np.random.default_rng(11)
-X_noise = rng_oc.normal(0, X.std(), (400, 64))          # 같은 분산의 순수 잡음
-X_shuf = np.array([rng_oc.permutation(x) for x in X_te])  # 픽셀만 뒤섞음
+X_noise = rng_oc.normal(0, X.std(), (400, 64))          # 같은 분산의 순수 noise
+X_shuf = np.array([rng_oc.permutation(x) for x in X_te])  # pixel만 뒤섞음
 
 OC = {}
-print(f"{'잠재 차원 k':>11} {'훈련 MSE':>11} {'테스트 MSE':>12} "
-      f"{'순수 잡음':>11} {'픽셀 셔플':>11}")
+print(f"{'latent k':>11} {'훈련 MSE':>11} {'test MSE':>12} "
+      f"{'순수 noise':>11} {'pixel shuffle':>13}")
 print("-" * 60)
 for k in [4, 16, 64, 128]:
     ae = nn.MLP([64, k, 64], activation="relu", init="he", seed=2)
@@ -293,10 +296,10 @@ for k in [4, 16, 64, 128]:
     def m(A):
         return float(((A - ae.forward(A, training=False)[0])**2).mean())
     print(f"{k:>11} {m(X):>11.6f} {m(X_te):>12.6f} {m(X_noise):>11.6f} "
-          f"{m(X_shuf):>11.6f}")
+          f"{m(X_shuf):>13.6f}")
 print("-" * 60)
-print(f"{'0 을 출력':>11} {'':>11} {'':>12} {float((X_noise**2).mean()):>11.6f} "
-      f"{float((X_shuf**2).mean()):>11.6f}")
+print(f"{'0을 출력':>11} {'':>11} {'':>12} {float((X_noise**2).mean()):>11.6f} "
+      f"{float((X_shuf**2).mean()):>13.6f}")
 print()
 ae128 = OC[128]
 tr128 = float(((X - ae128.forward(X, training=False)[0])**2).mean())
@@ -304,11 +307,11 @@ nz128 = float(((X_noise - ae128.forward(X_noise, training=False)[0])**2).mean())
 zero_nz = float((X_noise**2).mean())
 ```
 
-**$k=128$ (입력의 2배) 에서도 항등함수가 아니다.** 훈련 MSE 는 `{python} f"{tr128:.6f}"` 로 사실상
-완벽하지만, 순수 잡음 입력의 MSE 는 `{python} f"{nz128:.4f}"` 로 **아무것도 안 하고 0 을 뱉는 것
-(`{python} f"{zero_nz:.4f}"`)보다도 나쁘다.** 즉 이 오토인코더는 입력을 복사하는 것이 아니라
-**데이터 매니폴드로 사영하는 함수**를 배웠다. 매니폴드 밖의 입력은 매니폴드 위로 끌려오고,
-그래서 원본과 오히려 멀어진다.
+**$k=128$ (입력의 2배)에서도 identity function이 아니다.** 훈련 MSE는 `{python} f"{tr128:.6f}"`로 사실상
+완벽하지만, 순수 noise 입력의 MSE는 `{python} f"{nz128:.4f}"`로 **아무것도 안 하고 0을 뱉는 것
+(`{python} f"{zero_nz:.4f}"`)보다도 나쁘다.** 즉 이 autoencoder는 입력을 복사하는 것이 아니라
+**데이터 manifold로 projection하는 함수**를 배웠다. manifold 밖의 입력은 manifold 위로 끌려오고,
+그래서 원본과 오히려 멀어진다. 얼굴 사진만 보고 자란 화가에게 낙서를 보여 주면 얼굴처럼 고쳐 그리는 것이다.
 
 그럼 교과서 경고는 틀렸는가? 아니다 — **조건이 빠졌을 뿐이다.**
 
@@ -322,7 +325,7 @@ from src import nn
 r9 = np.random.default_rng(21)
 N_tr, N_te = r9.normal(0, 1, (1500, 64)), r9.normal(0, 1, (400, 64))
 
-print(f"{'잠재 차원 k':>11} {'훈련 MSE':>11} {'미학습 잡음 MSE':>16} {'판정'}")
+print(f"{'latent k':>11} {'훈련 MSE':>11} {'미학습 noise MSE':>16} {'판정'}")
 print("-" * 54)
 ID_TE = {}
 for k in [16, 64, 128]:
@@ -331,35 +334,36 @@ for k in [16, 64, 128]:
              steps=2500, seed=6)
     tr = float(((N_tr - ae.forward(N_tr, training=False)[0])**2).mean())
     te = float(((N_te - ae.forward(N_te, training=False)[0])**2).mean())
-    verdict = "항등함수에 접근" if te < 0.05 else "병목에 막힘"
+    verdict = "identity에 접근" if te < 0.05 else "bottleneck에 막힘"
     ID_TE[k] = te
     print(f"{k:>11} {tr:>11.6f} {te:>16.6f}  {verdict}")
-print(f"{'0 을 출력':>11} {'':>11} {float((N_te**2).mean()):>16.4f}")
+print(f"{'0을 출력':>11} {'':>11} {float((N_te**2).mean()):>16.4f}")
 ```
 
-매니폴드가 아예 없는 데이터(64차원 등방 가우스)로 학습하면 **결론이 갈린다.** 매니폴드가 있는
-데이터는 $k=128$ 이어도 항등함수를 배우지 않지만, 매니폴드가 없는 데이터는 $k=64$ 부터
-항등함수를 배운다 (미학습 입력 MSE `{python} f"{ID_TE[64]:.3f}"`).
+manifold가 아예 없는 데이터(64차원 isotropic Gaussian — 모든 방향으로 똑같이 퍼진 정규분포)로 학습하면 **결론이 갈린다.** manifold가 있는
+데이터는 $k=128$ 이어도 identity function을 배우지 않지만, manifold가 없는 데이터는 $k=64$ 부터
+identity function을 배운다 (미학습 입력 MSE `{python} f"{ID_TE[64]:.3f}"`).
 
-**'과완비 = 항등함수'는 표현 가능성의 문제이지 학습 결과가 아니다.** 경사하강은 데이터에서만
-신호를 받는다. 데이터 밖에서 항등이 될 이유가 없다. 데이터가 구조를 가지면 그 구조를 배우는
-쪽이 손실을 더 빨리 줄인다.
+**'overcomplete = identity'는 표현 가능성의 문제이지 학습 결과가 아니다.** gradient descent는 데이터에서만
+신호를 받는다. 데이터 밖에서 identity가 될 이유가 없다. 데이터가 구조를 가지면 그 구조를 배우는
+쪽이 loss를 더 빨리 줄인다.
 
-그렇다고 과완비를 마음 놓고 써도 된다는 뜻은 아니다. 진짜 문제는 다른 데 있다 —
-**코드가 128차원이면 그것은 압축도 아니고 쓸 만한 표현도 아니다.** 다음 절의 희소성 제약이
+그렇다고 overcomplete를 마음 놓고 써도 된다는 뜻은 아니다. 진짜 문제는 다른 데 있다 —
+**code가 128차원이면 그것은 압축도 아니고 쓸 만한 representation도 아니다.** 다음 절의 sparsity 제약이
 이 문제를 다룬다.
 
 ---
 
-## G6.1.3 — 희소 오토인코더: 차원이 아니라 활성 개수를 줄인다
+## G6.1.3 — sparse autoencoder: 차원이 아니라 활성 개수를 줄인다
 
-병목을 좁히는 대신, **넓게 두되 한 번에 몇 개만 켜지게** 한다.
+bottleneck을 좁히는 대신, **넓게 두되 한 번에 몇 개만 켜지게** 한다 — **sparse**(희소 — 대부분이 0)하게 만드는 것이다.
 
 $$\mathcal{L} = \|x - \hat{x}\|^2 + \lambda \|h\|_1$$
 
-이렇게 하면 코드가 **과완비이면서 희소**해진다.
-자연 데이터를 설명하는 특징의 수는 많지만 (사전이 크다),
-한 샘플에 관여하는 특징은 적다 (조합이 희소하다) — 는 가정이다.
+$\|h\|_1$ 은 hidden activation 절댓값의 합이다. [2.3](../02_classical_ml/03_regularization.qmd)의 L1 regularization처럼, 이 항은 값들을 정확히 0으로 밀어붙인다.
+이렇게 하면 code가 **overcomplete이면서 sparse**해진다.
+자연 데이터를 설명하는 feature의 수는 많지만 (사전이 두껍다),
+한 sample에 관여하는 feature는 적다 (한 문장에 쓰이는 단어는 몇 개뿐이다) — 는 가정이다.
 
 ```{python}
 #| label: sparse-ae
@@ -370,7 +374,7 @@ from src import nn
 
 
 class SparseAE:
-    """1은닉층 ReLU 오토인코더 + 은닉 활성 L1 페널티. 역전파를 직접 쓴다."""
+    """1 hidden layer ReLU autoencoder + hidden activation L1 penalty. backpropagation을 직접 쓴다."""
 
     def __init__(self, d, h, seed=0):
         r = np.random.default_rng(seed)
@@ -387,7 +391,7 @@ class SparseAE:
         n, d = A.shape
         for _ in range(steps):
             h, out = self.fwd(A)
-            d_out = 2*(out - A)/(n*d)                       # MSE 그래디언트
+            d_out = 2*(out - A)/(n*d)                       # MSE gradient
             g = {"Wd": h.T @ d_out, "bd": d_out.sum(0)}
             dh = d_out @ self.Wd.T + lam*np.sign(h)/n       # ← L1 항
             dz = dh*(h > 0)
@@ -408,8 +412,8 @@ for lam in LAMS:
     SP["per"].append(float((h > 1e-4).sum(1).mean()))
     SP["dead"].append(int(((h > 1e-4).sum(0) == 0).sum()))
 
-print(f"{'λ':>7} {'재구성 MSE':>13} {'활성 비율':>10} {'샘플당 활성 수':>15} "
-      f"{'죽은 유닛':>10}")
+print(f"{'λ':>7} {'reconstruction MSE':>13} {'활성 비율':>10} {'sample당 활성 수':>15} "
+      f"{'dead unit':>10}")
 print("-" * 60)
 for i, lam in enumerate(LAMS):
     print(f"{lam:>7.3f} {SP['mse'][i]:>13.6f} {SP['frac'][i]:>9.1%} "
@@ -418,21 +422,21 @@ sp_ratio = SP['per'][0]/SP['per'][3]
 sp_share = SP['mse'][3]/float((X**2).mean())
 ```
 
-은닉은 128차원(입력 64차원의 2배 — 과완비)이다. $\lambda=0$ 이면 128개 중
-`{python} f"{SP['per'][0]:.0f}"`개가 켜진다 — 코드가 조밀하고 해석 불가능하다. $\lambda=0.01$ 이면
-`{python} f"{SP['per'][3]:.1f}"`개만 켜지는데 MSE 는 `{python} f"{SP['mse'][3]:.4f}"` — **$\lambda=0$ 대비 활성 수
+hidden layer는 128차원(입력 64차원의 2배 — overcomplete)이다. $\lambda=0$ 이면 128개 중
+`{python} f"{SP['per'][0]:.0f}"`개가 켜진다 — code가 조밀하고 해석 불가능하다. $\lambda=0.01$ 이면
+`{python} f"{SP['per'][3]:.1f}"`개만 켜지는데 MSE는 `{python} f"{SP['mse'][3]:.4f}"` — **$\lambda=0$ 대비 활성 수
 `{python} f"{sp_ratio:.0f}"`배 감소, 오차는 여전히 데이터 분산의 `{python} f"{sp_share:.1%}"`.**
 $\lambda=0.05$ 에서는 전부 죽는다 (활성 0개, MSE `{python} f"{SP['mse'][-1]:.4f}"` = 평균만 출력).
 
-**희소성은 공짜가 아니다 — $\lambda$ 를 키우면 유닛이 죽는다.** $\lambda=0.002$ 에서 이미
-`{python} f"{SP['dead'][1]}"`/128 이 죽었고, $\lambda=0.03$ 에서 `{python} f"{SP['dead'][5]}"`/128 이다.
-실전에서는 죽은 유닛 재활성화(resampling)나 TopK 제약으로 대응한다. 이 구조가 그대로
-**희소 오토인코더(SAE) 해석가능성 연구**로 이어진다 — LLM 내부 활성을 과완비·희소 코드로
-분해해 '특징'을 찾는 기법이다.
+**sparsity는 공짜가 아니다 — $\lambda$ 를 키우면 unit이 죽는다.** dead unit(죽은 unit — 어떤 입력에도 켜지지 않는 unit)이 $\lambda=0.002$ 에서 이미
+`{python} f"{SP['dead'][1]}"`/128이고, $\lambda=0.03$ 에서 `{python} f"{SP['dead'][5]}"`/128이다.
+실전에서는 dead unit 재활성화(resampling)나 TopK 제약(sample당 상위 $K$ 개만 켜기)으로 대응한다. 이 구조가 그대로
+**sparse autoencoder(SAE) interpretability 연구**로 이어진다 — LLM 내부 activation을 overcomplete·sparse code로
+분해해 'feature'를 찾는 기법이다.
 
 ```{python}
 #| label: fig-sparse
-#| fig-cap: "L1 계수에 따른 재구성-희소성 트레이드오프와 코드 활성 패턴"
+#| fig-cap: "L1 계수에 따른 reconstruction-sparsity trade-off와 code 활성 pattern"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -441,8 +445,8 @@ from plotly.subplots import make_subplots
 from src import viz
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.42, 0.58],
-                    subplot_titles=("재구성 오차 vs 희소성",
-                                    "코드 활성 패턴 (샘플 40개 × 유닛 128개)"),
+                    subplot_titles=("reconstruction 오차 vs sparsity",
+                                    "code 활성 pattern (sample 40개 × unit 128개)"),
                     specs=[[{"type": "xy"}, {"type": "heatmap"}]])
 
 fig.add_trace(go.Scatter(x=SP["per"], y=SP["mse"], mode="lines+markers+text",
@@ -450,8 +454,8 @@ fig.add_trace(go.Scatter(x=SP["per"], y=SP["mse"], mode="lines+markers+text",
                          textfont=dict(size=10), showlegend=False,
                          line=dict(color=viz.ACCENT, width=2.5),
                          marker=dict(size=10, color=viz.WARM)), row=1, col=1)
-fig.update_xaxes(title_text="샘플당 활성 유닛 수", row=1, col=1)
-fig.update_yaxes(title_text="재구성 MSE", type="log", row=1, col=1)
+fig.update_xaxes(title_text="sample당 활성 unit 수", row=1, col=1)
+fig.update_yaxes(title_text="reconstruction MSE", type="log", row=1, col=1)
 
 steps = []
 for li, lam in enumerate(LAMS):
@@ -464,34 +468,37 @@ for li, lam in enumerate(LAMS):
     vis[1+li] = True
     steps.append((str(lam), {"visible": vis}))
 
-fig.update_xaxes(title_text="은닉 유닛", row=1, col=2)
-fig.update_yaxes(title_text="샘플", autorange="reversed", row=1, col=2)
+fig.update_xaxes(title_text="hidden unit", row=1, col=2)
+fig.update_yaxes(title_text="sample", autorange="reversed", row=1, col=2)
 fig.update_layout(sliders=[viz.slider(steps, prefix="L1 계수 λ = ", pad_t=40)])
-viz.fig_defaults(fig, height=430, title="파란 점 = 켜진 유닛")
+viz.fig_defaults(fig, height=430, title="파란 점 = 켜진 unit")
 fig.show()
 ```
 
 ---
 
-## G6.1.4 — 잡음제거 오토인코더와 스코어 함수
+## G6.1.4 — denoising autoencoder와 score function
 
-병목 대신 **문제를 어렵게** 만드는 방법도 있다.
-입력에 잡음을 섞고, **깨끗한 원본**을 복원하게 시킨다.
+bottleneck 대신 **문제를 어렵게** 만드는 방법도 있다.
+입력에 noise를 섞고, **깨끗한 원본**을 복원하게 시킨다 — **denoising autoencoder**(DAE, 잡음 제거 오토인코더)다.
 
 $$\tilde{x} = x + \sigma\varepsilon, \qquad
 \mathcal{L} = \mathbb{E}\big[\|x - r_\theta(\tilde{x})\|^2\big]$$
 
-복사만으로는 풀 수 없다. 데이터가 어떻게 생겼는지 알아야 잡음을 걷어낼 수 있다.
+복사만으로는 풀 수 없다. 데이터가 어떻게 생겼는지 알아야 noise를 걷어낼 수 있다.
+긁힌 사진을 복원하려면 사람 얼굴이 원래 어떻게 생겼는지 알아야 하는 것과 같다.
 
-### 그리고 여기서 확산 모델이 시작된다
+### 그리고 여기서 diffusion model이 시작된다
 
-MSE의 최적해는 조건부 평균이다: $r^*(\tilde{x}) = \mathbb{E}[x \mid \tilde{x}]$.
-가우스 잡음이면 **Tweedie 항등식**이 성립한다.
+MSE의 최적해는 conditional mean(조건부 평균)이다: $r^*(\tilde{x}) = \mathbb{E}[x \mid \tilde{x}]$ — "이 noise 낀 입력이 주어졌을 때 원본의 기댓값".
+Gaussian noise면 **Tweedie 항등식**이 성립한다.
 
 $$\boxed{\;r^*(\tilde{x}) - \tilde{x} = \sigma^2\, \nabla_{\tilde{x}} \log p_\sigma(\tilde{x})\;}$$
 
-즉 **잡음제거 오토인코더의 잔차는 스코어 함수를 가리킨다.**
-이것이 [6.6](06_score_sde.qmd) 스코어 기반 모델의 출발점이다.
+오른쪽의 $\nabla \log p$ 가 **score function**(스코어 함수 — 그 점에서 확률 밀도가 가장 가파르게 오르는 방향)이다.
+즉 **denoising autoencoder의 residual(잔차 — 복원값에서 입력을 뺀 것)은 score function을 가리킨다.**
+"noise 낀 점을 원래 자리로 되돌리는 화살표"가 곧 "확률이 높은 쪽을 가리키는 화살표"인 것이다.
+이것이 [6.6](06_score_sde.qmd) score-based model의 출발점이다.
 
 ```{python}
 #| label: tweedie
@@ -499,7 +506,7 @@ $$\boxed{\;r^*(\tilde{x}) - \tilde{x} = \sigma^2\, \nabla_{\tilde{x}} \log p_\si
 
 import numpy as np
 
-# 1D 가우스 혼합에서 해석적으로 검증한다
+# 1D Gaussian mixture에서 해석적으로 검증한다
 MUS = np.array([-2.0, 2.0]); WS = np.array([0.5, 0.5]); S0 = 0.5
 
 def tweedie_check(sig, xt):
@@ -520,12 +527,12 @@ for sig in [0.2, 0.5, 1.0, 2.0]:
     print(f"{sig:>6.1f} {np.abs(a-b).max():>16.3e}")
 ```
 
-$r^*(\tilde x) - \tilde x$ 와 $\sigma^2 \nabla \log p_\sigma(\tilde x)$ 가 **부동소수점 오차 수준으로 정확히
+$r^*(\tilde x) - \tilde x$ 와 $\sigma^2 \nabla \log p_\sigma(\tilde x)$ 가 **floating point 오차 수준으로 정확히
 일치한다.** 근사가 아니라 항등식이다.
 
 ```{python}
 #| label: fig-dae-score
-#| fig-cap: "잡음제거 잔차 = 스코어 함수"
+#| fig-cap: "denoising residual = score function"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -534,8 +541,8 @@ from plotly.subplots import make_subplots
 from src import viz
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("잡음 섞인 밀도 p_σ",
-                                    "잔차 r*(x̃) − x̃  와  σ²·∇log p_σ"))
+                    subplot_titles=("noise 섞인 density p_σ",
+                                    "residual r*(x̃) − x̃  와  σ²·∇log p_σ"))
 xs = np.linspace(-5, 5, 301)
 SIGS = [0.2, 0.5, 1.0, 2.0]
 steps = []
@@ -549,10 +556,10 @@ for si, sig in enumerate(SIGS):
                              fill="tozeroy",
                              fillcolor=viz.hex_rgba(viz.GREEN, 0.15)),
                   row=1, col=1)
-    fig.add_trace(go.Scatter(x=xs, y=a, mode="lines", name="DAE 잔차",
+    fig.add_trace(go.Scatter(x=xs, y=a, mode="lines", name="DAE residual",
                              visible=(si == 0), showlegend=(si == 0),
                              line=dict(color=viz.ACCENT, width=4)), row=1, col=2)
-    fig.add_trace(go.Scatter(x=xs, y=b, mode="lines", name="σ²·스코어",
+    fig.add_trace(go.Scatter(x=xs, y=b, mode="lines", name="σ²·score",
                              visible=(si == 0), showlegend=(si == 0),
                              line=dict(color=viz.WARM, width=2, dash="dash")),
                   row=1, col=2)
@@ -563,9 +570,9 @@ for si, sig in enumerate(SIGS):
     steps.append((str(sig), {"visible": vis}))
 fig.update_xaxes(title_text="x̃", row=1, col=1)
 fig.update_xaxes(title_text="x̃", row=1, col=2)
-fig.update_yaxes(title_text="밀도", row=1, col=1)
+fig.update_yaxes(title_text="density", row=1, col=1)
 fig.update_yaxes(title_text="값", row=1, col=2)
-fig.update_layout(sliders=[viz.slider(steps, prefix="잡음 수준 σ = ", pad_t=45)])
+fig.update_layout(sliders=[viz.slider(steps, prefix="noise 수준 σ = ", pad_t=45)])
 viz.fig_defaults(fig, height=400,
                  title="두 곡선은 정확히 겹칩니다 (파란 실선 위에 주황 점선)")
 fig.show()
@@ -582,8 +589,8 @@ from src import nn
 
 X_te_noisy = X_te + np.random.default_rng(5).normal(0, 0.3, X_te.shape)
 
-print(f"{'학습 σ':>8} {'깨끗한 입력':>13} {'σ=0.3 잡음 입력':>17} "
-      f"{'인코더 자코비안 norm':>20}")
+print(f"{'학습 σ':>8} {'깨끗한 입력':>13} {'σ=0.3 noise 입력':>17} "
+      f"{'encoder Jacobian norm':>21}")
 print("-" * 62)
 DAE_MODELS = {}
 DAE = {"clean": [], "noisy": [], "jac": []}
@@ -594,7 +601,7 @@ for s_tr in [0.0, 0.1, 0.3, 0.6]:
     P = ae.params()
     for _ in range(2000):
         Xn = X + rr.normal(0, s_tr, X.shape) if s_tr > 0 else X
-        _, g = ae.loss_and_grads(Xn, X, loss="mse")     # 잡음 입력 → 깨끗한 목표
+        _, g = ae.loss_and_grads(Xn, X, loss="mse")     # noise 입력 → 깨끗한 목표
         opt.step(P, g)
     DAE_MODELS[s_tr] = ae
     def m(A):
@@ -604,29 +611,29 @@ for s_tr in [0.0, 0.1, 0.3, 0.6]:
     DAE["clean"].append(m(X_te))
     DAE["noisy"].append(m(X_te_noisy))
     DAE["jac"].append(J)
-    print(f"{s_tr:>8.1f} {m(X_te):>13.6f} {m(X_te_noisy):>17.6f} {J:>20.3f}")
+    print(f"{s_tr:>8.1f} {m(X_te):>13.6f} {m(X_te_noisy):>17.6f} {J:>21.3f}")
 dae_gain = DAE['noisy'][0]/DAE['noisy'][2]
 jac_txt = " → ".join(f"{j:.2f}" for j in DAE["jac"])
 ```
 
-**$\sigma=0.3$ 으로 학습하면 잡음 입력 오차가 `{python} f"{DAE['noisy'][0]:.4f}"` → `{python} f"{DAE['noisy'][2]:.4f}"`,
+**$\sigma=0.3$ 으로 학습하면 noise 입력 오차가 `{python} f"{DAE['noisy'][0]:.4f}"` → `{python} f"{DAE['noisy'][2]:.4f}"`,
 `{python} f"{dae_gain:.0f}"`배 줄어든다.** 대신 깨끗한 입력의 오차는 `{python} f"{DAE['clean'][0]:.6f}"` →
-`{python} f"{DAE['clean'][2]:.4f}"` 로 늘어난다 — 견고성의 대가다. $\sigma=0.6$ 은 과하다: 잡음 입력 성능마저
+`{python} f"{DAE['clean'][2]:.4f}"`로 늘어난다 — robustness(견고성)의 대가다. $\sigma=0.6$ 은 과하다: noise 입력 성능마저
 나빠진다 (`{python} f"{DAE['noisy'][2]:.4f}"` → `{python} f"{DAE['noisy'][3]:.4f}"`).
 
-**자코비안 norm 이 단조 감소한다 (`{python} jac_txt`).** 잡음제거 학습은 명시적으로 요구하지
-않았는데도 **인코더를 수축시킨다** — 입력이 흔들려도 코드가 덜 변하게 만드는 것이 잡음을 이기는
-방법이기 때문이다. 수축 오토인코더(CAE)는 이 자코비안 norm 을 **직접** 페널티로 넣는다.
+**Jacobian norm이 단조 감소한다 (`{python} jac_txt`).** Jacobian([0.1](../00_foundations/01_calculus_optimization.qmd))은 "입력이 조금 바뀌면 code가 얼마나 바뀌는가"의 행렬이다. denoising 학습은 명시적으로 요구하지
+않았는데도 **encoder를 수축시킨다** — 입력이 흔들려도 code가 덜 변하게 만드는 것이 noise를 이기는
+방법이기 때문이다. contractive autoencoder(CAE — 수축 autoencoder)는 이 Jacobian norm을 **직접** penalty로 넣는다.
 
 $$\mathcal{L} = \|x - \hat x\|^2 + \lambda \left\|\frac{\partial h}{\partial x}\right\|_F^2$$
 
-**DAE 는 CAE 를 암묵적으로 수행한다** — 위 표가 그 증거다.
+**DAE는 CAE를 암묵적으로 수행한다** — 위 표가 그 증거다.
 
 ---
 
-## G6.1.5 — 잠재공간의 구조와 보간의 함정
+## G6.1.5 — latent space의 구조와 interpolation의 함정
 
-잠재공간에서 두 점을 잇는 직선을 디코딩하면 부드러운 변화가 나온다 —
+latent space에서 두 점을 잇는 직선을 decoding하면 부드러운 변화가 나온다 — 이것이 **latent interpolation**(잠재 보간)이다.
 **대개는.** 언제 깨지는지 보자.
 
 ```{python}
@@ -636,7 +643,7 @@ $$\mathcal{L} = \|x - \hat x\|^2 + \lambda \left\|\frac{\partial h}{\partial x}\
 import numpy as np
 from src import nn
 
-# 데이터: 원(1차원 매니폴드)이 2차원에 박혀 있다
+# 데이터: 원(1차원 manifold)이 2차원에 박혀 있다
 n_ring = 1200
 th = np.random.default_rng(4).uniform(0, 2*np.pi, n_ring)
 X_ring = (np.stack([np.cos(th), np.sin(th)], 1)
@@ -676,7 +683,7 @@ D_lin = (1-ts)[:, None]*X_ring[i0] + ts[:, None]*X_ring[i1]
 off_lat = np.abs(np.sqrt((D_lat**2).sum(1)) - 1.0)
 off_lin = np.abs(np.sqrt((D_lin**2).sum(1)) - 1.0)
 
-print(f"{'t':>5} {'잠재 보간 이탈':>15} {'데이터 직선 보간 이탈':>22}")
+print(f"{'t':>5} {'latent interpolation 이탈':>15} {'데이터 직선 interpolation 이탈':>22}")
 print("-" * 46)
 for t_, a_, b_ in zip(ts, off_lat, off_lin):
     mark = "  ←" if a_ > 0.1 else ""
@@ -687,20 +694,20 @@ interp_ratio = float(off_lin.mean()/off_lat.mean())
 t_jump, jump = float(ts[np.argmax(off_lat)]), float(off_lat.max())
 ```
 
-재구성 MSE 가 `{python} f"{ring_mse:.6f}"` 로 원을 1차원 코드로 잘 표현했고, **잠재 보간이 데이터 직선보다
-`{python} f"{interp_ratio:.1f}"`배 매니폴드에 붙어 있다.** 직선 보간은 $t=0.5$ 에서 원 중심 쪽으로
-`{python} f"{off_lin[5]:.2f}"` 만큼 파고든다 — 존재하지 않는 데이터다.
+reconstruction MSE가 `{python} f"{ring_mse:.6f}"`로 원을 1차원 code로 잘 표현했고, **latent interpolation이 데이터 직선보다
+`{python} f"{interp_ratio:.1f}"`배 manifold에 붙어 있다.** 직선 interpolation은 $t=0.5$ 에서 원 중심 쪽으로
+`{python} f"{off_lin[5]:.2f}"`만큼 파고든다 — 존재하지 않는 데이터다.
 
-**그런데 잠재 경로도 완전하지는 않다: $t$ = `{python} f"{t_jump:.1f}"` 에서 `{python} f"{jump:.2f}"` 만큼 튄다.**
-우연이 아니다. **원($S^1$)은 직선($\mathbb{R}^1$)에 위상적으로 끼워 넣을 수 없다.** 어딘가에서 반드시
-잘라야 하고, 잠재 직선이 그 절단면을 지나면 점프가 생긴다.
+**그런데 latent 경로도 완전하지는 않다: $t$ = `{python} f"{t_jump:.1f}"`에서 `{python} f"{jump:.2f}"`만큼 튄다.**
+우연이 아니다. **원($S^1$)은 직선($\mathbb{R}^1$)에 topology(위상)적으로 끼워 넣을 수 없다.** 시계 문자판을 잘라 일직선으로 펴면 12시와 1시 사이 어딘가는 반드시 끊어진다. 어딘가에서 반드시
+잘라야 하고, latent 직선이 그 절단면을 지나면 점프가 생긴다.
 
-**교훈: 잠재 차원의 크기만이 아니라 위상(topology)이 맞아야 한다.** 이 문제는 VAE 에서도,
-확산 모델의 잠재 공간에서도 그대로 남는다.
+**교훈: latent 차원의 크기만이 아니라 topology가 맞아야 한다.** 이 문제는 VAE에서도,
+diffusion model의 latent space에서도 그대로 남는다.
 
 ```{python}
 #| label: fig-latent
-#| fig-cap: "잠재 보간과 데이터 공간 직선 보간, 그리고 2D 잠재 지도"
+#| fig-cap: "latent interpolation과 데이터 공간 직선 interpolation, 그리고 2D latent 지도"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -708,7 +715,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import viz
 
-# 8×8 데이터에 2차원 잠재 AE 를 학습해 잠재 지도를 그린다
+# 8×8 데이터에 2차원 latent AE를 학습해 latent 지도를 그린다
 lat2 = nn.MLP([64, 48, 2, 48, 64], activation="tanh", init="xavier", seed=8)
 nn.train(lat2, X, X, loss="mse", opt=nn.Optimizer("adam", lr=0.005),
          steps=2500, seed=8)
@@ -739,9 +746,9 @@ tiles = (dec2(grid) + MU).reshape(G, G, 8, 8)
 canvas = np.block([[tiles[i, j] for j in range(G)] for i in range(G)])
 
 fig = make_subplots(rows=1, cols=3, column_widths=[0.30, 0.30, 0.40],
-                    subplot_titles=("링 데이터와 두 보간 경로",
-                                    "매니폴드 이탈량",
-                                    "2D 잠재 격자를 디코딩한 결과"),
+                    subplot_titles=("ring 데이터와 두 interpolation 경로",
+                                    "manifold 이탈량",
+                                    "2D latent 격자를 decoding한 결과"),
                     specs=[[{"type": "xy"}, {"type": "xy"},
                             {"type": "heatmap"}]])
 
@@ -751,7 +758,7 @@ fig.add_trace(go.Scatter(x=X_ring[::4, 0], y=X_ring[::4, 1], mode="markers",
                                      color=viz.hex_rgba(viz.GREEN, 0.4))),
               row=1, col=1)
 fig.add_trace(go.Scatter(x=D_lat[:, 0], y=D_lat[:, 1], mode="lines+markers",
-                         name="잠재 보간",
+                         name="latent interpolation",
                          line=dict(color=viz.ACCENT, width=2.5),
                          marker=dict(size=7)), row=1, col=1)
 fig.add_trace(go.Scatter(x=D_lin[:, 0], y=D_lin[:, 1], mode="lines+markers",
@@ -761,12 +768,12 @@ fig.add_trace(go.Scatter(x=D_lin[:, 0], y=D_lin[:, 1], mode="lines+markers",
 fig.update_xaxes(range=[-1.5, 1.5], row=1, col=1)
 fig.update_yaxes(range=[-1.5, 1.5], scaleanchor="x", row=1, col=1)
 
-for nm, v, c in [("잠재 보간", off_lat, viz.ACCENT),
+for nm, v, c in [("latent interpolation", off_lat, viz.ACCENT),
                  ("데이터 직선", off_lin, viz.WARM)]:
     fig.add_trace(go.Scatter(x=ts, y=v, mode="lines+markers", name=nm,
                              showlegend=False,
                              line=dict(color=c, width=2.5)), row=1, col=2)
-fig.update_xaxes(title_text="보간 위치 t", row=1, col=2)
+fig.update_xaxes(title_text="interpolation 위치 t", row=1, col=2)
 fig.update_yaxes(title_text="|‖x‖ − 1|", row=1, col=2)
 
 fig.add_trace(go.Heatmap(z=canvas, colorscale="Blues", showscale=False),
@@ -780,25 +787,29 @@ fig.show()
 
 ---
 
-## G6.1.6 — VQ-VAE: 잠재를 이산으로 만들기
+## G6.1.6 — VQ-VAE: latent를 discrete로 만들기
 
-지금까지 코드 $z$ 는 연속 벡터였다. **유한한 코드북에서 고르게** 하면 어떻게 될까.
+지금까지 code $z$ 는 연속 벡터였다. **유한한 codebook(코드북 — 미리 정해 둔 대표 벡터들의 목록)에서 고르게** 하면 어떻게 될까.
+그림의 색을 팔레트 256색 중 하나로 바꾸는 것과 같다 — 이것이 **VQ**(vector quantization, 벡터 양자화)다.
 
 $$z_q = \arg\min_{e_j \in \mathcal{C}} \|z_e - e_j\|_2$$
 
-`argmin` 은 미분 불가능하다. **직통 추정기(straight-through)** 로 우회한다.
+encoder 출력 $z_e$ 에 가장 가까운 codebook 벡터 $e_j$ 를 고른다.
+`argmin` 은 미분 불가능하다 — "가장 가까운 것을 고르기"는 계단 함수라 gradient가 0 아니면 무한대다. **straight-through estimator**(직통 추정기)로 우회한다.
 
 $$z_q = z_e + \text{sg}[z_q - z_e]$$
 
-순전파에서는 $z_q$ 값이 나가고, 역전파에서는 그래디언트가
-$z_q$ 를 통과해 그대로 $z_e$ 로 간다 ($\text{sg}$ 는 stop-gradient).
-**그래디언트를 복사해 붙이는 것**이지 진짜 미분이 아니다 — 그래서 편향된 추정량이다.
+forward pass에서는 $z_q$ 값이 나가고, backpropagation에서는 gradient가
+$z_q$ 를 통과해 그대로 $z_e$ 로 간다 ($\text{sg}$ 는 stop-gradient — 값은 쓰되 미분은 하지 않음).
+**gradient를 복사해 붙이는 것**이지 진짜 미분이 아니다 — 계단을 미끄럼틀로 간주하고 미분하는 셈이라 편향된 추정량이다.
 
-전체 목적함수에는 코드북 항 두 개가 더 붙는다.
+전체 목적함수에는 codebook 항 두 개가 더 붙는다.
 
-$$\mathcal{L} = \underbrace{\|x-\hat{x}\|^2}_{\text{재구성}}
-+ \underbrace{\|\text{sg}[z_e]-e\|^2}_{\text{코드북}}
-+ \beta\underbrace{\|z_e-\text{sg}[e]\|^2}_{\text{커밋먼트}}$$
+$$\mathcal{L} = \underbrace{\|x-\hat{x}\|^2}_{\text{reconstruction}}
++ \underbrace{\|\text{sg}[z_e]-e\|^2}_{\text{codebook}}
++ \beta\underbrace{\|z_e-\text{sg}[e]\|^2}_{\text{commitment}}$$
+
+codebook 항은 대표 벡터 $e$ 를 encoder 출력 쪽으로 옮기고, commitment 항은 반대로 encoder 출력이 대표 벡터에서 너무 멀리 벗어나지 않게 붙잡는다.
 
 ```{python}
 #| label: vq
@@ -806,11 +817,11 @@ $$\mathcal{L} = \underbrace{\|x-\hat{x}\|^2}_{\text{재구성}}
 
 import numpy as np
 
-Z8 = X @ Vt_[:8].T                            # 8차원 연속 잠재
+Z8 = X @ Vt_[:8].T                            # 8차원 연속 latent
 
 
 def kmeans(Zd, K, seed=0, iters=60):
-    """코드북 학습 = k-평균 (VQ-VAE 의 EMA 코드북 갱신과 같은 목적)."""
+    """codebook 학습 = k-means (VQ-VAE의 EMA codebook 갱신과 같은 목적)."""
     rr = np.random.default_rng(seed)
     C = Zd[rr.choice(len(Zd), K, replace=False)].copy()
     for _ in range(iters):
@@ -825,8 +836,8 @@ def kmeans(Zd, K, seed=0, iters=60):
 VQ = {"K": [], "bits": [], "mse": [], "used": []}
 CODEBOOKS = {}
 cont_mse = float(((X - Z8 @ Vt_[:8])**2).mean())
-print(f"{'코드북 K':>9} {'비트/샘플':>10} {'재구성 MSE':>13} "
-      f"{'연속 대비':>10} {'사용된 코드':>12}")
+print(f"{'codebook K':>10} {'bit/sample':>10} {'reconstruction MSE':>13} "
+      f"{'연속 대비':>10} {'사용된 code':>12}")
 print("-" * 60)
 for K in [4, 16, 64, 256, 1024]:
     C, a = kmeans(Z8, K, seed=7)
@@ -835,29 +846,29 @@ for K in [4, 16, 64, 256, 1024]:
     mse = float(((X - rec)**2).mean())
     VQ["K"].append(K); VQ["bits"].append(np.log2(K))
     VQ["mse"].append(mse); VQ["used"].append(len(np.unique(a)))
-    print(f"{K:>9} {np.log2(K):>10.1f} {mse:>13.6f} {mse/cont_mse:>9.2f}배 "
+    print(f"{K:>10} {np.log2(K):>10.1f} {mse:>13.6f} {mse/cont_mse:>9.2f}배 "
           f"{len(np.unique(a)):>9}/{K}")
 print("-" * 60)
-print(f"{'연속 8D':>9} {'256.0':>10} {cont_mse:>13.6f} {1.0:>9.2f}배")
+print(f"{'연속 8D':>10} {'256.0':>10} {cont_mse:>13.6f} {1.0:>9.2f}배")
 vq_quality = cont_mse/VQ['mse'][-1]
 vq_used_all = all(u == k for u, k in zip(VQ["used"], VQ["K"]))
 ```
 
-**10비트(1024 코드)로 256비트 연속 잠재의 `{python} f"{vq_quality:.0%}"` 품질에 도달한다.** 비트는
-`{python} f"{256/10:.0f}"`배 줄었는데 MSE 는 `{python} f"{VQ['mse'][-1]/cont_mse:.2f}"`배만 늘었다.
+**10 bit(1024 code)로 256 bit 연속 latent의 `{python} f"{vq_quality:.0%}"` 품질에 도달한다.** (연속 8차원 × float32 32 bit = 256 bit.) bit는
+`{python} f"{256/10:.0f}"`배 줄었는데 MSE는 `{python} f"{VQ['mse'][-1]/cont_mse:.2f}"`배만 늘었다.
 
-여기서는 코드북이 전부 쓰이고 있지만(죽은 코드 `{python} "0개" if vq_used_all else "있음"`), 실전에서는
-이게 잘 안 된다 — 코드북 붕괴(codebook collapse)로 일부 코드만 쓰이는 문제가 흔하고,
-EMA 갱신·코드 재시작(restart)·낮은 차원 코드북으로 대응한다. 이산 잠재가 중요한 이유는 넷이다.
+여기서는 codebook이 전부 쓰이고 있지만(dead code `{python} "0개" if vq_used_all else "있음"`), 실전에서는
+이게 잘 안 된다 — codebook collapse(코드북 붕괴)로 일부 code만 쓰이는 문제가 흔하고,
+EMA 갱신·code restart·낮은 차원 codebook으로 대응한다. discrete latent가 중요한 이유는 넷이다.
 
-- 자기회귀 모델을 잠재 위에 얹을 수 있다 (VQ-VAE + PixelCNN, DALL·E 1)
-- 오디오 코덱의 핵심 (SoundStream, EnCodec — Part 8 에서 다룬다)
-- 언어모델의 토큰과 같은 인터페이스가 된다 (이미지를 '토큰'으로)
-- 비트레이트를 정확히 제어할 수 있다
+- autoregressive model을 latent 위에 얹을 수 있다 (VQ-VAE + PixelCNN, DALL·E 1)
+- 오디오 codec의 핵심 (SoundStream, EnCodec — Part 8에서 다룬다)
+- language model의 token과 같은 interface가 된다 (이미지를 'token'으로)
+- bitrate를 정확히 제어할 수 있다
 
 ```{python}
 #| label: fig-vq
-#| fig-cap: "코드북 크기에 따른 율-왜곡 곡선과 양자화된 잠재 공간"
+#| fig-cap: "codebook 크기에 따른 rate-distortion 곡선과 quantization된 latent space"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -866,30 +877,30 @@ from plotly.subplots import make_subplots
 from src import viz
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.45, 0.55],
-                    subplot_titles=("율-왜곡 곡선",
-                                    "잠재 공간(PC1-PC2)과 코드 벡터"))
+                    subplot_titles=("rate-distortion 곡선 (bit 수 vs 오차)",
+                                    "latent space(PC1-PC2)와 code 벡터"))
 fig.add_trace(go.Scatter(x=VQ["bits"], y=VQ["mse"], mode="lines+markers+text",
                          text=[f"K={k}" for k in VQ["K"]],
                          textposition="top right", textfont=dict(size=10),
                          name="VQ", line=dict(color=viz.ACCENT, width=2.5),
                          marker=dict(size=10)), row=1, col=1)
 fig.add_hline(y=cont_mse, line=dict(color=viz.GREEN, dash="dash"),
-              annotation_text=f"연속 8D 하한 {cont_mse:.4f}", row=1, col=1)
-fig.update_xaxes(title_text="샘플당 비트 = log₂K", row=1, col=1)
-fig.update_yaxes(title_text="재구성 MSE", type="log", row=1, col=1)
+              annotation_text=f"연속 8D lower bound {cont_mse:.4f}", row=1, col=1)
+fig.update_xaxes(title_text="sample당 bit = log₂K", row=1, col=1)
+fig.update_yaxes(title_text="reconstruction MSE", type="log", row=1, col=1)
 
 steps = []
 KS_VQ = VQ["K"]
 for ki, K in enumerate(KS_VQ):
     C, a = CODEBOOKS[K]
     fig.add_trace(go.Scatter(x=Z8[::3, 0], y=Z8[::3, 1], mode="markers",
-                             name="연속 잠재", visible=(ki == 0),
+                             name="연속 latent", visible=(ki == 0),
                              showlegend=(ki == 0),
                              marker=dict(size=3, color=a[::3],
                                          colorscale="Turbo", opacity=0.55)),
                   row=1, col=2)
     fig.add_trace(go.Scatter(x=C[:, 0], y=C[:, 1], mode="markers",
-                             name="코드 벡터", visible=(ki == 0),
+                             name="code 벡터", visible=(ki == 0),
                              showlegend=(ki == 0),
                              marker=dict(size=8, color=viz.WARM,
                                          symbol="x", line=dict(width=1.5))),
@@ -900,7 +911,7 @@ for ki, K in enumerate(KS_VQ):
     steps.append((str(K), {"visible": vis}))
 fig.update_xaxes(title_text="PC1", row=1, col=2)
 fig.update_yaxes(title_text="PC2", row=1, col=2)
-fig.update_layout(sliders=[viz.slider(steps, prefix="코드북 크기 K = ", pad_t=45)])
+fig.update_layout(sliders=[viz.slider(steps, prefix="codebook 크기 K = ", pad_t=45)])
 viz.fig_defaults(fig, height=430, title="")
 fig.show()
 ```
@@ -911,17 +922,17 @@ fig.show()
 
 | 용도 | 원리 | 현황 |
 |---|---|---|
-| 이상 탐지 | 재구성 오차가 큰 샘플 = 학습 분포 밖 | 위 실험의 '순수 잡음 MSE' 가 정확히 이 원리 |
-| 차원 축소·시각화 | 비선형 매니폴드를 따라간다 | PCA보다 낫지만 t-SNE/UMAP처럼 거리 보존은 안 함 |
-| 사전학습 표현 | 레이블 없이 특징을 얻는다 | 지금은 대조학습·MAE가 더 강함 |
-| 생성 모델의 잠재 공간 | 확산을 픽셀 대신 잠재에서 돌린다 | **Stable Diffusion의 핵심 — 6.7** |
-| 신경 코덱 | VQ 코드북으로 비트레이트 제어 | EnCodec, SoundStream — Part 8 |
-| 해석가능성 | 과완비·희소 코드로 LLM 활성을 분해 | 희소 오토인코더(SAE) — Part 12 |
+| anomaly detection | reconstruction 오차가 큰 sample = 학습 분포 밖 | 위 실험의 '순수 noise MSE'가 정확히 이 원리 |
+| 차원 축소·시각화 | 비선형 manifold를 따라간다 | PCA보다 낫지만 t-SNE/UMAP처럼 거리 보존은 안 함 |
+| pretraining representation | label 없이 feature를 얻는다 | 지금은 contrastive learning·MAE가 더 강함 |
+| generative model의 latent space | diffusion을 pixel 대신 latent에서 돌린다 | **Stable Diffusion의 핵심 — 6.7** |
+| neural codec | VQ codebook으로 bitrate 제어 | EnCodec, SoundStream — Part 8 |
+| interpretability | overcomplete·sparse code로 LLM activation을 분해 | sparse autoencoder(SAE) — Part 12 |
 
-**오토인코더 자체는 좋은 생성 모델이 아니다.**
-잠재 공간에 사전분포가 없어서 z를 어디서 뽑아야 할지 모른다 —
-아무 z 나 넣으면 데이터가 아닌 것이 나온다 (위 보간 실험의 t=0.6 지점).
-**다음 장의 VAE가 정확히 이 구멍을 메운다** — 잠재에 분포를 강제한다.
+**autoencoder 자체는 좋은 generative model이 아니다.**
+latent space에 prior(사전분포 — "z는 대략 이렇게 분포한다"는 약속)가 없어서 z를 어디서 뽑아야 할지 모른다 —
+아무 z나 넣으면 데이터가 아닌 것이 나온다 (위 interpolation 실험의 t=0.6 지점).
+**다음 장의 VAE가 정확히 이 구멍을 메운다** — latent에 분포를 강제한다.
 
 
 ---
@@ -929,18 +940,18 @@ fig.show()
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 인코더 주각이 왜 52° 나 되는가**
-`subspace-detail` 의 인코더 주각을 $k$ = 1, 2, 3, 5, 8 에 대해 그리고, 조건수가 큰 데이터를
-화이트닝($X \to X\Sigma^{-1/2}$)해 다시 학습시켜라. 주각이 줄어드는가? 왜 그런지 손실이
+**① encoder principal angle이 왜 52°나 되는가**
+`subspace-detail` 의 encoder principal angle을 $k$ = 1, 2, 3, 5, 8에 대해 그리고, condition number가 큰 데이터를
+whitening($X \to X\Sigma^{-1/2}$ — 모든 방향의 분산을 1로 맞추기)해 다시 학습시켜라. principal angle이 줄어드는가? 왜 그런지 loss가
 제약하는 방향으로 설명하라.
 
-**② 매니폴드 없는 데이터에서 항등함수를 막는다**
-`identity-test` 의 등방 가우스 데이터에 $k=128$ 로 잡음(DAE, $\sigma=0.3$)이나 희소성($\lambda=0.01$)을
-넣어라. 미학습 잡음 MSE 가 여전히 0.005 로 내려가는가? 어느 쪽이 항등함수를 확실히 막는가?
+**② manifold 없는 데이터에서 identity function을 막는다**
+`identity-test` 의 isotropic Gaussian 데이터에 $k=128$ 로 noise(DAE, $\sigma=0.3$)나 sparsity($\lambda=0.01$)를
+넣어라. 미학습 noise MSE가 여전히 0.005로 내려가는가? 어느 쪽이 identity function을 확실히 막는가?
 
-**③ 학습된 DAE 의 잔차가 스코어인지 확인한다**
-`DAE_MODELS[0.3]` 의 잔차 $r(\tilde x) - \tilde x$ 를, 훈련 데이터로 만든 가우스 커널 밀도 추정
-($\sigma=0.3$)의 $\sigma^2 \nabla \log p_\sigma$ 와 비교하라. 코사인 유사도가 얼마인가? 잔차의 크기
+**③ 학습된 DAE의 residual이 score인지 확인한다**
+`DAE_MODELS[0.3]` 의 residual $r(\tilde x) - \tilde x$ 를, 훈련 데이터로 만든 Gaussian kernel density estimation
+($\sigma=0.3$)의 $\sigma^2 \nabla \log p_\sigma$ 와 비교하라. cosine similarity가 얼마인가? residual의 크기
 비율은? 이것이 [6.6](06_score_sde.qmd)의 다리다.
 :::
 
@@ -948,25 +959,25 @@ fig.show()
 
 | 개념 | 핵심 |
 |------|------|
-| 오토인코더 | $\hat{x} = g(f(x))$, 손실 = 재구성 오차, 레이블 불필요 |
-| 병목 | $k < d$ 가 압축을 강제한다 |
-| 선형 AE = PCA | 재구성 MSE 상대 차이 최대 `{python} f"{lin_gap:.1%}"`, $k \le 8$ 에서 소수점 6자리까지 일치 |
-| 단, 축은 다르다 | 회전 자유도 — 디코더 행이 특정 PC에 대응하지 않음 |
-| 인코더의 자유도 | 데이터가 분산을 안 갖는 방향에서는 제약 없음 (주각 `{python} f"{ang_enc:.0f}"`°, 데이터 위 차이 `{python} f"{data_gap:.1%}"`) |
+| autoencoder | $\hat{x} = g(f(x))$, loss = reconstruction 오차, label 불필요 — 작은 가방에 짐 싸기 |
+| bottleneck | $k < d$ 가 압축을 강제한다 |
+| 선형 AE = PCA | reconstruction MSE 상대 차이 최대 `{python} f"{lin_gap:.1%}"`, $k \le 8$ 에서 소수점 6자리까지 일치 |
+| 단, 축은 다르다 | 회전 자유도 — decoder 행이 특정 PC에 대응하지 않음 (같은 땅, 다른 방향의 지도) |
+| encoder의 자유도 | 데이터가 분산을 안 갖는 방향에서는 제약 없음 (principal angle `{python} f"{ang_enc:.0f}"`°, 데이터 위 차이 `{python} f"{data_gap:.1%}"`) |
 | 비선형 이득 | $k{=}5$ 에서 PCA 대비 오차 `{python} f"{gain5:.0f}"`배 감소 |
-| 과완비 | **매니폴드가 있으면 항등함수를 배우지 않는다** (실측) |
-| 항등함수가 되는 조건 | 데이터에 구조가 없을 때 ($k{\ge}64$, 미학습 MSE `{python} f"{ID_TE[64]:.3f}"`) |
-| 희소 AE | λ=0.01로 활성 `{python} f"{SP['per'][0]:.0f}"`개 → `{python} f"{SP['per'][3]:.1f}"`개, MSE `{python} f"{SP['mse'][3]:.4f}"` |
-| 희소성의 대가 | 유닛이 죽는다 (λ=0.03에서 `{python} f"{SP['dead'][5]}"`/128) |
-| DAE | σ=0.3 학습 → 잡음 입력 오차 `{python} f"{dae_gain:.0f}"`배 감소 |
-| DAE = 암묵적 CAE | 자코비안 norm `{python} f"{DAE['jac'][0]:.2f}"` → `{python} f"{DAE['jac'][-1]:.2f}"`으로 자동 수축 |
-| Tweedie | $r^*(\tilde x) - \tilde x = \sigma^2\nabla\log p_\sigma$ — 확산의 씨앗 |
-| 보간의 함정 | 잠재 경로가 직선보다 `{python} f"{interp_ratio:.0f}"`배 낫지만 위상이 안 맞으면 튄다 |
-| VQ | 10비트로 256비트 연속 잠재의 `{python} f"{vq_quality:.0%}"` 품질 |
-| 직통 추정기 | `argmin` 을 우회하는 편향된 그래디언트 |
+| overcomplete | **manifold가 있으면 identity function을 배우지 않는다** (실측) — 낙서를 얼굴로 고쳐 그리는 화가 |
+| identity가 되는 조건 | 데이터에 구조가 없을 때 ($k{\ge}64$, 미학습 MSE `{python} f"{ID_TE[64]:.3f}"`) |
+| sparse AE | λ=0.01로 활성 `{python} f"{SP['per'][0]:.0f}"`개 → `{python} f"{SP['per'][3]:.1f}"`개, MSE `{python} f"{SP['mse'][3]:.4f}"` — 두꺼운 사전, 짧은 문장 |
+| sparsity의 대가 | unit이 죽는다 (λ=0.03에서 `{python} f"{SP['dead'][5]}"`/128) |
+| DAE | σ=0.3 학습 → noise 입력 오차 `{python} f"{dae_gain:.0f}"`배 감소 — 긁힌 사진 복원 |
+| DAE = 암묵적 CAE | Jacobian norm `{python} f"{DAE['jac'][0]:.2f}"` → `{python} f"{DAE['jac'][-1]:.2f}"`으로 자동 수축 |
+| Tweedie | $r^*(\tilde x) - \tilde x = \sigma^2\nabla\log p_\sigma$ — diffusion의 씨앗 |
+| interpolation의 함정 | latent 경로가 직선보다 `{python} f"{interp_ratio:.0f}"`배 낫지만 topology가 안 맞으면 튄다 — 시계 문자판 펴기 |
+| VQ | 10 bit로 256 bit 연속 latent의 `{python} f"{vq_quality:.0%}"` 품질 — 256색 팔레트 |
+| straight-through estimator | `argmin` 을 우회하는 편향된 gradient — 계단을 미끄럼틀로 |
 
 ---
 
-**다음**: [6.2 변분 오토인코더](02_vae.qmd) — 잠재 공간에 분포를 얹기
+**다음**: [6.2 variational autoencoder](02_vae.qmd) — latent space에 분포를 얹기
 
-**이전**: [6.0 생성 모델 지형도](00_generative_overview.qmd)
+**이전**: [6.0 generative model 지형도](00_generative_overview.qmd)
