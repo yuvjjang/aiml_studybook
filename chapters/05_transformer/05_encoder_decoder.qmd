@@ -1,72 +1,73 @@
 ---
-title: "5.5 인코더-디코더와 세 가지 계열"
+title: "5.5 encoder-decoder와 세 가지 계열"
 subtitle: "원 논문 구조에서 encoder-only·decoder-only로의 분기"
 jupyter: ai-ml-study
 ---
 
 BERT, GPT, T5는 서로 다른 모델처럼 보이지만 **같은 부품으로 만든 세 가지 조립품**이다.
+같은 레고 block으로 집도 짓고 차도 만드는 것과 같다.
 
-[5.4](04_transformer_block.qmd)에서 본 블록이 부품이고, 차이는 두 가지뿐이다.
+[5.4](04_transformer_block.qmd)에서 본 block이 부품이고, 차이는 두 가지뿐이다.
 
-1. 블록을 **어떻게 배치**하는가 (한 스택인가, 두 스택인가)
-2. 어떤 **마스크**를 쓰는가
+1. block을 **어떻게 배치**하는가 (한 stack인가, 두 stack인가)
+2. 어떤 **mask**를 쓰는가
 
 그리고 두 번째가 사실상 첫 번째를 결정한다.
-[5.1](01_self_attention.qmd)에서 본 마스크 행렬 하나로 계열이 갈린다.
+[5.1](01_self_attention.qmd)에서 본 mask 행렬 하나로 계열이 갈린다.
 
 ---
 
 ## 원 논문의 구조
 
-*Attention Is All You Need* 는 기계번역 논문이었다.
-"영어 문장을 읽고 독일어 문장을 쓴다"는 과제라서, 자연스럽게 두 부분으로 나뉜다.
+*Attention Is All You Need*는 기계번역 논문이었다.
+"영어 문장을 읽고 독일어 문장을 쓴다"는 과제라서, 자연스럽게 두 부분으로 나뉜다 — [4.3](../04_architectures/03_lstm_gru.qmd)의 seq2seq처럼 읽는 쪽(**encoder**)과 쓰는 쪽(**decoder**)이다.
 
 ```{mermaid}
 %%| label: fig-encdec
-%%| fig-cap: "인코더-디코더 — 디코더 블록만 서브층이 셋이고, 크로스 어텐션의 K·V 는 인코더에서 온다"
+%%| fig-cap: "encoder-decoder — decoder block만 sublayer가 셋이고, cross-attention의 K·V 는 encoder에서 온다"
 flowchart LR
-  SRC["소스 문장"] --> ENC
-  subgraph ENC["인코더 × N"]
-    E1["양방향<br/>셀프 어텐션"] --> E2["FFN"]
+  SRC["source 문장"] --> ENC
+  subgraph ENC["encoder × N"]
+    E1["양방향<br/>self-attention"] --> E2["FFN"]
   end
   ENC -->|"K, V"| CA
-  TGT["타깃 (지금까지 쓴 것)"] --> DEC
-  subgraph DEC["디코더 × N"]
-    D1["마스크드<br/>셀프 어텐션"] --> CA["크로스 어텐션"]
+  TGT["target (지금까지 쓴 것)"] --> DEC
+  subgraph DEC["decoder × N"]
+    D1["masked<br/>self-attention"] --> CA["cross-attention"]
     CA --> D3["FFN"]
   end
-  DEC --> OUT["다음 토큰"]
+  DEC --> OUT["다음 token"]
   style CA fill:#8B4A2B,color:#fff
 ```
 
-| 스택 | 하는 일 | 어텐션 종류 |
+| stack | 하는 일 | attention 종류 |
 |------|---------|-------------|
-| **인코더** ($N$층) | 소스 문장을 읽어 표현을 만든다 | 양방향 셀프 어텐션 |
-| **디코더** ($N$층) | 타깃 문장을 한 토큰씩 쓴다 | 마스크드 셀프 + **크로스** 어텐션 |
+| **encoder** ($N$층) | source(원문) 문장을 읽어 표현을 만든다 | 양방향 self-attention |
+| **decoder** ($N$층) | target(번역문) 문장을 한 token씩 쓴다 | masked self + **cross**-attention |
 
-디코더 블록은 서브층이 **세 개**다 (인코더는 두 개).
+decoder block은 sublayer가 **세 개**다 (encoder는 두 개).
 
 $$
 \begin{aligned}
 x &\leftarrow x + \text{MaskedSelfAttn}(\text{Norm}(x)) &&\text{내가 지금까지 쓴 것 참조}\\
-x &\leftarrow x + \text{CrossAttn}(\text{Norm}(x),\; E) &&\text{소스 문장 참조}\\
-x &\leftarrow x + \text{FFN}(\text{Norm}(x)) &&\text{채널 처리}
+x &\leftarrow x + \text{CrossAttn}(\text{Norm}(x),\; E) &&\text{source 문장 참조}\\
+x &\leftarrow x + \text{FFN}(\text{Norm}(x)) &&\text{channel 처리}
 \end{aligned}
 $$
 
-크로스 어텐션에서 $Q$ 는 디코더에서, $K$·$V$ 는 **인코더 출력 $E$** 에서 온다.
-이것이 "번역할 때 소스 문장의 어느 단어를 보는가"를 결정한다.
-그림에서 인코더로부터 들어오는 화살표가 그 경로다.
+cross-attention에서 $Q$ 는 decoder에서, $K$·$V$ 는 **encoder 출력 $E$** 에서 온다.
+이것이 "번역할 때 source 문장의 어느 단어를 보는가"를 결정한다 — 번역가가 쓰면서 원문을 계속 곁눈질하는 것이다.
+그림에서 encoder로부터 들어오는 화살표가 그 경로다.
 
 ---
 
-## G5.5.1 — 마스크 하나로 계열이 갈린다
+## G5.5.1 — mask 하나로 계열이 갈린다
 
-세 계열의 차이를 어텐션 마스크 행렬만으로 표현할 수 있다.
+세 계열의 차이를 attention mask 행렬만으로 표현할 수 있다. source 5 token과 target 6 token을 한 줄로 놓고, 누가 누구를 볼 수 있는지 그린다.
 
 ```{python}
 #| label: fig-family-masks
-#| fig-cap: "같은 블록, 다른 마스크 — BERT·GPT·T5 를 가르는 전부"
+#| fig-cap: "같은 block, 다른 mask — BERT·GPT·T5 를 가르는 전부"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -88,17 +89,17 @@ families = {}
 # encoder-only (BERT): 전부 서로 본다
 families["encoder-only (BERT)"] = np.zeros((N, N), dtype=bool)
 
-# decoder-only (GPT): 인과 마스크만
+# decoder-only (GPT): causal mask만
 families["decoder-only (GPT)"] = attention.causal_mask(N)
 
-# encoder-decoder (T5): 소스는 서로 양방향, 타깃은 인과 + 소스 전체 참조,
-#                       소스는 타깃을 보지 않는다
+# encoder-decoder (T5): source는 서로 양방향, target은 causal + source 전체 참조,
+#                       source는 target을 보지 않는다
 ed = np.zeros((N, N), dtype=bool)
-ed |= (is_src_q & ~is_src_k)                       # 소스 → 타깃 차단
-ed |= (~is_src_q & ~is_src_k & (j_idx > i_idx))    # 타깃 내부는 인과적
+ed |= (is_src_q & ~is_src_k)                       # source → target 차단
+ed |= (~is_src_q & ~is_src_k & (j_idx > i_idx))    # target 내부는 causal
 families["encoder-decoder (T5)"] = ed
 
-# prefix LM: 소스 구간은 양방향, 그 뒤는 인과적 (한 스택에서)
+# prefix LM: source 구간은 양방향, 그 뒤는 causal (한 stack에서)
 pl = attention.causal_mask(N).copy()
 pl[:n_src, :n_src] = False
 families["prefix LM (UL2)"] = pl
@@ -110,7 +111,7 @@ for c, nm in enumerate(names, start=1):
     m = families[nm].astype(float)
     fig.add_trace(go.Heatmap(z=1 - m, colorscale=[[0, "#141414"], [1, viz.YELLOW]],
                              showscale=False,
-                             hovertemplate="쿼리 %{y} → 키 %{x}<extra></extra>"),
+                             hovertemplate="query %{y} → key %{x}<extra></extra>"),
                   row=1, col=c)
     fig.add_shape(type="line", x0=n_src - 0.5, x1=n_src - 0.5, y0=-0.5, y1=N - 0.5,
                   line=dict(color=viz.ACCENT, width=1.5, dash="dot"), row=1, col=c)
@@ -123,40 +124,41 @@ for c, nm in enumerate(names, start=1):
                      showticklabels=(c == 1), row=1, col=c)
 
 viz.fig_defaults(fig, height=320,
-                 title="S = 소스(입력) 토큰, T = 타깃(생성) 토큰 · 노랑 = 참조 가능")
+                 title="S = source(입력) token, T = target(생성) token · 노랑 = 참조 가능")
 fig.update_layout(margin=dict(l=45, r=20, t=80, b=45))
 fig.update_annotations(font_size=11)
 fig.show()
 ```
 
 ::: {.interaction-hint}
-파란 점선이 소스/타깃 경계입니다. **encoder-decoder**를 보세요 — 왼쪽 위(소스끼리)는 꽉 찬 사각형, 오른쪽 아래(타깃끼리)는 삼각형, 왼쪽 아래(타깃→소스)는 꽉 참, 오른쪽 위(소스→타깃)는 차단. **prefix LM**은 같은 패턴을 스택 하나로 구현한 것입니다.
+파란 점선이 source/target 경계입니다. **encoder-decoder**를 보세요 — 왼쪽 위(source끼리)는 꽉 찬 사각형, 오른쪽 아래(target끼리)는 삼각형, 왼쪽 아래(target→source)는 꽉 참, 오른쪽 위(source→target)는 차단. **prefix LM**은 같은 패턴을 stack 하나로 구현한 것입니다.
 :::
 
 ::: {.key-concept}
-prefix LM과 encoder-decoder는 **마스크 패턴이 거의 같다.**
+prefix LM과 encoder-decoder는 **mask 패턴이 거의 같다.**
 
-차이는 파라미터를 공유하느냐다. encoder-decoder는 소스용·타깃용 가중치가 따로 있고,
-prefix LM은 하나의 스택이 둘 다 처리한다.
-그래서 "encoder-decoder는 prefix LM에 파라미터를 두 배 쓴 것"이라는 관점이 가능하다.
+차이는 parameter를 공유하느냐다. encoder-decoder는 source용·target용 weight가 따로 있고,
+prefix LM은 하나의 stack이 둘 다 처리한다.
+그래서 "encoder-decoder는 prefix LM에 parameter를 두 배 쓴 것"이라는 관점이 가능하다.
 :::
 
 ---
 
-### 마스크가 정하는 것을 수로 세어 보면
+### mask가 정하는 것을 수로 세어 보면
 
-세 계열을 가르는 것은 **어텐션 마스크 $M$ 하나**다.
+세 계열을 가르는 것은 **attention mask $M$ 하나**다.
 점수 행렬에 더해지는 $M_{ij}\in\{0,-\infty\}$ 가 정보 흐름 전체를 정한다.
 
 $$\text{Attn} = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}} + M\right)V$$
 
 여기서 두 가지를 세어 보면 이후 논의의 축이 잡힌다.
 
-| 계열 | 마스크 | 볼 수 있는 (질의, 키) 쌍 | 시퀀스당 예측 과제 |
+| 계열 | mask | 볼 수 있는 (query, key) 쌍 | sequence당 예측 과제 |
 |---|---|---|---|
 | encoder-only | 없음 | $T^2$ | $0.15\,T$ (가린 자리만) |
-| decoder-only | 인과 | $T(T{+}1)/2 \approx T^2/2$ | $T$ (전 위치) |
+| decoder-only | causal | $T(T{+}1)/2 \approx T^2/2$ | $T$ (전 위치) |
 
+encoder-only의 학습(MLM — 아래 설명)은 token의 15%만 가리고 맞히므로 문장당 예측 과제가 $0.15T$ 개뿐이다.
 **decoder-only는 문맥을 절반만 보는 대신 학습 신호를 6~7배 얻는다.**
 아래 "이긴 이유"의 첫 항목이 이 비율이고, 나머지 항목들은 이 구조에서 파생된다.
 
@@ -166,30 +168,30 @@ $$\text{Attn} = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}} + M\right)V$$
 
 T = 512
 
-print(f"시퀀스 길이 T = {T}\n")
+print(f"sequence 길이 T = {T}\n")
 print(f"{'':<26}{'볼 수 있는 쌍':>16}{'예측 과제 수':>14}")
 print(f"{'양방향 (encoder-only)':<26}{T*T:>16,}{int(0.15*T):>14,}")
-print(f"{'인과 (decoder-only)':<26}{T*(T+1)//2:>16,}{T:>14,}")
+print(f"{'causal (decoder-only)':<26}{T*(T+1)//2:>16,}{T:>14,}")
 ctx_ratio = (T*(T+1)//2)/(T*T)
 signal_ratio = T/(0.15*T)
 ```
 
-문맥 범위는 인과가 양방향의 `{python} f"{ctx_ratio:.2f}"`배, 신호 밀도는 인과가 MLM 의
+문맥 범위는 causal이 양방향의 `{python} f"{ctx_ratio:.2f}"`배, 신호 밀도는 causal이 MLM의
 `{python} f"{signal_ratio:.1f}"`배다. 한 축에서 2배 손해, 다른 축에서 약 7배 이득이다.
 데이터와 연산이 충분해지면 뒤쪽이 이긴다 — 이것이 역전의 산술적 근거다.
 
 ::: {.callout-note}
-## 인과 마스크가 표현력을 절반으로 깎지는 않는다
+## causal mask가 표현력을 절반으로 깎지는 않는다
 
 "쌍의 수가 절반"이 곧 "성능이 절반"은 아니다.
 
 층을 쌓으면 정보가 **간접적으로** 흐르기 때문이다.
-위치 $i$ 는 직접적으로는 과거만 보지만, 그 과거 토큰들은 이미 자기 과거를 요약해 들고 있다.
+위치 $i$ 는 직접적으로는 과거만 보지만, 그 과거 token들은 이미 자기 과거를 요약해 들고 있다.
 $L$ 층을 지나면 각 위치의 표현에 앞선 문맥이 누적된다.
 정말로 잃는 것은 **미래 정보**뿐이고, 생성 과제에서는 애초에 쓸 수 없는 정보다.
 
 반면 분류·검색처럼 문장 전체가 한꺼번에 주어지는 과제에서는 양방향이 여전히 유리하다.
-그래서 임베딩·재순위 모델에는 encoder-only가 남아 있다
+그래서 embedding·reranking 모델에는 encoder-only가 남아 있다
 ([7.10 RAG](../07_language/10_rag.qmd)의 검색기가 그 예다).
 :::
 
@@ -199,16 +201,16 @@ $L$ 층을 지나면 각 위치의 표현에 앞선 문맥이 누적된다.
 
 ### encoder-only (BERT 계열)
 
-모든 토큰이 좌우를 다 본다. 그래서 **이해 과제에 강하다** —
-문장 분류, 개체명 인식, 문장 유사도, 검색용 임베딩.
+모든 token이 좌우를 다 본다. 그래서 **이해 과제에 강하다** —
+문장 분류, 개체명 인식, 문장 유사도, 검색용 embedding.
 
-문제는 생성이다. 양방향이면 "다음 토큰 예측"으로 학습할 수 없다(정답이 보인다).
-그래서 [마스크드 언어모델(MLM)](../07_language/04_pretraining_paradigms.qmd)로 학습하는데,
+문제는 생성이다. 양방향이면 "다음 token 예측"으로 학습할 수 없다(정답이 보인다).
+그래서 [**MLM**(masked language model — 문장의 일부 token을 가리고 그 자리를 맞히는 빈칸 채우기 학습)](../07_language/04_pretraining_paradigms.qmd)으로 학습하는데,
 이것은 생성 과제와 학습 목표가 어긋난다.
 
 ### decoder-only (GPT 계열)
 
-인과 마스크 하나로 모든 위치에서 동시에 학습된다.
+causal mask 하나로 모든 위치에서 동시에 학습된다.
 **생성이 자연스럽고, 학습 신호가 조밀하다** — 이 두 번째 이유가 결정적이다.
 
 ::: {.callout-note}
@@ -216,15 +218,16 @@ $L$ 층을 지나면 각 위치의 표현에 앞선 문맥이 누적된다.
 
 이해 과제에서는 양방향이 유리한데도 decoder-only가 지배하게 됐다. 왜인가?
 
-1. **학습 신호 밀도** — MLM은 토큰의 15%만 예측 대상이다.
-   자기회귀는 **모든 토큰**이 예측 대상이라 같은 데이터에서 훨씬 많이 배운다.
-2. **사전학습-실사용 정합** — 생성으로 학습하고 생성으로 쓴다. MLM은 `[MASK]` 토큰이
+1. **학습 신호 밀도** — MLM은 token의 15%만 예측 대상이다.
+   autoregressive는 **모든 token**이 예측 대상이라 같은 데이터에서 훨씬 많이 배운다.
+   같은 교과서를 읽어도 한 쪽은 15%의 빈칸만 풀고 다른 쪽은 모든 문장을 받아쓰기하는 셈이다.
+2. **pretraining-실사용 정합** — 생성으로 학습하고 생성으로 쓴다. MLM은 `[MASK]` token이
    실사용에는 없어서 불일치가 생긴다.
 3. **과제 통합** — 모든 문제를 "텍스트를 이어 쓰기"로 표현할 수 있다.
-   분류도 "정답은 ___" 형태로 하면 된다. 별도 헤드가 필요 없다.
-4. **문맥 내 학습** — 이 능력이 자기회귀 모델에서 창발했다
-   ([7.8 프롬프팅](../07_language/08_prompting_icl.qmd)).
-5. **KV 캐시** — 생성 시 이전 계산을 재사용할 수 있는 구조다(아래 참고).
+   분류도 "정답은 ___" 형태로 하면 된다. 별도 head가 필요 없다.
+4. **in-context learning** — 이 능력이 autoregressive 모델에서 창발했다
+   ([7.8 prompting](../07_language/08_prompting_icl.qmd)).
+5. **KV cache** — 생성 시 이전 계산을 재사용할 수 있는 구조다(아래 참고).
 
 즉 "이해 성능"이라는 한 축에서 밀리더라도, 나머지 전부에서 이겼다.
 :::
@@ -234,18 +237,19 @@ $L$ 층을 지나면 각 위치의 표현에 앞선 문맥이 누적된다.
 입력과 출력이 명확히 구분되는 과제에 잘 맞는다 — 번역, 요약, 음성 인식.
 
 여전히 살아 있는 곳이 있다. [Whisper](../08_audio/06_asr_modern.qmd)는 encoder-decoder이고,
-[확산 모델의 텍스트 조건 주입](../06_generative/07_latent_diffusion.qmd)도 크로스 어텐션이다.
-**"고정된 입력을 반복 참조하며 출력을 만든다"** 는 구조에서는 여전히 자연스럽다.
+[diffusion model의 텍스트 조건 주입](../06_generative/07_latent_diffusion.qmd)도 cross-attention이다.
+**"고정된 입력을 반복 참조하며 출력을 만든다"**는 구조에서는 여전히 자연스럽다.
 
 ---
 
-## G5.5.2 — 추론 비용의 차이
+## G5.5.2 — inference 비용의 차이
 
-계열마다 생성 시 연산 특성이 다르다. 서빙 비용에 직접 영향을 준다.
+계열마다 생성 시 연산 특성이 다르다. serving 비용에 직접 영향을 준다.
+아래는 입력 512 token을 주고 token을 하나씩 생성할 때 누적 연산량을 개략적으로 센 것이다.
 
 ```{python}
 #| label: fig-inference-cost
-#| fig-cap: "출력 길이에 따른 누적 연산량 (입력 512 토큰 고정)"
+#| fig-cap: "출력 길이에 따른 누적 연산량 (입력 512 token 고정)"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -258,25 +262,25 @@ n_in = 512
 out_lens = np.arange(1, 1025)
 
 def flops_per_token(ctx):
-    """디코딩 한 토큰의 대략적 연산량 (파라미터 2배 + 어텐션)"""
+    """decoding 한 token의 대략적 연산량 (parameter 2배 + attention)"""
     return 2 * 12 * d * d * L + 2 * 2 * ctx * d * L
 
 # decoder-only: 문맥이 입력+생성분 전체
 dec_only = np.cumsum([flops_per_token(n_in + t) for t in out_lens])
 
-# encoder-decoder: 셀프어텐션은 생성분만, 크로스어텐션은 고정 입력 참조
-#   (인코더는 한 번만 실행 → 상수 비용, 디코더 블록은 크로스 어텐션 4d² 가 더 있어 16d²)
+# encoder-decoder: self-attention은 생성분만, cross-attention은 고정 입력 참조
+#   (encoder는 한 번만 실행 → 상수 비용, decoder block은 cross-attention 4d² 가 더 있어 16d²)
 enc_cost = 2 * 12 * d * d * L * n_in
 enc_dec = enc_cost + np.cumsum(
     [2 * 16 * d * d * L + 2 * 2 * t * d * L + 2 * 2 * n_in * d * L for t in out_lens])
 
-# KV 캐시 없이 매번 전체 재계산하면: 문맥 전체(n_in + t 토큰)를 다시 순전파
+# KV cache 없이 매번 전체 재계산하면: 문맥 전체(n_in + t token)를 다시 forward pass
 no_cache = np.cumsum([(n_in + t) * 2 * 12 * d * d * L + 2 * 2 * (n_in + t) ** 2 * d * L
                       for t in out_lens])
 cache_gain = float(no_cache[-1] / dec_only[-1])
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("계열별 누적 연산량", "KV 캐시의 효과 (decoder-only)"))
+                    subplot_titles=("계열별 누적 연산량", "KV cache의 효과 (decoder-only)"))
 
 fig.add_trace(go.Scatter(x=out_lens, y=dec_only / 1e12, mode="lines",
                          name="decoder-only", line=dict(color=viz.ACCENT, width=2.5)),
@@ -286,35 +290,36 @@ fig.add_trace(go.Scatter(x=out_lens, y=enc_dec / 1e12, mode="lines",
               row=1, col=1)
 
 fig.add_trace(go.Scatter(x=out_lens, y=dec_only / 1e12, mode="lines",
-                         name="KV 캐시 사용", showlegend=False,
+                         name="KV cache 사용", showlegend=False,
                          line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
 fig.add_trace(go.Scatter(x=out_lens, y=no_cache / 1e12, mode="lines",
-                         name="캐시 없음", showlegend=False,
+                         name="cache 없음", showlegend=False,
                          line=dict(color=viz.PINK, width=2.5, dash="dash")), row=1, col=2)
 
-fig.update_xaxes(title_text="생성한 토큰 수")
+fig.update_xaxes(title_text="생성한 token 수")
 fig.update_yaxes(title_text="누적 TFLOPs", row=1, col=1)
 fig.update_yaxes(title_text="누적 TFLOPs", type="log", row=1, col=2)
 viz.fig_defaults(fig, height=400,
-                 title=f"d={d}, {L}층, 입력 {n_in} 토큰 기준 (개략 추정)")
+                 title=f"d={d}, {L}층, 입력 {n_in} token 기준 (개략 추정)")
 fig.update_layout(legend=dict(x=0.02, y=0.98))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-왼쪽에서 encoder-decoder는 시작점이 높습니다(인코더를 한 번 돌려야 하니까). 하지만 기울기는 더 완만합니다 — 셀프 어텐션이 짧은 생성분만 보기 때문입니다. 긴 입력·짧은 출력이면 유리한 구조입니다.
+왼쪽에서 encoder-decoder는 시작점이 높습니다(encoder를 한 번 돌려야 하니까). 하지만 기울기는 더 완만합니다 — self-attention이 짧은 생성분만 보기 때문입니다. 긴 입력·짧은 출력이면 유리한 구조입니다.
 :::
 
 ::: {.key-concept}
-**KV 캐시는 decoder-only의 구조적 이점이다.**
+**KV cache는 decoder-only의 구조적 이점이다.**
 
-인과 마스크 덕분에 **과거 토큰의 $K$·$V$ 는 절대 변하지 않는다.**
-새 토큰을 생성할 때 이전 것을 다시 계산할 필요가 없다 — 캐시해두고 이어붙이면 된다.
+causal mask 덕분에 **과거 token의 $K$·$V$ 는 절대 변하지 않는다** — 과거 token은 미래를 볼 수 없으므로, 뒤에 무엇이 오든 그 값이 바뀔 이유가 없다.
+새 token을 생성할 때 이전 것을 다시 계산할 필요가 없다 — cache해두고 이어붙이면 된다.
+책을 읽을 때 새 페이지가 나올 때마다 처음부터 다시 읽지 않고 메모를 이어 쓰는 것과 같다.
 
-오른쪽 그림에서 `{python} f"{out_lens[-1]:,}"` 토큰을 생성했을 때 캐시 유무의 차이가
-`{python} f"{cache_gain:.0f}"`배다 — 캐시가 없으면 매 스텝 문맥 전체를 다시 계산하므로 비용이
+오른쪽 그림에서 `{python} f"{out_lens[-1]:,}"` token을 생성했을 때 cache 유무의 차이가
+`{python} f"{cache_gain:.0f}"`배다 — cache가 없으면 매 step 문맥 전체를 다시 계산하므로 비용이
 생성 길이의 제곱으로 자란다.
-이것이 [7.14 추론 최적화](../07_language/14_inference_optimization.qmd) 전체의 출발점이고,
+이것이 [7.14 inference 최적화](../07_language/14_inference_optimization.qmd) 전체의 출발점이고,
 [5.2에서 본 GQA](02_multi_head.qmd)가 필요한 이유이기도 하다.
 :::
 
@@ -325,12 +330,12 @@ fig.show()
 | 과제 | 계열 | 대표 모델 | 비고 |
 |---|---|---|---|
 | 문장 분류·감정 분석 | encoder-only | BERT, DeBERTa | 작고 빠름 |
-| 검색용 임베딩 | encoder-only | E5, BGE | 양방향이 유리 |
-| 개체명 인식·태깅 | encoder-only | BERT 계열 | 토큰별 출력 |
+| 검색용 embedding | encoder-only | E5, BGE | 양방향이 유리 |
+| 개체명 인식·tagging | encoder-only | BERT 계열 | token별 출력 |
 | 번역·요약 | enc-dec 또는 dec | T5 / LLM | 요즘은 LLM도 충분 |
 | 음성 인식 | encoder-decoder | Whisper | 고정 입력 반복 참조 |
 | 대화·코드·범용 생성 | decoder-only | GPT, LLaMA | 사실상 기본값 |
-| 이미지 생성 조건 주입 | 크로스 어텐션 | Stable Diffusion | 다른 양식을 참조 |
+| 이미지 생성 조건 주입 | cross-attention | Stable Diffusion | 다른 modality를 참조 |
 
 
 ::: {.callout-note}
@@ -339,14 +344,14 @@ fig.show()
 2020년대 중반 들어 선택지가 좁아졌다.
 
 - **범용 생성은 decoder-only로 사실상 통일**되었다.
-- **임베딩·분류는 여전히 encoder-only가 효율적**이다. 작은 모델로 충분하고 빠르다.
-  다만 LLM에서 임베딩을 뽑는 방식도 늘고 있다.
-- **encoder-decoder는 특수 목적으로 축소**되었다 — 입력 양식이 다르거나(음성·이미지),
+- **embedding·분류는 여전히 encoder-only가 효율적**이다. 작은 모델로 충분하고 빠르다.
+  다만 LLM에서 embedding을 뽑는 방식도 늘고 있다.
+- **encoder-decoder는 특수 목적으로 축소**되었다 — 입력 modality(양식 — 텍스트·음성·이미지 같은 데이터 종류)가 다르거나,
   입력이 고정된 채 여러 번 참조해야 할 때.
 
-멀티모달에서는 크로스 어텐션이 다시 중요해진다.
+multimodal에서는 cross-attention이 다시 중요해진다.
 [VLM](../09_vision_video/09_vlm.qmd)이 이미지 특성을 언어모델에 주입하는 방식 중 하나가
-정확히 크로스 어텐션이다(Flamingo 계열).
+정확히 cross-attention이다(Flamingo 계열).
 :::
 
 ---
@@ -354,35 +359,35 @@ fig.show()
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 마스크 조합을 직접 센다**
-`mask-counting` 에서 인코더·디코더 자기어텐션·교차어텐션 각각이
-몇 개의 (쿼리, 키) 쌍을 보는지 세라. 길이가 각각 $n, m$ 일 때 식으로 써 보라.
+**① mask 조합을 직접 센다**
+`mask-counting` 에서 encoder·decoder self-attention·cross-attention 각각이
+몇 개의 (query, key) 쌍을 보는지 세라. 길이가 각각 $n, m$ 일 때 식으로 써 보라.
 
-**② 인코더 전용으로 생성을 시도한다**
-BERT 류로 자기회귀 생성을 하려면 무엇이 문제인가?
-마스크만 바꾸면 되는지, 학습 목표까지 바꿔야 하는지 논하라.
+**② encoder 전용으로 생성을 시도한다**
+BERT류로 autoregressive 생성을 하려면 무엇이 문제인가?
+mask만 바꾸면 되는지, 학습 목표까지 바꿔야 하는지 논하라.
 
-**③ prefix LM 과 encoder-decoder 를 수로 비교한다**
-`fig-family-masks` 의 두 마스크는 패턴이 같고 파라미터 공유만 다르다. 소스 길이 $n$, 타깃 길이 $m$ 일 때
-볼 수 있는 (질의, 키) 쌍의 수와 파라미터 수를 각각 식으로 쓰고, `mask-counting` 을 확장해
+**③ prefix LM과 encoder-decoder를 수로 비교한다**
+`fig-family-masks` 의 두 mask는 패턴이 같고 parameter 공유만 다르다. source 길이 $n$, target 길이 $m$ 일 때
+볼 수 있는 (query, key) 쌍의 수와 parameter 수를 각각 식으로 쓰고, `mask-counting` 을 확장해
 $n \gg m$ 과 $n \ll m$ 에서 어느 쪽이 유리한지 논하라.
 :::
 
 ## 요약
 
-| 계열 | 마스크 | 학습 목표 | 강점 | 대표 |
+| 계열 | mask | 학습 목표 | 강점 | 대표 |
 |------|--------|-----------|------|------|
-| encoder-only | 없음 (양방향) | MLM | 이해, 임베딩 | BERT |
-| decoder-only | 인과 | 다음 토큰 예측 | 생성, ICL, KV 캐시 | GPT, LLaMA |
-| encoder-decoder | 혼합 (2스택) | span corruption 등 | 조건부 생성 | T5, Whisper |
-| prefix LM | 혼합 (1스택) | 통합 목표 | 둘의 절충 | UL2 |
+| encoder-only | 없음 (양방향) | MLM (빈칸 채우기) | 이해, embedding | BERT |
+| decoder-only | causal | 다음 token 예측 (받아쓰기) | 생성, ICL, KV cache | GPT, LLaMA |
+| encoder-decoder | 혼합 (2 stack) | span corruption 등 | 조건부 생성 — 원문을 곁눈질하는 번역가 | T5, Whisper |
+| prefix LM | 혼합 (1 stack) | 통합 목표 | 둘의 절충 | UL2 |
 
 | 핵심 사실 | 내용 |
 |-----------|------|
-| 계열의 차이 | 블록이 아니라 **마스크와 배치** |
-| 크로스 어텐션 | $Q$=디코더, $K,V$=인코더 출력 |
-| decoder-only 승리 요인 | 학습 신호 밀도, 목표 정합, 과제 통합, ICL, KV 캐시 |
-| KV 캐시 | 인과 마스크가 만든 구조적 이점 |
+| 계열의 차이 | block이 아니라 **mask와 배치** — 같은 레고, 다른 조립 |
+| cross-attention | $Q$=decoder, $K,V$=encoder 출력 |
+| decoder-only 승리 요인 | 학습 신호 밀도, 목표 정합, 과제 통합, ICL, KV cache |
+| KV cache | causal mask가 만든 구조적 이점 — 메모 이어 쓰기 |
 
 여기까지 Transformer의 모든 부품을 봤다.
 읽어서 아는 것과 만들어서 아는 것은 다르니, 다음 장에서 **직접 만든다.**
@@ -391,4 +396,4 @@ $n \gg m$ 과 $n \ll m$ 에서 어느 쪽이 유리한지 논하라.
 
 **다음**: [5.6 GPT를 처음부터 만들기](06_build_gpt.qmd) — 200줄로 동작하는 언어모델
 
-**이전**: [5.4 트랜스포머 블록](04_transformer_block.qmd)
+**이전**: [5.4 Transformer block](04_transformer_block.qmd)
