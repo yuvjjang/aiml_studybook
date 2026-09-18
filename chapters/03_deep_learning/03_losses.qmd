@@ -1,53 +1,68 @@
 ---
-title: "3.3 손실함수"
-subtitle: "MSE·교차엔트로피·대조손실 — 무엇을 최적화한다고 말하는가"
+title: "3.3 loss function"
+subtitle: "MSE·cross-entropy·contrastive loss — 무엇을 최적화한다고 말하는가"
 jupyter: ai-ml-study
 ---
 
-손실함수는 모델에게 주는 **유일한 목표 진술**이다.
+**loss function**(loss function — 모델의 예측이 정답에서 얼마나 벗어났는지를 숫자 하나로 매기는 함수)은 모델에게 주는 **유일한 목표 진술**이다.
+시험의 채점 기준표와 같다. 학생(모델)은 채점표에 적힌 대로만 공부하므로,
+채점표가 잘못되면 열심히 공부할수록 엉뚱한 곳에 도달한다.
 
-아키텍처를 아무리 잘 설계하고 최적화를 아무리 잘 해도,
+architecture를 아무리 잘 설계하고 optimization을 아무리 잘 해도,
 목표를 잘못 적으면 모델은 **잘못된 것을 아주 잘 배운다.**
 
-[2.0](../02_classical_ml/00_learning_problem.qmd)에서 손실을 고르는 것이
+[2.0](../02_classical_ml/00_learning_problem.qmd)에서 loss를 고르는 것이
 추정 대상을 정하는 일임을 봤고,
-[0.4](../00_foundations/04_information_theory.qmd)에서 교차엔트로피가 어디서 왔는지 봤다.
+[0.4](../00_foundations/04_information_theory.qmd)에서 cross-entropy가 어디서 왔는지 봤다.
 
-이 장은 그 둘을 딥러닝의 실제 손실들로 확장한다.
-그리고 [CLIP·SimCLR](../09_vision_video/04_clip_multimodal.qmd)의 대조 손실까지 이어진다.
+이 장은 그 둘을 딥러닝의 실제 loss들로 확장한다.
+그리고 [CLIP·SimCLR](../09_vision_video/04_clip_multimodal.qmd)의 contrastive loss까지 이어진다.
 
 ---
 
-## 모든 손실은 음의 로그우도다
+## 모든 loss는 negative log-likelihood다
 
 [0.2 확률](../00_foundations/02_probability.qmd)의 관점을 다시 가져온다.
+모델이 "입력 $x_i$ 가 주어졌을 때 정답이 $y_i$ 일 확률" $p_\theta(y_i \mid x_i)$ 를 내놓는다고 보면,
+좋은 모델이란 실제 정답에 높은 확률을 준 모델이다.
+그 확률에 로그를 씌우고 부호를 뒤집은 것이 **negative log-likelihood**(NLL — 음의 로그우도)이고,
+이것을 모든 샘플에 대해 평균한 것이 loss다.
 
 $$L(\theta) = -\frac{1}{N}\sum_i \log p_\theta(y_i \mid x_i)$$
 
-$p_\theta$ 를 무엇으로 가정하느냐가 손실의 이름을 정한다.
+정답에 확률 1을 줬으면 $-\log 1 = 0$ 으로 벌점이 없고, 확률 0.01을 줬으면 $-\log 0.01 \approx 4.6$ 으로 벌점이 크다.
+"모델이 정답을 보고 얼마나 놀랐는가"를 재는 셈이다.
+
+$p_\theta$ 를 무엇으로 가정하느냐가 loss의 이름을 정한다.
+잡음이 종 모양(Gaussian)이라 가정하고 $-\log p$ 를 전개하면 제곱 오차가 나오고, 뾰족한 모양(Laplace)이라 가정하면 절댓값 오차가 나온다.
 
 | 가정한 분포 | −log p | 부르는 이름 | 추정하는 것 |
 |---|---|---|---|
-| 가우스 (등분산) | ½σ⁻²(y−ŷ)² | MSE | 조건부 평균 |
-| 라플라스 | b⁻¹\|y−ŷ\| | MAE | 조건부 중앙값 |
-| 비대칭 라플라스 | 분위수 가중 절댓값 | Quantile 손실 | 조건부 분위수 |
-| 베르누이 | −[y log p + …] | 이진 교차엔트로피 | 조건부 확률 |
-| 범주형 | −log p_y | 교차엔트로피 | 클래스 확률 |
-| 푸아송 | λ̂ − y log λ̂ | 푸아송 손실 | 조건부 강도 |
+| Gaussian (분산 일정) | ½σ⁻²(y−ŷ)² | MSE | 조건부 평균 |
+| Laplace | b⁻¹\|y−ŷ\| | MAE | 조건부 중앙값 |
+| 비대칭 Laplace | quantile 가중 절댓값 | quantile loss | 조건부 quantile(분위수) |
+| Bernoulli | −[y log p + …] | binary cross-entropy | 조건부 확률 |
+| categorical | −log p_y | cross-entropy | class 확률 |
+| Poisson | λ̂ − y log λ̂ | Poisson loss | 조건부 강도(단위 시간당 건수) |
 
-손실을 고르는 것은 '잡음이 어떻게 생겼는지' 가정하는 것이다.
+"조건부 평균"은 "$x$ 가 주어졌을 때 $y$ 의 평균"이라는 뜻이다. 조건부 중앙값, 조건부 quantile도 같은 식이다.
+
+loss를 고르는 것은 '잡음이 어떻게 생겼는지' 가정하는 것이다.
 그 가정이 틀리면 모델은 틀린 통계량을 열심히 추정한다.
 
 
 ---
 
-## G3.3.1 — 손실이 다른 통계량을 추정한다
+## G3.3.1 — loss가 다른 통계량을 추정한다
 
-같은 데이터에 손실만 바꿔 학습시키면 **다른 답**이 나온다.
+같은 데이터에 loss만 바꿔 학습시키면 **다른 답**이 나온다.
+연봉 분포처럼 한쪽으로 길게 꼬리가 늘어진 데이터를 생각하면 된다 — "평균 연봉"은 소수의 고소득자 때문에 위로 끌려 올라가고,
+"중위 연봉"은 그렇지 않다. 둘 다 맞는 숫자지만 다른 질문에 대한 답이다.
+아래 실험은 그런 치우친 잡음을 일부러 만들어, 직선 하나를 MSE·MAE·quantile loss로 각각 맞춰본다.
 
 ```{python}
 #| label: fig-loss-targets
-#| fig-cap: "치우친 분포에서 MSE는 평균을, MAE는 중앙값을 따라갑니다."
+#| fig-cap: "치우친 분포에서 MSE는 평균을, MAE는 중앙값을, quantile loss는 분위수를 따라갑니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -57,7 +72,7 @@ from src import viz
 rng = np.random.default_rng(0)
 n = 4000
 x = rng.uniform(0, 1, n)
-# x 에 따라 로그정규 잡음 — 평균과 중앙값이 크게 다르다
+# x 에 따라 log-normal 잡음 — 평균과 중앙값이 크게 다르다
 noise = rng.lognormal(0, 0.9, n)
 y = 1.0 + 2.0*x + noise - np.exp(0.9**2/2)
 
@@ -104,7 +119,7 @@ for i, (k, lbl, col) in enumerate([("mse", "MSE 적합", viz.WARM),
 fig.update_layout(xaxis_title="x", yaxis_title="y", yaxis=dict(range=[-2, 12]),
                   legend=dict(x=0.01, y=0.99, font=dict(size=10)))
 viz.fig_defaults(fig, height=460,
-                 title="로그정규 잡음 — 각 손실이 서로 다른 통계량으로 수렴")
+                 title="log-normal 잡음 — 각 loss가 서로 다른 통계량으로 수렴")
 fig.show()
 ```
 
@@ -128,23 +143,31 @@ for k, lbl, tgt in [("mse", "MSE", "평균"), ("mae", "MAE", "중앙값"),
     print(f"{lbl:<14} {w:>9.3f} {b:>9.3f} {pred:>12.3f}   {ref:>24}")
 ```
 
-같은 데이터인데 손실에 따라 예측이 다르다. 버그가 아니라 명세다.
-'평균 배송시간'과 '중앙값 배송시간'은 다른 질문이고, 손실이 그것을 정한다.
+같은 데이터인데 loss에 따라 예측이 다르다. 버그가 아니라 명세다.
+'평균 배송시간'과 '중앙값 배송시간'은 다른 질문이고, loss가 그것을 정한다.
+배송 지연 보상을 설계한다면 "절반의 고객은 이 시간 안에 받는다"(중앙값)와
+"기다린 시간을 다 더해 나누면"(평균)은 다른 약속이다.
 
 ::: {.interaction-hint}
-로그정규 잡음이라 **평균이 중앙값보다 훨씬 위**에 있습니다. MSE 선(주황)은 평균 점들을, MAE 선(초록)은 중앙값 점들을, Quantile(0.9) 선(분홍)은 90분위 점들을 따라갑니다.
+log-normal(로그정규 — 로그를 취하면 정규분포가 되는, 오른쪽으로 긴 꼬리를 가진 분포) 잡음이라 **평균이 중앙값보다 훨씬 위**에 있습니다. MSE 선(주황)은 평균 점들을, MAE 선(초록)은 중앙값 점들을, Quantile(0.9) 선(분홍)은 90분위 점들을 따라갑니다.
 :::
 
 ---
 
-## 분류: 교차엔트로피와 그 그래디언트
+## 분류: cross-entropy와 그 gradient
 
-[0.4](../00_foundations/04_information_theory.qmd)에서 유도했듯
+[0.4](../00_foundations/04_information_theory.qmd)에서 유도했듯, 정답 class $y$ 에 모델이 준 확률을 $p_y$ 라 하면
 
 $$L = -\log p_y, \qquad \frac{\partial L}{\partial z} = p - y_{\text{onehot}}$$
 
-**그래디언트가 (예측 − 정답)** 이라는 것이 이 손실의 핵심 이점이다.
-softmax의 복잡한 야코비안과 로그의 미분이 정확히 상쇄된다.
+$z$ 는 softmax에 들어가기 전의 logit 벡터, $p = \text{softmax}(z)$ 는 예측 확률 벡터,
+$y_{\text{onehot}}$ 은 정답 자리만 1이고 나머지는 0인 벡터다.
+
+**gradient가 (예측 − 정답)**이라는 것이 이 loss의 핵심 이점이다.
+softmax의 복잡한 Jacobian과 로그의 미분이 정확히 상쇄된다.
+예측이 $[0.7, 0.2, 0.1]$ 이고 정답이 두 번째라면 gradient는 $[0.7, -0.8, 0.1]$ —
+"첫 번째 logit은 0.7만큼 내리고, 두 번째는 0.8만큼 올려라"라는 직관적인 지시가 된다.
+아래 코드는 이 식이 `src/nn.py` 의 구현 및 numerical differentiation과 일치하는지 확인한다.
 
 ```{python}
 #| label: ce-gradient-check
@@ -163,7 +186,7 @@ p = nn.softmax(logits)
 manual = p.copy(); manual[np.arange(5), y_idx] -= 1.0; manual /= 5
 
 print(f"손실 {L:.6f}   (균등 예측이면 log 4 = {np.log(4):.6f})")
-print(f"그래디언트가 (p − onehot)/n 과 일치: "
+print(f"gradient가 (p − onehot)/n 과 일치: "
       f"최대 차이 {np.abs(g - manual).max():.2e}")
 print()
 # 수치 검증
@@ -181,11 +204,14 @@ print(f"수치 미분과의 최대 차이: {np.abs(g - num).max():.2e}")
 
 ---
 
-## G3.3.2 — 손실 곡선의 모양이 학습 신호를 정한다
+## G3.3.2 — loss 곡선의 모양이 학습 신호를 정한다
+
+분류 loss는 여러 가지가 있고, 전부 "정답에 준 확률 $p$ 가 높을수록 작아진다"는 점은 같다.
+다른 점은 **곡선의 모양**, 즉 $p$ 가 어느 구간에 있을 때 학습 신호(기울기)가 큰가다.
 
 ```{python}
 #| label: fig-classification-losses
-#| fig-cap: "정답 확률에 따른 손실과 그래디언트 크기"
+#| fig-cap: "정답 확률에 따른 loss와 gradient 크기"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -196,7 +222,7 @@ from src import viz
 p = np.linspace(0.001, 0.999, 800)
 
 losses = {
-    "교차엔트로피 −log p":       -np.log(p),
+    "cross-entropy −log p":     -np.log(p),
     "Brier (1−p)²":            (1 - p)**2,
     "focal γ=2":               -(1 - p)**2 * np.log(p),
     "focal γ=5":               -(1 - p)**5 * np.log(p),
@@ -204,23 +230,23 @@ losses = {
 }
 # d(loss)/dp 의 절댓값
 grads = {
-    "교차엔트로피 −log p":       1/p,
+    "cross-entropy −log p":     1/p,
     "Brier (1−p)²":            2*(1 - p),
     "focal γ=2":               np.abs(2*(1-p)*np.log(p) - (1-p)**2/p),
     "focal γ=5":               np.abs(5*(1-p)**4*np.log(p) - (1-p)**5/p),
     "MAE (1−p)":               np.ones_like(p),
 }
 
-fig = make_subplots(rows=1, cols=2, subplot_titles=("손실", "|∂L/∂p| (학습 신호 크기)"))
+fig = make_subplots(rows=1, cols=2, subplot_titles=("loss", "|∂L/∂p| (학습 신호 크기)"))
 for i, k in enumerate(losses):
     fig.add_trace(go.Scatter(x=p, y=losses[k], mode="lines", name=k,
                              line=dict(color=viz.color(i), width=2.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=p, y=grads[k], mode="lines", name=k, showlegend=False,
                              line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
-fig.update_xaxes(title_text="정답 클래스에 준 확률 p")
-fig.update_yaxes(title_text="손실", range=[0, 5], row=1, col=1)
+fig.update_xaxes(title_text="정답 class에 준 확률 p")
+fig.update_yaxes(title_text="loss", range=[0, 5], row=1, col=1)
 fig.update_yaxes(title_text="|∂L/∂p|", type="log", row=1, col=2)
-viz.fig_defaults(fig, height=410, title="분류 손실 비교")
+viz.fig_defaults(fig, height=410, title="분류 loss 비교")
 fig.update_layout(legend=dict(x=0.55, y=0.98, font=dict(size=10)))
 fig.show()
 ```
@@ -231,7 +257,7 @@ fig.show()
 
 import numpy as np
 
-print("샘플 난이도에 따른 손실 기여도 (전체 합 대비 비율)")
+print("샘플 난이도에 따른 loss 기여도 (전체 합 대비 비율)")
 print()
 # 쉬운 샘플 많고 어려운 샘플 적은 전형적 불균형 상황
 p_easy = np.full(950, 0.95)      # 이미 잘 맞히는 샘플
@@ -239,7 +265,7 @@ p_hard = np.full(50, 0.15)       # 계속 틀리는 샘플
 
 print(f"{'손실':<14} {'쉬운 950개 비중':>16} {'어려운 50개 비중':>18}")
 print("-" * 52)
-for name, gamma in [("교차엔트로피", 0.0), ("focal γ=1", 1.0),
+for name, gamma in [("cross-entropy", 0.0), ("focal γ=1", 1.0),
                     ("focal γ=2", 2.0), ("focal γ=5", 5.0)]:
     le = float(np.sum((1-p_easy)**gamma * -np.log(p_easy)))
     lh = float(np.sum((1-p_hard)**gamma * -np.log(p_hard)))
@@ -247,44 +273,52 @@ for name, gamma in [("교차엔트로피", 0.0), ("focal γ=1", 1.0),
     print(f"{name:<14} {le/tot:>15.1%} {lh/tot:>17.1%}")
 ```
 
-focal loss 는 이미 잘 맞히는 샘플의 손실을 $(1-p)^\gamma$ 로 눌러 학습 신호를 어려운 샘플 쪽으로 옮긴다.
-객체 검출처럼 배경(쉬운 음성)이 압도적인 문제에서 쓰인다.
+**focal loss**는 이미 잘 맞히는 샘플의 loss를 $(1-p)^\gamma$ 로 눌러 학습 신호를 어려운 샘플 쪽으로 옮긴다.
+$p = 0.95$ 인 쉬운 샘플은 $(1-0.95)^2 = 0.0025$ 배로 거의 사라지고, $p = 0.15$ 인 어려운 샘플은 $0.85^2 \approx 0.72$ 배로 대부분 남는다.
+이미 잘하는 학생은 넘어가고 못하는 학생에게 시간을 쓰는 선생님과 같다.
+object detection처럼 배경(쉬운 negative)이 압도적인 문제에서 쓰인다.
 
 ::: {.key-concept}
-**교차엔트로피의 그래디언트는 $1/p$ 로 폭발한다**
+**cross-entropy의 gradient는 $1/p$ 로 폭발한다**
 
-오른쪽 그림에서 $p\to0$ 일 때 교차엔트로피만 발산한다.
+오른쪽 그림에서 $p\to0$ 일 때 cross-entropy만 발산한다.
 "확신에 찬 오답"에 강한 학습 신호를 준다는 뜻이고, 대개 바람직하다.
 
-하지만 **레이블에 잡음이 있으면** 문제가 된다.
-잘못 붙은 레이블 하나가 거대한 그래디언트를 만들어 모델을 끌고 간다.
-그때는 레이블 스무딩이나 강건한 손실(Brier, MAE)을 고려한다.
+하지만 **label에 잡음이 있으면** 문제가 된다.
+잘못 붙은 label 하나가 거대한 gradient를 만들어 모델을 끌고 간다.
+정답이 실제로는 A인데 B로 잘못 적혀 있으면, 모델이 A라고 자신 있게 맞힐수록 벌점이 커지는 셈이다.
+그때는 label smoothing이나 robust(강건 — 잡음이나 이상값에 덜 흔들리는) loss(Brier, MAE)를 고려한다.
 :::
 
 ---
 
-## 레이블 스무딩
+## label smoothing
 
-정답에 확률 1을 전부 주는 대신 $\epsilon$ 만큼 나눠준다.
+**label smoothing**(label smoothing)은 정답에 확률 1을 전부 주는 대신 $\epsilon$ 만큼 떼어 모든 class에 나눠주는 것이다.
 
 $$y_k^{\text{smooth}} = (1-\epsilon)\,y_k + \frac{\epsilon}{K}$$
 
-### 로짓이 무한대로 가는 것을 막는다
+$K$ 는 class 수다. $\epsilon = 0.1$, $K = 10$ 이면 정답에 $0.9 + 0.01 = 0.91$, 나머지 9개에 각각 $0.01$ 을 목표로 준다.
+"정답은 맞지만 100% 확신하지는 마라"라고 가르치는 셈이다.
 
-스무딩이 없으면 교차엔트로피의 최솟값은 **도달할 수 없는 곳**에 있다.
-정답 확률을 1로 만들려면 정답 로짓이 나머지보다 무한히 커야 하기 때문이다.
-그래서 학습은 로짓을 계속 키우는 방향으로 끌려간다 — 손실은 조금씩 줄지만
+### logit이 무한대로 가는 것을 막는다
+
+smoothing이 없으면 cross-entropy의 최솟값은 **도달할 수 없는 곳**에 있다.
+정답 확률을 1로 만들려면 정답 logit이 나머지보다 무한히 커야 하기 때문이다.
+그래서 학습은 logit을 계속 키우는 방향으로 끌려간다 — loss는 조금씩 줄지만
 모델은 점점 과신하게 된다.
 
-스무딩을 넣으면 최적점이 **유한한 곳으로 이동한다.**
-정답 로짓을 $z_1$, 나머지를 모두 $z_0$ 라 두고 최적 조건을 풀면
-softmax 출력이 목표 분포와 같아질 때 손실이 최소이므로
+smoothing을 넣으면 최적점이 **유한한 곳으로 이동한다.**
+정답 logit을 $z_1$, 나머지를 모두 $z_0$ 라 두고 최적 조건을 풀면
+softmax 출력이 목표 분포와 같아질 때 loss가 최소이므로
 
 $$\frac{e^{z_1}}{e^{z_1}+(K-1)e^{z_0}} = 1-\epsilon+\frac{\epsilon}{K}
 \quad\Longrightarrow\quad
 \boxed{\ z_1 - z_0 = \log\frac{(K-1)\big(1-\epsilon+\tfrac{\epsilon}{K}\big)}{\epsilon - \tfrac{\epsilon}{K}}\ }$$
 
-$\epsilon \to 0$ 이면 분모가 0으로 가 로짓 격차가 $\infty$ 로 발산한다.
+식을 읽으면: 왼쪽은 "정답 logit이 나머지보다 $z_1 - z_0$ 만큼 클 때 softmax가 정답에 주는 확률"이고,
+오른쪽은 smoothing된 목표 확률이다. 둘이 같아지는 $z_1 - z_0$ 을 풀면 상자 안의 식이 된다.
+$\epsilon \to 0$ 이면 분모가 0으로 가 logit 격차가 $\infty$ 로 발산한다.
 $\epsilon = 0.1$, $K=1000$ 이면 격차가 약 $\log(9\cdot999) \approx 9.1$ 로 **유한**하다.
 
 ```{python}
@@ -293,7 +327,7 @@ $\epsilon = 0.1$, $K=1000$ 이면 격차가 약 $\log(9\cdot999) \approx 9.1$ �
 
 import numpy as np
 
-print(f"{'K':>7}{'ε':>8}{'최적 로짓 격차':>16}{'정답 확률':>12}")
+print(f"{'K':>7}{'ε':>8}{'최적 logit 격차':>16}{'정답 확률':>12}")
 for K in [10, 1000]:
     for eps in [0.0, 0.01, 0.05, 0.1, 0.2]:
         if eps == 0:
@@ -305,24 +339,24 @@ for K in [10, 1000]:
         print(f"{K:>7}{eps:>8.2f}{gap:>16.3f}{p:>12.4f}")
 ```
 
-$\epsilon=0$ 이면 최적점이 무한대라 학습이 끝나지 않고 로짓만 계속 커진다.
-$\epsilon>0$ 이면 유한한 지점에서 멈추므로 과신이 억제되고 보정이 좋아진다.
-대가는 정답 확률의 상한이 1 이 아니게 된다는 것 — 순위는 그대로다.
+$\epsilon=0$ 이면 최적점이 무한대라 학습이 끝나지 않고 logit만 계속 커진다.
+$\epsilon>0$ 이면 유한한 지점에서 멈추므로 과신이 억제되고 calibration(보정 — "80%라고 말한 예측이 실제로 80% 맞는가")이 좋아진다.
+대가는 정답 확률의 상한이 1이 아니게 된다는 것 — 순위는 그대로다.
 
 ::: {.callout-warning}
-## 스무딩이 해로운 경우
+## smoothing이 해로운 경우
 
-로짓 격차를 유한하게 묶는 것은 **표현을 압축**하는 부작용이 있다.
-같은 클래스의 샘플들이 더 촘촘한 군집으로 몰리면서 클래스 간 구조 정보가 줄어든다.
+logit 격차를 유한하게 묶는 것은 **표현을 압축**하는 부작용이 있다.
+같은 class의 샘플들이 더 촘촘한 군집으로 몰리면서 class 간 구조 정보가 줄어든다.
 
-그래서 **지식 증류의 교사 모델**에는 스무딩을 쓰지 않는 편이 낫다.
-증류가 활용하는 것이 바로 "오답들 사이의 상대적 확률"인데,
-스무딩이 그 정보를 균등하게 눌러버리기 때문이다.
+그래서 **knowledge distillation**(지식 증류 — 큰 teacher 모델의 출력 확률을 작은 student 모델이 흉내 내게 하는 학습)의 **teacher 모델**에는 smoothing을 쓰지 않는 편이 낫다.
+distillation이 활용하는 것이 바로 "오답들 사이의 상대적 확률"("고양이 사진을 개로 볼 확률이 자동차로 볼 확률보다 높다"는 정보)인데,
+smoothing이 그 정보를 균등하게 눌러버리기 때문이다.
 :::
 
 ```{python}
 #| label: fig-label-smoothing
-#| fig-cap: "레이블 스무딩은 최적 로짓 간격을 유한하게 만듭니다"
+#| fig-cap: "label smoothing은 최적 logit 간격을 유한하게 만듭니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -331,10 +365,10 @@ from plotly.subplots import make_subplots
 from src import nn, viz
 
 K = 10
-gaps = np.linspace(0, 14, 400)          # 정답 로짓 − 나머지 로짓
+gaps = np.linspace(0, 14, 400)          # 정답 logit − 나머지 logit
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("로짓 간격에 따른 손실", "최적 간격과 최대 확률"))
+                    subplot_titles=("logit 간격에 따른 loss", "최적 간격과 최대 확률"))
 eps_list = [0.0, 0.05, 0.1, 0.2, 0.3]
 best_gap, best_conf = [], []
 for i, eps in enumerate(eps_list):
@@ -353,17 +387,17 @@ for i, eps in enumerate(eps_list):
     best_conf.append(float(nn.softmax(z[None])[0, 0]))
 
 fig.add_trace(go.Scatter(x=eps_list, y=best_gap, mode="lines+markers",
-                         name="최적 로짓 간격",
+                         name="최적 logit 간격",
                          line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
 fig.add_trace(go.Scatter(x=eps_list, y=np.array(best_conf)*14, mode="lines+markers",
                          name="그때의 최대 확률 (×14)",
                          line=dict(color=viz.GREEN, width=2.5, dash="dash")),
               row=1, col=2)
-fig.update_xaxes(title_text="정답 로짓 − 나머지", row=1, col=1)
-fig.update_yaxes(title_text="손실", row=1, col=1)
-fig.update_xaxes(title_text="스무딩 ε", row=1, col=2)
+fig.update_xaxes(title_text="정답 logit − 나머지", row=1, col=1)
+fig.update_yaxes(title_text="loss", row=1, col=1)
+fig.update_xaxes(title_text="smoothing ε", row=1, col=2)
 fig.update_yaxes(title_text="값", row=1, col=2)
-viz.fig_defaults(fig, height=400, title=f"클래스 {K}개, 레이블 스무딩")
+viz.fig_defaults(fig, height=400, title=f"class {K}개, label smoothing")
 fig.update_layout(legend=dict(x=0.5, y=0.98, font=dict(size=10)))
 fig.show()
 ```
@@ -372,7 +406,7 @@ fig.show()
 #| label: smoothing-numbers
 #| code-fold: false
 
-print(f"{'ε':>6} {'최적 로짓 간격':>15} {'그때 정답 확률':>16}")
+print(f"{'ε':>6} {'최적 logit 간격':>15} {'그때 정답 확률':>16}")
 print("-" * 42)
 for e, g_, c_ in zip(eps_list, best_gap, best_conf):
     note = "  ← 발산 (∞ 로 밀림)" if e == 0 else ""
@@ -383,30 +417,40 @@ for e, g_, c_ in zip(eps_list, best_gap, best_conf):
 $\epsilon=0$ 이면 곡선이 끝까지 내려가고, $\epsilon>0$ 이면 유한한 지점에 바닥이 생긴다.
 
 ::: {.key-concept}
-**레이블 스무딩이 하는 일**
+**label smoothing이 하는 일**
 
-- 과신 억제 → [캘리브레이션 개선](../02_classical_ml/11_model_evaluation.qmd)
-- 로짓이 무한대로 발산하지 않음 → 학습 안정
-- 클래스 표현이 등거리로 모임 (군집이 조여짐)
+- 과신 억제 → [calibration 개선](../02_classical_ml/11_model_evaluation.qmd)
+- logit이 무한대로 발산하지 않음 → 학습 안정
+- class 표현이 등거리로 모임 (군집이 조여짐)
 
-대가도 있다. **증류(distillation)의 교사 모델로는 나쁘다** —
-클래스 간 유사도 정보(암흑 지식)가 지워지기 때문이다.
+대가도 있다. **distillation의 teacher 모델로는 나쁘다** —
+class 간 유사도 정보(dark knowledge — 오답 확률들에 담긴 "무엇과 무엇이 비슷한가"의 지식)가 지워지기 때문이다.
 :::
 
 ---
 
-## 대조 손실: 레이블 없이 배우기
+## contrastive loss: label 없이 배우기
 
+**contrastive loss**(대조 손실)는 "이 둘은 짝이고, 저것들은 짝이 아니다"라는 정보만으로 표현을 배우는 loss다.
 [CLIP](../09_vision_video/04_clip_multimodal.qmd), [SimCLR](../09_vision_video/03_ssl_vision.qmd),
-문장 임베딩이 전부 쓰는 손실이다.
+문장 embedding이 전부 쓴다.
+
+사진 8장과 설명문 8개를 섞어놓고 짝을 맞추는 게임을 생각하면 된다.
+정답 label("이 사진은 고양이")은 없지만, "이 사진의 짝은 이 문장"이라는 것만으로도 고양이·개·자동차를 구별하는 표현을 배울 수 있다.
 
 $$L = -\log\frac{\exp(\text{sim}(q, k^+)/\tau)}{\sum_{j}\exp(\text{sim}(q, k_j)/\tau)}$$
 
-**형태가 교차엔트로피와 같다.** 다른 점은 "클래스"가 배치 안의 다른 샘플이라는 것뿐이다.
+$q$ 는 기준 샘플(query)의 embedding, $k^+$ 는 그 짝(positive — 양성)의 embedding, $k_j$ 는 batch 안의 모든 후보(짝 하나 + 나머지 negative — 음성),
+$\text{sim}$ 은 cosine similarity 같은 유사도, $\tau$ 는 temperature(온도)라 부르는 상수다.
+이 형태를 **InfoNCE**라 부른다.
+
+**형태가 cross-entropy와 같다.** 유사도를 logit으로, 짝을 정답 class로 보면
+"batch 안의 $B$ 개 후보 중 진짜 짝을 골라내는 $B$-class 분류"다.
+다른 점은 "class"가 batch 안의 다른 샘플이라는 것뿐이다.
 
 ```{python}
 #| label: fig-infonce
-#| fig-cap: "온도가 양성/음성 쌍의 학습 신호 분배를 바꿉니다"
+#| fig-cap: "temperature가 positive/negative 쌍의 학습 신호 분배를 바꿉니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -416,7 +460,7 @@ from src import nn, viz
 
 rng = np.random.default_rng(0)
 B, d = 8, 16
-# 양성 쌍은 비슷하고 음성 쌍은 다양한 유사도를 갖는 상황
+# positive 쌍은 비슷하고 negative 쌍은 다양한 유사도를 갖는 상황
 q = rng.normal(size=(B, d)); q /= np.linalg.norm(q, axis=1, keepdims=True)
 k = q + rng.normal(0, 0.35, (B, d)); k /= np.linalg.norm(k, axis=1, keepdims=True)
 sim = q @ k.T
@@ -434,28 +478,28 @@ for T in temps:
     hard_w.append(float(off.max(axis=1).mean()))
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
-                    subplot_titles=("유사도 softmax 행렬 (대각이 양성)",
-                                    "온도에 따른 손실과 가중치"))
+                    subplot_titles=("유사도 softmax 행렬 (대각이 positive)",
+                                    "temperature에 따른 loss와 weight"))
 T0 = 0.1
 fig.add_trace(go.Heatmap(z=mats[T0], colorscale="Blues", zmin=0, zmax=1,
                          showscale=False, text=mats[T0], texttemplate="%{text:.2f}",
                          textfont=dict(size=8)), row=1, col=1)
-fig.add_trace(go.Scatter(x=temps, y=loss_by_t, mode="lines+markers", name="InfoNCE 손실",
+fig.add_trace(go.Scatter(x=temps, y=loss_by_t, mode="lines+markers", name="InfoNCE loss",
                          line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
-fig.add_trace(go.Scatter(x=temps, y=pos_w, mode="lines+markers", name="양성 쌍 평균 확률",
+fig.add_trace(go.Scatter(x=temps, y=pos_w, mode="lines+markers", name="positive 쌍 평균 확률",
                          line=dict(color=viz.ACCENT, width=2.5)), row=1, col=2)
 fig.add_trace(go.Scatter(x=temps, y=hard_w, mode="lines+markers",
-                         name="가장 어려운 음성 확률",
+                         name="가장 어려운 negative 확률",
                          line=dict(color=viz.GREEN, width=2.5, dash="dash")), row=1, col=2)
 
 steps = [(f"{T:g}", {"z": [mats[T], None, None, None],
                      "text": [mats[T], None, None, None]}) for T in temps]
-fig.update_layout(sliders=[viz.slider(steps, prefix="온도 τ = ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="temperature τ = ",
                                       active=temps.index(T0), pad_t=55)])
 fig.update_yaxes(autorange="reversed", row=1, col=1)
-fig.update_xaxes(title_text="온도 τ", type="log", row=1, col=2)
+fig.update_xaxes(title_text="temperature τ", type="log", row=1, col=2)
 fig.update_yaxes(title_text="값", row=1, col=2)
-viz.fig_defaults(fig, height=430, title=f"InfoNCE (배치 {B})")
+viz.fig_defaults(fig, height=430, title=f"InfoNCE (batch {B})")
 fig.update_layout(legend=dict(x=0.53, y=0.98, font=dict(size=10)))
 fig.show()
 ```
@@ -464,41 +508,45 @@ fig.show()
 #| label: infonce-numbers
 #| code-fold: false
 
-print(f"{'온도 τ':>8} {'손실':>9} {'양성 확률':>11} {'최난 음성 확률':>15}")
+print(f"{'τ':>8} {'loss':>9} {'positive 확률':>11} {'최난 negative 확률':>15}")
 print("-" * 48)
 for T, l_, p_, h_ in zip(temps, loss_by_t, pos_w, hard_w):
     print(f"{T:>8.2f} {l_:>9.4f} {p_:>11.4f} {h_:>15.4f}")
 ```
 
-$\tau$ 가 작으면 분포가 뾰족해져 **가장 어려운 음성**에 학습이 집중된다.
-$\tau$ 가 크면 모든 음성을 고르게 밀어내지만 신호가 약해진다.
-CLIP 은 $\tau$ 를 학습 가능한 파라미터로 두고 0.01 근처에서 하한을 건다.
+temperature $\tau$ 는 유사도를 softmax에 넣기 전에 나누는 수다. 작게 나눌수록 유사도 차이가 증폭되어 분포가 뾰족해진다.
+$\tau$ 가 작으면 **가장 어려운 negative**(짝이 아닌데 짝과 비슷하게 생긴 것)에 학습이 집중된다.
+$\tau$ 가 크면 모든 negative를 고르게 밀어내지만 신호가 약해진다.
+채점의 엄격함과 같다 — 엄격하면 헷갈리는 오답 하나에 집중하고, 느슨하면 전부 조금씩 본다.
+CLIP은 $\tau$ 를 학습 가능한 parameter로 두고 0.01 근처에서 하한을 건다.
 
 ::: {.key-concept}
-**대조 손실은 분류 손실이다**
+**contrastive loss는 분류 loss다**
 
-배치 크기 $B$ 인 InfoNCE는 사실상 **$B$-클래스 분류**다.
-그래서 [0.4의 상호정보](../00_foundations/04_information_theory.qmd) 하한과 연결되고,
-$\log B$ 가 그 하한의 상한이 된다.
+batch 크기 $B$ 인 InfoNCE는 사실상 **$B$-class 분류**다.
+그래서 [0.4의 mutual information](../00_foundations/04_information_theory.qmd)(상호정보 — 한쪽을 알면 다른 쪽에 대해 얼마나 알게 되는가) 하한과 연결되고,
+$\log B$ 가 그 하한의 상한이 된다 — $B$ 개 중 하나를 고르는 문제로는 $\log B$ 비트 이상의 정보를 잴 수 없다는 뜻이다.
 
-**배치가 클수록 음성 샘플이 많아져 과제가 어려워지고 표현이 좋아진다** —
-SimCLR이 배치 4096을 쓰고, MoCo가 큐로 음성을 모으고,
-CLIP이 32768 배치를 쓰는 이유다.
+**batch가 클수록 negative 샘플이 많아져 과제가 어려워지고 표현이 좋아진다** —
+8명 중 짝 찾기보다 4096명 중 짝 찾기가 훨씬 세밀한 구별을 요구한다.
+SimCLR이 batch 4096을 쓰고, MoCo가 queue로 negative를 모으고,
+CLIP이 32768 batch를 쓰는 이유다.
 :::
 
 ---
 
-## 다중 목표 손실
+## multi-task loss
 
-실무에서는 손실이 여러 개인 경우가 많다.
+실무에서는 loss가 여러 개인 경우가 많다 — 예컨대 물체의 위치(regression)와 종류(분류)를 동시에 맞히는 경우다.
 
 $$L = \lambda_1 L_1 + \lambda_2 L_2 + \dots$$
 
-문제는 $\lambda$ 를 어떻게 정하느냐다. **스케일이 다르면 하나가 지배한다.**
+문제는 $\lambda$ 를 어떻게 정하느냐다. **scale이 다르면 하나가 지배한다.**
+100점 만점 과목과 10000점 만점 과목의 점수를 그냥 더해 석차를 매기면 두 번째 과목만 열심히 하게 되는 것과 같다.
 
 ```{python}
 #| label: fig-multitask
-#| fig-cap: "손실 스케일이 다르면 가중치를 맞춰야 합니다"
+#| fig-cap: "loss scale이 다르면 weight를 맞춰야 합니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -506,17 +554,17 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import viz
 
-# 두 과제: 하나는 손실 스케일이 100배 큼
+# 두 과제: 하나는 loss scale이 100배 큼
 rng = np.random.default_rng(0)
 steps_n = 200
 lambdas = [0.001, 0.01, 0.1, 1.0, 10.0]
 
 def simulate(lam):
-    """가중치에 따라 두 손실이 어떻게 줄어드는지 (개념적 시뮬레이션)"""
+    """weight에 따라 두 loss가 어떻게 줄어드는지 (개념적 시뮬레이션)"""
     l1 = 100.0; l2 = 1.0
     h1, h2 = [], []
     for _ in range(steps_n):
-        total_grad = 1.0 * l1 + lam * l2         # 각 손실의 그래디언트 기여
+        total_grad = 1.0 * l1 + lam * l2         # 각 loss의 gradient 기여
         share1 = (1.0 * l1) / total_grad
         share2 = (lam * l2) / total_grad
         l1 *= (1 - 0.05 * share1)
@@ -524,8 +572,8 @@ def simulate(lam):
         h1.append(l1); h2.append(l2)
     return np.array(h1), np.array(h2)
 
-fig = make_subplots(rows=1, cols=2, subplot_titles=("과제 1 손실 (초기 100)",
-                                                    "과제 2 손실 (초기 1)"))
+fig = make_subplots(rows=1, cols=2, subplot_titles=("과제 1 loss (초기 100)",
+                                                    "과제 2 loss (초기 1)"))
 for i, lam in enumerate(lambdas):
     a, b = simulate(lam)
     fig.add_trace(go.Scatter(x=np.arange(steps_n), y=a/a[0], mode="lines",
@@ -534,33 +582,36 @@ for i, lam in enumerate(lambdas):
     fig.add_trace(go.Scatter(x=np.arange(steps_n), y=b/b[0], mode="lines",
                              showlegend=False,
                              line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
-fig.update_xaxes(title_text="스텝")
-fig.update_yaxes(title_text="초기 대비 손실", type="log")
+fig.update_xaxes(title_text="step")
+fig.update_yaxes(title_text="초기 대비 loss", type="log")
 viz.fig_defaults(fig, height=390,
-                 title="가중치를 안 맞추면 큰 손실이 학습을 독점한다 (개념 모델)")
+                 title="weight를 안 맞추면 큰 loss가 학습을 독점한다 (개념 모델)")
 fig.update_layout(legend=dict(x=0.02, y=0.15, font=dict(size=10)))
 fig.show()
 ```
 
 ::: {.callout-warning}
 위 그림은 **개념적 시뮬레이션**입니다. 실제 신경망 학습이 아니라
-"그래디언트 기여 비율에 따라 각 손실이 줄어든다"는 관계를 단순화한 것입니다.
+"gradient 기여 비율에 따라 각 loss가 줄어든다"는 관계를 단순화한 것입니다.
 
 실무 지침:
 
-1. **각 손실을 초기값으로 나눠 정규화**하고 시작한다
-2. 또는 그래디언트 norm을 맞춘다 (GradNorm)
-3. 또는 불확실성 기반 가중치를 **학습**한다 (Kendall et al.)
-4. 가장 단순하고 자주 통하는 것: **로그 스케일로 몇 개만 시도**
+1. **각 loss를 초기값으로 나눠** 크기를 1 근처로 맞추고 시작한다
+2. 또는 gradient norm을 맞춘다 (GradNorm)
+3. 또는 uncertainty 기반 weight를 **학습**한다 (Kendall et al.)
+4. 가장 단순하고 자주 통하는 것: **$\lambda$ 를 0.01, 0.1, 1, 10처럼 log scale로 몇 개만 시도**
 :::
 
 ---
 
-## 실측: 손실 선택이 결과를 바꾼다
+## 실측: loss 선택이 결과를 바꾼다
+
+label 일부를 일부러 뒤집어(잡음을 넣어) 학습시키고, 깨끗한 test set에서 정확도를 잰다.
+cross-entropy, label smoothing을 넣은 cross-entropy, MAE 세 가지를 비교한다.
 
 ```{python}
 #| label: fig-loss-comparison-training
-#| fig-cap: "레이블 잡음이 있을 때 손실별 강건성"
+#| fig-cap: "label 잡음이 있을 때 loss별 robustness"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -574,7 +625,7 @@ tr, te = split[:450], split[450:]
 
 noise_rates = [0.0, 0.1, 0.2, 0.3, 0.4]
 
-# 잡음 레이블은 손실 종류와 무관하게 **동일한 패턴**으로 미리 만들어 둔다
+# 잡음 label은 loss 종류와 무관하게 **동일한 패턴**으로 미리 만들어 둔다
 noisy = {}
 for nr in noise_rates:
     y_tr = y[tr].copy()
@@ -595,18 +646,18 @@ def train_with(loss_kind, y_tr, smooth=0.0, steps=800):
         tgt[np.arange(len(idx)), y_tr[idx]] += 1 - smooth
         if loss_kind == "ce":
             dz = (p - tgt) / len(idx)
-        else:                                  # 확률에 대한 MAE — softmax 야코비안 통과
+        else:                                  # 확률에 대한 MAE — softmax Jacobian 통과
             gp = np.sign(p - tgt) / len(idx)
             dz = p * (gp - (gp * p).sum(1, keepdims=True))
         opt.step(params, m.backward(cache, dz))
     test = float((m.predict(X[te]).argmax(1) == y[te]).mean())
-    train = float((m.predict(X[tr]).argmax(1) == y_tr).mean())   # 잡음 레이블 기준
+    train = float((m.predict(X[tr]).argmax(1) == y_tr).mean())   # 잡음 label 기준
     return test, train
 
 results = {}
-for kind, label, sm in [("ce", "교차엔트로피", 0.0),
-                        ("ce", "CE + 스무딩 0.2", 0.2),
-                        ("mae", "MAE (강건)", 0.0)]:
+for kind, label, sm in [("ce", "cross-entropy", 0.0),
+                        ("ce", "CE + smoothing 0.2", 0.2),
+                        ("mae", "MAE (robust)", 0.0)]:
     results[label] = [train_with(kind, noisy[nr], sm) for nr in noise_rates]
 
 fig = go.Figure()
@@ -615,12 +666,12 @@ for i, (label, pairs) in enumerate(results.items()):
                              mode="lines+markers", name=label,
                              line=dict(color=viz.color(i), width=2.5)))
     fig.add_trace(go.Scatter(x=noise_rates, y=[tr_ for _, tr_ in pairs],
-                             mode="lines", name=f"{label} (훈련, 잡음 레이블)",
+                             mode="lines", name=f"{label} (train, 잡음 label)",
                              line=dict(color=viz.color(i), width=1.5, dash="dot"),
                              showlegend=False, opacity=0.5))
-fig.update_layout(xaxis_title="레이블 잡음 비율", yaxis_title="깨끗한 시험셋 정확도",
+fig.update_layout(xaxis_title="label 잡음 비율", yaxis_title="깨끗한 test set 정확도",
                   legend=dict(x=0.02, y=0.15))
-viz.fig_defaults(fig, height=400, title="레이블 잡음에 대한 손실별 강건성")
+viz.fig_defaults(fig, height=400, title="label 잡음에 대한 loss별 robustness")
 fig.show()
 ```
 
@@ -628,14 +679,14 @@ fig.show()
 #| label: robust-loss-numbers
 #| code-fold: false
 
-print("깨끗한 시험셋 정확도")
-print(f"{'손실':<18} " + " ".join(f"{r:>7.0%}" for r in noise_rates))
+print("깨끗한 test set 정확도")
+print(f"{'loss':<18} " + " ".join(f"{r:>7.0%}" for r in noise_rates))
 print("-" * 62)
 for label, pairs in results.items():
     print(f"{label:<18} " + " ".join(f"{t:>7.3f}" for t, _ in pairs))
 print()
-print("훈련셋 정확도 (뒤집힌 레이블 기준) — 잡음을 얼마나 외웠는가")
-print(f"{'손실':<18} " + " ".join(f"{r:>7.0%}" for r in noise_rates))
+print("train set 정확도 (뒤집힌 label 기준) — 잡음을 얼마나 외웠는가")
+print(f"{'loss':<18} " + " ".join(f"{r:>7.0%}" for r in noise_rates))
 print("-" * 62)
 for label, pairs in results.items():
     print(f"{label:<18} " + " ".join(f"{a:>7.3f}" for a in [x[1] for x in pairs]))
@@ -644,41 +695,47 @@ for j, r in enumerate(noise_rates):
     best = max(results, key=lambda k: results[k][j][0])
     print(f"잡음 {r:>4.0%} → 최고: {best} ({results[best][j][0]:.3f})")
 
-mae_20, ce_20 = results["MAE (강건)"][2][0], results["교차엔트로피"][2][0]
-mae_last = results["MAE (강건)"][-1]
+mae_20, ce_20 = results["MAE (robust)"][2][0], results["cross-entropy"][2][0]
+mae_last = results["MAE (robust)"][-1]
 ```
 
 ::: {.callout-warning}
 ## 데이터가 말하는 것 (그리고 말하지 않는 것)
 
-**MAE 가 잡음 10–20% 구간에서 가장 높다** — 이론(Ghosh et al., 2017:
-MAE 는 대칭 레이블 잡음에 대해 위험이 불변)과 방향이 맞는다. 다만 격차는
-20% 에서 `{python} f"{mae_20:.3f}"` 대 `{python} f"{ce_20:.3f}"` 정도로 작고, 30% 에서는 교차엔트로피에 따라잡힌다.
-**세 손실 모두** 훈련 정확도가 거의 정확히 $1-\text{잡음률}$ 에 붙어 있다.
-뒤집힌 레이블을 외우지 않고 깨끗한 구조만 학습했다는 뜻이다.
+**MAE가 잡음 10–20% 구간에서 가장 높다** — 이론(Ghosh et al., 2017:
+MAE는 대칭 label 잡음에 대해 risk가 불변)과 방향이 맞는다. 다만 격차는
+20%에서 `{python} f"{mae_20:.3f}"` 대 `{python} f"{ce_20:.3f}"` 정도로 작고, 30%에서는 cross-entropy에 따라잡힌다.
+**세 loss 모두** train 정확도가 거의 정확히 $1-\text{잡음률}$ 에 붙어 있다.
+뒤집힌 label을 외우지 않고 깨끗한 구조만 학습했다는 뜻이다(뒤집힌 label까지 외웠다면 train 정확도가 1에 가까웠을 것이다).
 
-**그런데 40% 에서 MAE 만 붕괴한다.** 시험 `{python} f"{mae_last[0]:.3f}"`, 훈련 `{python} f"{mae_last[1]:.3f}"` 로 둘 다 무너졌다.
-잡음에 과적합한 것이 아니라 **최적화 실패**다 — 아예 학습을 못 한 것이다.
-MAE 의 그래디언트는 크기가 일정해서 신호가 약하고, 잡음이 커지면 서로 상쇄된다.
-스텝을 3배(2400)로 늘려도 0.63 근처에 머문다. "강건하지만 학습이 어렵다"는
-MAE 의 잘 알려진 대가를 그대로 보여준다.
+**그런데 40%에서 MAE만 붕괴한다.** test `{python} f"{mae_last[0]:.3f}"`, train `{python} f"{mae_last[1]:.3f}"` 로 둘 다 무너졌다.
+잡음에 overfitting한 것이 아니라 **optimization 실패**다 — 아예 학습을 못 한 것이다.
+MAE의 gradient는 크기가 일정해서(앞 그림의 |∂L/∂p| 가 평평한 선) 신호가 약하고, 잡음이 커지면 서로 상쇄된다.
+step을 3배(2400)로 늘려도 0.63 근처에 머문다. "robust하지만 학습이 어렵다"는
+MAE의 잘 알려진 대가를 그대로 보여준다.
 
-**주의.** 이 실험은 작은 MLP · 800스텝 · two-moons 다. 세 손실 모두
-30% 까지 시험 정확도 0.98 을 유지한 데에는 **짧은 학습 예산 자체가 정규화로
-작용한** 몫이 크다. 대형 모델을 오래 학습시키면 교차엔트로피는 잡음 레이블을
+**주의.** 이 실험은 작은 MLP · 800 step · two-moons다. 세 loss 모두
+30%까지 test 정확도 0.98을 유지한 데에는 **짧은 학습 예산 자체가 regularization으로
+작용한** 몫이 크다(외울 시간이 없었다). 대형 모델을 오래 학습시키면 cross-entropy는 잡음 label을
 실제로 외워버린다. 여기서 읽어야 할 것은 절대 수치가 아니라 **경향**이다.
 :::
 
 ---
 
-## 손실 지형과 평평한 최소점
+## loss landscape와 flat minimum
 
-손실함수는 **파라미터 공간 위의 지형**이기도 하다.
-같은 손실값이라도 지형의 모양이 다르면 일반화가 다르다는 관찰이 있다.
+loss function은 **parameter 공간 위의 지형**(loss landscape)이기도 하다 —
+parameter를 좌표로, loss를 높이로 보면 산과 골짜기가 있는 지도가 된다.
+같은 loss값이라도 지형의 모양이 다르면 generalization이 다르다는 관찰이 있다.
+좁고 깊은 골짜기 바닥(sharp minimum)에 놓인 공은 살짝만 밀어도 loss가 확 올라가지만,
+넓은 골짜기(flat minimum — 평평한 최소점)에서는 조금 밀려도 괜찮다.
+"살짝 밀린다"를 "train 데이터와 test 데이터의 차이"로 보면, flat한 쪽이 test에서도 잘 될 것 같다는 직관이다.
+
+아래 실험은 학습된 해에서 무작위 방향으로 조금씩 이동하며 loss가 얼마나 올라가는지(지형의 단면)를 그린다.
 
 ```{python}
 #| label: fig-loss-landscape
-#| fig-cap: "학습된 해 주변의 손실 지형 단면 (filter-normalized 1D)"
+#| fig-cap: "학습된 해 주변의 loss landscape 단면 (filter-normalized 1D)"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -690,12 +747,12 @@ rng = np.random.default_rng(0)
 perm = rng.permutation(len(X)); tr, te = perm[:350], perm[350:]
 
 curves = {}
-for bs, label in [(8, "작은 배치 (8)"), (256, "큰 배치 (256)")]:
+for bs, label in [(8, "작은 batch (8)"), (256, "큰 batch (256)")]:
     m = nn.MLP([2, 48, 48, 2], activation="relu", seed=1)
     nn.train(m, X[tr], y[tr], loss="softmax_ce",
              opt=nn.Optimizer("sgd", lr=0.08), steps=1200, batch_size=bs)
     base = {k: v.copy() for k, v in m.params().items()}
-    # 무작위 방향 (층별 norm으로 정규화)
+    # 무작위 방향 (층별 norm으로 크기를 맞춤)
     d = {}
     r = np.random.default_rng(7)
     for k, v in base.items():
@@ -717,13 +774,13 @@ for bs, label in [(8, "작은 배치 (8)"), (256, "큰 배치 (256)")]:
 fig = go.Figure()
 for i, (label, (a, l, acc)) in enumerate(curves.items()):
     fig.add_trace(go.Scatter(x=a, y=l, mode="lines",
-                             name=f"{label} · 시험 정확도 {acc:.3f}",
+                             name=f"{label} · test 정확도 {acc:.3f}",
                              line=dict(color=viz.color(i), width=3)))
 fig.add_vline(x=0, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="학습된 해")
-fig.update_layout(xaxis_title="무작위 방향으로의 이동 α", yaxis_title="훈련 손실",
+fig.update_layout(xaxis_title="무작위 방향으로의 이동 α", yaxis_title="train loss",
                   legend=dict(x=0.25, y=0.98))
-viz.fig_defaults(fig, height=400, title="해 주변 손실 단면")
+viz.fig_defaults(fig, height=400, title="해 주변 loss 단면")
 fig.show()
 ```
 
@@ -733,7 +790,7 @@ fig.show()
 
 import numpy as np
 
-print(f"{'':<18} {'중심 손실':>11} {'|α|=0.5 손실':>14} {'상승폭':>10} {'시험 정확도':>12}")
+print(f"{'':<18} {'중심 loss':>11} {'|α|=0.5 loss':>14} {'상승폭':>10} {'test 정확도':>12}")
 print("-" * 70)
 for label, (a, l, acc) in curves.items():
     c = l[len(l)//2]
@@ -746,47 +803,47 @@ for label, (a, l, acc) in curves.items():
     rise[label] = float(l[k] - l[len(l)//2]); accs[label] = acc
 flat = min(rise, key=rise.get)
 good = max(accs, key=accs.get)
-print(f"더 평평한 쪽: {flat}   /   시험 정확도가 더 높은 쪽: {good}")
+print(f"더 평평한 쪽: {flat}   /   test 정확도가 더 높은 쪽: {good}")
 ```
 
 ::: {.callout-warning}
-## 평평한 최소점 가설의 한계
+## flat minimum 가설의 한계
 
-"평평한 최소점이 더 잘 일반화한다"는 널리 인용되지만 **논쟁 중인 주장**이다.
+"flat minimum이 더 잘 generalization한다"는 널리 인용되지만 **논쟁 중인 주장**이다.
 
-- 가중치를 스케일링하면 손실값은 같은데 지형의 평평함이 바뀐다 (재파라미터화 문제)
+- weight를 scaling하면 loss값은 같은데 지형의 평평함이 바뀐다 (reparameterization 문제 — ReLU 망에서 한 층을 2배, 다음 층을 ½배 하면 함수는 같지만 지형은 달라진다)
 - 방향을 어떻게 고르느냐에 따라 그림이 크게 달라진다
-- 시각화는 2차원 단면일 뿐, 수백만 차원의 지형을 대표하지 않는다
+- 시각화는 1·2차원 단면일 뿐, 수백만 차원의 지형을 대표하지 않는다
 
 **위 실험이 그 예다.** 이 실행에서 더 평평한 쪽은 `{python} flat` 이고
-시험 정확도가 더 높은 쪽은 `{python} good` 이라 둘이
+test 정확도가 더 높은 쪽은 `{python} good` 이라 둘이
 `{python} "일치한다" if flat == good else "엇갈린다"`
-(상승폭 `{python} f"{rise['작은 배치 (8)']:.3f}"` 대 `{python} f"{rise['큰 배치 (256)']:.3f}"`,
-정확도 `{python} f"{accs['작은 배치 (8)']:.3f}"` 대 `{python} f"{accs['큰 배치 (256)']:.3f}"`).
+(상승폭 `{python} f"{rise['작은 batch (8)']:.3f}"` 대 `{python} f"{rise['큰 batch (256)']:.3f}"`,
+정확도 `{python} f"{accs['작은 batch (8)']:.3f}"` 대 `{python} f"{accs['큰 batch (256)']:.3f}"`).
 이 격차는 두 샘플 차이라 통계적으로 의미 있다고 말할 수도 없다 —
 그래서 더욱, 단면 그림 하나로 결론을 내리면 안 된다.
-무작위 방향 하나이고, 손실 지형의 평평함은 재파라미터화로 조작 가능하다.
+무작위 방향 하나이고, loss landscape의 평평함은 reparameterization으로 조작 가능하다.
 
-그럼에도 SAM(Sharpness-Aware Minimization) 같은 기법이 실제로 효과를 보이므로,
-**완전히 틀린 직관은 아니다.** 증명된 정리가 아니라 유용한 휴리스틱으로 다루는 것이 맞다.
+그럼에도 SAM(Sharpness-Aware Minimization — 일부러 주변이 평평한 해를 찾는 optimizer) 같은 기법이 실제로 효과를 보이므로,
+**완전히 틀린 직관은 아니다.** 증명된 정리가 아니라 유용한 heuristic(경험칙)으로 다루는 것이 맞다.
 :::
 
 ---
 
 ## 손실 선택 가이드
 
-| 상황 | 권장 손실 | 비고 |
+| 상황 | 권장 loss | 비고 |
 |---|---|---|
-| 회귀, 잡음이 가우스 | MSE | 기본값 |
-| 회귀, 이상치 많음 | MAE / Huber | 조건부 중앙값 |
-| 회귀, 분위수 필요 | Quantile | 예측 구간 |
-| 이진 분류 | BCE (로짓 입력) | sigmoid와 짝 |
-| 다중 클래스 | 교차엔트로피 | softmax와 짝 |
+| regression, 잡음이 Gaussian | MSE | 기본값 |
+| regression, outlier(이상값) 많음 | MAE / Huber | 조건부 중앙값 |
+| regression, quantile 필요 | quantile loss | 예측 구간 |
+| binary classification | BCE (logit 입력) | sigmoid와 짝 |
+| multi-class | cross-entropy | softmax와 짝 |
 | 극단적 불균형 | focal loss | 쉬운 샘플 억제 |
-| 레이블 잡음 | CE + 스무딩 | 과신 억제 |
-| 표현 학습 (레이블 없음) | InfoNCE | 배치가 클수록 유리 |
-| 검색·랭킹 | triplet / BPR | 쌍 비교 |
-| 생성 (자기회귀) | 교차엔트로피 | 다음 토큰 예측 |
+| label 잡음 | CE + smoothing | 과신 억제 |
+| representation learning (label 없음) | InfoNCE | batch가 클수록 유리 |
+| 검색·ranking | triplet / BPR | 쌍 비교 |
+| 생성 (autoregressive) | cross-entropy | 다음 token 예측 |
 
 
 ---
@@ -794,13 +851,13 @@ print(f"더 평평한 쪽: {flat}   /   시험 정확도가 더 높은 쪽: {goo
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 손실이 무엇을 추정하는지 확인한다**
-`loss-target-numbers` 에 분위수 손실(pinball, $\tau=0.9$)을 추가하라.
+**① loss가 무엇을 추정하는지 확인한다**
+`loss-target-numbers` 에 quantile loss(pinball, $\tau=0.9$)를 추가하라.
 최소화하는 값이 90분위수에 오는가?
 
-**② 라벨 스무딩의 로짓 간격을 예측한다**
-$\epsilon=0.1$, $K=10$ 일 때 최적 로짓 간격을 본문의 닫힌 식으로 계산하고
-`smoothing-numbers` 의 실측(격자 탐색)과 비교하라. 격자 간격만큼의 오차 안에서 맞는가?
+**② label smoothing의 logit 간격을 예측한다**
+$\epsilon=0.1$, $K=10$ 일 때 최적 logit 간격을 본문의 닫힌 식으로 계산하고
+`smoothing-numbers` 의 실측(grid search)과 비교하라. grid 간격만큼의 오차 안에서 맞는가?
 
 **③ Focal loss의 γ 를 극단으로**
 $\gamma=0$ 이면 무엇이 되는가? $\gamma=5$ 면 쉬운 샘플의 기여가 몇 배 줄어드는가?
@@ -811,22 +868,22 @@ $\gamma=0$ 이면 무엇이 되는가? $\gamma=5$ 면 쉬운 샘플의 기여가
 
 | 개념 | 핵심 |
 |------|------|
-| 손실 = $-\log p$ | 분포 가정이 손실의 이름을 정함 |
-| MSE / MAE / Quantile | **평균 / 중앙값 / 분위수**를 추정 |
-| 교차엔트로피 | 그래디언트가 $(p-y)$ 로 단순 |
-| $1/p$ 발산 | 확신에 찬 오답에 강한 신호 — 레이블 잡음엔 취약 |
-| focal loss | $(1-p)^\gamma$ 로 쉬운 샘플 억제 |
-| 레이블 스무딩 | 최적 로짓 간격을 **유한하게** 만듦 |
-| InfoNCE | $B$-클래스 분류, 배치가 클수록 유리 |
-| 온도 $\tau$ | 작으면 어려운 음성에 집중 |
-| 다중 목표 | 스케일 정규화가 먼저 |
-| 평평한 최소점 | 유용한 휴리스틱, 증명된 정리는 아님 |
+| loss = $-\log p$ | 분포 가정이 loss의 이름을 정함 — 채점 기준표 |
+| MSE / MAE / quantile | **평균 / 중앙값 / 분위수**를 추정 — 평균 연봉 vs 중위 연봉 |
+| cross-entropy | gradient가 $(p-y)$ 로 단순 |
+| $1/p$ 발산 | 확신에 찬 오답에 강한 신호 — label 잡음엔 취약 |
+| focal loss | $(1-p)^\gamma$ 로 쉬운 샘플 억제 — 못하는 학생에게 집중 |
+| label smoothing | 최적 logit 간격을 **유한하게** 만듦 — "100% 확신은 금물" |
+| InfoNCE | $B$-class 분류, batch가 클수록 유리 — 짝 찾기 게임 |
+| temperature $\tau$ | 작으면 어려운 negative에 집중 — 채점의 엄격함 |
+| multi-task | scale 맞추기가 먼저 — 만점이 다른 과목 합산 |
+| flat minimum | 유용한 heuristic, 증명된 정리는 아님 — 넓은 골짜기 |
 
-손실이 목표를 정했고, 역전파가 방향을 준다.
-남은 것은 **그 방향으로 얼마나, 어떻게 움직일 것인가** — 옵티마이저다.
+loss가 목표를 정했고, backpropagation이 방향을 준다.
+남은 것은 **그 방향으로 얼마나, 어떻게 움직일 것인가** — optimizer다.
 
 ---
 
-**다음**: [3.4 최적화 알고리즘](04_optimizers.qmd) — SGD·모멘텀·Adam·AdamW
+**다음**: [3.4 optimizer](04_optimizers.qmd) — SGD·momentum·Adam·AdamW
 
-**이전**: [3.2 활성화 함수](02_activations.qmd)
+**이전**: [3.2 activation function](02_activations.qmd)
