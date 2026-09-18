@@ -1,8 +1,11 @@
 ---
-title: "3.8 자동미분 직접 만들기"
-subtitle: "120줄짜리 autograd — 프레임워크의 내부"
+title: "3.8 autograd 직접 만들기"
+subtitle: "120줄짜리 autograd — framework의 내부"
 jupyter: ai-ml-study
 ---
+
+**autograd**(automatic differentiation — 자동미분)는 코드로 적은 계산의 gradient를 사람이 유도하지 않아도 자동으로 구해주는 장치다.
+PyTorch·JAX 같은 framework의 심장이고, 우리가 `loss.backward()` 한 줄로 [3.1](01_backpropagation.qmd)의 backpropagation을 얻는 이유다.
 
 PyTorch가 무엇을 하는지 모르면 이런 것들이 전부 미신이 된다.
 
@@ -14,7 +17,7 @@ PyTorch가 무엇을 하는지 모르면 이런 것들이 전부 미신이 된�
 **직접 만들면 전부 자명해진다.** 이 장은 120줄로 autograd를 만들고,
 그것으로 실제 MLP를 학습시킨 뒤 [3.1](01_backpropagation.qmd)의 손계산 구현과 대조한다.
 
-[3.1](01_backpropagation.qmd)에서 역전파를 손으로 유도했다.
+[3.1](01_backpropagation.qmd)에서 backpropagation을 손으로 유도했다.
 이제 그것을 **자동화하는 기계**를 만든다.
 
 ---
@@ -24,28 +27,31 @@ PyTorch가 무엇을 하는지 모르면 이런 것들이 전부 미신이 된�
 `c = a * b` 를 실행할 때, 결과 `c` 는 세 가지를 함께 들고 다닌다.
 
 1. **값** — `a.data * b.data`
-2. **부모** — `{a, b}`
-3. **역함수** — "내게 온 그래디언트를 부모에게 어떻게 나눠줄 것인가"
+2. **parent(부모)** — `{a, b}`: 이 값을 만드는 데 쓰인 입력들
+3. **backward 함수** — "내게 온 gradient를 parent에게 어떻게 나눠줄 것인가"
 
 $c = ab$ 이면 $\partial c/\partial a = b$, $\partial c/\partial b = a$ 이므로
-역함수는 `a.grad += b.data * c.grad`, `b.grad += a.data * c.grad` 다.
+backward 함수는 `a.grad += b.data * c.grad`, `b.grad += a.data * c.grad` 다 — [3.1](01_backpropagation.qmd)의 "교환기" 규칙 그대로다.
 
-이 규칙을 연산마다 하나씩 적어두면, **그래프 전체의 미분이 자동으로 나온다.**
+3.1의 조립 라인 비유로 말하면, 각 부품에 "내 입력이 1 mm 바뀌면 내 출력은 몇 mm 바뀐다"는 설명서를 붙여 두는 것이다.
+이 규칙을 연산마다 하나씩 적어두면, **graph 전체의 미분이 자동으로 나온다.**
+사람은 forward 계산만 적고, 미분은 설명서를 뒤에서부터 읽는 것으로 끝난다.
 
 ### 왜 `=` 가 아니라 `+=` 인가
 
-구현에서 가장 중요한 한 글자다. 근거는 **다변수 연쇄법칙**이다.
-어떤 노드 $v$ 가 여러 연산에 재사용되면, 손실로 가는 경로가 여러 개 생긴다.
-그 경로들의 기여는 **더해진다.**
+구현에서 가장 중요한 한 글자다. 근거는 **multivariable chain rule**(다변수 연쇄법칙)이다.
+어떤 node $v$ 가 여러 연산에 재사용되면, loss로 가는 경로가 여러 개 생긴다.
+그 경로들의 기여는 **더해진다** — 3.1의 "분기는 합" 규칙이다.
 
 $$\frac{\partial L}{\partial v} = \sum_{u \,\in\, \text{children}(v)} \frac{\partial L}{\partial u}\,\frac{\partial u}{\partial v}$$
 
-$v$ 를 조금 흔들면 $u_1, u_2, \dots$ 가 각각 흔들리고 그 효과가 $L$ 에서 합쳐지기 때문이다.
-그래서 각 자식이 자기 몫을 **누적**해야 하고, 덮어쓰면 마지막 경로만 남는다.
+$\text{children}(v)$ 는 $v$ 를 입력으로 쓴 연산들이다. $v$ 를 조금 흔들면 $u_1, u_2, \dots$ 가 각각 흔들리고 그 효과가 $L$ 에서 합쳐지기 때문이다.
+그래서 각 child가 자기 몫을 **누적**해야 하고, 덮어쓰면 마지막 경로만 남는다.
+택배가 여러 경로로 나뉘어 배송되면 도착한 것을 전부 합쳐야 원래 물량인 것과 같다.
 
 가장 단순한 예로 $y = x \cdot x$ 를 보자. 참값은 $dy/dx = 2x$ 다.
-곱셈의 역함수는 두 부모에게 각각 상대편 값을 곱해 보내는데,
-여기서는 두 부모가 **같은 노드**라 같은 자리에 $x$ 가 두 번 도착한다.
+곱셈의 backward 함수는 두 parent에게 각각 상대편 값을 곱해 보내는데,
+여기서는 두 parent가 **같은 node**라 같은 자리에 $x$ 가 두 번 도착한다.
 `+=` 면 $x + x = 2x$ 로 맞고, `=` 면 $x$ 가 되어 절반이 된다.
 
 ```{python}
@@ -77,22 +83,24 @@ for acc in (True, False):
     print(f"{tag}   dy/dx = {x.grad:.1f}   참값 2x = {2*x.data:.1f}")
 ```
 
-### 위상 정렬이 필요한 이유
+### topological sort가 필요한 이유
 
-`+=` 만으로는 부족하다. **언제 역함수를 호출할지**도 정해져야 한다.
+`+=` 만으로는 부족하다. **언제 backward 함수를 호출할지**도 정해져야 한다.
 
-노드 $v$ 의 그래디언트는 **모든 자식이 기여를 마친 뒤에야 완성된다.**
-아직 덜 채워진 $\partial L/\partial v$ 로 $v$ 의 역함수를 호출하면,
-그 값이 부모에게 그대로 전파되어 그래프 전체가 틀어진다.
+node $v$ 의 gradient는 **모든 child가 기여를 마친 뒤에야 완성된다.**
+아직 덜 채워진 $\partial L/\partial v$ 로 $v$ 의 backward 함수를 호출하면,
+그 값이 parent에게 그대로 전파되어 graph 전체가 틀어진다.
+부서장이 팀들의 보고를 다 받기 전에 본부에 보고하면 숫자가 틀리는 것과 같다.
 
-그래서 역전파는 **위상 역순**으로 진행해야 한다 —
-어떤 노드를 처리하기 전에 그 노드에 의존하는 모든 노드가 먼저 처리되어야 한다.
-계산 그래프가 **비순환**(DAG)이므로 그런 순서가 항상 존재하고,
+그래서 backward pass는 **topological order**(위상 순서 — 의존 관계를 어기지 않는 순서)의 **역순**으로 진행해야 한다 —
+어떤 node를 처리하기 전에 그 node에 의존하는 모든 node가 먼저 처리되어야 한다.
+computation graph가 **acyclic**(비순환 — 화살표를 따라가면 제자리로 돌아오지 않음; DAG)이므로 그런 순서가 항상 존재하고,
 아래 구현의 `backward` 가 `build` 로 만드는 `order` 리스트가 그 순서다 —
-부모를 먼저 넣고 자식을 나중에 넣은 뒤, 역전파는 그 역순으로 돈다.
+parent를 먼저 넣고 child를 나중에 넣은 뒤, backward pass는 그 역순으로 돈다.
+요리 순서와 같다 — 재료 손질(parent)이 끝나야 볶기(child)를 할 수 있고, 책임을 되짚을 때는 거꾸로 간다.
 
-이것이 순전파를 먼저 끝내야 하는 이유이기도 하다.
-그래프의 모양은 실행하면서 결정되므로(동적 그래프),
+이것이 forward pass를 먼저 끝내야 하는 이유이기도 하다.
+graph의 모양은 실행하면서 결정되므로(**dynamic graph** — 동적 graph; 코드가 실행될 때마다 영수증처럼 기록됨),
 전체 구조를 알기 전에는 올바른 순서를 알 수 없다.
 
 ---
@@ -107,19 +115,19 @@ import numpy as np
 
 
 class Tensor:
-    """NumPy 배열 하나 + 그래디언트 + 그래프 연결."""
+    """NumPy 배열 하나 + gradient + graph 연결."""
 
     def __init__(self, data, parents=(), op=""):
         self.data = np.asarray(data, dtype=float)
         self.grad = np.zeros_like(self.data)
-        self._backward = lambda: None       # 부모에게 그래디언트를 흘리는 함수
+        self._backward = lambda: None       # parent에게 gradient를 흘리는 함수
         self._parents = set(parents)
         self._op = op                       # 시각화·디버깅용 이름
 
     def __repr__(self):
         return f"Tensor(shape={self.data.shape}, op='{self._op}')"
 
-    # ── 브로드캐스팅 역전파: 늘어난 축을 다시 합친다 ──
+    # ── broadcasting의 backward: 늘어난 축을 다시 합친다 ──
     @staticmethod
     def _unbroadcast(g, shape):
         while g.ndim > len(shape):
@@ -225,10 +233,10 @@ class Tensor:
         return out
 
     def detach(self):
-        """값만 복사하고 그래프에서 잘라낸다."""
+        """값만 복사하고 graph에서 잘라낸다."""
         return Tensor(self.data.copy())
 
-    # ── 파이썬 연산자 편의 ──
+    # ── Python 연산자 편의 ──
     def __neg__(self):       return self * -1.0
     def __sub__(self, o):    return self + (-(o if isinstance(o, Tensor) else Tensor(o)))
     def __truediv__(self, o):
@@ -242,7 +250,7 @@ class Tensor:
     def shape(self):
         return self.data.shape
 
-    # ── 역전파: 위상 정렬 후 역순 순회 ──
+    # ── backward pass: topological sort 후 역순 순회 ──
     def backward(self):
         order, seen = [], set()
 
@@ -252,23 +260,29 @@ class Tensor:
             seen.add(id(v))
             for p in v._parents:
                 build(p)
-            order.append(v)                 # 부모가 먼저, 자식이 나중
+            order.append(v)                 # parent가 먼저, child가 나중
         build(self)
 
-        self.grad = np.ones_like(self.data)  # 시드 그래디언트
-        for v in reversed(order):            # 자식 → 부모 순서
+        self.grad = np.ones_like(self.data)  # seed gradient (dL/dL = 1)
+        for v in reversed(order):            # child → parent 순서
             v._backward()
         return order
 ```
 
 구현한 연산은 `+ - * / @ ** relu tanh exp log sum max detach` 열셋이다.
-`-` 와 `/` 는 `* -1` 과 `** -1` 로 풀어 썼으므로 역함수를 따로 쓰지 않았고,
-`_unbroadcast` 는 순전파에서 브로드캐스팅으로 늘어난 축을 역전파에서 다시 **합산**한다 —
-bias 가 배치 전체에 더해졌으면 그 그래디언트는 배치에 대해 합쳐져야 하기 때문이다.
+`-` 와 `/` 는 `* -1` 과 `** -1` 로 풀어 썼으므로 backward 함수를 따로 쓰지 않았고,
+`_unbroadcast` 는 forward pass에서 broadcasting(브로드캐스팅 — 모양이 작은 배열을 큰 배열에 맞춰 자동으로 늘려 연산하는 NumPy 규칙)으로 늘어난 축을 backward pass에서 다시 **합산**한다 —
+bias가 batch 전체에 더해졌으면 그 gradient는 batch에 대해 합쳐져야 하기 때문이다(3.1의 "분배기의 역은 합").
+
+코드 구조를 읽는 법: 각 연산 메서드는 (1) 값을 계산해 새 `Tensor` 를 만들고, (2) 그 안에 `_backward` 함수를 정의해 붙인다.
+`_backward` 는 `out.grad`(뒤에서 온 gradient)에 local derivative를 곱해 `self.grad`·`other.grad` 에 더한다.
+`backward()` 는 graph를 topological sort한 뒤 역순으로 각 node의 `_backward` 를 한 번씩 부른다.
 
 ---
 
 ## 검증 1: 손으로 푼 미분과 맞는가
+
+먼저 scalar 식 하나로 확인한다. $f(a,b) = (ab + a)^2 \tanh(b)$ 를 autograd로 미분한 값과 chain rule로 손으로 푼 값을 비교한다.
 
 ```{python}
 #| label: verify-scalar
@@ -292,7 +306,7 @@ th = np.tanh(bv)
 da = 2*cv*th*(bv+1)
 db = 2*cv*th*av + cv**2*(1 - th**2)
 
-print(f"그래프 노드 수: {len(order)}")
+print(f"graph node 수: {len(order)}")
 print(f"d = {float(d.data):.6f}   (손계산 {cv**2*th:.6f})")
 print()
 print(f"∂d/∂a : autograd {float(a.grad):.6f}   손계산 {da:.6f}   "
@@ -303,7 +317,9 @@ print(f"∂d/∂b : autograd {float(b.grad):.6f}   손계산 {db:.6f}   "
 
 ---
 
-## 검증 2: 수치 미분과 맞는가 (행렬 연산 포함)
+## 검증 2: numerical differentiation과 맞는가 (행렬 연산 포함)
+
+행렬 곱과 broadcasting이 들어간 작은 MLP에서, [3.1의 gradient check](01_backpropagation.qmd)처럼 parameter를 $\pm\epsilon$ 흔들어 잰 값과 비교한다.
 
 ```{python}
 #| label: verify-numeric
@@ -314,7 +330,7 @@ import numpy as np
 rng = np.random.default_rng(0)
 
 def build_and_loss(Wd, Xd, yd):
-    """작은 2층 MLP + MSE 를 Tensor 로 구성하고 손실을 반환."""
+    """작은 2층 MLP + MSE 를 Tensor 로 구성하고 loss를 반환."""
     W1, b1, W2, b2 = (Tensor(w) for w in Wd)
     X = Tensor(Xd)
     h = (X @ W1 + b1).tanh()
@@ -331,9 +347,9 @@ Wd = [rng.normal(0, 0.5, (3, 5)), rng.normal(0, 0.1, (5,)),
 loss, params = build_and_loss(Wd, Xd, yd)
 loss.backward()
 
-print(f"손실 = {float(loss.data):.6f}")
+print(f"loss = {float(loss.data):.6f}")
 print()
-print(f"{'파라미터':>10} {'모양':>10} {'최대 상대오차':>16}")
+print(f"{'parameter':>10} {'모양':>10} {'최대 상대오차':>16}")
 print("-" * 42)
 eps = 1e-6
 worst = 0.0
@@ -354,33 +370,35 @@ for name, P, Wi in zip(["W1", "b1", "W2", "b2"], params, range(4)):
     print(f"{name:>10} {str(P.shape):>10} {e:>16.2e}")
 ```
 
-최대 상대오차 `{python} f"{worst:.2e}"` 다. 중심차분의 오차는 $h^2$ 의 절단오차와 $\epsilon/h$ 의
-반올림오차의 합이라 $h=10^{-6}$ 에서 $10^{-9}$ 근처가 한계이고, 그 수준이면 정상이다
-([3.1](01_backpropagation.qmd)의 grad check 와 같은 기준이다).
+최대 상대오차 `{python} f"{worst:.2e}"` 다. central difference의 오차는 $h^2$ 의 truncation error(절단오차)와 $\epsilon/h$ 의
+rounding error(반올림오차)의 합이라 $h=10^{-6}$ 에서 $10^{-9}$ 근처가 한계이고, 그 수준이면 정상이다
+([3.1](01_backpropagation.qmd)의 gradient check와 같은 기준이다).
 
 ---
 
-## G3.8.1 — 계산 그래프와 역방향 순회
+## G3.8.1 — computation graph와 역방향 순회
+
+`backward()` 가 돌려주는 `order` 리스트를 그대로 그림으로 그려 본다. 왼쪽이 leaf(입력·parameter), 오른쪽이 loss다.
 
 ```{python}
 #| label: fig-graph
-#| fig-cap: "연산 순서대로 쌓인 계산 그래프와 역순으로 흐르는 그래디언트"
+#| fig-cap: "연산 순서대로 쌓인 computation graph와 역순으로 흐르는 gradient"
 
 import sys; sys.path.append("../..")
 import numpy as np
 import plotly.graph_objects as go
 from src import viz
 
-# 작은 식 하나를 그래프로 그린다: L = ((x*w + b).tanh() - y)²
+# 작은 식 하나를 graph로 그린다: L = ((x*w + b).tanh() - y)²
 x = Tensor(0.7); w = Tensor(1.3); b = Tensor(-0.2); yv = Tensor(0.5)
 t1 = x*w; t2 = t1 + b; t3 = t2.tanh(); t4 = t3 - yv; L = t4 ** 2
 order = L.backward()
 
 named = {id(x): "x", id(w): "w", id(b): "b", id(yv): "y",
          id(t1): "x·w", id(t2): "+b", id(t3): "tanh", id(t4): "−y", id(L): "L"}
-# `t3 - yv` 는 내부적으로 t3 + (yv * −1) 로 풀리므로 익명 노드가 생긴다
+# `t3 - yv` 는 내부적으로 t3 + (yv * −1) 로 풀리므로 익명 node가 생긴다
 names = {id(v): named.get(id(v), v._op or "const") for v in order}
-# 위상 순서대로 x 좌표, 리프는 왼쪽
+# topological 순서대로 x 좌표, leaf는 왼쪽
 depth = {}
 for v in order:
     depth[id(v)] = 0 if not v._parents else 1 + max(depth[id(p)] for p in v._parents)
@@ -416,11 +434,11 @@ fig.add_trace(go.Scatter(
     hovertemplate="%{text}<br>값 %{customdata[0]:.4f}"
                   "<br>grad %{customdata[1]:.4f}<extra></extra>",
     showlegend=False))
-fig.update_xaxes(title_text="위상 깊이 (역전파는 오른쪽 → 왼쪽)",
+fig.update_xaxes(title_text="topological 깊이 (backward pass는 오른쪽 → 왼쪽)",
                  showgrid=False, dtick=1)
 fig.update_yaxes(showgrid=False, showticklabels=False, zeroline=False)
 viz.fig_defaults(fig, height=400,
-                 title="L = (tanh(x·w + b) − y)² 의 계산 그래프 · 색 = |그래디언트|")
+                 title="L = (tanh(x·w + b) − y)² 의 computation graph · 색 = |gradient|")
 fig.show()
 ```
 
@@ -430,7 +448,7 @@ fig.show()
 
 import numpy as np
 
-print(f"{'#':>3} {'노드':>7} {'연산':>7} {'값':>10} {'그래디언트':>12}")
+print(f"{'#':>3} {'node':>7} {'연산':>7} {'값':>10} {'gradient':>12}")
 print("-" * 46)
 for i, v in enumerate(order):
     print(f"{i:>3} {names[id(v)]:>7} {v._op or 'leaf':>7} "
@@ -443,11 +461,11 @@ manual = 2*(tv - yv_)*(1 - tv**2)*xv_
 print(f"∂L/∂w : autograd {float(w.grad):.8f}   손계산 {manual:.8f}")
 ```
 
-표는 위상 정렬 결과(부모 → 자식)이고 역전파는 이 순서의 역순으로 돈다.
-리프 노드(x, w, b, y)가 위상 깊이 0 에 있고 L 이 가장 깊으며, `build` 가 재귀로 부모를
-먼저 넣기 때문에 순서가 자동으로 보장된다. `−y` 가 `*` 와 `const` 노드로 갈라져 있는 것은
-`t3 - yv` 가 내부적으로 `t3 + (yv * −1)` 로 풀리기 때문이다 — 뺄셈의 역함수를 따로 쓰지 않은 대가로
-노드가 둘 늘었다.
+표는 topological sort 결과(parent → child)이고 backward pass는 이 순서의 역순으로 돈다.
+leaf node(leaf — parent가 없는 시작점: x, w, b, y)가 topological 깊이 0에 있고 L이 가장 깊으며, `build` 가 재귀로 parent를
+먼저 넣기 때문에 순서가 자동으로 보장된다. `−y` 가 `*` 와 `const` node로 갈라져 있는 것은
+`t3 - yv` 가 내부적으로 `t3 + (yv * −1)` 로 풀리기 때문이다 — 뺄셈의 backward 함수를 따로 쓰지 않은 대가로
+node가 둘 늘었다.
 
 ---
 
@@ -455,7 +473,8 @@ print(f"∂L/∂w : autograd {float(w.grad):.8f}   손계산 {manual:.8f}")
 
 ### `zero_grad()` 를 왜 부르는가
 
-`grad` 가 `=` 가 아니라 `+=` 이기 때문이다. 같은 리프에 `backward` 를 세 번 부르면
+`grad` 가 `=` 가 아니라 `+=` 이기 때문이다. 계산기의 M+ 버튼처럼 메모리에 계속 더해지므로, 새 계산 전에 MC(클리어)를 눌러야 한다.
+같은 leaf에 `backward` 를 세 번 부르면
 
 ```{python}
 #| label: myth-zero-grad
@@ -470,12 +489,13 @@ for i in range(3):
     print(f"{i+1}번째 backward 후 a.grad = {float(a.grad):.1f}  (정답은 매번 {2*3.0:.1f})")
 ```
 
-누적된다. 이것은 버그가 아니라 **기능**이다 — 작은 배치 여러 개의 그래디언트를 누적하면
-큰 배치를 메모리 없이 흉내낼 수 있다(gradient accumulation). 대신 매 스텝 직접 0 으로 지워야 한다.
+누적된다. 이것은 버그가 아니라 **기능**이다 — 작은 batch 여러 개의 gradient를 누적하면
+큰 batch를 메모리 없이 흉내낼 수 있다(gradient accumulation). 대신 매 step 직접 0으로 지워야 한다.
 
 ### `detach()` 가 하는 일
 
-그래프에서 잘라내기다. $L = (3w)\cdot w$ 에서 $\partial L/\partial w$ 를 두 방식으로 구하면
+graph에서 잘라내기다. 값은 그대로 통과시키되 gradient는 통과시키지 않는 벽이다.
+$L = (3w)\cdot w$ 에서 $\partial L/\partial w$ 를 두 방식으로 구하면
 
 ```{python}
 #| label: myth-detach
@@ -488,7 +508,7 @@ L1.backward()
 g_full = float(w.grad)
 
 w2 = Tensor(2.0)
-u2 = (w2 * 3.0).detach()          # 여기서 그래프가 끊긴다
+u2 = (w2 * 3.0).detach()          # 여기서 graph가 끊긴다
 L2 = (u2 * w2).sum()
 L2.backward()
 g_cut = float(w2.grad)
@@ -497,12 +517,13 @@ print(f"detach 없음 : {g_full:.1f}   (= 6w = {6*2.0:.1f}, 두 경로 모두 �
 print(f"detach 있음 : {g_cut:.1f}   (= 3w 를 상수로 보고 {3*2.0:.1f})")
 ```
 
-값은 같지만 그래디언트가 다르다. 한쪽 경로를 **상수로 취급**하고 싶을 때 쓴다 —
-강화학습의 타깃 네트워크, 대조학습의 stop-gradient(SimSiam, BYOL)가 정확히 이것이다.
+값은 같지만 gradient가 다르다. 한쪽 경로를 **상수로 취급**하고 싶을 때 쓴다 —
+reinforcement learning의 target network, contrastive learning의 stop-gradient(SimSiam, BYOL)가 정확히 이것이다.
 
 ### `no_grad()` 가 메모리를 아끼는 이유
 
-그래프를 안 만들면 중간값도 안 남는다. 256×256 배열에 `tanh` 와 덧셈을 20단계 연쇄하면
+graph를 안 만들면 중간값도 안 남는다. 영수증을 남기지 않고 계산만 하는 것이다.
+256×256 배열에 `tanh` 와 덧셈을 20단계 연쇄하면
 
 ```{python}
 #| label: myth-no-grad
@@ -516,18 +537,20 @@ nodes = chain.backward()
 mem = sum(v.data.nbytes + v.grad.nbytes for v in nodes)
 big_nodes = sum(1 for v in nodes if v.data.size > 1)
 mem_ratio = mem / chain.data.nbytes
-print(f"그래프 노드 {len(nodes)}개 (그중 {big_nodes}개가 256×256 배열)")
-print(f"보관 중인 메모리: {mem/1e6:.1f} MB (값 + 그래디언트)")
+print(f"graph node {len(nodes)}개 (그중 {big_nodes}개가 256×256 배열)")
+print(f"보관 중인 메모리: {mem/1e6:.1f} MB (값 + gradient)")
 print(f"최종 결과만 필요하다면 {chain.data.nbytes/1e6:.2f} MB")
 ```
 
-`{python} f"{mem_ratio:.0f}"`배 차이다. 추론에는 이 중간값이 전혀 필요 없으므로 `no_grad()`
-(또는 `inference_mode()`)가 필수다. 나머지 `1.0` 상수 노드 20개는 스칼라라 메모리에는
-거의 기여하지 않지만, 노드 수를 세어 보면 `+ 1.0` 마다 하나씩 생긴 것이 보인다.
+`{python} f"{mem_ratio:.0f}"`배 차이다. inference에는 이 중간값이 전혀 필요 없으므로 `no_grad()`
+(또는 `inference_mode()`)가 필수다. 나머지 `1.0` 상수 node 20개는 scalar라 메모리에는
+거의 기여하지 않지만, node 수를 세어 보면 `+ 1.0` 마다 하나씩 생긴 것이 보인다.
 
 ---
 
 ## 검증 3: 이 엔진으로 실제 학습시키기
+
+`Tensor` 연산만으로 MLP와 softmax cross-entropy를 짜고, `backward()` 와 SGD 갱신 두 줄로 two-moons를 학습시킨다.
 
 ```{python}
 #| label: fig-train-with-autograd
@@ -543,7 +566,7 @@ perm = np.random.default_rng(0).permutation(len(X)); tr, te = perm[:450], perm[4
 onehot = np.eye(2)[y]
 
 def softmax_ce_tensor(logits, target):
-    """Tensor 연산만으로 구현한 안정적 softmax + 교차엔트로피."""
+    """Tensor 연산만으로 구현한 안정적 softmax + cross-entropy."""
     shifted = logits - Tensor(logits.data.max(1, keepdims=True))  # 상수로 취급
     e = shifted.exp()
     p = e / e.sum(axis=1, keepdims=True)
@@ -576,7 +599,7 @@ for lr in lrs:
         loss = softmax_ce_tensor(forward(ps, X[tr][idx]), onehot[tr][idx])
         loss.backward()
         for p in ps:
-            p.data -= lr * p.grad                    # ← SGD 스텝
+            p.data -= lr * p.grad                    # ← SGD step
         hist.append(float(loss.data))
     curves[lr] = np.array(hist)
     logits = forward(ps, X[te]).data
@@ -586,11 +609,11 @@ fig = go.Figure()
 for i, lr in enumerate(lrs):
     sm = np.convolve(curves[lr], np.ones(15)/15, mode="valid")
     fig.add_trace(go.Scatter(x=np.arange(len(sm)), y=sm, mode="lines",
-                             name=f"η={lr} · 시험 {accs[lr]:.3f}",
+                             name=f"η={lr} · test {accs[lr]:.3f}",
                              line=dict(color=viz.color(i), width=2.5)))
 fig.add_hline(y=np.log(2), line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="무작위 수준")
-fig.update_layout(xaxis_title="스텝", yaxis_title="훈련 손실 (이동평균)",
+fig.update_layout(xaxis_title="step", yaxis_title="train loss (이동평균)",
                   yaxis_type="log", legend=dict(x=0.55, y=0.98))
 viz.fig_defaults(fig, height=420,
                  title="자작 autograd + SGD · MLP[2,32,32,2] · two-moons")
@@ -605,13 +628,13 @@ import sys; sys.path.append("../..")
 import numpy as np
 from src import nn
 
-print(f"{'학습률':>8} {'최종 손실':>11} {'시험 정확도':>12}")
+print(f"{'lr':>8} {'최종 loss':>11} {'test 정확도':>12}")
 print("-" * 34)
 for lr in lrs:
     print(f"{lr:>8.3f} {curves[lr][-30:].mean():>11.4f} {accs[lr]:>12.3f}")
 print()
 
-# src/nn.py 의 손계산 구현과 그래디언트가 일치하는가?
+# src/nn.py 의 손계산 구현과 gradient가 일치하는가?
 ps = make_params([2, 16, 2], seed=0)
 ref = nn.MLP([2, 16, 2], activation="relu", seed=0)
 ref.W[0][...] = ps[0].data; ref.b[0][...] = ps[1].data
@@ -624,50 +647,50 @@ L_auto = softmax_ce_tensor(forward(ps, xb), np.eye(2)[yb])
 L_auto.backward()
 L_ref, g_ref = ref.loss_and_grads(xb, yb, loss="softmax_ce")
 
-print("자작 autograd vs src/nn.py 의 손으로 짠 역전파")
-print(f"  손실      : {float(L_auto.data):.8f} vs {L_ref:.8f}")
+print("자작 autograd vs src/nn.py 의 손으로 짠 backpropagation")
+print(f"  loss      : {float(L_auto.data):.8f} vs {L_ref:.8f}")
 for name, mine, theirs in [("W0", ps[0].grad, g_ref["W0"]), ("b0", ps[1].grad, g_ref["b0"]),
                            ("W1", ps[2].grad, g_ref["W1"]), ("b1", ps[3].grad, g_ref["b1"])]:
-    print(f"  {name} 그래디언트 최대 차이: {np.abs(mine-theirs).max():.2e}")
+    print(f"  {name} gradient 최대 차이: {np.abs(mine-theirs).max():.2e}")
 ```
 
-학습률 `{python} f"{lrs[-1]}"` 에서 시험 정확도 `{python} f"{accs[lrs[-1]]:.3f}"` 로, 이 엔진만으로
-실제 학습이 된다. 그리고 [3.1](01_backpropagation.qmd)에서 손으로 짠 `src/nn.py` 의 역전파와
-그래디언트가 $10^{-13}$ 수준에서 일치한다 — 두 구현이 독립적이므로 서로가 서로의 검증이 된다.
+learning rate `{python} f"{lrs[-1]}"` 에서 test 정확도 `{python} f"{accs[lrs[-1]]:.3f}"` 로, 이 엔진만으로
+실제 학습이 된다. 그리고 [3.1](01_backpropagation.qmd)에서 손으로 짠 `src/nn.py` 의 backpropagation과
+gradient가 $10^{-13}$ 수준에서 일치한다 — 두 구현이 독립적이므로 서로가 서로의 검증이 된다.
 
 ---
 
-## 진짜 프레임워크는 무엇을 더 하는가
+## 진짜 framework는 무엇을 더 하는가
 
 | 항목 | 이 장의 구현 | PyTorch / JAX |
 |---|---|---|
-| 연산 커버리지 | 10개 | 2000+ 개, 각각 CPU/CUDA/Metal 커널 |
-| 메모리 | 노드마다 유지 | 중간값 재계산(checkpointing), 인플레이스 최적화 |
-| 그래프 | 매번 재구성 | 동적(eager) + 컴파일(torch.compile, JAX jit) |
-| 정밀도 | float64 | bf16/fp16 혼합정밀도 + 손실 스케일링 |
-| 병렬 | 없음 | 데이터/텐서/파이프라인 병렬 |
+| 연산 coverage | 13개 | 2000+ 개, 각각 CPU/CUDA/Metal kernel(GPU에서 도는 함수) |
+| 메모리 | node마다 유지 | 중간값 재계산(checkpointing), in-place 최적화 |
+| graph | 매번 재구성 | dynamic(eager) + compile(torch.compile, JAX jit) |
+| 정밀도 | float64 | bf16/fp16 mixed precision + loss scaling |
+| 병렬 | 없음 | data/tensor/pipeline parallelism |
 | 고차 미분 | 불가 | grad of grad (Hessian-vector product) |
-| 연산 융합 | 없음 | 여러 연산을 커널 하나로 합침 |
+| operator fusion | 없음 | 여러 연산을 kernel 하나로 합침 |
 
-하지만 **핵심 논리는 정확히 같다.** 위상 정렬 후 역순 순회.
-PyTorch의 autograd 엔진도 결국 이 구조를 C++ 로 아주 빠르게 돌리는 것이다.
+하지만 **핵심 논리는 정확히 같다.** topological sort 후 역순 순회.
+PyTorch의 autograd 엔진도 결국 이 구조를 C++로 아주 빠르게 돌리는 것이다.
 
 
 ::: {.callout-note}
-## 역방향 모드 vs 순방향 모드
+## reverse-mode vs forward-mode
 
-우리가 만든 것은 **역방향 모드**(reverse-mode) 자동미분이다.
+우리가 만든 것은 **reverse-mode**(역방향 모드) autograd다 — [3.1의 "왜 역방향인가"](01_backpropagation.qmd)에서 비용을 비교한 그것이다.
 
 - $f: \mathbb{R}^n \to \mathbb{R}^m$ 에서
-- **역방향 모드**: 순전파 1회 + 역전파 $m$ 회 → 출력이 적을 때 유리
-- **순방향 모드**: 순전파 $n$ 회 → 입력이 적을 때 유리
+- **reverse-mode**: forward pass 1회 + backward pass $m$ 회 → 출력이 적을 때 유리
+- **forward-mode**: forward pass $n$ 회 → 입력이 적을 때 유리
 
-딥러닝은 파라미터가 $n \sim 10^9$ 개인데 손실은 $m=1$ 개다.
-그래서 역방향 모드가 압도적으로 유리하다 — **한 번의 역전파로 모든 그래디언트**를 얻는다.
+딥러닝은 parameter가 $n \sim 10^9$ 개인데 loss는 $m=1$ 개다.
+그래서 reverse-mode가 압도적으로 유리하다 — **한 번의 backward pass로 모든 gradient**를 얻는다.
 
-대신 대가가 있다. 순전파의 **중간값을 전부 저장**해야 한다.
+대신 대가가 있다. forward pass의 **중간값을 전부 저장**해야 한다 (위 `myth-no-grad` 가 보여준 그 메모리다).
 이것이 학습 시 메모리의 대부분을 차지하고,
-그래디언트 체크포인팅(중간값을 버리고 필요할 때 재계산)이 존재하는 이유다.
+activation checkpointing(중간값을 버리고 필요할 때 재계산)이 존재하는 이유다.
 :::
 
 ---
@@ -677,16 +700,16 @@ PyTorch의 autograd 엔진도 결국 이 구조를 C++ 로 아주 빠르게 돌�
 
 **① 연산을 하나 추가한다**
 `tiny-autograd` 에 `sigmoid` 와 `mean(axis)` 를 추가하고 `verify-numeric` 으로 검증하라.
-그리고 `max` 의 역함수가 최댓값이 **동률**일 때 그래디언트를 어떻게 나누는지 코드에서 찾아
-설명하라 — PyTorch 는 어떻게 하는가?
+그리고 `max` 의 backward 함수가 최댓값이 **동률**일 때 gradient를 어떻게 나누는지 코드에서 찾아
+설명하라 — PyTorch는 어떻게 하는가?
 
 **② `_unbroadcast` 를 빼면 무엇이 깨지는가**
 `__add__` 에서 `_unbroadcast` 를 제거하고 `verify-numeric` 을 다시 돌려라.
-`(8, 5) + (5,)` 의 bias 그래디언트가 어떤 모양으로 나오는가? 왜 **합산**이 정답인가?
+`(8, 5) + (5,)` 의 bias gradient가 어떤 모양으로 나오는가? 왜 **합산**이 정답인가?
 
-**③ 두 번째 backward 가 왜 PyTorch 에서는 오류인가**
-우리 구현은 같은 그래프에 `backward` 를 두 번 불러도 (누적될 뿐) 돌아간다.
-PyTorch 는 "Trying to backward through the graph a second time" 오류를 낸다.
+**③ 두 번째 backward가 왜 PyTorch에서는 오류인가**
+우리 구현은 같은 graph에 `backward` 를 두 번 불러도 (누적될 뿐) 돌아간다.
+PyTorch는 "Trying to backward through the graph a second time" 오류를 낸다.
 어떤 메모리를 언제 해제하기 때문인지, `myth-no-grad` 의 수치로 설명하라.
 :::
 
@@ -694,20 +717,20 @@ PyTorch 는 "Trying to backward through the graph a second time" 오류를 낸�
 
 | 개념 | 핵심 |
 |------|------|
-| Tensor 노드 | 값 + grad + 부모 + 역함수 |
-| 동적 그래프 | 연산할 때마다 노드가 붙음 |
-| 위상 정렬 | 자식이 전부 끝난 뒤 부모를 처리하기 위해 |
-| 브로드캐스팅 역전파 | 늘어난 축을 **합산**해서 되돌림 |
-| `grad +=` | 누적이 기본 → `zero_grad()` 필요 |
-| `detach()` | 그래프 절단. 값은 같고 미분은 안 흐름 |
-| `no_grad()` | 그래프를 안 만듦 → 중간값 메모리 절약 |
-| 역방향 모드 | 출력 1개일 때 최적. 중간값 저장이 대가 |
+| Tensor node | 값 + grad + parent + backward 함수 — 부품마다 붙은 설명서 |
+| dynamic graph | 연산할 때마다 node가 붙음 — 실행하며 쓰는 영수증 |
+| topological sort | child가 전부 끝난 뒤 parent를 처리하기 위해 — 팀 보고가 끝나야 부서 보고 |
+| broadcasting의 backward | 늘어난 축을 **합산**해서 되돌림 |
+| `grad +=` | 누적이 기본 → `zero_grad()` 필요 — 계산기 M+와 MC |
+| `detach()` | graph 절단. 값은 같고 미분은 안 흐름 — 값만 통과시키는 벽 |
+| `no_grad()` | graph를 안 만듦 → 중간값 메모리 절약 — 영수증 안 남기기 |
+| reverse-mode | 출력 1개일 때 최적. 중간값 저장이 대가 |
 
-이제 프레임워크의 안이 보인다.
+이제 framework의 안이 보인다.
 마지막으로 남은 것은 **이 모든 것이 실전에서 어떻게 무너지는가**다.
 
 ---
 
-**다음**: [3.9 학습 실전과 디버깅](09_training_practice.qmd)
+**다음**: [3.9 학습 실전과 debugging](09_training_practice.qmd)
 
-**이전**: [3.7 초기화와 그래디언트 흐름](07_initialization.qmd)
+**이전**: [3.7 initialization과 gradient 흐름](07_initialization.qmd)
