@@ -1,36 +1,43 @@
 ---
-title: "3.4 최적화 알고리즘"
-subtitle: "SGD·모멘텀·Adam·AdamW·스케줄러 — 어떻게 내려갈 것인가"
+title: "3.4 optimizer"
+subtitle: "SGD·momentum·Adam·AdamW·scheduler — 어떻게 내려갈 것인가"
 jupyter: ai-ml-study
 ---
 
 [3.3](03_losses.qmd)에서 목표를 정했고 [3.1](01_backpropagation.qmd)에서 방향을 얻었다.
 남은 것은 **얼마나, 어떤 리듬으로 움직일 것인가**다.
+이것을 정하는 알고리즘이 **optimizer**(optimizer — gradient를 받아 parameter를 실제로 갱신하는 규칙)이고,
+시간에 따라 보폭(learning rate)을 어떻게 바꿀지 정하는 것이 **scheduler**(스케줄러)다.
 
-현대 대형 모델 학습에서 옵티마이저와 학습률 스케줄은 아키텍처만큼 결과를 좌우한다.
+현대 대형 모델 학습에서 optimizer와 learning rate schedule은 architecture만큼 결과를 좌우한다.
 그리고 **학습 실패의 대부분은 여기서 시작된다** —
-발산하는 손실, 멈춰버린 학습, 재현되지 않는 결과.
+발산하는 loss, 멈춰버린 학습, 재현되지 않는 결과.
 
 [0.1 미적분과 최적화](../00_foundations/01_calculus_optimization.qmd)에서
-경사하강의 기본을 봤다. 이 장은 그것이 왜 딥러닝에서 그대로는 안 통하는지,
+gradient descent의 기본을 봤다. 이 장은 그것이 왜 딥러닝에서 그대로는 안 통하는지,
 그리고 무엇으로 고치는지를 다룬다.
 
 ---
 
-## 문제: 곡률이 방향마다 다르다
+## 문제: curvature가 방향마다 다르다
 
-경사하강의 근본 문제는 하나다.
+gradient descent의 근본 문제는 하나다.
 
 $$\theta \leftarrow \theta - \eta \nabla L$$
 
-**모든 방향에 같은 $\eta$ 를 쓴다.** 그런데 손실 지형의 곡률은 방향마다 다르다.
+**모든 방향에 같은 $\eta$ 를 쓴다.** 그런데 loss landscape의 curvature(곡률 — 얼마나 급하게 휘어 있는가)는 방향마다 다르다.
 
-이차 근사 $L \approx \tfrac{1}{2}\theta^\top H \theta$ 에서
-$H$ 의 고윳값이 $\lambda_{\min}, \lambda_{\max}$ 이면,
-안정성을 위해 $\eta < 2/\lambda_{\max}$ 여야 하고,
+좁고 긴 협곡을 생각하면 된다. 폭 방향으로는 벽이 가파르고, 길이 방향으로는 바닥이 거의 평평하다.
+보폭을 폭 방향에 맞춰 작게 잡으면 길이 방향으로 한없이 오래 걸리고,
+길이 방향에 맞춰 크게 잡으면 폭 방향에서 벽에 부딪혀 튕긴다. 보폭이 하나뿐이라면 둘 다 만족시킬 수 없다.
+
+수식으로 보면, 최소점 근처에서 loss를 이차식으로 근사한 $L \approx \tfrac{1}{2}\theta^\top H \theta$ 에서
+$H$ 는 [Hessian](../00_foundations/01_calculus_optimization.qmd)(Hessian — 2차 미분을 모은 행렬, 각 방향의 curvature를 담는다)이고,
+그 eigenvalue(고윳값 — 주된 방향들 각각의 curvature)를 $\lambda_{\min}, \lambda_{\max}$ 라 하자.
+가장 가파른 방향에서 튕기지 않으려면(안정성) $\eta < 2/\lambda_{\max}$ 여야 하고,
 그러면 가장 완만한 방향은 $\lambda_{\min}/\lambda_{\max}$ 배로 느리게 수렴한다.
 
-이 비율 $\kappa = \lambda_{\max}/\lambda_{\min}$ 가 **조건수**다.
+이 비율 $\kappa = \lambda_{\max}/\lambda_{\min}$ 가 **condition number**(condition number — 협곡이 얼마나 길쭉한가)다.
 
 ```{python}
 #| label: condition-number
@@ -38,7 +45,7 @@ $H$ 의 고윳값이 $\lambda_{\min}, \lambda_{\max}$ 이면,
 
 import numpy as np
 
-print(f"{'조건수 κ':>10} {'쓸 수 있는 η':>13} {'느린 방향 스텝당 축소율':>22} "
+print(f"{'κ':>10} {'쓸 수 있는 η':>13} {'느린 방향 step당 축소율':>22} "
       f"{'1% 로 줄이는 데':>16}")
 print("-" * 66)
 for kappa in [1, 10, 100, 1000, 10000]:
@@ -49,48 +56,51 @@ for kappa in [1, 10, 100, 1000, 10000]:
     print(f"{kappa:>10} {eta:>13.3f} {rate:>22.6f} {steps:>16,}")
 ```
 
-조건수가 10배 커지면 필요한 스텝도 대략 10배 커진다 ($\kappa \gg 1$ 에서 스텝 $\approx 4.6\kappa$).
-딥러닝 손실의 헤시안은 조건수가 $10^4 \sim 10^6$ 에 이르는 것으로 알려져 있다.
+표를 읽으면: condition number가 10배 커지면 필요한 step도 대략 10배 커진다 ($\kappa \gg 1$ 에서 step $\approx 4.6\kappa$).
+"느린 방향 step당 축소율"이 0.9999라는 것은 한 step에 오차가 0.01%밖에 안 줄어든다는 뜻이다.
+딥러닝 loss의 Hessian은 condition number가 $10^4 \sim 10^6$ 에 이르는 것으로 알려져 있다.
 
 ::: {.key-concept}
-**모든 옵티마이저가 이 문제를 푸는 장치다**
+**모든 optimizer가 이 문제를 푸는 장치다**
 
-- **모멘텀** — 반복되는 방향은 누적하고 진동하는 방향은 상쇄시킨다
-- **적응적 학습률(AdaGrad/RMSProp/Adam)** — 방향마다 $\eta$ 를 따로 정한다
-- **정규화 층** ([3.5](05_normalization.qmd)) — 애초에 조건수를 낮춘다
-- **2차 방법(Shampoo, Sophia)** — 곡률을 직접 추정한다
+- **momentum** — 반복되는 방향은 누적하고 진동하는 방향은 상쇄시킨다
+- **adaptive learning rate**(적응적 학습률 — AdaGrad/RMSProp/Adam) — 방향마다 $\eta$ 를 따로 정한다
+- **normalization layer** ([3.5](05_normalization.qmd)) — 애초에 condition number를 낮춘다
+- **second-order method**(2차 방법 — Shampoo, Sophia) — curvature를 직접 추정한다
 :::
 
 ---
 
 ## 계보
 
-| 옵티마이저 | 연도 | 핵심 갱신식 | 메모리 | 한 줄 평 |
+| optimizer | 연도 | 핵심 갱신식 | 메모리 | 한 줄 평 |
 |---|---|---|---|---|
 | SGD | 1951 | $\theta \leftarrow \theta - \eta g$ | 1× | 기준 |
 | Momentum | 1964 | $v \leftarrow \mu v + g$; $\theta \leftarrow \theta - \eta v$ | 2× | 진동 억제 |
-| Nesterov | 1983 | 미리 가본 지점에서 그래디언트 | 2× | 약간 더 정확 |
-| AdaGrad | 2011 | $s \leftarrow s + g^2$; $\theta \leftarrow \theta - \eta g/\sqrt{s}$ | 2× | $\eta$ 가 단조 감소 |
-| RMSProp | 2012 | $s \leftarrow \beta s + (1-\beta)g^2$ | 2× | 감소를 멈춤 |
-| Adam | 2014 | 모멘텀 + RMSProp + 편향보정 | 3× | 사실상 표준 |
-| AdamW | 2017 | weight decay 를 분리 | 3× | 현재 표준 |
-| LAMB | 2019 | 층별 신뢰 비율 | 3× | 초대형 배치 |
-| Lion | 2023 | 부호만 사용, 모멘트 1개 | 2× | 메모리 절약 |
-| Sophia | 2023 | 대각 헤시안 추정 | 3× | 2차 근사 |
-| Muon | 2024 | 모멘텀 행렬을 직교화 | 2× | 행렬 파라미터용 |
+| Nesterov | 1983 | 미리 가본 지점에서 gradient | 2× | 약간 더 정확 |
+| AdaGrad | 2011 | $s \leftarrow s + g^2$; $\theta \leftarrow \theta - \eta g/\sqrt{s}$ | 2× | $\eta$ 가 계속 줄기만 함 |
+| RMSProp | 2012 | $s \leftarrow \beta s + (1-\beta)g^2$ | 2× | 감소를 멈춤 (최근 것만 기억) |
+| Adam | 2014 | momentum + RMSProp + bias correction | 3× | 사실상 표준 |
+| AdamW | 2017 | weight decay를 분리 | 3× | 현재 표준 |
+| LAMB | 2019 | 층별 trust ratio | 3× | 초대형 batch |
+| Lion | 2023 | 부호만 사용, moment 1개 | 2× | 메모리 절약 |
+| Sophia | 2023 | 대각 Hessian 추정 | 3× | 2차 근사 |
+| Muon | 2024 | momentum 행렬을 직교화 | 2× | 행렬 parameter용 |
 
-메모리는 파라미터 자체 대비 배수 (파라미터 + 옵티마이저 상태).
+메모리는 parameter 자체 대비 배수 (parameter + optimizer state — optimizer가 parameter마다 따로 기억해 두는 값들. momentum은 $v$ 하나, Adam은 $m, v$ 둘).
+$g$ 는 gradient, $\eta$ 는 learning rate, $\mu$·$\beta$ 는 "과거를 얼마나 기억할지" 정하는 0과 1 사이의 상수다.
 
 
 ---
 
 ## G3.4.1 — 궤적 경주
 
-같은 지형, 같은 시작점, 같은 스텝 수. 경로만 다르다.
+같은 지형, 같은 시작점, 같은 step 수. 경로만 다르다.
+세 가지 지형을 준비했다 — 협곡(condition number 30인 타원형 그릇), Rosenbrock(바나나 모양으로 휘어진 골짜기), saddle point(안장점 — 한 방향으론 내리막, 다른 방향으론 오르막이라 gradient가 0에 가까워 멈추기 쉬운 곳).
 
 ```{python}
 #| label: fig-optimizer-race
-#| fig-cap: "지형을 바꿔가며 옵티마이저 궤적을 비교합니다."
+#| fig-cap: "지형을 바꿔가며 optimizer 궤적을 비교합니다."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -98,7 +108,7 @@ import plotly.graph_objects as go
 from src import nn, viz
 
 # ── 시험용 2D 함수들 ──
-def quad(p):                                  # 협곡 (조건수 30)
+def quad(p):                                  # 협곡 (condition number 30)
     x, y = p
     return 0.5*(x**2 + 30*y**2), np.array([x, 30*y])
 
@@ -112,18 +122,18 @@ def saddle(p):
     return x**2 - 0.6*y**2 + 0.05*y**4, np.array([2*x, -1.2*y + 0.2*y**3])
 
 FUNCS = {
-    "협곡 (조건수 30)": dict(fn=quad,   start=(-4.5, 1.0),  xr=(-5.5, 5.5), yr=(-1.6, 1.6),
+    "협곡 (κ=30)":     dict(fn=quad,   start=(-4.5, 1.0),  xr=(-5.5, 5.5), yr=(-1.6, 1.6),
                           lrs=dict(sgd=0.055, momentum=0.012, nesterov=0.012,
                                    rmsprop=0.15, adam=0.25)),
     "Rosenbrock":     dict(fn=rosen,  start=(-1.4, 1.6),  xr=(-2.0, 2.0), yr=(-0.6, 2.6),
                           lrs=dict(sgd=0.0018, momentum=0.0003, nesterov=0.0003,
                                    rmsprop=0.02, adam=0.03)),
-    "안장점":          dict(fn=saddle, start=(-1.6, 0.02), xr=(-2.2, 2.2), yr=(-2.4, 2.4),
+    "saddle point":    dict(fn=saddle, start=(-1.6, 0.02), xr=(-2.2, 2.2), yr=(-2.4, 2.4),
                           lrs=dict(sgd=0.06, momentum=0.02, nesterov=0.02,
                                    rmsprop=0.06, adam=0.08)),
 }
 OPTS = ["sgd", "momentum", "nesterov", "rmsprop", "adam"]
-LABEL = dict(sgd="SGD", momentum="모멘텀", nesterov="네스테로프",
+LABEL = dict(sgd="SGD", momentum="momentum", nesterov="Nesterov",
              rmsprop="RMSProp", adam="Adam")
 STEPS = 220
 
@@ -169,7 +179,7 @@ for fi, fname in enumerate(FUNCS):
         vis[fi*n_per + j] = True
     steps.append((fname, {"visible": vis}))
 fig.update_layout(sliders=[viz.slider(steps, prefix="지형: ", pad_t=48)])
-viz.fig_defaults(fig, height=520, title=f"{STEPS} 스텝 후의 궤적")
+viz.fig_defaults(fig, height=520, title=f"{STEPS} step 후의 궤적")
 fig.update_layout(legend=dict(x=0.01, y=0.99, font=dict(size=11)))
 fig.show()
 ```
@@ -181,8 +191,8 @@ fig.show()
 import numpy as np
 
 for fname, cfg in FUNCS.items():
-    print(f"[{fname}]  시작 손실 {cfg['fn'](np.array(cfg['start']))[0]:.4f}")
-    print(f"  {'옵티마이저':<12} {'최종 손실':>12} {'이동 거리':>10} {'학습률':>9}")
+    print(f"[{fname}]  시작 loss {cfg['fn'](np.array(cfg['start']))[0]:.4f}")
+    print(f"  {'optimizer':<12} {'최종 loss':>12} {'이동 거리':>10} {'lr':>9}")
     for k in OPTS:
         pth = paths[(fname, k)]
         f_end = cfg["fn"](pth[-1])[0]
@@ -191,36 +201,43 @@ for fname, cfg in FUNCS.items():
     finals_f = [cfg["fn"](paths[(fname, k)][-1])[0] for k in OPTS]
     spread = max(finals_f) - min(finals_f)
     if spread < 1e-6 * max(1.0, abs(np.mean(finals_f))):
-        print("  → 다섯 모두 최솟값에 도달했다 (손실 < 1e-8). 그 아래 자릿수 차이는 의미가 없다.")
+        print("  → 다섯 모두 최솟값에 도달했다 (loss < 1e-8). 그 아래 자릿수 차이는 의미가 없다.")
     else:
         best = OPTS[int(np.argmin(finals_f))]
-        print(f"  → 최저 손실: {LABEL[best]}")
+        print(f"  → 최저 loss: {LABEL[best]}")
     print()
 ```
 
 ::: {.callout-warning}
 **이 비교는 "누가 더 좋은가"의 증거가 아니다.**
 
-학습률을 지형마다 손으로 맞췄고, 2차원 장난감 함수이며, 스텝 수도 임의다.
+learning rate를 지형마다 손으로 맞췄고, 2차원 장난감 함수이며, step 수도 임의다.
 읽어야 할 것은 **경로의 모양**이다 — SGD가 협곡에서 지그재그로 튀는 것,
-모멘텀이 그것을 펴는 것, 적응적 방법이 축마다 다른 보폭을 쓰는 것.
+momentum이 그것을 펴는 것, adaptive 방법이 축마다 다른 보폭을 쓰는 것.
 
 실제 신경망에서의 우열은 [뒤의 실측 학습 곡선](#실측-신경망에서의-비교)에서 본다.
 :::
 
 ---
 
-## G3.4.2 — 모멘텀이 하는 일
+## G3.4.2 — momentum이 하는 일
+
+**momentum**(momentum — 관성)은 gradient를 그대로 쓰는 대신, 지금까지의 gradient를 누적한 "속도" $v$ 를 따라 움직이는 방법이다.
 
 $$v_t = \mu v_{t-1} + g_t, \qquad \theta \leftarrow \theta - \eta v_t$$
 
-그래디언트가 매 스텝 같은 방향이면 $v$ 는 기하급수로 커져
-**유효 학습률이 $\eta/(1-\mu)$ 배**가 된다.
-반대로 부호가 번갈아 바뀌면 서로 상쇄된다.
+$\mu$ 는 이전 속도를 얼마나 남길지 정하는 상수(보통 0.9)다.
+언덕을 굴러 내려가는 무거운 공을 생각하면 된다. 공은 매 순간의 경사(gradient)에만 반응하지 않고,
+지금까지 굴러온 속도를 유지하며 경사를 조금씩 더한다.
+
+gradient가 매 step 같은 방향이면 $v$ 는 $g + \mu g + \mu^2 g + \cdots = g/(1-\mu)$ 로 쌓여
+**effective learning rate(유효 learning rate — 실제 보폭)가 $\eta/(1-\mu)$ 배**가 된다. $\mu = 0.9$ 면 10배다.
+반대로 부호가 번갈아 바뀌면(협곡의 폭 방향처럼 좌우로 튕길 때) 서로 상쇄된다.
+길이 방향으로는 가속하고 폭 방향으로는 진동을 죽이는 것이다.
 
 ```{python}
 #| label: fig-momentum
-#| fig-cap: "모멘텀 계수에 따른 협곡 궤적과 유효 가속 배수"
+#| fig-cap: "momentum 계수에 따른 협곡 궤적과 유효 가속 배수"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -246,7 +263,7 @@ gx = np.linspace(-5.5, 5.5, 90); gy = np.linspace(-1.6, 1.6, 90)
 Zq = np.array([[quad(np.array([a, b]))[0] for a in gx] for b in gy])
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.58, 0.42],
-                    subplot_titles=("협곡 위의 궤적", "μ 에 따른 최종 손실"))
+                    subplot_titles=("협곡 위의 궤적", "μ 에 따른 최종 loss"))
 fig.add_trace(go.Contour(x=gx, y=gy, z=np.log1p(Zq), colorscale="Greys",
                          showscale=False, ncontours=20, hoverinfo="skip",
                          contours=dict(coloring="lines"), line=dict(width=1)),
@@ -256,18 +273,18 @@ t0 = trajs[mu0]
 fig.add_trace(go.Scatter(x=t0[:, 0], y=t0[:, 1], mode="lines+markers", name="궤적",
                          line=dict(color=viz.ACCENT, width=2.5),
                          marker=dict(size=3)), row=1, col=1)
-fig.add_trace(go.Scatter(x=mus, y=finals, mode="lines+markers", name="최종 손실",
+fig.add_trace(go.Scatter(x=mus, y=finals, mode="lines+markers", name="최종 loss",
                          line=dict(color=viz.WARM, width=2.5)), row=1, col=2)
 
-# 슬라이더가 움직이는 것은 궤적(trace 1)뿐이다. 등고선과 오른쪽 손실 곡선도
+# 슬라이더가 움직이는 것은 궤적(trace 1)뿐이다. 등고선과 오른쪽 loss 곡선도
 # 좌표를 매번 그대로 다시 준다 — None 을 주면 Plotly 가 그 데이터를 지운다.
 steps = [(f"{mu:g}", {"x": [gx, trajs[mu][:, 0], mus],
                       "y": [gy, trajs[mu][:, 1], finals]}) for mu in mus]
-fig.update_layout(sliders=[viz.slider(steps, prefix="모멘텀 μ = ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="momentum μ = ",
                                       active=mus.index(mu0), pad_t=52)])
-fig.update_yaxes(type="log", title_text="최종 손실", row=1, col=2)
+fig.update_yaxes(type="log", title_text="최종 loss", row=1, col=2)
 fig.update_xaxes(title_text="μ", row=1, col=2)
-viz.fig_defaults(fig, height=450, title=f"학습률 고정 η = {lr_m}")
+viz.fig_defaults(fig, height=450, title=f"learning rate 고정 η = {lr_m}")
 fig.update_layout(showlegend=False)
 fig.show()
 ```
@@ -278,7 +295,7 @@ fig.show()
 
 import numpy as np
 
-print(f"{'μ':>6} {'1/(1−μ) 가속':>13} {'최종 손실':>13} {'y축 부호 변화 횟수':>19}")
+print(f"{'μ':>6} {'1/(1−μ) 가속':>13} {'최종 loss':>13} {'y축 부호 변화 횟수':>19}")
 print("-" * 56)
 for mu, f_ in zip(mus, finals):
     t = trajs[mu]
@@ -289,9 +306,10 @@ best_mu = mus[int(np.argmin(finals))]
 print(f"이 설정에서 최적 μ = {best_mu}")
 ```
 
-$\mu$ 가 커질수록 유효 학습률이 커져 빠르지만, 임계를 넘으면 진동이 다시 커진다 —
+"y축 부호 변화 횟수"는 협곡의 폭 방향으로 몇 번 좌우로 튕겼는가다.
+$\mu$ 가 커질수록 effective learning rate가 커져 빠르지만, 임계를 넘으면 공이 너무 무거워져 진동이 다시 커진다 —
 이 설정에서는 $\mu=$ `{python} f"{best_mu}"` 가 최적이었다.
-실무 기본값 0.9 는 "가속 10배"라는 뜻이다 — 학습률을 함께 낮춰야 하는 이유다.
+실무 기본값 0.9는 "가속 10배"라는 뜻이다 — learning rate를 함께 낮춰야 하는 이유다.
 
 ---
 
@@ -306,13 +324,20 @@ $$\hat{m}_t = \frac{m_t}{1-\beta_1^t}, \quad
 
 세 조각으로 읽으면 된다.
 
-1. $m$ — **모멘텀** (1차 모멘트)
-2. $\sqrt{v}$ — **그래디언트 크기 추정** (2차 모멘트). 나눠주면 스케일 불변
-3. $1-\beta^t$ — **편향 보정**. $m_0=v_0=0$ 에서 시작하므로 초반이 0쪽으로 편향된다
+1. $m$ — **momentum** (first moment — gradient의 이동평균)
+2. $\sqrt{v}$ — **gradient 크기 추정** (second moment — gradient 제곱의 이동평균, 그 제곱근은 "최근 gradient의 전형적인 크기"). 나눠주면 scale invariant(gradient가 10배 커져도 step은 그대로)가 된다
+3. $1-\beta^t$ — **bias correction**(bias correction). $m_0=v_0=0$ 에서 시작하므로 초반이 0쪽으로 치우친다
+
+2번이 Adam의 핵심이다. gradient를 자기 크기로 나누므로 **parameter마다 보폭이 대략 $\eta$ 로 같아진다** —
+gradient가 큰 방향(협곡의 벽)은 작게, 작은 방향(협곡의 바닥)은 크게 걷는 셈이다.
+같은 100만 원 벌금이라도 소득 대비 비율로 매기는 것과 비슷하다.
+
+3번은 이동평균을 0에서 시작한 데서 오는 문제다. 가게를 연 첫 날 "지난 10일 평균 매출"을 계산하면
+9일치 0이 섞여 실제보다 훨씬 낮게 나오는 것과 같다. 그래서 초반 몇 step은 그만큼 되돌려 준다.
 
 ```{python}
 #| label: fig-bias-correction
-#| fig-cap: "편향 보정이 없으면 초반 스텝이 최대 6.5배까지 과대해집니다"
+#| fig-cap: "bias correction이 없으면 초반 step이 최대 6.5배까지 과대해집니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -321,7 +346,7 @@ from plotly.subplots import make_subplots
 from src import viz
 
 T = 300
-g_const = 1.0                       # 그래디언트가 계속 1이라고 하자
+g_const = 1.0                       # gradient가 계속 1이라고 하자
 b1, b2 = 0.9, 0.999
 m = v = 0.0
 raw, corrected, ratio = [], [], []
@@ -334,20 +359,20 @@ for t in range(1, T+1):
     ratio.append(corrected[-1]/max(raw[-1], 1e-12))
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("스텝 크기 (그래디언트가 항상 1일 때)",
+                    subplot_titles=("step 크기 (gradient가 항상 1일 때)",
                                     "보정 / 미보정 비율"))
 fig.add_trace(go.Scatter(x=np.arange(1, T+1), y=raw, mode="lines", name="보정 없음",
                          line=dict(color=viz.WARM, width=2.5)), row=1, col=1)
-fig.add_trace(go.Scatter(x=np.arange(1, T+1), y=corrected, mode="lines", name="편향 보정",
+fig.add_trace(go.Scatter(x=np.arange(1, T+1), y=corrected, mode="lines", name="bias correction",
                          line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
 fig.add_hline(y=1.0, line=dict(color=viz.YELLOW, dash="dash"),
               annotation_text="이상적인 크기 1", row=1, col=1)
 fig.add_trace(go.Scatter(x=np.arange(1, T+1), y=ratio, mode="lines", showlegend=False,
                          line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
-fig.update_xaxes(title_text="스텝 t", type="log")
+fig.update_xaxes(title_text="step t", type="log")
 fig.update_yaxes(title_text="|Δθ| / η", row=1, col=1)
 fig.update_yaxes(title_text="배수", type="log", row=1, col=2)
-viz.fig_defaults(fig, height=400, title="Adam 편향 보정 (β₁=0.9, β₂=0.999)")
+viz.fig_defaults(fig, height=400, title="Adam bias correction (β₁=0.9, β₂=0.999)")
 fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=11)))
 fig.show()
 ```
@@ -358,44 +383,46 @@ fig.show()
 
 import numpy as np
 
-print(f"{'스텝 t':>7} {'보정 없음':>11} {'편향 보정':>11} {'비율':>9}")
+print(f"{'step t':>7} {'보정 없음':>11} {'bias correction':>11} {'비율':>9}")
 print("-" * 42)
 for t in [1, 2, 5, 10, 50, 100, 300]:
     print(f"{t:>7} {raw[t-1]:>11.4f} {corrected[t-1]:>11.4f} {ratio[t-1]:>9.2f}")
 t_peak, raw_peak = int(np.argmax(raw)) + 1, float(max(raw))
 ```
 
-보정 없는 스텝은 $t=1$ 에서 `{python} f"{raw[0]:.2f}"`배, $t=$ `{python} f"{t_peak}"` 에서 최대 `{python} f"{raw_peak:.2f}"`배로 **너무 크다.**
-이유는 편향이 $m$ 보다 $v$ 에서 훨씬 심하기 때문이다. $t=1$ 의 편향 계수가
+보정 없는 step은 $t=1$ 에서 `{python} f"{raw[0]:.2f}"`배, $t=$ `{python} f"{t_peak}"` 에서 최대 `{python} f"{raw_peak:.2f}"`배로 **너무 크다.**
+"0에서 시작해서 작게 나온다"면 step도 작아야 할 것 같은데 왜 커지는가?
+이유는 치우침이 $m$ 보다 $v$ 에서 훨씬 심하고, $v$ 는 **분모**에 있기 때문이다. $t=1$ 의 치우침 계수가
 $m$ 은 $1-\beta_1 = 0.1$ 인데 $\sqrt{v}$ 는 $\sqrt{1-\beta_2} \approx$ `{python} f"{np.sqrt(1-b2):.3f}"` 라,
-둘의 비 `{python} f"{(1-b1)/np.sqrt(1-b2):.2f}"` 가 그대로 스텝 과대 배수가 된다.
-편향 보정을 넣으면 그래디언트가 일정할 때 스텝이 정확히 1 로 고정된다.
+둘의 비 `{python} f"{(1-b1)/np.sqrt(1-b2):.2f}"` 가 그대로 step 과대 배수가 된다.
+bias correction을 넣으면 gradient가 일정할 때 step이 정확히 1로 고정된다.
 
 ::: {.callout-note}
-## 편향 보정과 warmup은 다른 문제를 푼다
+## bias correction과 warmup은 다른 문제를 푼다
 
-편향 보정은 **$m,v$ 를 0에서 시작한 것의 결정론적 보정**이다.
-왜 $1-\beta^t$ 로 나누는지는 점화식을 펼치면 바로 나온다.
+bias correction은 **$m,v$ 를 0에서 시작한 것의 deterministic(결정론적 — 우연이 아니라 식에서 정확히 계산되는) 보정**이다.
+왜 $1-\beta^t$ 로 나누는지는 recurrence(점화식)를 펼치면 바로 나온다.
 $m_t = \beta_1 m_{t-1} + (1-\beta_1)g_t$ 를 $m_0=0$ 에서 풀면
 
 $$m_t = (1-\beta_1)\sum_{i=1}^{t}\beta_1^{\,t-i}g_i$$
 
-그래디언트의 기댓값이 대략 일정해 $\mathbb{E}[g_i]\approx\mathbb{E}[g]$ 라 하면,
+(최근 gradient일수록 $\beta_1$ 의 낮은 거듭제곱이 곱해져 비중이 크다.)
+gradient의 기댓값이 대략 일정해 $\mathbb{E}[g_i]\approx\mathbb{E}[g]$ 라 하면,
 등비급수의 합이 $\frac{1-\beta_1^t}{1-\beta_1}$ 이므로
 
 $$\mathbb{E}[m_t] \approx (1-\beta_1)\,\mathbb{E}[g]\cdot\frac{1-\beta_1^{\,t}}{1-\beta_1}
 = \big(1-\beta_1^{\,t}\big)\,\mathbb{E}[g]$$
 
 $1-\beta_1^t$ 배만큼 **작게** 나온다는 뜻이고, 그래서 그 값으로 나눠 되돌린다.
-$t=1$, $\beta_1=0.9$ 면 계수가 0.1이라 보정 없이는 첫 스텝이 10배 작아진다.
-$v$ 쪽도 같은 논리이고 $\beta_2=0.999$ 라 훨씬 오래 간다 — 1000 스텝쯤 지나야 사라진다.
+$t=1$, $\beta_1=0.9$ 면 계수가 0.1이라 보정 없이는 첫 step의 $m$ 이 10배 작아진다.
+$v$ 쪽도 같은 논리이고 $\beta_2=0.999$ 라 훨씬 오래 간다 — 1000 step쯤 지나야 사라진다.
 
-위 그림처럼 그래디언트가 일정하면 이 보정이 완벽하게 상쇄된다.
+위 그림처럼 gradient가 일정하면 이 보정이 완벽하게 상쇄된다.
 
-warmup이 필요한 이유는 다르다. **초기에는 $v$ 의 추정 자체가 부정확하다.**
+warmup(초반 몇 step 동안 learning rate를 0에서 서서히 올리는 것)이 필요한 이유는 다르다. **초기에는 $v$ 의 추정 자체가 부정확하다.**
 샘플 몇 개로 분산을 추정하는 셈이라 $\hat{v}$ 의 분산이 크고,
 운 나쁘게 작게 나오면 $g/\sqrt{\hat{v}}$ 가 폭발한다.
-편향 보정은 **평균의 치우침**을 고치지 **분산의 부정확함**은 고치지 못한다.
+bias correction은 **평균의 치우침**을 고치지 **분산의 부정확함**은 고치지 못한다.
 RAdam 논문이 이 분산을 정량화했고, 실무의 답은 그냥 warmup이다.
 :::
 
@@ -403,15 +430,19 @@ RAdam 논문이 이 분산을 정량화했고, 실무의 답은 그냥 warmup이
 
 ## AdamW: weight decay를 분리하는 이유
 
-L2 정규화를 손실에 넣으면 그래디언트에 $\lambda\theta$ 가 더해진다.
-그런데 Adam은 그 그래디언트를 **$\sqrt{\hat v}$ 로 나눈다.**
+**weight decay**(가중치 감쇠)는 매 step마다 weight를 조금씩 0 쪽으로 줄이는 regularization이다.
+[2.2](../02_classical_ml/02_regularization.qmd)의 L2 regularization을 loss에 넣으면 gradient에 $\lambda\theta$ 가 더해지고,
+SGD에서는 이것이 곧 weight decay와 같다.
+그런데 Adam은 그 gradient를 **$\sqrt{\hat v}$ 로 나눈다.**
 
 $$\text{Adam+L2:}\quad \Delta\theta \propto \frac{g + \lambda\theta}{\sqrt{\hat v}}
 \qquad\qquad
 \text{AdamW:}\quad \Delta\theta \propto \frac{g}{\sqrt{\hat v}} + \lambda\theta$$
 
-Adam+L2에서는 **그래디언트가 큰 파라미터일수록 감쇠가 약해진다.**
-가장 활발히 학습되는 가중치가 정규화를 덜 받는다는 뜻이고, 의도와 정반대다.
+Adam+L2에서는 $\lambda\theta$ 도 함께 $\sqrt{\hat v}$ 로 나뉘므로 **gradient가 큰 parameter일수록 decay가 약해진다.**
+가장 활발히 학습되는 weight가 regularization을 덜 받는다는 뜻이고, 의도와 정반대다.
+AdamW는 decay 항을 나눗셈 밖으로 빼서(decoupled) 모든 parameter를 같은 비율로 줄인다.
+아래 실험은 gradient 크기가 100배 다른 두 parameter에 각각을 적용해 본다.
 
 ```{python}
 #| label: adamw-vs-l2
@@ -421,11 +452,11 @@ import sys; sys.path.append("../..")
 import numpy as np
 from src import nn
 
-# 두 파라미터: 그래디언트 크기가 100배 차이 난다.
-# 그래디언트는 ±로 번갈아 들어와 순 이동이 0 이므로, 남는 것은 감쇠 효과뿐이다.
+# 두 parameter: gradient 크기가 100배 차이 난다.
+# gradient는 ±로 번갈아 들어와 순 이동이 0 이므로, 남는 것은 decay 효과뿐이다.
 lam, lr, T = 0.05, 0.01, 2000
 
-print(f"{'옵티마이저':<10} {'큰 그래디언트 파라미터':>22} {'작은 그래디언트 파라미터':>24}")
+print(f"{'optimizer':<10} {'큰 gradient parameter':>22} {'작은 gradient parameter':>24}")
 print("-" * 60)
 for kind in ["adam", "adamw"]:
     p = {"p": np.array([1.0, 1.0])}
@@ -436,21 +467,24 @@ for kind in ["adam", "adamw"]:
     name = "Adam + L2" if kind == "adam" else "AdamW"
     if kind == "adam":
         decay_l2 = (float(1 - p['p'][0]), float(1 - p['p'][1]))
-    print(f"{name:<10} {1 - p['p'][0]:>21.1%} 감쇠 {1 - p['p'][1]:>21.1%} 감쇠")
+    print(f"{name:<10} {1 - p['p'][0]:>21.1%} decay {1 - p['p'][1]:>21.1%} decay")
 ```
 
-Adam + L2 는 그래디언트가 큰 파라미터를 거의 감쇠시키지 못한다
+Adam + L2는 gradient가 큰 parameter를 거의 decay시키지 못한다
 (`{python} f"{decay_l2[0]:.0%}"` 대 `{python} f"{decay_l2[1]:.0%}"`).
-가장 활발히 학습되는 가중치가 정규화를 가장 덜 받는다 — 의도와 정반대다.
-AdamW 는 둘을 정확히 같은 비율로 감쇠시킨다. 이것이 '분리'의 의미다.
+가장 활발히 학습되는 weight가 regularization을 가장 덜 받는다 — 의도와 정반대다.
+AdamW는 둘을 정확히 같은 비율로 decay시킨다. 이것이 '분리(decoupled)'의 의미다.
 
 ---
 
-## 학습률 스케줄
+## learning rate schedule
+
+**learning rate schedule**은 학습이 진행됨에 따라 $\eta$ 를 어떻게 바꿀지 정한 계획이다.
+목적지에 가까워질수록 속도를 줄여야 정확히 멈출 수 있듯이, 대부분의 schedule은 처음엔 크게, 나중엔 작게 걷는다.
 
 ```{python}
 #| label: fig-lr-schedules
-#| fig-cap: "주요 학습률 스케줄"
+#| fig-cap: "주요 learning rate schedule"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -492,38 +526,39 @@ fig = go.Figure()
 for i, (k, v) in enumerate(scheds.items()):
     fig.add_trace(go.Scatter(x=t, y=v, mode="lines", name=k,
                              line=dict(color=viz.color(i), width=2.5)))
-fig.update_layout(xaxis_title="스텝", yaxis_title="학습률 (최대치 대비)",
+fig.update_layout(xaxis_title="step", yaxis_title="learning rate (최대치 대비)",
                   legend=dict(x=0.55, y=0.98, font=dict(size=11)))
-viz.fig_defaults(fig, height=420, title=f"학습률 스케줄 (총 {T} 스텝)")
+viz.fig_defaults(fig, height=420, title=f"learning rate schedule (총 {T} step)")
 fig.show()
 ```
 
 ::: {.key-concept}
-**스케줄 선택 기준**
+**schedule 선택 기준**
 
-| 스케줄 | 언제 쓰나 | 특징 |
+| schedule | 언제 쓰나 | 특징 |
 |--------|-----------|------|
-| cosine | 총 스텝을 미리 아는 학습 | 가장 널리 쓰이는 기본값 |
-| warmup + cosine | Adam + 트랜스포머 | 사실상 표준 |
-| WSD | **총 스텝을 모를 때** | 아무 때나 감쇠 구간만 붙여 종료 가능 |
-| one-cycle | 짧은 학습, 빠른 수렴 | 큰 학습률로 정규화 효과 |
+| cosine | 총 step을 미리 아는 학습 | 가장 널리 쓰이는 기본값 (코사인 곡선을 따라 부드럽게 0으로) |
+| warmup + cosine | Adam + transformer | 사실상 표준 |
+| WSD (warmup-stable-decay) | **총 step을 모를 때** | 일정하게 유지하다가 아무 때나 decay 구간만 붙여 종료 가능 |
+| one-cycle | 짧은 학습, 빠른 수렴 | 큰 learning rate로 regularization 효과 |
 | inverse sqrt | 원조 Transformer | 무한 학습 가정 |
 
-WSD는 요즘 대형 모델 사전학습에서 중요해졌다.
-**중간 체크포인트가 그 자체로 쓸 만한 모델**이 되기 때문이다 —
-cosine은 끝까지 가야만 좋은 모델이 나온다.
+WSD는 요즘 대형 모델 pretraining에서 중요해졌다.
+**중간 checkpoint(저장된 중간 상태)가 그 자체로 쓸 만한 모델**이 되기 때문이다 —
+cosine은 끝까지 가야만 좋은 모델이 나온다. 기차가 어느 역에서든 내릴 수 있는 것과, 종점까지 가야만 내릴 수 있는 것의 차이다.
 :::
 
 ---
 
 ## warmup이 필요한 이유
 
-Adam의 스텝 크기는 $|\Delta\theta| = \eta\,|\hat m/\sqrt{\hat v}|$ 다.
-이 비율이 **초기화 직후에 가장 크다**는 것이 문제다.
+Adam의 step 크기는 $|\Delta\theta| = \eta\,|\hat m/\sqrt{\hat v}|$ 다.
+이 비율이 **initialization 직후에 가장 크다**는 것이 문제다.
+아래 시뮬레이션은 gradient가 순수한 잡음(평균 0)일 때 이 비율이 step에 따라 어떻게 변하는지를 400번 반복해 분포로 본다.
 
 ```{python}
 #| label: fig-warmup
-#| fig-cap: "초기 Adam 스텝은 정상 구간보다 여러 배 크다"
+#| fig-cap: "초기 Adam step은 정상 구간보다 여러 배 크다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -537,7 +572,7 @@ b1, b2 = 0.9, 0.999
 sizes = np.zeros((n_trial, T))
 for i in range(n_trial):
     m = v = 0.0
-    g = rng.normal(0, 1, T)                  # 평균 0, 표준편차 1 인 잡음 그래디언트
+    g = rng.normal(0, 1, T)                  # 평균 0, 표준편차 1 인 잡음 gradient
     for t in range(1, T+1):
         m = b1*m + (1-b1)*g[t-1]
         v = b2*v + (1-b2)*g[t-1]**2
@@ -549,18 +584,18 @@ xs = np.arange(1, T+1)
 warm_factor = np.minimum(xs/50.0, 1.0)
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("스텝 크기 분포 (분위수)",
-                                    "warmup(50스텝 선형)을 곱한 뒤"))
+                    subplot_titles=("step 크기 분포 (분위수)",
+                                    "warmup(50 step 선형)을 곱한 뒤"))
 for c, (lab, col) in enumerate(zip(["중앙값", "90분위", "99분위"],
                                     [viz.ACCENT, viz.WARM, viz.PINK])):
     fig.add_trace(go.Scatter(x=xs, y=q[c], mode="lines", name=lab,
                              line=dict(color=col, width=2.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=xs, y=q[c]*warm_factor, mode="lines", showlegend=False,
                              line=dict(color=col, width=2.5)), row=1, col=2)
-fig.update_xaxes(title_text="스텝 t")
+fig.update_xaxes(title_text="step t")
 fig.update_yaxes(title_text="|Δθ| / η", range=[0, 1.1])
 viz.fig_defaults(fig, height=400,
-                 title="잡음 그래디언트에서 Adam 스텝 크기 (400회 시뮬레이션)")
+                 title="잡음 gradient에서 Adam step 크기 (400회 시뮬레이션)")
 fig.update_layout(legend=dict(x=0.02, y=0.35, font=dict(size=11)))
 fig.show()
 ```
@@ -571,7 +606,7 @@ fig.show()
 
 import numpy as np
 
-print(f"{'스텝':>6} {'중앙값':>10} {'99분위':>10} {'99분위/중앙값':>15}")
+print(f"{'step':>6} {'중앙값':>10} {'99분위':>10} {'99분위/중앙값':>15}")
 print("-" * 46)
 for t in [1, 2, 3, 5, 10, 30, 100, 200]:
     med, p99 = q[0, t-1], q[2, t-1]
@@ -580,36 +615,42 @@ print()
 steady = float(np.median(q[0, 100:]))
 warm_ratio = float(q[0, 0] / steady)
 spread_late = float(q[2, -1] / q[0, -1])
-print(f"t=1 의 스텝 크기 {q[0,0]:.3f} vs 정상 구간 {steady:.3f} → {warm_ratio:.1f}배")
+print(f"t=1 의 step 크기 {q[0,0]:.3f} vs 정상 구간 {steady:.3f} → {warm_ratio:.1f}배")
 ```
 
-$t=1$ 에서는 $\hat m = g$, $\hat v = g^2$ 이므로 $|\hat m/\sqrt{\hat v}| = 1$ — 스텝이 정확히 $\eta$ 다.
-$t$ 가 커지면 $\hat m$ 은 최근 10개 남짓 그래디언트의 평균이라 잡음이 상쇄되어 작아지는데,
+$t=1$ 에서는 $\hat m = g$, $\hat v = g^2$ 이므로 $|\hat m/\sqrt{\hat v}| = 1$ — step이 정확히 $\eta$ 다.
+$t$ 가 커지면 $\hat m$ 은 최근 10개 남짓 gradient의 평균이라 잡음이 상쇄되어 작아지는데
+(+1과 −1을 번갈아 평균 내면 0에 가까워진다),
 $\sqrt{\hat v}$ 는 크기의 평균이라 줄지 않는다. 그래서 비율이 `{python} f"{steady:.2f}"` 근처로 내려간다.
 
-즉 **초기화 직후의 Adam 은 거의 최대 보폭으로, 거의 무작위 방향으로 걷는다.**
-이 스텝들이 아직 아무것도 학습하지 않은 가중치를 크게 흐트러뜨린다.
-warmup 은 그 구간의 $\eta$ 를 줄여 이것을 막는다 (오른쪽 그림).
+즉 **initialization 직후의 Adam은 거의 최대 보폭으로, 거의 무작위 방향으로 걷는다.**
+이 step들이 아직 아무것도 학습하지 않은 weight를 크게 흐트러뜨린다.
+warmup은 그 구간의 $\eta$ 를 줄여 이것을 막는다 (오른쪽 그림).
+차가운 엔진을 바로 최고 속도로 돌리지 않고 예열하는 것과 같다.
 
 ::: {.callout-note}
 ## 여기서 측정된 것과 측정되지 않은 것
 
-**측정된 것**: 잡음 그래디언트에서 Adam 의 정규화된 스텝 크기는 $t=1$ 에 1.0 으로
-최대이고 정상 구간의 약 `{python} f"{warm_ratio:.1f}"`배다. 상대 산포(99분위/중앙값)도 초기 1.0 에서
+**측정된 것**: 잡음 gradient에서 Adam의 normalized step 크기는 $t=1$ 에 1.0으로
+최대이고 정상 구간의 약 `{python} f"{warm_ratio:.1f}"`배다. 상대 산포(99분위/중앙값)도 초기 1.0에서
 후반 `{python} f"{spread_late:.1f}"` 로 커진다.
 
 **측정되지 않은 것**: RAdam 논문이 지적한 "$\hat v$ 추정 분산이 초기에 커서
-스텝이 폭발한다"는 주장은 이 단순 시뮬레이션에서 재현되지 않는다.
+step이 폭발한다"는 주장은 이 단순 시뮬레이션에서 재현되지 않는다.
 $t=1$ 에서는 오히려 분산이 0이다($|\hat m/\sqrt{\hat v}|$ 가 항상 정확히 1).
-실제 학습에서는 그래디언트가 iid가 아니고 층마다 스케일이 다르므로 사정이 다르다.
+실제 학습에서는 gradient가 iid(독립·동일 분포)가 아니고 층마다 scale이 다르므로 사정이 다르다.
 
 warmup이 통하는 이유는 하나가 아닐 수 있다. 여기서 확인한 것은
-**초기 스텝이 구조적으로 크다**는 것이고, 이것만으로도 warmup의 근거가 된다.
+**초기 step이 구조적으로 크다**는 것이고, 이것만으로도 warmup의 근거가 된다.
 :::
 
 ---
 
-## 그래디언트 클리핑
+## gradient clipping
+
+**gradient clipping**(gradient clipping)은 gradient 전체의 norm(크기)이 정해진 임계값을 넘으면
+그 임계값이 되도록 전체를 일정 비율로 줄이는 것이다. 자동차의 속도 제한기와 같다 —
+평소에는 아무 일도 하지 않다가, 가끔 튀어나오는 비정상적으로 큰 gradient만 잘라낸다.
 
 ```{python}
 #| label: clipping-demo
@@ -620,41 +661,46 @@ import numpy as np
 from src import nn
 
 rng = np.random.default_rng(0)
-# 대부분 정상이고 가끔 폭발하는 그래디언트 norm 분포 (실제 학습에서 흔한 모양)
+# 대부분 정상이고 가끔 폭발하는 gradient norm 분포 (실제 학습에서 흔한 모양)
 norms = np.abs(rng.normal(0, 1, 5000)) * np.where(rng.random(5000) < 0.01, 40, 1)
 
-print(f"그래디언트 norm — 중앙값 {np.median(norms):.3f}, "
+print(f"gradient norm — 중앙값 {np.median(norms):.3f}, "
       f"99분위 {np.percentile(norms, 99):.2f}, 최댓값 {norms.max():.2f}")
 print()
-print(f"{'클립 임계값':>11} {'클리핑되는 비율':>15} {'적용 후 최대 norm':>18}")
+print(f"{'clip 임계값':>11} {'clip되는 비율':>15} {'적용 후 최대 norm':>18}")
 print("-" * 48)
 for c in [0.5, 1.0, 2.0, 5.0, 10.0]:
     hit = float((norms > c).mean())
     print(f"{c:>11.1f} {hit:>15.2%} {min(norms.max(), c):>18.2f}")
 print()
-# 실제 그래디언트 dict 에 적용
+# 실제 gradient dict 에 적용
 g = {"W": rng.normal(0, 3, (8, 8)), "b": rng.normal(0, 3, 8)}
 before, scale = nn.clip_grads(g, 1.0)
 after = np.sqrt(sum(float((v**2).sum()) for v in g.values()))
 print(f"clip_grads: norm {before:.3f} → {after:.3f} (배율 {scale:.4f})")
 ```
 
-클리핑은 방향은 그대로 두고 크기만 줄인다. 위 분포처럼 1% 의 스텝만 폭발하는 상황에서
-그 스텝들만 잘라내는 것이 목적이고, 임계값 1.0 이 트랜스포머 학습의 관례다.
+clipping은 방향은 그대로 두고 크기만 줄인다(모든 원소에 같은 배율을 곱하므로). 위 분포처럼 1%의 step만 폭발하는 상황에서
+그 step들만 잘라내는 것이 목적이고, 임계값 1.0이 transformer 학습의 관례다.
 
 ---
 
-## G3.4.3 — 배치 크기와 그래디언트 잡음
+## G3.4.3 — batch 크기와 gradient 잡음
 
-미니배치 그래디언트의 분산은 배치 크기에 **반비례**한다.
+학습 때는 데이터 전체가 아니라 **mini-batch**(미니batch — 무작위로 뽑은 $B$ 개 샘플)로 gradient를 계산한다.
+이것은 전체 gradient의 **추정치**라 잡음이 섞이고, 그 분산은 batch 크기에 **반비례**한다.
+여론조사와 같다 — 표본 $B$ 명의 평균은 전체 평균 근처에 오지만, 오차(표준편차)는 $1/\sqrt{B}$ 로 줄어든다.
 
 $$\operatorname{Var}[\hat{g}_B] = \frac{\sigma^2}{B}
 \quad\Longrightarrow\quad
 \text{표준편차} \propto \frac{1}{\sqrt{B}}$$
 
+아래 실험은 학습된 MLP에서 전체 데이터 gradient $g$ 를 구해 두고, batch 크기별로 mini-batch gradient $\hat g_B$ 를 300번 뽑아
+$g$ 와의 거리와 방향 일치도(cosine similarity — 두 벡터가 이루는 각의 코사인, 1이면 같은 방향)를 잰다.
+
 ```{python}
 #| label: fig-batch-noise
-#| fig-cap: "배치 크기에 따른 그래디언트 잡음"
+#| fig-cap: "batch 크기에 따른 gradient 잡음"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -686,8 +732,8 @@ for B in batch_sizes:
     cos_sim.append(float(np.mean(cs)))
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("전체 그래디언트와의 오차 norm",
-                                    "전체 그래디언트와의 코사인 유사도"))
+                    subplot_titles=("전체 gradient와의 오차 norm",
+                                    "전체 gradient와의 cosine similarity"))
 fig.add_trace(go.Scatter(x=batch_sizes, y=noise_std, mode="lines+markers", name="실측",
                          line=dict(color=viz.ACCENT, width=2.5)), row=1, col=1)
 ref = noise_std[0]*np.sqrt(batch_sizes[0]/np.array(batch_sizes, dtype=float))
@@ -696,10 +742,10 @@ fig.add_trace(go.Scatter(x=batch_sizes, y=ref, mode="lines", name="1/√B 기준
 fig.add_trace(go.Scatter(x=batch_sizes, y=cos_sim, mode="lines+markers",
                          showlegend=False,
                          line=dict(color=viz.GREEN, width=2.5)), row=1, col=2)
-fig.update_xaxes(title_text="배치 크기 B", type="log")
+fig.update_xaxes(title_text="batch 크기 B", type="log")
 fig.update_yaxes(title_text="‖ĝ_B − g‖", type="log", row=1, col=1)
 fig.update_yaxes(title_text="cos(ĝ_B, g)", row=1, col=2)
-viz.fig_defaults(fig, height=400, title="미니배치 그래디언트의 잡음")
+viz.fig_defaults(fig, height=400, title="mini-batch gradient의 잡음")
 fig.update_layout(legend=dict(x=0.02, y=0.15, font=dict(size=11)))
 fig.show()
 ```
@@ -714,28 +760,30 @@ logB = np.log(batch_sizes)
 slope = float(np.polyfit(logB, np.log(noise_std), 1)[0])
 print(f"log‖오차‖ = {slope:.3f} · logB + c    (이론값 −0.5)")
 print()
-print(f"{'배치 B':>8} {'오차 norm':>12} {'코사인 유사도':>14}")
+print(f"{'batch B':>8} {'오차 norm':>12} {'cosine similarity':>14}")
 print("-" * 38)
 for B, e, c in zip(batch_sizes, noise_std, cos_sim):
     print(f"{B:>8} {e:>12.4f} {c:>14.4f}")
 ```
 
-실측 기울기 `{python} f"{slope:.2f}"` 가 이론값 $-0.5$ 에 가깝다 —
-배치를 4배 키우면 잡음이 절반으로 준다. 계산량은 4배다.
-그래서 "배치를 키우면 학습률도 키운다"는 규칙이 나온다.
+log-log 그래프에서 실측 기울기 `{python} f"{slope:.2f}"` 가 이론값 $-0.5$ 에 가깝다 —
+batch를 4배 키우면 잡음이 절반으로 준다. 계산량은 4배다.
+잡음이 줄었으니 더 자신 있게 크게 걸어도 된다. 그래서 "batch를 키우면 learning rate도 키운다"는 규칙이 나온다.
 
-- 선형 규칙 $\eta \propto B$ — SGD, 큰 배치에서 자주 쓴다
-- 제곱근 규칙 $\eta \propto \sqrt{B}$ — 잡음 스케일을 맞추는 관점
+- linear scaling rule $\eta \propto B$ — SGD, 큰 batch에서 자주 쓴다
+- square-root rule $\eta \propto \sqrt{B}$ — 잡음 scale을 맞추는 관점
 
-어느 쪽도 무한정 통하지 않는다. 임계 배치 크기를 넘으면 이득이 사라진다.
+어느 쪽도 무한정 통하지 않는다. critical batch size(임계 batch 크기)를 넘으면 잡음이 이미 충분히 작아서 더 키워도 이득이 사라진다.
 
 ---
 
 ## 실측: 신경망에서의 비교
 
+장난감 함수가 아니라 실제 MLP 학습에서 비교한다. 같은 데이터·같은 망·같은 step 수에서 optimizer와 schedule만 바꾼다.
+
 ```{python}
 #| label: fig-real-training
-#| fig-cap: "같은 문제·같은 예산에서 옵티마이저별 학습 곡선"
+#| fig-cap: "같은 문제·같은 예산에서 optimizer별 학습 곡선"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -748,7 +796,7 @@ tr, te = perm[:1100], perm[1100:]
 
 configs = [
     ("SGD",          "sgd",      0.3,  "constant", 0),
-    ("모멘텀 0.9",     "momentum", 0.05, "constant", 0),
+    ("momentum 0.9",   "momentum", 0.05, "constant", 0),
     ("RMSProp",      "rmsprop",  0.01, "constant", 0),
     ("Adam",         "adam",     0.01, "constant", 0),
     ("Adam + cosine", "adam",    0.01, "cosine",   0),
@@ -768,11 +816,11 @@ fig = go.Figure()
 for i, (label, (loss, acc)) in enumerate(hists.items()):
     sm = np.convolve(loss, np.ones(20)/20, mode="valid")
     fig.add_trace(go.Scatter(x=np.arange(len(sm)), y=sm, mode="lines",
-                             name=f"{label} · 시험 {acc:.3f}",
+                             name=f"{label} · test {acc:.3f}",
                              line=dict(color=viz.color(i), width=2.5)))
-fig.update_layout(xaxis_title="스텝", yaxis_title="훈련 손실 (20스텝 이동평균)",
+fig.update_layout(xaxis_title="step", yaxis_title="train loss (20 step 이동평균)",
                   yaxis_type="log", legend=dict(x=0.45, y=0.98, font=dict(size=11)))
-viz.fig_defaults(fig, height=430, title=f"two-moons · MLP[2,32,32,2] · {STEPS_T} 스텝")
+viz.fig_defaults(fig, height=430, title=f"two-moons · MLP[2,32,32,2] · {STEPS_T} step")
 fig.show()
 ```
 
@@ -782,41 +830,44 @@ fig.show()
 
 import numpy as np
 
-print(f"{'설정':<24} {'최종 손실':>11} {'최저 손실':>11} {'시험 정확도':>12}")
+print(f"{'설정':<24} {'최종 loss':>11} {'최저 loss':>11} {'test 정확도':>12}")
 print("-" * 62)
 for label, (loss, acc) in hists.items():
     print(f"{label:<24} {loss[-50:].mean():>11.4f} {loss.min():>11.4f} {acc:>12.3f}")
 print()
 best_loss = min(hists, key=lambda k: hists[k][0][-50:].mean())
 best_acc = max(hists, key=lambda k: hists[k][1])
-print(f"최저 훈련 손실: {best_loss}")
-print(f"최고 시험 정확도: {best_acc}")
+print(f"최저 train loss: {best_loss}")
+print(f"최고 test 정확도: {best_acc}")
 ```
 
-훈련 손실을 가장 잘 낮춘 설정과 가장 잘 일반화한 설정이 같을 이유는 없다.
-학습률을 각자 조금씩만 조정해도 순위가 바뀐다 — 그래서 옵티마이저 비교는
-반드시 각각 학습률을 튜닝한 뒤에 해야 공정하다.
+train loss를 가장 잘 낮춘 설정과 가장 잘 generalization한 설정이 같을 이유는 없다.
+learning rate를 각자 조금씩만 조정해도 순위가 바뀐다 — 그래서 optimizer 비교는
+반드시 각각 learning rate를 tuning한 뒤에 해야 공정하다.
 
 ---
 
-## 옵티마이저 상태의 메모리 비용
+## optimizer state의 메모리 비용
+
+optimizer state는 parameter마다 따로 붙는 장부다. Adam은 parameter 하나당 $m$ 과 $v$ 두 개를 fp32(4 byte)로 들고 있으므로
+parameter당 8 byte가 추가된다. 7B(70억 개) 모델이면 이것만 56 GB다.
 
 ```{python}
 #| label: memory-cost
 #| code-fold: false
 
 def bytes_per_param(kind, mixed_precision=True):
-    """파라미터 1개당 바이트. 혼합정밀도 학습 기준."""
-    p_master = 4        # fp32 마스터 가중치
+    """parameter 1개당 byte. mixed precision 학습 기준."""
+    p_master = 4        # fp32 master weight
     p_half = 2 if mixed_precision else 0
     grad = 2 if mixed_precision else 4
     state = {"sgd": 0, "momentum": 4, "adam": 8, "adamw": 8, "lion": 4,
              "adafactor": 0.1, "8bit-adam": 2}[kind]
     return p_master + p_half + grad + state
 
-print("7B 파라미터 모델 학습 시 메모리 (활성값·프레임워크 오버헤드 제외)")
+print("7B parameter 모델 학습 시 메모리 (activation·framework overhead 제외)")
 print()
-print(f"{'옵티마이저':<14} {'파라미터당 B':>12} {'7B 모델':>12} {'A100 80GB 몇 장':>17}")
+print(f"{'optimizer':<14} {'parameter당 B':>12} {'7B 모델':>12} {'A100 80GB 몇 장':>17}")
 print("-" * 60)
 N = 7e9
 for k in ["sgd", "momentum", "adamw", "lion", "8bit-adam", "adafactor"]:
@@ -825,9 +876,9 @@ for k in ["sgd", "momentum", "adamw", "lion", "8bit-adam", "adafactor"]:
     print(f"{k:<14} {b:>12.1f} {gb:>10.1f} GB {gb/80:>16.2f}")
 ```
 
-AdamW 는 파라미터당 상태만 8바이트다 — 모델 가중치(fp16 2바이트)의 4배.
-Lion 이 모멘트를 하나만 쓰고, 8bit-Adam 이 상태를 양자화하고,
-Adafactor 가 2차 모멘트를 행·열 인수로 분해하는 이유가 전부 이것이다.
+AdamW는 parameter당 state만 8 byte다 — 모델 weight(fp16 2 byte)의 4배.
+Lion이 moment를 하나만 쓰고, 8bit-Adam이 state를 quantize(양자화 — 더 적은 bit로 저장)하고,
+Adafactor가 second moment를 행·열 factor로 분해(행렬 대신 행 합과 열 합만 저장)하는 이유가 전부 이것이다.
 
 ---
 
@@ -837,28 +888,28 @@ Adafactor 가 2차 모멘트를 행·열 인수로 분해하는 이유가 전부
 **뭘 모르겠으면 이렇게 시작한다**
 
 ```python
-# 트랜스포머 계열
+# transformer 계열
 optimizer = AdamW(params, lr=3e-4, betas=(0.9, 0.95),
                   weight_decay=0.1, eps=1e-8)
 scheduler = warmup_cosine(warmup_steps=2000, total_steps=...)
 clip_grad_norm_(params, max_norm=1.0)
 
-# weight decay 를 적용하지 않을 파라미터 — 중요하다
+# weight decay 를 적용하지 않을 parameter — 중요하다
 no_decay = ["bias", "LayerNorm.weight", "embedding"]
 ```
 
 - **β₂ = 0.95** (기본값 0.999보다 작게) — 대형 언어모델 학습의 관례.
-  손실 스파이크에서 더 빨리 회복한다
-- **weight decay 0.1** — 트랜스포머에서는 꽤 큰 값이 표준
-- **bias와 정규화 파라미터에는 decay를 걸지 않는다** — 스케일을 줄일 이유가 없다
-- **클리핑 1.0** — 거의 항상 켜둔다. 비용이 없다
+  $v$ 가 최근 gradient를 더 빨리 반영하므로 loss spike(갑자기 loss가 튀는 현상)에서 더 빨리 회복한다
+- **weight decay 0.1** — transformer에서는 꽤 큰 값이 표준
+- **bias와 normalization parameter에는 decay를 걸지 않는다** — scale을 줄일 이유가 없다
+- **clipping 1.0** — 거의 항상 켜둔다. 비용이 없다
 :::
 
 ::: {.callout-warning}
-**학습률이 첫 번째이자 마지막 하이퍼파라미터다**
+**learning rate가 첫 번째이자 마지막 hyperparameter다**
 
-옵티마이저를 바꿔서 얻는 이득보다 **학습률을 제대로 맞춰서 얻는 이득이 대개 크다.**
-새 옵티마이저를 시험할 때는 반드시 로그 스케일로 학습률을 훑어야 한다
+optimizer를 바꿔서 얻는 이득보다 **learning rate를 제대로 맞춰서 얻는 이득이 대개 크다.**
+새 optimizer를 시험할 때는 반드시 log scale로 learning rate를 훑어야 한다
 (예: 1e-5 → 1e-2, 4배씩). 그러지 않은 비교는 아무 의미가 없다.
 :::
 
@@ -867,16 +918,16 @@ no_decay = ["bias", "LayerNorm.weight", "embedding"]
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 모멘텀의 최적 계수를 이론과 맞춰 본다**
-조건수 $\kappa$ 인 이차함수에서 최적 모멘텀은 $\left(\frac{\sqrt\kappa-1}{\sqrt\kappa+1}\right)^2$ 다.
+**① momentum의 최적 계수를 이론과 맞춰 본다**
+condition number $\kappa$ 인 이차함수에서 최적 momentum은 $\left(\frac{\sqrt\kappa-1}{\sqrt\kappa+1}\right)^2$ 다.
 `momentum-numbers` 의 $\kappa$ 로 계산한 값이 실측 최적과 맞는가?
 
 **② AdamW와 L2가 갈라지는 지점**
 `adamw-vs-l2` 에서 기울기 크기가 좌표마다 크게 다른 문제를 만들어라.
-두 방식의 최종 가중치 norm 차이가 얼마나 벌어지는가?
+두 방식의 최종 weight norm 차이가 얼마나 벌어지는가?
 
-**③ 워밍업이 필요한 이유를 재현한다**
-`warmup-numbers` 에서 워밍업을 없애고 초기 몇 스텝의 $\hat v$ 값을 찍어 보라.
+**③ warmup이 필요한 이유를 재현한다**
+`warmup-numbers` 에서 warmup을 없애고 초기 몇 step의 $\hat v$ 값을 찍어 보라.
 분모가 작아 갱신이 폭주하는 것이 보이는가?
 :::
 
@@ -884,22 +935,22 @@ no_decay = ["bias", "LayerNorm.weight", "embedding"]
 
 | 개념 | 핵심 |
 |------|------|
-| 근본 문제 | 방향마다 곡률이 다름 (조건수 $10^4$–$10^6$) |
-| 모멘텀 | 유효 학습률 $\times \frac{1}{1-\mu}$, 진동 상쇄 |
-| Adam | 모멘텀 + 그래디언트 크기 정규화 + 편향 보정 |
-| 편향 보정 | $m_0=v_0=0$ 의 결정론적 보정 — warmup과 다른 문제 |
-| warmup | 초기 스텝이 구조적으로 가장 큼 (측정: 정상 구간의 `{python} f"{warm_ratio:.1f}"`배) |
+| 근본 문제 | 방향마다 curvature가 다름 (condition number $10^4$–$10^6$) — 좁고 긴 협곡 |
+| momentum | effective learning rate $\times \frac{1}{1-\mu}$, 진동 상쇄 — 무거운 공 |
+| Adam | momentum + gradient 크기로 나누기 + bias correction — 소득 비례 벌금 |
+| bias correction | $m_0=v_0=0$ 의 deterministic 보정 — 개업 첫 날의 "10일 평균" |
+| warmup | 초기 step이 구조적으로 가장 큼 (측정: 정상 구간의 `{python} f"{warm_ratio:.1f}"`배) — 엔진 예열 |
 | AdamW | decay를 $\sqrt{\hat v}$ 로 나누지 않음 |
-| 스케줄 | cosine 기본, 총 스텝 모르면 WSD |
-| 클리핑 | norm 1.0, 방향 유지·크기만 축소 |
-| 배치 잡음 | 실측 기울기 `{python} f"{slope:.2f}"` (이론 $-0.5$, 즉 $\propto B^{-1/2}$) |
-| 메모리 | AdamW 상태가 파라미터당 8바이트 |
+| schedule | cosine 기본, 총 step 모르면 WSD — 아무 역에서나 내리기 |
+| clipping | norm 1.0, 방향 유지·크기만 축소 — 속도 제한기 |
+| batch 잡음 | 실측 기울기 `{python} f"{slope:.2f}"` (이론 $-0.5$, 즉 $\propto B^{-1/2}$) — 여론조사 표본 |
+| 메모리 | AdamW state가 parameter당 8 byte |
 
-옵티마이저는 지형을 **따라간다**.
-다음 장은 지형 자체를 바꾸는 방법이다 — 정규화 층.
+optimizer는 지형을 **따라간다**.
+다음 장은 지형 자체를 바꾸는 방법이다 — normalization layer.
 
 ---
 
-**다음**: [3.5 정규화 층](05_normalization.qmd) — BatchNorm·LayerNorm·RMSNorm
+**다음**: [3.5 normalization layer](05_normalization.qmd) — BatchNorm·LayerNorm·RMSNorm
 
-**이전**: [3.3 손실함수](03_losses.qmd)
+**이전**: [3.3 loss function](03_losses.qmd)
