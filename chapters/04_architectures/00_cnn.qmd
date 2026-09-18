@@ -1,26 +1,31 @@
 ---
-title: "4.0 합성곱 신경망"
-subtitle: "지역성·가중치 공유·수용영역 — 이미지에 맞춘 귀납 편향"
+title: "4.0 CNN"
+subtitle: "locality·weight sharing·receptive field — 이미지에 맞춘 inductive bias"
 jupyter: ai-ml-study
 ---
 
 [Part 3](../03_deep_learning/00_perceptron_mlp.qmd)에서 신경망을 **학습시키는** 부품을 전부 만들었다.
 이제 그 부품으로 **구조를 짓는다.**
 
-CNN은 "데이터의 성질을 아키텍처에 새겨 넣는다"는 발상의 원형이다.
+**CNN**(convolutional neural network — convolution 신경망)은 "데이터의 성질을 architecture에 새겨 넣는다"는 발상의 원형이다.
+이렇게 모델 구조에 미리 심어 둔 가정을 **inductive bias**(귀납 편향)라 한다 — 데이터를 보기 전부터 "세상은 이럴 것이다"라고 정해 둔 선입견이다.
 이미지에는 두 가지 명백한 사실이 있다.
 
-1. **가까운 픽셀끼리 관련이 깊다** (지역성)
-2. **고양이는 왼쪽 위에 있든 오른쪽 아래에 있든 고양이다** (평행이동)
+1. **가까운 pixel끼리 관련이 깊다** (locality — 지역성)
+2. **고양이는 왼쪽 위에 있든 오른쪽 아래에 있든 고양이다** (translation — 평행이동)
 
 MLP는 이 둘을 전혀 모른다. CNN은 이 둘을 **구조로 강제한다.**
+돋보기 하나로 사진 전체를 훑는 것과 같다 — 돋보기(kernel)는 작은 부분만 보고(locality), 어느 위치에서든 같은 돋보기를 쓴다(weight sharing).
 
-그리고 이 장을 제대로 읽어야 [Part 5](../05_transformer/00_attention_mechanism.qmd)의 어텐션이
+그리고 이 장을 제대로 읽어야 [Part 5](../05_transformer/00_attention_mechanism.qmd)의 attention이
 왜 그 강제를 **다시 버리는지** 이해할 수 있다.
 
 ---
 
 ## MLP를 이미지에 쓰면 무슨 일이 생기는가
+
+MLP는 이미지를 한 줄로 펴서(예: 224×224×3 = 150,528개 숫자) 모든 입력을 모든 unit에 연결한다.
+아래는 첫 층 하나(출력 64개)에 필요한 parameter 수를 MLP와 CNN에서 비교한 것이다.
 
 ```{python}
 #| label: mlp-vs-cnn-params
@@ -28,23 +33,24 @@ MLP는 이 둘을 전혀 모른다. CNN은 이 둘을 **구조로 강제한다.*
 
 import numpy as np
 
-print(f"{'입력 해상도':>16} {'입력 차원':>12} {'MLP(완전연결)':>18} {'CNN(3×3 커널)':>16} {'비율'}")
+print(f"{'입력 해상도':>16} {'입력 차원':>12} {'MLP(fully-connected)':>18} {'CNN(3×3 kernel)':>16} {'비율'}")
 print("-" * 76)
 ratio_first = {}
 for h, w, c in [(28, 28, 1), (64, 64, 3), (224, 224, 3), (1024, 1024, 3)]:
     n_in = h*w*c
-    mlp = n_in * 64 + 64                 # 완전연결
-    cnn = 3*3*c*64 + 64                  # 3×3 커널 64개
+    mlp = n_in * 64 + 64                 # fully-connected
+    cnn = 3*3*c*64 + 64                  # 3×3 kernel 64개
     ratio_first[h] = mlp / cnn
     print(f"{f'{h}×{w}×{c}':>16} {n_in:>12,} {mlp:>18,} {cnn:>16,} {mlp/cnn:>10,.0f}배")
 ```
 
-첫 층 하나(출력 채널 64개)만 비교해도 이렇다. CNN 의 파라미터 수는 **입력 해상도와 무관하다** —
-커널 크기와 채널 수만으로 정해진다. MLP 는 픽셀 수(변의 길이의 제곱)에 비례해 커지므로 격차가
-해상도와 함께 벌어진다: 224×224 에서 `{python} f"{ratio_first[224]:,.0f}"`배,
-1024×1024 에서 `{python} f"{ratio_first[1024]:,.0f}"`배.
+첫 층 하나(출력 channel 64개)만 비교해도 이렇다. CNN의 parameter 수는 **입력 해상도와 무관하다** —
+kernel 크기와 channel 수만으로 정해진다. MLP는 pixel 수(변의 길이의 제곱)에 비례해 커지므로 격차가
+해상도와 함께 벌어진다: 224×224에서 `{python} f"{ratio_first[224]:,.0f}"`배,
+1024×1024에서 `{python} f"{ratio_first[1024]:,.0f}"`배.
 
-파라미터 수만 문제가 아니다. 더 근본적인 문제가 있다.
+parameter 수만 문제가 아니다. 더 근본적인 문제가 있다.
+같은 이미지를 5 pixel 옆으로 옮기면 MLP와 CNN이 각각 무엇을 보는지 확인한다.
 
 ```{python}
 #| label: mlp-translation
@@ -56,59 +62,68 @@ from src import datasets, imaging
 
 img = datasets.image_grid(32)
 
-# 같은 이미지를 5픽셀 오른쪽으로 옮긴다
+# 같은 이미지를 5pixel 오른쪽으로 옮긴다
 shifted = np.roll(img, 5, axis=1)
 
-# MLP 의 입력은 평탄화된 벡터다 — 두 벡터가 얼마나 다른가?
+# MLP 의 입력은 한 줄로 편 벡터다 — 두 벡터가 얼마나 다른가?
 v1, v2 = img.ravel(), shifted.ravel()
 cos = float(v1 @ v2 / (np.linalg.norm(v1)*np.linalg.norm(v2)))
 c1, c2 = v1 - v1.mean(), v2 - v2.mean()
 corr = float(c1 @ c2 / (np.linalg.norm(c1)*np.linalg.norm(c2)))
 changed = float(np.mean(np.abs(img-shifted) > 0.01))
-print(f"원본과 5픽셀 이동본:")
-print(f"  코사인 유사도          {cos:.4f}")
+print(f"원본과 5pixel 이동본:")
+print(f"  cosine similarity      {cos:.4f}")
 print(f"  평균 제거 후 상관계수   {corr:.4f}")
-print(f"  값이 바뀐 픽셀 비율     {changed:.1%}")
+print(f"  값이 바뀐 pixel 비율     {changed:.1%}")
 
-# CNN 은 어떤가 — 같은 커널로 두 이미지를 필터링해 본다
+# CNN 은 어떤가 — 같은 kernel로 두 이미지를 필터링해 본다
 k = imaging.KERNELS["소벨 x"]
 f1, f2 = imaging.convolve2d(img, k), imaging.convolve2d(shifted, k)
-# 특성맵도 정확히 같은 만큼 이동해 있는가?
+# feature map도 정확히 같은 만큼 이동해 있는가?
 f1_rolled = np.roll(f1, 5, axis=1)
 inner = float(np.abs(f1_rolled[:, 8:-8] - f2[:, 8:-8]).max())      # 경계 제외
 print(f"CNN: conv(shift(x)) 와 shift(conv(x)) 의 최대 차이 (경계 제외): {inner:.2e}")
 ```
 
-코사인 유사도가 `{python} f"{cos:.2f}"` 로 높아 보이는 것은 밝기 기준선이 공유되기 때문이고,
+cosine similarity가 `{python} f"{cos:.2f}"` 로 높아 보이는 것은 밝기 기준선이 공유되기 때문이고,
 평균을 제거한 상관계수 `{python} f"{corr:.2f}"` 가 실제 패턴의 유사도다.
-MLP 의 가중치는 **픽셀 위치마다 따로** 있다. `{python} f"{changed:.0%}"` 의 픽셀 값이 바뀌었다는 것은
-그 가중치들이 보는 입력이 거의 전부 달라졌다는 뜻이고, 모든 위치에서 같은 패턴을 인식하려면
-모든 위치마다 따로 학습해야 한다.
+MLP의 weight는 **pixel 위치마다 따로** 있다. `{python} f"{changed:.0%}"` 의 pixel 값이 바뀌었다는 것은
+그 weight들이 보는 입력이 거의 전부 달라졌다는 뜻이고, 모든 위치에서 같은 패턴을 인식하려면
+모든 위치마다 따로 학습해야 한다. "왼쪽 위의 고양이"와 "오른쪽 아래의 고양이"를 별개의 과제로 배우는 셈이다.
 
-반면 CNN 의 특성맵은 입력과 **정확히 같은 만큼** 함께 이동한다 — 경계를 제외하면 두 특성맵의 최대 차이가
-`{python} f"{inner:.1e}"` 다. 이것이 등변성(equivariance)이다.
+반면 CNN의 feature map(feature map — kernel을 이미지 전체에 적용해 얻은 출력 격자)은 입력과 **정확히 같은 만큼** 함께 이동한다 — 경계를 제외하면 두 feature map의 최대 차이가
+`{python} f"{inner:.1e}"` 다. 이것이 **equivariance**(등변성)다.
 
 ::: {.key-concept}
-**등변성(equivariance)과 불변성(invariance)은 다르다**
+**equivariance(등변성)와 invariance(불변성)는 다르다**
 
-- **등변성** — 입력을 옮기면 출력도 **같이 옮겨진다**: $f(T x) = T f(x)$
-- **불변성** — 입력을 옮겨도 출력이 **그대로다**: $f(T x) = f(x)$
+- **equivariance** — 입력을 옮기면 출력도 **같이 옮겨진다**: $f(T x) = T f(x)$
+- **invariance** — 입력을 옮겨도 출력이 **그대로다**: $f(T x) = f(x)$
 
-합성곱 층은 **등변**이고, 전역 풀링이나 분류 헤드가 그것을 **불변**으로 바꾼다.
+사진 속 고양이를 오른쪽으로 옮기면 "고양이 얼굴이 어디 있나"를 표시한 지도도 오른쪽으로 옮겨진다(equivariance).
+그러나 "이 사진에 고양이가 있는가"라는 답은 그대로다(invariance).
 
-이 구분이 중요한 이유: 분할(segmentation)이나 검출에서는 **위치를 알아야 하므로**
-불변이면 안 된다. 등변성을 유지한 채 끝까지 가야 한다.
+convolution 층은 **equivariant**이고, global pooling이나 classification head(마지막의 분류용 층)가 그것을 **invariant**로 바꾼다.
+
+이 구분이 중요한 이유: segmentation(분할 — pixel마다 무엇인지 칠하기)이나 detection(검출 — 물체의 위치 상자 찾기)에서는 **위치를 알아야 하므로**
+invariant이면 안 된다. equivariance를 유지한 채 끝까지 가야 한다.
 :::
 
 ---
 
-## 합성곱 연산
+## convolution 연산
+
+**convolution**(convolution)은 작은 격자(kernel — kernel, 보통 3×3)를 이미지의 모든 위치에 대고,
+겹치는 부분끼리 곱해 더한 값을 그 위치의 출력으로 삼는 연산이다.
+도장을 종이 위 모든 자리에 찍어 보며 "이 자리가 도장 무늬와 얼마나 닮았는가"를 점수로 매기는 것과 같다.
 
 $$(f * k)[i, j] = \sum_{m}\sum_{n} f[i+m,\ j+n] \cdot k[m, n]$$
 
-수학의 합성곱은 커널을 180° 뒤집지만, 딥러닝 프레임워크는 뒤집지 않는
-**상호상관(cross-correlation)** 을 쓰면서 "합성곱"이라 부른다.
-커널을 학습으로 얻으므로 뒤집힘이 파라미터에 흡수되기 때문이다.
+$f$ 는 입력 이미지, $k$ 는 kernel, $[i,j]$ 는 출력 위치다. kernel의 각 칸 $k[m,n]$ 에 그 칸이 덮은 입력 $f[i+m, j+n]$ 을 곱해 전부 더한다.
+
+수학의 convolution은 kernel을 180° 뒤집지만, 딥러닝 framework는 뒤집지 않는
+**cross-correlation**(상호상관)을 쓰면서 "convolution"이라 부른다.
+kernel을 학습으로 얻으므로 뒤집힘이 parameter에 흡수되기 때문이다 — 뒤집힌 도장을 배우면 그만이다.
 
 ```{python}
 #| label: conv-vs-corr
@@ -118,33 +133,35 @@ import sys; sys.path.append("../..")
 import numpy as np
 from src import imaging
 
-img = np.zeros((7, 7)); img[3, 3] = 1.0          # 델타 함수 (점 하나)
-k = np.arange(9).reshape(3, 3).astype(float)     # 비대칭 커널
+img = np.zeros((7, 7)); img[3, 3] = 1.0          # delta 함수 (점 하나)
+k = np.arange(9).reshape(3, 3).astype(float)     # 비대칭 kernel
 
 corr = imaging.convolve2d(img, k, pad="constant")
 true_conv = imaging.convolve2d(img, k[::-1, ::-1], pad="constant")
 
-print("비대칭 커널:")
+print("비대칭 kernel:")
 print(k.astype(int))
 print()
-print("델타 입력에 대한 상호상관 결과 (중심 3×3):")
+print("delta 입력에 대한 cross-correlation 결과 (중심 3×3):")
 print(corr[2:5, 2:5].astype(int))
 print()
-print("진짜 합성곱 결과 (중심 3×3):")
+print("진짜 convolution 결과 (중심 3×3):")
 print(true_conv[2:5, 2:5].astype(int))
 ```
 
-델타 입력은 커널 자체를 찍어내므로 두 결과가 정확히 180° 뒤집힌 관계임이 보인다.
-커널이 학습 대상이면 이 차이는 의미가 없고, 이 책도 프레임워크 관례를 따라 상호상관을
-'합성곱'이라 부른다.
+delta 입력(한 점만 1)은 kernel 자체를 찍어내므로 두 결과가 정확히 180° 뒤집힌 관계임이 보인다.
+kernel이 학습 대상이면 이 차이는 의미가 없고, 이 책도 framework 관례를 따라 cross-correlation을
+'convolution'이라 부른다.
 
 ---
 
-## G4.0.1 — 커널이 슬라이딩하며 특성맵을 만든다
+## G4.0.1 — kernel이 sliding하며 feature map을 만든다
+
+8×8 입력에 3×3 kernel을 왼쪽 위부터 한 칸씩 옮겨 가며(sliding) 적용한다. 슬라이더로 kernel 위치를 옮기면 feature map이 한 칸씩 채워진다.
 
 ```{python}
 #| label: fig-conv-sliding
-#| fig-cap: "커널이 위치를 옮겨가며 특성맵의 값을 하나씩 채우는 과정"
+#| fig-cap: "kernel이 위치를 옮겨가며 feature map의 값을 하나씩 채우는 과정"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -156,7 +173,7 @@ rng = np.random.default_rng(0)
 H = W = 8
 K = 3
 inp = np.round(rng.integers(0, 5, (H, W)).astype(float), 0)
-kern = np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]], float)     # 소벨 x
+kern = np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]], float)     # Sobel x
 
 OH = OW = H - K + 1
 out_full = np.zeros((OH, OW))
@@ -177,7 +194,7 @@ for (i, j) in positions:
                                 np.round(running, 0).astype(object)))
 
 fig = make_subplots(rows=1, cols=3, column_widths=[0.4, 0.2, 0.4],
-                    subplot_titles=("입력 (8×8)", "커널 (3×3)", "특성맵 (6×6)"))
+                    subplot_titles=("입력 (8×8)", "kernel (3×3)", "feature map (6×6)"))
 fig.add_trace(go.Heatmap(z=inp, colorscale="Blues", showscale=False,
                          text=inp, texttemplate="%{text:.0f}",
                          textfont=dict(size=10)), row=1, col=1)
@@ -197,13 +214,13 @@ for s in STEP_IDX:
         "z": [inp, kern, partial[s]],
         "text": [inp, kern, partial_txt[s]],
     }))
-fig.update_layout(sliders=[viz.slider(steps, prefix="커널 위치 ", pad_t=52)])
+fig.update_layout(sliders=[viz.slider(steps, prefix="kernel 위치 ", pad_t=52)])
 for c in (1, 2, 3):
     fig.update_yaxes(autorange="reversed", row=1, col=c)
     fig.update_xaxes(showticklabels=False, row=1, col=c)
     fig.update_yaxes(showticklabels=False, row=1, col=c)
 viz.fig_defaults(fig, height=380,
-                 title="합성곱 = 커널을 모든 위치에 대고 내적하기")
+                 title="convolution = kernel을 모든 위치에 대고 내적하기")
 fig.show()
 ```
 
@@ -216,28 +233,28 @@ import numpy as np
 i, j = 0, 0
 patch = inp[i:i+K, j:j+K]
 print(f"출력 (0,0) 이 계산되는 방식:")
-print(f"  입력 패치            커널")
+print(f"  입력 patch           kernel")
 for r in range(K):
     print(f"  {patch[r].astype(int)}      {kern[r].astype(int)}")
-print(f"  원소별 곱의 합 = {float(np.sum(patch*kern)):.0f}  →  특성맵[0,0]")
+print(f"  원소별 곱의 합 = {float(np.sum(patch*kern)):.0f}  →  feature map[0,0]")
 ```
 
-입력 `{python} f"{H}×{W}"`, 커널 `{python} f"{K}×{K}"` (패딩 없음, 스트라이드 1)이면 출력은
+입력 `{python} f"{H}×{W}"`, kernel `{python} f"{K}×{K}"` (padding 없음, stride 1)이면 출력은
 `{python} f"{OH}×{OW}"` 이고, 곱셈-덧셈은 `{python} f"{OH*OW}"` 위치 × `{python} f"{K*K}"` =
 `{python} f"{OH*OW*K*K:,}"` 회다.
-**커널의 값 `{python} f"{K*K}"`개가 `{python} f"{OH*OW}"`개 위치 전부에서 재사용된다.**
-이것이 가중치 공유(weight sharing)다. 완전연결이라면 `{python} f"{H*W}"` × `{python} f"{OH*OW}"` =
-`{python} f"{H*W*OH*OW:,}"` 개의 가중치가 필요하다.
+**kernel의 값 `{python} f"{K*K}"`개가 `{python} f"{OH*OW}"`개 위치 전부에서 재사용된다.**
+이것이 **weight sharing**(weight 공유)이다. fully-connected라면 `{python} f"{H*W}"` × `{python} f"{OH*OW}"` =
+`{python} f"{H*W*OH*OW:,}"` 개의 weight가 필요하다.
 
 ---
 
-## G4.0.2 — 커널마다 다른 것을 본다
+## G4.0.2 — kernel마다 다른 것을 본다
 
-CNN이 **학습으로 얻는 것**이 바로 이런 커널들이다.
+CNN이 **학습으로 얻는 것**이 바로 이런 kernel들이다. 아래는 사람이 손으로 설계한 고전적 kernel 7개를 같은 이미지에 적용한 것이다.
 
 ```{python}
 #| label: fig-kernel-gallery
-#| fig-cap: "같은 이미지에 서로 다른 커널을 적용한 결과"
+#| fig-cap: "같은 이미지에 서로 다른 kernel을 적용한 결과"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -250,7 +267,7 @@ names = ["항등", "박스 블러", "샤픈", "소벨 x", "소벨 y", "라플라
 results = {n: np.round(imaging.convolve2d(img, imaging.KERNELS[n]), 3) for n in names}
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.42, 0.58],
-                    subplot_titles=("커널 (3×3)", "출력 특성맵"))
+                    subplot_titles=("kernel (3×3)", "출력 feature map"))
 n0 = "소벨 x"
 k0 = imaging.KERNELS[n0]
 fig.add_trace(go.Heatmap(z=k0, colorscale="RdBu", zmid=0, showscale=False,
@@ -261,12 +278,12 @@ fig.add_trace(go.Heatmap(z=results[n0], colorscale="Greys", showscale=False),
 
 steps = [(n, {"z": [imaging.KERNELS[n], results[n]],
               "text": [np.round(imaging.KERNELS[n], 2), None]}) for n in names]
-fig.update_layout(sliders=[viz.slider(steps, prefix="커널: ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="kernel: ",
                                       active=names.index(n0), pad_t=52)])
 for c in (1, 2):
     fig.update_yaxes(autorange="reversed", showticklabels=False, row=1, col=c)
     fig.update_xaxes(showticklabels=False, row=1, col=c)
-viz.fig_defaults(fig, height=400, title="3×3 커널 9개 숫자가 만드는 차이")
+viz.fig_defaults(fig, height=400, title="3×3 kernel 9개 숫자가 만드는 차이")
 fig.show()
 ```
 
@@ -276,11 +293,11 @@ fig.show()
 
 import numpy as np
 
-print(f"{'커널':<12} {'합':>7} {'출력 평균':>10} {'출력 표준편차':>13} {'하는 일'}")
+print(f"{'kernel':<12} {'합':>7} {'출력 평균':>10} {'출력 표준편차':>13} {'하는 일'}")
 print("-" * 66)
-desc = {"항등": "그대로 통과", "박스 블러": "고주파 제거",
-        "샤픈": "고주파 강조", "소벨 x": "세로 에지 검출",
-        "소벨 y": "가로 에지 검출", "라플라시안": "2차 미분 — 모든 에지",
+desc = {"항등": "그대로 통과", "박스 블러": "고주파(잔 변화) 제거 → 흐림",
+        "샤픈": "고주파 강조 → 선명", "소벨 x": "세로 edge(경계선) 검출",
+        "소벨 y": "가로 edge 검출", "라플라시안": "2차 미분 — 모든 edge",
         "엠보스": "방향성 음영"}
 for n in names:
     k = imaging.KERNELS[n]
@@ -289,9 +306,9 @@ for n in names:
 edge_txt = ", ".join(n for n in names if abs(imaging.KERNELS[n].sum()) < 1e-9)
 ```
 
-**커널 합이 1이면 밝기를 보존하고, 0이면 변화량만 남긴다.** 합이 0 인 커널(`{python} edge_txt`)의
-출력 평균이 0 근처인 것이 그것이다. CNN 은 이 9개 숫자를 손으로 정하지 않고 **역전파로 찾는다.**
-첫 층이 학습한 커널을 시각화하면 실제로 에지·색 대비 검출기가 나온다.
+**kernel 합이 1이면 밝기를 보존하고, 0이면 변화량만 남긴다.** 합이 0인 kernel(`{python} edge_txt`)의
+출력 평균이 0 근처인 것이 그것이다 (평평한 영역에서는 주변 값이 같아 곱해 더하면 0이 된다). CNN은 이 9개 숫자를 손으로 정하지 않고 **backpropagation으로 찾는다.**
+첫 층이 학습한 kernel을 시각화하면 실제로 edge·색 대비 검출기가 나온다.
 
 ---
 
@@ -299,11 +316,13 @@ edge_txt = ", ".join(n for n in names if abs(imaging.KERNELS[n].sum()) < 1e-9)
 
 $$O = \left\lfloor \frac{I + 2P - D(K-1) - 1}{S} \right\rfloor + 1$$
 
-$I$ 입력 크기, $K$ 커널, $P$ 패딩, $S$ 스트라이드, $D$ 팽창(dilation).
+$I$ 입력 크기, $K$ kernel 크기, $P$ **padding**(padding — 가장자리에 0을 덧대는 칸 수; 없으면 출력이 줄어든다),
+$S$ **stride**(stride — kernel을 몇 칸씩 옮기는가; 2면 출력이 절반), $D$ **dilation**(dilation — kernel 칸 사이를 벌리는 간격; 2면 3×3 kernel이 5×5 영역을 띄엄띄엄 본다).
+분자는 "kernel이 놓일 수 있는 범위", 나누기 $S$ 는 "몇 칸씩 건너뛰는가", $+1$ 은 시작 위치다.
 
 ```{python}
 #| label: fig-output-size
-#| fig-cap: "스트라이드·패딩·팽창에 따른 출력 크기와 비용"
+#| fig-cap: "stride·padding·dilation에 따른 출력 크기와 비용"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -318,13 +337,13 @@ I0, C_IN, C_OUT = 224, 64, 128
 Ks = [1, 3, 5, 7, 9, 11]
 Ss = [1, 2, 3, 4]
 
-# (커널, 스트라이드) 격자에서 출력 크기 / FLOPs
+# (kernel, stride) 격자에서 출력 크기 / FLOPs
 grid_o = np.array([[out_size(I0, k, k//2, s) for k in Ks] for s in Ss])
 grid_f = np.array([[out_size(I0, k, k//2, s)**2 * k*k * C_IN * C_OUT / 1e9
                     for k in Ks] for s in Ss])
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("출력 해상도 (입력 224, 'same' 패딩)",
+                    subplot_titles=("출력 해상도 (입력 224, 'same' padding)",
                                     "FLOPs (G, 곱셈-덧셈)"))
 fig.add_trace(go.Heatmap(z=grid_o, x=[f"K={k}" for k in Ks], y=[f"S={s}" for s in Ss],
                          colorscale="Blues", showscale=False,
@@ -338,7 +357,7 @@ fig.add_trace(go.Heatmap(z=np.round(grid_f, 2), x=[f"K={k}" for k in Ks],
 for c in (1, 2):
     fig.update_yaxes(autorange="reversed", row=1, col=c)
 viz.fig_defaults(fig, height=360,
-                 title=f"입력 {I0}×{I0}, {C_IN}→{C_OUT} 채널")
+                 title=f"입력 {I0}×{I0}, {C_IN}→{C_OUT} channel")
 fig.show()
 ```
 
@@ -353,36 +372,38 @@ print("-" * 62)
 cfgs = [
     ("크기 유지 ('same')",        3, 1, 1, 1),
     ("절반으로 (stride 2)",       3, 1, 2, 1),
-    ("1×1 (채널만 섞기)",          1, 0, 1, 1),
+    ("1×1 (channel만 섞기)",       1, 0, 1, 1),
     ("VGG 스타일 3×3",           3, 1, 1, 1),
-    ("팽창 2 (수용영역 ↑)",        3, 2, 1, 2),
-    ("팽창 4",                   3, 4, 1, 4),
-    ("초기 다운샘플 (7×7 s2)",     7, 3, 2, 1),
+    ("dilation 2 (receptive field ↑)",    3, 2, 1, 2),
+    ("dilation 4",               3, 4, 1, 4),
+    ("초기 downsample (7×7 s2)",  7, 3, 2, 1),
 ]
 for name, k, p, s, d in cfgs:
     print(f"{name:<26} {k:>3} {p:>3} {s:>3} {d:>3} {out_size(224, k, p, s, d):>12}")
 ```
 
 자주 쓰는 설정은 위 표로 정리된다. 크기를 유지하려면($S=1$) $P = D(K-1)/2$ 이면 된다 —
-팽창 $D$ 가 커널의 유효 폭을 $D(K-1)+1$ 로 늘리기 때문에 패딩도 그만큼 늘어난다
-($K=3, D=2$ 면 유효 폭 5, $P=2$). **팽창은 파라미터를 늘리지 않고 수용영역만 키운다.**
-분할(segmentation)에서 해상도를 잃지 않고 문맥을 넓힐 때 쓴다.
+dilation $D$ 가 kernel의 유효 폭을 $D(K-1)+1$ 로 늘리기 때문에 padding도 그만큼 늘어난다
+($K=3, D=2$ 면 유효 폭 5, $P=2$). **dilation은 parameter를 늘리지 않고 receptive field만 키운다.**
+segmentation에서 해상도를 잃지 않고 문맥을 넓힐 때 쓴다.
 
 ---
 
-## G4.0.3 — 수용영역은 어떻게 자라는가
+## G4.0.3 — receptive field는 어떻게 자라는가
 
-한 뉴런이 **원본 이미지의 몇 픽셀을 보는가.**
-이것이 CNN 설계의 핵심 제약이다.
+**receptive field**(receptive field)는 어떤 층의 한 neuron이 **원본 이미지의 몇 pixel을 보는가**다.
+첫 층의 neuron은 3×3만 보지만, 그 위 층의 neuron은 "3×3을 본 neuron들" 3×3개를 보므로 원본의 5×5를 본다.
+층을 쌓을수록 창문이 넓어지는 셈이고, 이것이 CNN 설계의 핵심 제약이다.
 
 $$r_l = r_{l-1} + (k_l - 1)\prod_{i<l} s_i$$
 
-층 $l$ 의 커널이 한 칸 더 보는 것은 원본에서 앞 층들의 stride 곱만큼이므로, stride 가 있으면
-수용영역이 **지수적으로** 자란다. 팽창 $d_l$ 은 $(k_l-1)$ 을 $d_l(k_l-1)$ 로 바꾸는 것과 같다.
+$r_l$ 은 층 $l$ 의 receptive field, $k_l$ 은 그 층의 kernel 크기, $s_i$ 는 앞 층들의 stride다.
+층 $l$ 의 kernel이 한 칸 더 보는 것은 원본에서 앞 층들의 stride 곱만큼이므로, stride가 있으면
+receptive field가 **지수적으로** 자란다. dilation $d_l$ 은 $(k_l-1)$ 을 $d_l(k_l-1)$ 로 바꾸는 것과 같다.
 
 ```{python}
 #| label: fig-receptive-field
-#| fig-cap: "층을 쌓을수록 넓어지는 한 뉴런의 수용영역"
+#| fig-cap: "층을 쌓을수록 넓어지는 한 neuron의 receptive field"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -399,17 +420,17 @@ configs = {
 }
 rf = {k: imaging.receptive_field(L, **v) for k, v in configs.items()}
 
-# 팽창을 늘려가는 스택 (WaveNet/DeepLab 방식) — 직접 계산
+# dilation을 늘려가는 stack (WaveNet/DeepLab 방식) — 직접 계산
 def rf_dilated(n, k=3, base=2):
     r, out = 1, []
     for l in range(n):
         r = r + (k-1) * (base**l)
         out.append(r)
     return out
-rf["3×3, 팽창 1,2,4,8…"] = rf_dilated(L)
+rf["3×3, dilation 1,2,4,8…"] = rf_dilated(L)
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
-                    subplot_titles=("층 수에 따른 수용영역",
+                    subplot_titles=("층 수에 따른 receptive field",
                                     "224 입력을 다 보려면 몇 층?"))
 need = {}
 for i, (k, v) in enumerate(rf.items()):
@@ -426,9 +447,9 @@ fig.add_trace(go.Bar(x=vals, y=labels, orientation="h", showlegend=False,
                      text=[f"{need[k]}층" if need[k] else f">{L}층" for k in labels],
                      textposition="outside"), row=1, col=2)
 fig.update_xaxes(title_text="층 수", row=1, col=1)
-fig.update_yaxes(title_text="수용영역 (픽셀)", type="log", row=1, col=1)
+fig.update_yaxes(title_text="receptive field (pixel)", type="log", row=1, col=1)
 fig.update_xaxes(title_text="필요한 층 수", row=1, col=2)
-viz.fig_defaults(fig, height=430, title="수용영역 성장")
+viz.fig_defaults(fig, height=430, title="receptive field 성장")
 fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 fig.show()
 ```
@@ -446,28 +467,29 @@ for k, v in rf.items():
 
 r3 = rf["3×3, stride 1"]
 r3s2 = rf["3×3, stride 2"]
-rd = rf["3×3, 팽창 1,2,4,8…"]
+rd = rf["3×3, dilation 1,2,4,8…"]
 same_growth = (list(r3s2) == list(rd))
 n_s2 = need["3×3, stride 2"]
 print(f"224 를 다 보는 데 필요한 층 수: " +
       ", ".join(f"{k} {n}층" if n else f"{k} >12층(최대 {rf[k][-1]})" for k, n in need.items()))
 ```
 
-stride 1 만 쓰면 수용영역이 **선형**으로 자란다 — `{python} f"{r3[0]}"` → `{python} f"{r3[-1]}"`,
-층당 +2 이므로 224 를 다 보려면 `{python} f"{(224-1)//2 + 1}"`층이 필요하다. 비현실적이다.
-stride 2 와 팽창 2배는 점화식이 같아서 **수치가 완전히 같고**(`{python} "일치" if same_growth else "불일치"`),
-둘 다 `{python} f"{r3s2[0]}"` → `{python} f"{r3s2[-1]:,}"` 로 지수 성장해 `{python} f"{n_s2}"`층이면 224 를 다 본다.
+stride 1만 쓰면 receptive field가 **선형**으로 자란다 — `{python} f"{r3[0]}"` → `{python} f"{r3[-1]}"`,
+층당 +2이므로 224를 다 보려면 `{python} f"{(224-1)//2 + 1}"`층이 필요하다. 비현실적이다.
+stride 2와 dilation 2배는 recurrence(점화식)가 같아서 **수치가 완전히 같고**(`{python} "일치" if same_growth else "불일치"`),
+둘 다 `{python} f"{r3s2[0]}"` → `{python} f"{r3s2[-1]:,}"` 로 지수 성장해 `{python} f"{n_s2}"`층이면 224를 다 본다.
 
-차이는 수용영역이 아니라 **출력 해상도**에 있다. 층마다 stride 2 를 쓰면 해상도가 매 층 절반이 되어
-`{python} f"{n_s2}"`층 뒤에는 특성맵이 `{python} f"{224/2**n_s2:.2f}"`픽셀만 남지만, 팽창은 224 를 그대로 유지한다.
-**분할·검출은 해상도가 답이므로 팽창을 쓴다**(DeepLab). 분류는 stride 로 충분하다.
+차이는 receptive field가 아니라 **출력 해상도**에 있다. 층마다 stride 2를 쓰면 해상도가 매 층 절반이 되어
+`{python} f"{n_s2}"`층 뒤에는 feature map이 `{python} f"{224/2**n_s2:.2f}"` pixel만 남지만, dilation은 224를 그대로 유지한다.
+창문을 넓히되 stride는 pixel을 성기게 보고, dilation은 촘촘함을 유지하는 것이다.
+**segmentation·detection은 해상도가 답이므로 dilation을 쓴다**(DeepLab). 분류는 stride로 충분하다.
 
-설계 규칙은 하나다. **분류하려는 대상의 크기만큼은 수용영역이 커야 한다.**
-수용영역이 물체보다 작으면 모델은 물체 전체를 한 번에 볼 수 없다.
+설계 규칙은 하나다. **분류하려는 대상의 크기만큼은 receptive field가 커야 한다.**
+receptive field가 물체보다 작으면 모델은 물체 전체를 한 번에 볼 수 없다.
 
 ### 3×3 두 층 = 5×5 한 층 (VGG의 발견)
 
-3×3 층 두 개를 쌓으면 수용영역이 5×5가 된다. 그런데:
+3×3 층 두 개를 쌓으면 receptive field가 5×5가 된다. 그런데:
 
 ```{python}
 #| label: vgg-trick
@@ -476,22 +498,27 @@ stride 2 와 팽창 2배는 점화식이 같아서 **수치가 완전히 같고*
 C = 64
 one_5 = 5*5*C*C
 two_3 = 2 * (3*3*C*C)
-print(f"채널 {C}→{C} 기준")
-print(f"  5×5 한 층    : {one_5:,} 파라미터")
-print(f"  3×3 두 층    : {two_3:,} 파라미터  ({two_3/one_5:.0%})")
+print(f"channel {C}→{C} 기준")
+print(f"  5×5 한 층    : {one_5:,} parameter")
+print(f"  3×3 두 층    : {two_3:,} parameter  ({two_3/one_5:.0%})")
 print(f"  7×7 한 층    : {7*7*C*C:,}")
 print(f"  3×3 세 층    : {3*(3*3*C*C):,}  ({3*(3*3*C*C)/(7*7*C*C):.0%})")
 ```
 
-같은 수용영역을 **더 적은 파라미터로**, 게다가 비선형성을 더 많이 끼워서 얻는다.
-VGG(2014) 가 이것을 밀어붙여 3×3 만으로 망을 쌓았고, 이후 표준이 되었다.
+같은 receptive field를 **더 적은 parameter로**, 게다가 층 사이에 activation function을 한 번 더 끼워 비선형성을 더 많이 얻는다.
+작은 렌즈 두 개를 겹치는 것이 큰 렌즈 하나보다 싸고 유연한 셈이다.
+VGG(2014)가 이것을 밀어붙여 3×3만으로 망을 쌓았고, 이후 표준이 되었다.
 
 ---
 
-## 채널: 1×1 합성곱과 병목
+## channel: 1×1 convolution과 bottleneck
 
-1×1 커널은 공간적으로는 아무것도 안 한다. **채널만 섞는다.**
-각 픽셀 위치에서 $C_{\text{in}}$ 차원 벡터에 완전연결층을 적용하는 것과 같다.
+channel(channel)은 한 위치에 쌓인 값의 개수다 — 입력 이미지는 RGB 3개, 중간 층은 kernel 수만큼(64, 256, …)이다.
+1×1 kernel은 공간적으로는 아무것도 안 한다. **channel만 섞는다.**
+각 pixel 위치에서 $C_{\text{in}}$ 차원 벡터에 fully-connected 층을 적용하는 것과 같다.
+RGB 세 값을 가중합해 흑백 한 값으로 만드는 것이 1×1 convolution의 가장 단순한 예다.
+
+**bottleneck**(병목)은 이것을 이용해 비싼 3×3 convolution을 좁은 channel에서만 하는 구조다: 1×1로 channel을 줄이고 → 3×3 → 1×1로 다시 늘린다.
 
 ```{python}
 #| label: bottleneck
@@ -508,39 +535,39 @@ def flops(hw, k, cin, cout):
 
 plain = flops(H, 3, C, C)
 bottleneck = (flops(H, 1, C, BOTTLE)         # 1×1 축소
-              + flops(H, 3, BOTTLE, BOTTLE)  # 3×3 (좁은 채널에서)
+              + flops(H, 3, BOTTLE, BOTTLE)  # 3×3 (좁은 channel에서)
               + flops(H, 1, BOTTLE, C))      # 1×1 복원
 
-print(f"{H}×{W} 특성맵, {C} 채널")
+print(f"{H}×{W} feature map, {C} channel")
 print()
 print(f"  단순 3×3 {C}→{C}                     : {plain/1e9:>7.2f} GFLOPs")
-print(f"  병목 1×1({C}→{BOTTLE}) 3×3 1×1({BOTTLE}→{C}) : {bottleneck/1e9:>7.2f} GFLOPs "
+print(f"  bottleneck 1×1({C}→{BOTTLE}) 3×3 1×1({BOTTLE}→{C}) : {bottleneck/1e9:>7.2f} GFLOPs "
       f"({bottleneck/plain:.0%})")
 print()
-print(f"파라미터")
+print(f"parameter")
 print(f"  단순 3×3 : {3*3*C*C:>10,}")
-print(f"  병목      : {1*1*C*BOTTLE + 3*3*BOTTLE*BOTTLE + 1*1*BOTTLE*C:>10,}"
+print(f"  bottleneck: {1*1*C*BOTTLE + 3*3*BOTTLE*BOTTLE + 1*1*BOTTLE*C:>10,}"
       f"  ({(1*1*C*BOTTLE + 3*3*BOTTLE*BOTTLE + 1*1*BOTTLE*C)/(3*3*C*C):.0%})")
 
 # depthwise separable
-dw = flops(H, 3, C, 1) + flops(H, 1, C, C)   # 채널별 3×3 + 1×1 점별
-print(f"깊이별 분리 합성곱 (MobileNet)")
+dw = flops(H, 3, C, 1) + flops(H, 1, C, C)   # channel별 3×3 + 1×1 pointwise
+print(f"depthwise separable convolution (MobileNet)")
 print(f"  depthwise 3×3 + pointwise 1×1     : {dw/1e9:>7.2f} GFLOPs ({dw/plain:.1%})")
 print(f"  이론 감소율 = 1/C_out + 1/K² = 1/{C} + 1/9 = {1/C + 1/9:.4f}")
 ```
 
-ResNet-50 이상이 전부 이 병목 블록을 쓴다 — 비싼 3×3 을 좁은 채널에서만 하면 연산과 파라미터가
-`{python} f"{bottleneck/plain:.0%}"` 로 준다. 깊이별 분리 합성곱은 실측 비율이 이론값
+ResNet-50 이상이 전부 이 bottleneck block을 쓴다 — 비싼 3×3을 좁은 channel에서만 하면 연산과 parameter가
+`{python} f"{bottleneck/plain:.0%}"` 로 준다. depthwise separable convolution은 실측 비율이 이론값
 $1/C_{\text{out}} + 1/K^2$ 과 정확히 일치한다.
 
 ::: {.key-concept}
-**깊이별 분리 합성곱**
+**depthwise separable convolution**(깊이별 분리 convolution)
 
-일반 합성곱은 **공간(K×K)과 채널(C_in×C_out)을 동시에** 섞는다.
-분리 합성곱은 이 둘을 두 단계로 나눈다.
+일반 convolution은 **공간(K×K)과 channel(C_in×C_out)을 동시에** 섞는다.
+separable convolution은 이 둘을 두 단계로 분업한다.
 
-1. **depthwise** — 채널마다 독립적으로 $K\times K$ (채널 간 섞지 않음)
-2. **pointwise** — $1\times1$ 로 채널만 섞음
+1. **depthwise** — channel마다 독립적으로 $K\times K$ (channel 간 섞지 않음): 공간 담당
+2. **pointwise** — $1\times1$ 로 channel만 섞음: channel 담당
 
 비용이 $\frac{1}{C_{\text{out}}} + \frac{1}{K^2}$ 배로 준다.
 $K=3$ 이면 대략 **1/9 수준**이다.
@@ -551,11 +578,15 @@ MobileNet, EfficientNet, 그리고 ConvNeXt까지 전부 이 구조를 쓴다.
 
 ---
 
-## 풀링: 불변성을 사는 값
+## pooling: invariance를 사는 값
+
+**pooling**(pooling)은 feature map을 작은 창(보통 2×2)으로 나눠 각 창을 최댓값(max pool)이나 평균(avg pool) 하나로 요약하는 연산이다.
+"정확히 어느 pixel"이 아니라 "이 근방 어딘가"로 뭉뚱그리므로, 입력이 조금 움직여도 출력이 잘 안 변한다 — 그것이 invariance다.
+아래 실험은 이미지를 1~8 pixel 옮기며 feature가 얼마나 변하는지를 pooling 방식별로 잰다.
 
 ```{python}
 #| label: fig-pooling
-#| fig-cap: "풀링과 stride가 만드는 이동 불변성 — 그리고 잃는 것"
+#| fig-cap: "pooling과 stride가 만드는 translation invariance — 그리고 잃는 것"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -576,7 +607,7 @@ def avgpool(a, k=2):
 feat = lambda x: np.maximum(imaging.convolve2d(x, imaging.KERNELS["소벨 x"]), 0)
 
 curves = {}
-for name, fn in [("풀링 없음", lambda a: a),
+for name, fn in [("pooling 없음", lambda a: a),
                  ("max pool 2×2", maxpool),
                  ("avg pool 2×2", avgpool),
                  ("max pool 4×4", lambda a: maxpool(maxpool(a))),
@@ -594,7 +625,7 @@ fig = go.Figure()
 for i, (k, v) in enumerate(curves.items()):
     fig.add_trace(go.Scatter(x=shifts, y=v, mode="lines+markers", name=k,
                              line=dict(color=viz.color(i), width=2.5)))
-fig.update_layout(xaxis_title="입력을 오른쪽으로 이동한 픽셀 수",
+fig.update_layout(xaxis_title="입력을 오른쪽으로 이동한 pixel 수",
                   yaxis_title="특성의 상대 변화량",
                   legend=dict(x=0.02, y=0.98, font=dict(size=11)))
 viz.fig_defaults(fig, height=410, title="이동에 대한 특성 안정성")
@@ -607,28 +638,30 @@ fig.show()
 
 import numpy as np
 
-print(f"{'방식':<16} " + " ".join(f"{s:>6}" for s in shifts) + "   (이동 픽셀)")
+print(f"{'방식':<16} " + " ".join(f"{s:>6}" for s in shifts) + "   (이동 pixel)")
 print("-" * 78)
 for k, v in curves.items():
     print(f"{k:<16} " + " ".join(f"{x:>6.3f}" for x in v))
 small = {k: float(np.mean(v[1:3])) for k, v in curves.items()}   # 1~2px 이동의 평균 변화량
 ```
 
-작은 이동(1~2px)에서 특성의 상대 변화량은 풀링 없음 `{python} f"{small['풀링 없음']:.2f}"`,
+작은 이동(1~2px)에서 feature의 상대 변화량은 pooling 없음 `{python} f"{small['pooling 없음']:.2f}"`,
 max pool 2×2 `{python} f"{small['max pool 2×2']:.2f}"`, 4×4 `{python} f"{small['max pool 4×4']:.2f}"`,
-전역 max pool `{python} f"{small['전역 max pool']:.2f}"` 다 — 풀링 창이 커질수록 안정적이다.
-(전역 max pool 이 정확히 0 인 것은 `np.roll` 이 순환 이동이라 최댓값이 그대로 보존되기 때문이다.)
+global max pool `{python} f"{small['전역 max pool']:.2f}"` 다 — pooling 창이 커질수록 안정적이다.
+(global max pool이 정확히 0인 것은 `np.roll` 이 순환 이동이라 최댓값이 그대로 보존되기 때문이다.)
 
-**공짜가 아니다.** 전역 풀링은 완전히 불변이지만 위치 정보를 전부 버린다.
-검출·분할처럼 '어디에 있는지'가 답인 과제에서는 쓸 수 없다.
+**공짜가 아니다.** global pooling(전역 풀링 — feature map 전체를 값 하나로)은 완전히 invariant이지만 위치 정보를 전부 버린다.
+detection·segmentation처럼 '어디에 있는지'가 답인 과제에서는 쓸 수 없다.
 
-최근 경향은 풀링 대신 **stride 합성곱**을 쓰는 것이다. 다운샘플링이 학습 가능한 연산이 되고,
-max pooling 의 비선형성은 이미 활성화 함수가 제공하기 때문이다. ResNet 이후 대부분의 아키텍처가
-stride 2 합성곱으로 해상도를 줄인다.
+최근 경향은 pooling 대신 **stride convolution**을 쓰는 것이다. downsampling(해상도 줄이기)이 학습 가능한 연산이 되고,
+max pooling의 비선형성은 이미 activation function이 제공하기 때문이다. ResNet 이후 대부분의 architecture가
+stride 2 convolution으로 해상도를 줄인다.
 
 ---
 
-## 파라미터와 FLOPs 회계
+## parameter와 FLOPs 회계
+
+VGG-16 스타일 망의 층별 parameter 수와 FLOPs(곱셈-덧셈 횟수)를 세어, 둘이 어느 층에 몰리는지 본다.
 
 ```{python}
 #| label: cnn-budget
@@ -641,7 +674,7 @@ def conv_cost(hw_out, k, cin, cout, groups=1):
     flops = hw_out*hw_out * k*k * (cin//groups) * cout
     return params, flops
 
-# VGG-16 스타일 백본의 층별 비용
+# VGG-16 스타일 backbone의 층별 비용
 layers = [
     ("conv1  3→64",    224, 3,   3,   64),
     ("conv2  64→64",   224, 3,   64,  64),
@@ -654,7 +687,7 @@ layers = [
     ("conv9  512→512", 14,  3,   512, 512),
     ("fc     25088→4096", 1, 1, 25088, 4096),
 ]
-print(f"{'층':<20} {'해상도':>8} {'파라미터':>14} {'FLOPs(M)':>12} {'파라미터%':>10} {'FLOPs%':>9}")
+print(f"{'층':<20} {'해상도':>8} {'parameter':>14} {'FLOPs(M)':>12} {'param%':>10} {'FLOPs%':>9}")
 print("-" * 78)
 rows = [(n,) + conv_cost(hw, k, ci, co) + (hw,) for n, hw, k, ci, co in layers]
 tp = sum(r[1] for r in rows); tf = sum(r[2] for r in rows)
@@ -667,27 +700,27 @@ conv_p = sum(r[1] for r in rows[:-1]); fc_p = rows[-1][1]
 conv_f = sum(r[2] for r in rows[:-1]); fc_f = rows[-1][2]
 ```
 
-**파라미터와 연산량이 정반대로 몰려 있다.** FC 층 하나가 해상도 1×1 인데도 파라미터의
+**parameter와 연산량이 정반대로 몰려 있다.** FC(fully-connected) 층 하나가 해상도 1×1인데도 parameter의
 `{python} f"{fc_p/tp:.0%}"` 를 차지하고, 연산량의 `{python} f"{conv_f/tf:.0%}"` 는 해상도가 큰
-합성곱 층에 몰린다. 그래서 두 최적화가 서로 다른 곳을 겨냥한다 — 모델 크기를 줄이려면 FC 를
-전역 평균 풀링으로 대체하고(NiN, ResNet), 속도를 올리려면 초반에 빨리 다운샘플한다
-(stem stride 2, 7×7 s2).
+convolution 층에 몰린다 (같은 kernel을 위치마다 반복 적용하므로 위치 수 = 해상도²에 비례). 그래서 두 최적화가 서로 다른 곳을 겨냥한다 — 모델 크기를 줄이려면 FC를
+global average pooling으로 대체하고(NiN, ResNet), 속도를 올리려면 초반에 빨리 downsample한다
+(stem — 맨 앞의 첫 층 — 을 stride 2, 7×7 s2로).
 
 ---
 
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 파라미터 수를 손으로 세고 맞춰 본다**
-$224\times224\times3$ 입력에 $3\times3$ 커널 64개를 쓰는 층의 파라미터 수는?
+**① parameter 수를 손으로 세고 맞춰 본다**
+$224\times224\times3$ 입력에 $3\times3$ kernel 64개를 쓰는 층의 parameter 수는?
 같은 일을 MLP로 하면 몇 개인가? `mlp-vs-cnn-params` 와 비교하라.
 
-**② 이동 등변성이 깨지는 지점**
-`mlp-translation` 의 입력을 1픽셀 옮겼을 때 CNN 특성맵도 정확히 1픽셀 옮겨지는가?
+**② translation equivariance가 깨지는 지점**
+`mlp-translation` 의 입력을 1 pixel 옮겼을 때 CNN feature map도 정확히 1 pixel 옮겨지는가?
 stride 2를 넣으면? padding을 없애면?
 
-**③ 수용 영역을 목표에 맞춘다**
-$3\times3$ conv를 몇 층 쌓아야 수용 영역이 $32\times32$ 를 덮는가?
+**③ receptive field를 목표에 맞춘다**
+$3\times3$ conv를 몇 층 쌓아야 receptive field가 $32\times32$ 를 덮는가?
 `receptive-field-numbers` 의 공식으로 계산하고 dilation을 쓰면 몇 층이면 되는지 비교하라.
 :::
 
@@ -695,27 +728,27 @@ $3\times3$ conv를 몇 층 쌓아야 수용 영역이 $32\times32$ 를 덮는가
 
 | 개념 | 핵심 |
 |------|------|
-| 지역성 | 커널이 국소 패치만 본다 |
-| 가중치 공유 | 같은 커널을 모든 위치에 재사용 → 파라미터가 해상도와 무관 |
-| 등변성 | $f(Tx) = Tf(x)$ — 특성맵이 함께 이동 |
-| 불변성 | 풀링·전역 풀링이 만듦. **위치 정보를 버리는 대가** |
+| locality | kernel이 국소 patch만 본다 — 돋보기 |
+| weight sharing | 같은 kernel을 모든 위치에 재사용 → parameter가 해상도와 무관 — 도장 하나로 전체 찍기 |
+| equivariance | $f(Tx) = Tf(x)$ — feature map이 함께 이동 (고양이 지도가 같이 움직임) |
+| invariance | pooling·global pooling이 만듦. **위치 정보를 버리는 대가** ("있다/없다"만 남음) |
 | 출력 크기 | $O = \lfloor (I+2P-D(K-1)-1)/S \rfloor + 1$ |
-| 수용영역 | $r_l = r_{l-1} + (k-1)\prod s_i$ — stride/팽창이 지수 성장 |
-| 3×3 쌓기 | 5×5 한 층보다 파라미터 72%, 비선형 2배 |
-| 1×1 병목 | 비싼 3×3을 좁은 채널에서만 |
-| depthwise separable | 비용 $1/C_{out} + 1/K^2$ |
-| 비용 분포 | 파라미터는 FC에, FLOPs는 초반 합성곱에 |
+| receptive field | $r_l = r_{l-1} + (k-1)\prod s_i$ — stride/dilation이 지수 성장 (넓어지는 창문) |
+| 3×3 쌓기 | 5×5 한 층보다 parameter 72%, 비선형 2배 — 작은 렌즈 두 개 |
+| 1×1 bottleneck | 비싼 3×3을 좁은 channel에서만 |
+| depthwise separable | 비용 $1/C_{out} + 1/K^2$ — 공간과 channel의 분업 |
+| 비용 분포 | parameter는 FC에, FLOPs는 초반 convolution에 |
 
-CNN은 **이미지의 성질을 아키텍처에 새겨 넣었다.**
-그 대가로 파라미터가 극적으로 줄었고, 적은 데이터로도 학습이 됐다.
+CNN은 **이미지의 성질을 architecture에 새겨 넣었다.**
+그 대가로 parameter가 극적으로 줄었고, 적은 데이터로도 학습이 됐다.
 
 하지만 새겨 넣은 가정은 **깨질 수도 있다.**
-수용영역 밖의 관계는 볼 수 없고, 지역성이 틀린 데이터에서는 오히려 방해가 된다.
+receptive field 밖의 관계는 볼 수 없고, locality가 틀린 데이터에서는 오히려 방해가 된다.
 
 다음 장은 그 제약 안에서 깊이를 밀어붙인 설계들을 본다.
 
 ---
 
-**다음**: [4.1 현대 CNN 아키텍처](01_cnn_modern.qmd) — ResNet·Inception·EfficientNet·ConvNeXt
+**다음**: [4.1 현대 CNN architecture](01_cnn_modern.qmd) — ResNet·Inception·EfficientNet·ConvNeXt
 
-**이전**: [3.9 학습 실전과 디버깅](../03_deep_learning/09_training_practice.qmd)
+**이전**: [3.9 학습 실전과 debugging](../03_deep_learning/09_training_practice.qmd)
