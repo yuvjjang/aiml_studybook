@@ -1,99 +1,106 @@
 ---
-title: "6.0 생성 모델 지형도"
-subtitle: "명시적 밀도·암묵적 생성 — 무엇을 학습한다고 말하는가"
+title: "6.0 generative model 지형도"
+subtitle: "explicit density·implicit 생성 — 무엇을 학습한다고 말하는가"
 jupyter: ai-ml-study
 ---
 
-생성 모델은 종류가 많아 보인다.
-VAE, GAN, 정규화 흐름, 확산, 자기회귀, 에너지 기반 모델…
+**generative model**(생성 모델 — 데이터를 "새로 만들어 내는" 모델)은 종류가 많아 보인다.
+VAE, GAN, normalizing flow, diffusion, autoregressive, energy-based model…
 
 그런데 전부 **한 질문에 대한 서로 다른 타협**이다.
 
 > **분포 $p(x)$ 를 어떻게 다룰 것인가?**
 
-정확히 계산할 것인가, 근사할 것인가, 아예 포기하고 샘플만 뽑을 것인가.
+$p(x)$ 는 "이런 이미지(또는 문장) $x$ 가 나올 확률"이다. 이것을
+정확히 계산할 것인가, 근사할 것인가, 아예 포기하고 sample(분포에서 뽑은 예시 하나)만 뽑을 것인가.
 그 선택이 품질·다양성·속도·평가 가능성을 전부 결정한다.
 
 그리고 이 장에서 가장 먼저 확인할 것은 **평가가 어렵다**는 사실이다.
-우도가 높아도 샘플이 쓰레기일 수 있고,
-샘플이 완벽해도 우도가 $-\infty$ 일 수 있다.
+likelihood(우도 — 모델이 실제 데이터에 매긴 확률)가 높아도 sample이 쓰레기일 수 있고,
+sample이 완벽해도 likelihood가 $-\infty$ 일 수 있다.
 앞의 것은 직접 계산하고, 뒤의 것은 왜 그런지 보인다.
 
 ---
 
-## 판별이냐 생성이냐
+## discriminative냐 generative냐
 
 | 분류 | 학습 대상 | 용도 | 배우는 것 | 비용 |
 |---|---|---|---|---|
-| 판별 (discriminative) | p(y \| x) | 분류·회귀 | 결정 경계만 배움 | 적은 데이터로 충분 |
-| 생성 (generative) | p(x) 또는 p(x, y) | 샘플 생성·밀도 추정 | 분포 전체를 배움 | 훨씬 많은 데이터 필요 |
+| discriminative(판별) | p(y \| x) | 분류·regression | decision boundary만 배움 | 적은 데이터로 충분 |
+| generative(생성) | p(x) 또는 p(x, y) | sample 생성·density estimation | 분포 전체를 배움 | 훨씬 많은 데이터 필요 |
 
-**생성 모델이 할 수 있는 일** (판별 모델은 못 하는 것)
+위조지폐 감별사와 위조범의 차이다. 감별사(discriminative)는 진짜와 가짜를 가르는 **기준 몇 가지**만 알면 되지만,
+위조범(generative)은 지폐 **전체를 그려 낼 수 있어야** 한다.
 
-- 새 샘플 생성
-- 이상 탐지 — 밀도가 낮은 점을 찾는다
-- 결측 보완 — 조건부 분포에서 샘플
+**generative model이 할 수 있는 일** (discriminative model은 못 하는 것)
+
+- 새 sample 생성
+- anomaly detection(이상 탐지) — density(밀도 — 그 근처에 데이터가 얼마나 몰려 있는가)가 낮은 점을 찾는다
+- imputation(결측 보완) — 빠진 부분을 conditional 분포에서 sample
 - 불확실성 추정 — 여러 그럴듯한 답을 제시
-- 표현 학습 — 데이터를 설명하려면 구조를 알아야 한다
-- 준지도 학습 — 레이블 없는 데이터를 쓸 수 있다
+- representation learning(표현 학습) — 데이터를 설명하려면 구조를 알아야 한다
+- semi-supervised learning(준지도 학습) — label 없는 데이터를 쓸 수 있다
 
-**대가**: p(x) 는 p(y|x) 보다 훨씬 어렵다.
-x가 784차원 이미지면 p(x) 는 784차원 분포이고,
-y가 10개 클래스면 p(y|x) 는 x마다 10개 숫자다.
+**대가**: p(x)는 p(y|x)보다 훨씬 어렵다.
+x가 784차원 이미지면 p(x)는 784차원 분포이고,
+y가 10개 class면 p(y|x)는 x마다 10개 숫자다.
 
-그래서 분류만 필요하면 판별 모델이 거의 항상 낫다 (Vapnik의 원칙:
-**'더 일반적인 문제를 중간 단계로 풀지 말라'**).
+그래서 분류만 필요하면 discriminative model이 거의 항상 낫다 (Vapnik의 원칙:
+**'더 일반적인 문제를 중간 단계로 풀지 말라'** — 진짜인지만 알면 되는데 위조 기술까지 배울 필요는 없다).
 
 
 ---
 
 ## 어떻게 $p(x)$ 를 다룰 것인가
 
-| 계열 | 밀도 | p(x) 를 어떻게 | 학습 목표 | 샘플링 | 대표 |
+| 계열 | density | p(x)를 어떻게 | 학습 목표 | sampling | 대표 |
 |---|---|---|---|---|---|
-| 자기회귀 (AR) | 명시적·정확 | p(x) = Π p(xᵢ \| x<ᵢ) | 최대우도 | d 단계 순차 | PixelCNN, WaveNet, GPT |
-| 정규화 흐름 | 명시적·정확 | 가역 변환 + 야코비안 | 최대우도 | 1단계 | RealNVP, Glow |
-| VAE | 명시적·근사 | ELBO 하한 | ELBO 최대화 | 1단계 | VAE, VQ-VAE, β-VAE |
-| 확산 | 명시적·근사 | 잡음 제거 사슬 | 잡음 예측 (ELBO) | T 단계 | DDPM, Stable Diffusion |
-| GAN | **암묵적** | 밀도를 정의하지 않음 | 적대적 게임 | 1단계 | StyleGAN, BigGAN |
-| 에너지 기반 (EBM) | 명시적·비정규화 | p ∝ exp(−E(x)) | 대조 발산 등 | MCMC | JEM, 스코어 매칭 |
+| autoregressive (AR) | explicit·정확 | p(x) = Π p(xᵢ \| x<ᵢ) | maximum likelihood | d 단계 순차 | PixelCNN, WaveNet, GPT |
+| normalizing flow | explicit·정확 | invertible 변환 + Jacobian | maximum likelihood | 1단계 | RealNVP, Glow |
+| VAE | explicit·근사 | ELBO lower bound | ELBO 최대화 | 1단계 | VAE, VQ-VAE, β-VAE |
+| diffusion | explicit·근사 | denoising 사슬 | noise 예측 (ELBO) | T 단계 | DDPM, Stable Diffusion |
+| GAN | **implicit** | density를 정의하지 않음 | adversarial game | 1단계 | StyleGAN, BigGAN |
+| energy-based (EBM) | explicit·unnormalized | p ∝ exp(−E(x)) | contrastive divergence 등 | MCMC | JEM, score matching |
+
+(explicit = 명시적, $p(x)$ 라는 함수를 실제로 갖고 있음. implicit = 암묵적, sample을 뽑는 절차만 있고 $p(x)$ 값은 모름.)
 
 **핵심 구분 두 가지**
 
-① **밀도를 계산할 수 있는가**
-정확: AR, 흐름 — 우도로 학습하고 우도로 평가한다
-근사: VAE, 확산 — 하한(ELBO)만 안다
-불가: GAN — p(x) 라는 함수가 아예 없다. 샘플러만 있다
+① **density를 계산할 수 있는가**
+정확: AR, flow — likelihood로 학습하고 likelihood로 평가한다
+근사: VAE, diffusion — lower bound(하한 — 진짜 값은 모르지만 "이보다는 크다"는 값)인 ELBO만 안다
+불가: GAN — p(x)라는 함수가 아예 없다. sampler만 있다
 
-② **샘플링에 몇 단계가 필요한가**
+② **sampling에 몇 단계가 필요한가**
 이것이 실용성을 정한다. 다음 절에서 수치로 본다.
 
-자기회귀 분해는 연쇄법칙일 뿐이라 **항상 정확하다**:
+autoregressive 분해는 [0.2의 chain rule](../00_foundations/02_probability.qmd)일 뿐이라 **항상 정확하다**:
 p(x₁,…,x_d) = p(x₁)·p(x₂|x₁)·p(x₃|x₁,x₂)···
-근사가 없다. 대신 **순서를 정해야** 하고, 샘플링이 d 단계다.
+근사가 없다. 대신 **순서를 정해야** 하고, sampling이 d 단계다 — 소설을 첫 글자부터 한 글자씩 쓰는 것이다.
 
 
 ---
 
-### 왜 우도와 샘플 품질이 갈라지는가
+### 왜 likelihood와 sample 품질이 갈라지는가
 
 아래 실험이 보여줄 현상에는 짧고 결정적인 근거가 있다(Theis et al., 2016).
-**좋은 모델에 쓰레기를 조금 섞어도 로그우도는 거의 안 떨어진다.**
+**좋은 모델에 쓰레기를 조금 섞어도 log-likelihood는 거의 안 떨어진다.**
 
-좋은 모델 $p$ 와 완전한 잡음 $q$ 를 섞은 혼합 모델을 보자.
+좋은 모델 $p$ 와 완전한 noise $q$ 를 섞은 mixture model(혼합 모델 — 동전을 던져 어느 쪽에서 뽑을지 정하는 모델)을 보자.
 
 $$p_{\text{mix}}(x) = (1-\varepsilon)\,p(x) + \varepsilon\,q(x)$$
 
-$p_{\text{mix}} \ge (1-\varepsilon)p$ 이므로 로그우도의 손해에 상한이 걸린다.
+$q(x) \ge 0$ 이므로 $p_{\text{mix}} \ge (1-\varepsilon)p$ 이고, 양변에 로그를 씌우면 log-likelihood의 손해에 상한이 걸린다.
 
 $$\log p_{\text{mix}}(x) \;\ge\; \log p(x) + \log(1-\varepsilon)$$
 
-$\varepsilon = 0.01$ 이면 손해가 **차원과 무관하게** $-\log(0.99) \approx 0.01$ 내트뿐이다.
-그런데 샘플의 **1%는 순수한 잡음**이다.
+$\varepsilon = 0.01$ 이면 손해가 **차원과 무관하게** $-\log(0.99) \approx 0.01$ nat(자연로그 단위의 정보량)뿐이다.
+그런데 sample의 **1%는 순수한 noise**다.
 
-반대 방향도 성립한다. 잡음 모델에 좋은 모델을 1%만 섞으면 샘플의 99%가 쓰레기인데,
-고차원에서는 로그우도가 좋은 모델과 크게 차이 나지 않을 수 있다 —
-차원 $d$ 가 커질수록 총 로그우도가 $O(d)$ 로 자라 **상수 크기의 차이가 묻히기 때문**이다.
+반대 방향도 성립한다. noise 모델에 좋은 모델을 1%만 섞으면 sample의 99%가 쓰레기인데,
+고차원에서는 log-likelihood가 좋은 모델과 크게 차이 나지 않을 수 있다 —
+차원 $d$ 가 커질수록 총 log-likelihood가 $O(d)$ 로 자라 **상수 크기의 차이가 묻히기 때문**이다.
+100만 원짜리 장부에서 1원 차이가 안 보이는 것과 같다.
 
 ```{python}
 #| label: likelihood-decoupling
@@ -101,28 +108,28 @@ $\varepsilon = 0.01$ 이면 손해가 **차원과 무관하게** $-\log(0.99) \a
 
 import numpy as np
 
-print(f"{'ε':>8}{'로그우도 손해 (nat)':>22}{'쓰레기 샘플 비율':>18}")
+print(f"{'ε':>8}{'log-likelihood 손해 (nat)':>26}{'쓰레기 sample 비율':>20}")
 for eps in [0.001, 0.01, 0.1, 0.5]:
-    print(f"{eps:>8.3f}{-np.log(1-eps):>22.4f}{eps:>17.1%}")
+    print(f"{eps:>8.3f}{-np.log(1-eps):>26.4f}{eps:>19.1%}")
 d_512 = 512*512*3
-share_512 = -np.log(0.99) / d_512          # 차원당 1 nat 규모의 총 로그우도 대비
+share_512 = -np.log(0.99) / d_512          # 차원당 1 nat 규모의 총 log-likelihood 대비
 ```
 
-좋은 모델에 잡음을 $\varepsilon$ 섞었을 때의 손해가 위 표다. 총 로그우도는 차원당 1 nat 정도의
-규모로 $d$ 에 비례해 자라므로, 512×512 컬러 이미지($d$ = `{python} f"{d_512:,}"`)에서 1% 잡음
-혼합의 손해는 전체의 `{python} f"{share_512:.1e}"` 에 불과하다 — 사실상 측정 불가능하다.
-그런데 생성된 그림 100장 중 1장은 완전한 노이즈다.
+좋은 모델에 noise를 $\varepsilon$ 섞었을 때의 손해가 위 표다. 총 log-likelihood는 차원당 1 nat 정도의
+규모로 $d$ 에 비례해 자라므로, 512×512 컬러 이미지($d$ = `{python} f"{d_512:,}"`)에서 1% noise
+혼합의 손해는 전체의 `{python} f"{share_512:.1e}"`에 불과하다 — 사실상 측정 불가능하다.
+그런데 생성된 그림 100장 중 1장은 완전한 noise다.
 
 ::: {.key-concept}
 여기서 두 가지 실무 지침이 나온다.
 
-- **우도(또는 BPD)로 생성 모델을 순위 매기지 말 것.** 우도가 재는 것은
-  "데이터에 확률을 얼마나 줬는가"이지 "샘플이 좋은가"가 아니다.
+- **likelihood(또는 BPD — bits per dimension, 차원당 bit 수로 환산한 likelihood)로 generative model을 순위 매기지 말 것.** likelihood가 재는 것은
+  "데이터에 확률을 얼마나 줬는가"이지 "sample이 좋은가"가 아니다.
   둘은 [0.4의 KL](../00_foundations/04_information_theory.qmd) 방향 문제이기도 하다 —
-  최대우도는 $D_{KL}(p_{\text{data}}\|p_\theta)$ 를 줄이는데,
+  maximum likelihood는 $D_{KL}(p_{\text{data}}\|p_\theta)$ 를 줄이는데,
   이 방향은 데이터가 있는 곳을 덮으라고만 하지 **없는 곳을 비우라고 하지 않는다**(mode covering).
-- **반대로 샘플이 좋다고 우도가 높은 것도 아니다.** GAN은 애초에 $p(x)$ 가 없고,
-  훈련 데이터를 그대로 외워 뱉는 모델은 샘플이 완벽하지만 일반화가 0이다.
+- **반대로 sample이 좋다고 likelihood가 높은 것도 아니다.** GAN은 애초에 $p(x)$ 가 없고,
+  훈련 데이터를 그대로 외워 뱉는 모델은 sample이 완벽하지만 generalization이 0이다.
 
 그래서 이 장의 평가 절에서 여러 지표를 함께 보는 것이고,
 어느 하나도 단독으로는 속는다는 결론이 나온다.
@@ -130,11 +137,11 @@ share_512 = -np.log(0.99) / d_512          # 차원당 1 nat 규모의 총 로�
 
 ---
 
-## G6.0.1 — 우도가 높아도 샘플이 쓰레기일 수 있다
+## G6.0.1 — likelihood가 높아도 sample이 쓰레기일 수 있다
 
-Theis et al.(2016)의 논증을 직접 계산한다.
+Theis et al.(2016)의 논증을 직접 계산한다. 이번에는 반대 방향 — noise가 대부분인 모델이다.
 
-좋은 모델 $p$ 와 아무 데나 퍼진 잡음 분포를 **섞는다.**
+좋은 모델 $p$ 와 아무 데나 퍼진 noise 분포를 **섞는다.**
 
 $$q(x) = \varepsilon\, p(x) + (1-\varepsilon)\, \text{noise}(x)$$
 
@@ -146,7 +153,7 @@ $$\log q(x) \approx \log p(x) + \log \varepsilon$$
 
 ```{python}
 #| label: fig-likelihood-quality
-#| fig-cap: "차원이 커질수록 사라지는 우도 손실 — 샘플의 99%는 여전히 쓰레기"
+#| fig-cap: "차원이 커질수록 사라지는 likelihood 손실 — sample의 99%는 여전히 쓰레기"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -157,16 +164,16 @@ from src import viz
 EPS = 0.01
 DIMS = np.array([2, 5, 10, 20, 50, 100, 200, 500, 784, 3072])
 
-# 표준정규를 참 분포로: 평균 로그밀도 = −d/2·log(2π) − d/2
+# 표준정규를 참 분포로: 평균 log density = −d/2·log(2π) − d/2
 ll_good = -0.5*DIMS*np.log(2*np.pi) - 0.5*DIMS
 ll_mix = ll_good + np.log(EPS)
 gap_per_dim = (ll_good - ll_mix)/DIMS
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("차원당 로그우도 손실",
-                                    "쓸 만한 샘플의 비율"))
+                    subplot_titles=("차원당 log-likelihood 손실",
+                                    "쓸 만한 sample의 비율"))
 fig.add_trace(go.Scatter(x=DIMS, y=gap_per_dim, mode="lines+markers",
-                         name="우도 손실 (nats/dim)", showlegend=False,
+                         name="likelihood 손실 (nats/dim)", showlegend=False,
                          line=dict(color=viz.WARM, width=2.5),
                          marker=dict(size=9)), row=1, col=1)
 fig.add_trace(go.Scatter(x=DIMS, y=np.full(len(DIMS), EPS), mode="lines+markers",
@@ -181,7 +188,7 @@ for d_, lbl in [(784, "MNIST"), (3072, "CIFAR-10")]:
     fig.add_vline(x=d_, line=dict(color=viz.YELLOW, dash="dot"),
                   annotation_text=lbl, row=1, col=1)
 viz.fig_defaults(fig, height=390,
-                 title=f"q = {EPS}·p_good + {1-EPS}·잡음 인 모델")
+                 title=f"q = {EPS}·p_good + {1-EPS}·noise인 모델")
 fig.show()
 ```
 
@@ -200,39 +207,39 @@ for d_, a_, b_, g_ in zip(DIMS, ll_good/DIMS, ll_mix/DIMS, gap_per_dim):
 loss_mnist = -np.log(EPS)/784; loss_cifar = -np.log(EPS)/3072
 ```
 
-섞음 비율 $\varepsilon$ = `{python} f"{EPS}"` 이므로 샘플의 `{python} f"{1-EPS:.0%}"` 가 순수 잡음인데,
+섞음 비율 $\varepsilon$ = `{python} f"{EPS}"`이므로 sample의 `{python} f"{1-EPS:.0%}"`가 순수 noise인데,
 **손실은 정확히 $-\log\varepsilon / d$ = `{python} f"{-np.log(EPS):.3f}"`$/d$ 다** — MNIST($d=784$)에서
 `{python} f"{loss_mnist:.4f}"` nats/dim, CIFAR-10($d=3072$)에서 `{python} f"{loss_cifar:.4f}"` nats/dim.
-**논문에서 모델 간 우도 차이가 이 정도인 경우가 흔하다.** 즉 '우도가 0.01 nats/dim 좋다'는 것이
-'샘플이 낫다'를 전혀 보장하지 않는다.
+**논문에서 모델 간 likelihood 차이가 이 정도인 경우가 흔하다.** 즉 'likelihood가 0.01 nats/dim 좋다'는 것이
+'sample이 낫다'를 전혀 보장하지 않는다.
 
-반대 방향도 성립한다. 훈련 데이터를 그대로 뱉는 모델은 샘플 품질이 완벽하지만 새 점의 우도가
-$-\infty$ 이고, GAN 은 샘플은 뛰어나지만 $p(x)$ 자체가 정의되지 않아 우도를 잴 수 없다.
-**결론: 우도와 샘플 품질은 서로를 함의하지 않는다.** 생성 모델 논문이 FID·IS·인간 평가를
+반대 방향도 성립한다. 훈련 데이터를 그대로 뱉는 모델은 sample 품질이 완벽하지만 새 점의 likelihood가
+$-\infty$ 이고(본 적 없는 점에는 확률 0을 주므로 로그가 $-\infty$), GAN은 sample은 뛰어나지만 $p(x)$ 자체가 정의되지 않아 likelihood를 잴 수 없다.
+**결론: likelihood와 sample 품질은 서로를 함의하지 않는다.** generative model 논문이 FID·IS·인간 평가를
 함께 싣는 이유가 이것이다.
 
 ::: {.key-concept}
-**우도가 무의미하다는 뜻은 아니다**
+**likelihood가 무의미하다는 뜻은 아니다**
 
-우도는 **밀도 추정**이라는 과제에서는 올바른 지표다.
-이상 탐지, 압축, 결측 보완처럼 $p(x)$ 자체가 답인 문제에서는 우도를 봐야 한다.
+likelihood는 **density estimation**(밀도 추정 — $p(x)$ 값 자체를 맞히기)이라는 과제에서는 올바른 지표다.
+anomaly detection, 압축, imputation처럼 $p(x)$ 자체가 답인 문제에서는 likelihood를 봐야 한다.
 
-문제는 우도를 **샘플 품질의 대리지표로 쓸 때** 생긴다.
-[1.5](../01_data_science/05_experiment_design.qmd)에서 본 대리지표의 위험과 같다 —
+문제는 likelihood를 **sample 품질의 proxy metric(대리 지표)으로 쓸 때** 생긴다.
+[1.5](../01_data_science/05_experiment_design.qmd)에서 본 proxy metric의 위험과 같다 —
 **지표가 목표가 되면 좋은 지표이기를 멈춘다.**
 
-$d$ 차원 데이터에서 우도는 $d$ 개 좌표 전부에 대한 평균이므로,
-**시각적으로 중요한 소수의 구조**가 우도에 기여하는 몫은 아주 작다.
-배경 픽셀 하나를 잘 맞히는 것과 얼굴 구조를 맞히는 것이 같은 무게를 갖는다.
+$d$ 차원 데이터에서 likelihood는 $d$ 개 좌표 전부에 대한 평균이므로,
+**시각적으로 중요한 소수의 구조**가 likelihood에 기여하는 몫은 아주 작다.
+배경 pixel 하나를 잘 맞히는 것과 얼굴 구조를 맞히는 것이 같은 무게를 갖는다 — 시험 100문제 중 핵심 1문제와 나머지 99문제가 배점이 같은 셈이다.
 :::
 
 ---
 
-## G6.0.2 — 삼중고: 품질 · 다양성 · 속도
+## G6.0.2 — trilemma: 품질 · 다양성 · 속도
 
 ```{python}
 #| label: fig-trilemma
-#| fig-cap: "계열별 샘플링 단계 수와 우도 계산 가능성"
+#| fig-cap: "계열별 sampling 단계 수와 likelihood 계산 가능성"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -240,14 +247,14 @@ import plotly.graph_objects as go
 from src import viz
 
 FAMS = [
-    # 이름, 순차 단계(d=784 기준), 품질(0~1), 다양성(0~1), 우도
-    ("자기회귀 (AR)",      784,  0.85, 0.95, "정확"),
-    ("정규화 흐름",         1,    0.60, 0.90, "정확"),
-    ("VAE",              1,    0.55, 0.90, "하한"),
-    ("GAN",              1,    0.95, 0.55, "불가"),
-    ("확산 DDPM",         1000, 0.95, 0.95, "하한"),
-    ("확산 DDIM(20)",     20,   0.90, 0.92, "하한"),
-    ("일관성 모델",         2,    0.85, 0.88, "불가"),
+    # 이름, 순차 단계(d=784 기준), 품질(0~1), 다양성(0~1), likelihood
+    ("autoregressive (AR)", 784,  0.85, 0.95, "정확"),
+    ("normalizing flow",    1,    0.60, 0.90, "정확"),
+    ("VAE",                 1,    0.55, 0.90, "lower bound"),
+    ("GAN",                 1,    0.95, 0.55, "불가"),
+    ("diffusion DDPM",      1000, 0.95, 0.95, "lower bound"),
+    ("diffusion DDIM(20)",  20,   0.90, 0.92, "lower bound"),
+    ("consistency model",   2,    0.85, 0.88, "불가"),
 ]
 
 fig = go.Figure()
@@ -259,59 +266,59 @@ for i, (nm, steps, q, dv, ll) in enumerate(FAMS):
                                          line=dict(width=1.5,
                                                    color="rgba(0,0,0,0.4)")),
                              showlegend=False))
-fig.update_layout(xaxis_title="샘플 1개를 만드는 데 필요한 순차 단계 수 (로그)",
-                  yaxis_title="샘플 품질 (개념적)",
+fig.update_layout(xaxis_title="sample 1개를 만드는 데 필요한 순차 단계 수 (로그)",
+                  yaxis_title="sample 품질 (개념적)",
                   xaxis_type="log", yaxis=dict(range=[0.4, 1.12]))
 viz.fig_defaults(fig, height=440,
-                 title="원 크기 = 다양성(모드 커버리지) · 개념 도식")
+                 title="원 크기 = 다양성(mode coverage) · 개념 도식")
 fig.show()
 ```
 
-| 계열 | 순차 단계 | 우도 | 강점 | 약점 |
+| 계열 | 순차 단계 | likelihood | 강점 | 약점 |
 |---|---|---|---|---|
-| 자기회귀 (AR) | $d$ | 정확 | 정확한 우도, 이산 데이터에 자연스러움 | 샘플링이 $d$ 단계 — 이미지엔 느림 |
-| 정규화 흐름 | 1 | 정확 | 정확한 우도 + 1단계 샘플링 | 가역성 제약으로 표현력 손해 |
-| VAE | 1 | 하한 | 빠르고 안정적, 잠재공간이 유용 | 샘플이 흐릿함 |
-| GAN | 1 | 불가 | 샘플 품질 최상, 1단계 | **모드 붕괴**, 학습 불안정, 우도 없음 |
-| 확산 DDPM | ~1000 | 하한 | 품질·다양성 모두 최상 | 샘플링이 수백~수천 단계 |
-| 확산 DDIM | 20~50 | 하한 | 품질 거의 유지하며 수십 배 빠름 | 여전히 1단계는 아님 |
-| 일관성 모델 | 1~4 | 불가 | 몇 단계로 확산급 품질 | 학습이 까다로움 |
+| autoregressive (AR) | $d$ | 정확 | 정확한 likelihood, discrete(이산) 데이터에 자연스러움 | sampling이 $d$ 단계 — 이미지엔 느림 |
+| normalizing flow | 1 | 정확 | 정확한 likelihood + 1단계 sampling | invertibility 제약으로 표현력 손해 |
+| VAE | 1 | lower bound | 빠르고 안정적, latent space가 유용 | sample이 흐릿함 |
+| GAN | 1 | 불가 | sample 품질 최상, 1단계 | **mode collapse**, 학습 불안정, likelihood 없음 |
+| diffusion DDPM | ~1000 | lower bound | 품질·다양성 모두 최상 | sampling이 수백~수천 단계 |
+| diffusion DDIM | 20~50 | lower bound | 품질 거의 유지하며 수십 배 빠름 | 여전히 1단계는 아님 |
+| consistency model | 1~4 | 불가 | 몇 단계로 diffusion급 품질 | 학습이 까다로움 |
 
-**삼중고(trilemma)** — 품질·다양성·속도 셋을 동시에 얻기 어렵다. GAN 은 품질·속도를 얻고
-**다양성**을 잃고(모드 붕괴), VAE 는 다양성·속도를 얻고 **품질**을 잃으며(흐릿함), 확산은
+**trilemma**(삼중고) — 품질·다양성·속도 셋을 동시에 얻기 어렵다. "빠르고, 싸고, 좋은 것 중 둘만 고르라"는 공사판 격언의 generative model판이다. GAN은 품질·속도를 얻고
+**다양성**을 잃고(mode collapse — mode collapse, 분포의 여러 봉우리 중 일부만 흉내 내는 것), VAE는 다양성·속도를 얻고 **품질**을 잃으며(흐릿함), diffusion은
 품질·다양성을 얻고 **속도**를 잃는다.
 
-최근 연구의 방향은 명확하다 — **확산의 속도를 고치는 것**이다.
+최근 연구의 방향은 명확하다 — **diffusion의 속도를 고치는 것**이다.
 
-- 샘플러 개선: DDIM, DPM-Solver (20~50 단계)
-- 증류: 확산 모델을 1~4 단계 모델로 압축 (일관성 모델, LCM)
-- 잠재 확산: 픽셀이 아니라 잠재공간에서 확산 (Stable Diffusion)
-- 흐름 매칭(flow matching): 더 곧은 경로를 학습해 단계를 줄임
+- sampler 개선: DDIM, DPM-Solver (20~50 단계)
+- distillation(증류 — 큰 모델의 결과를 작은 모델에 옮겨 배우게 하기): diffusion model을 1~4 단계 모델로 압축 (consistency model, LCM)
+- latent diffusion: pixel이 아니라 latent space(잠재 공간 — 압축된 표현의 공간)에서 diffusion (Stable Diffusion)
+- flow matching: 더 곧은 경로를 학습해 단계를 줄임
 
 ```{python}
 #| label: trilemma-numbers
 #| code-fold: false
 
 latent_dim, T_diff = 64*64*4, 1000
-print(f"512×512 이미지의 잠재 64×64×4 = {latent_dim:,}차원")
-print(f"  AR 순차 호출   : {latent_dim:,} 번")
-print(f"  확산 {T_diff} 스텝 : {T_diff:,} 번  (AR 의 1/{latent_dim/T_diff:.0f})")
+print(f"512×512 이미지의 latent 64×64×4 = {latent_dim:,}차원")
+print(f"  AR 순차 호출        : {latent_dim:,} 번")
+print(f"  diffusion {T_diff} step : {T_diff:,} 번  (AR의 1/{latent_dim/T_diff:.0f})")
 ```
 
-샘플링 비용이 실제로 뜻하는 것이 이것이다. 잠재공간 차원 하나하나를 순서대로 뽑는 AR 보다
-1,000 스텝짜리 확산이 `{python} f"{latent_dim/T_diff:.0f}"`배 적게 신경망을 부른다 — 확산이
-이미지에서 AR 을 대체한 이유 중 하나다.
+sampling 비용이 실제로 뜻하는 것이 이것이다. latent space 차원 하나하나를 순서대로 뽑는 AR보다
+1,000 step짜리 diffusion이 `{python} f"{latent_dim/T_diff:.0f}"`배 적게 신경망을 부른다 — diffusion이
+이미지에서 AR을 대체한 이유 중 하나다.
 
 ---
 
 ## G6.0.3 — 평가: 어떤 지표도 단독으로는 속는다
 
-2차원 8-모드 혼합 분포로 직접 재본다.
-**모드 붕괴를 각 지표가 잡아내는가?**
+2차원 8-mode 혼합 분포(봉우리가 8개인 분포)로 직접 재본다.
+**mode collapse를 각 지표가 잡아내는가?**
 
 ```{python}
 #| label: fig-evaluation
-#| fig-cap: "다섯 가지 '생성 모델' 과 세 가지 지표"
+#| fig-cap: "다섯 가지 'generative model'과 세 가지 지표"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -328,7 +335,7 @@ def sample_real(n, seed):
     return CENTERS[r.integers(0, K, n)] + r.normal(0, 0.25, (n, 2))
 
 def frechet(A, B):
-    """2D 가우스 근사 FID — 평균과 공분산만 비교한다 (실제 FID 와 같은 원리)."""
+    """2D Gaussian 근사 FID — 평균과 공분산만 비교한다 (실제 FID와 같은 원리)."""
     mu1, mu2 = A.mean(0), B.mean(0)
     C1, C2 = np.cov(A.T), np.cov(B.T)
     s, U = np.linalg.eigh(C1)
@@ -343,7 +350,7 @@ def mode_coverage(S, thresh=0.8):
     return len(np.unique(d.argmin(1)[near]))
 
 def sample_quality(S):
-    """가장 가까운 모드까지의 평균 거리 — 작을수록 '진짜 같다'."""
+    """가장 가까운 mode까지의 평균 거리 — 작을수록 '진짜 같다'."""
     return float(np.sqrt(((S[:, None, :]-CENTERS[None, :, :])**2)
                          .sum(-1).min(1)).mean())
 
@@ -351,14 +358,14 @@ NS_ = 4000
 real = sample_real(NS_, 1)
 r8 = np.random.default_rng(8)
 MODELS = {
-    "① 완벽 (8모드)":      sample_real(NS_, 2),
-    "② 모드 4개만":        CENTERS[np.random.default_rng(3).integers(0, 4, NS_)]
+    "① 완벽 (8 mode)":      sample_real(NS_, 2),
+    "② mode 4개만":        CENTERS[np.random.default_rng(3).integers(0, 4, NS_)]
                         + np.random.default_rng(4).normal(0, 0.25, (NS_, 2)),
-    "③ 모드 1개 (완전 붕괴)": CENTERS[0]
+    "③ mode 1개 (완전 collapse)": CENTERS[0]
                         + np.random.default_rng(5).normal(0, 0.25, (NS_, 2)),
     "④ 흐릿함 (σ 2.2배)":   sample_real(NS_, 6)
                         + np.random.default_rng(7).normal(0, 0.5, (NS_, 2)),
-    "⑤ 전부 잡음":         r8.normal(0, 3, (NS_, 2)),
+    "⑤ 전부 noise":         r8.normal(0, 3, (NS_, 2)),
 }
 
 fig = make_subplots(rows=1, cols=len(MODELS)+1,
@@ -377,7 +384,7 @@ for c in range(1, len(MODELS)+2):
     fig.update_xaxes(range=[-7, 7], showticklabels=False, row=1, col=c)
     fig.update_yaxes(range=[-7, 7], showticklabels=False,
                      scaleanchor=f"x{c if c > 1 else ''}", row=1, col=c)
-viz.fig_defaults(fig, height=280, title=f"8-모드 혼합 (각 {NS_:,} 샘플)")
+viz.fig_defaults(fig, height=280, title=f"8-mode 혼합 (각 {NS_:,} sample)")
 fig.show()
 ```
 
@@ -387,93 +394,97 @@ fig.show()
 
 import numpy as np
 
-print(f"{'모델':<22} {'커버한 모드':>11} {'FID (낮을수록 좋음)':>20} "
-      f"{'샘플 품질 (낮을수록 좋음)':>24}")
+print(f"{'모델':<26} {'커버한 mode':>11} {'FID (낮을수록 좋음)':>20} "
+      f"{'sample 품질 (낮을수록 좋음)':>26}")
 print("-" * 82)
 SCORES = {}
 for nm, S in MODELS.items():
     cov, fid, q = mode_coverage(S), frechet(real, S), sample_quality(S)
     SCORES[nm] = (cov, fid, q)
-    print(f"{nm:<22} {cov:>8}/{K} {fid:>20.4f} {q:>24.4f}")
+    print(f"{nm:<26} {cov:>8}/{K} {fid:>20.4f} {q:>26.4f}")
 
 names = list(MODELS)
 n_noise, n_collapse = names[4], names[2]
 q_gap = abs(SCORES[n_collapse][2] - SCORES[names[0]][2])
 fid_ratio = SCORES[n_collapse][1] / SCORES[n_noise][1]
 print()
-print("FID 가 보는 두 모멘트")
-print(f"{'분포':<22} {'평균':>18} {'trace(공분산)':>14}")
+print("FID가 보는 두 moment(평균·공분산)")
+print(f"{'분포':<26} {'평균':>18} {'trace(공분산)':>14}")
 print("-" * 58)
 mom = {}
 for lbl, S in [("진짜 데이터", real), (n_noise, MODELS[n_noise]), (n_collapse, MODELS[n_collapse])]:
     mom[lbl] = (float(np.linalg.norm(S.mean(0) - real.mean(0))), float(np.trace(np.cov(S.T))))
-    print(f"{lbl:<22} {str(np.round(S.mean(0), 2).tolist()):>18} {mom[lbl][1]:>14.2f}")
+    print(f"{lbl:<26} {str(np.round(S.mean(0), 2).tolist()):>18} {mom[lbl][1]:>14.2f}")
 mean_term = float(((MODELS[n_collapse].mean(0)-real.mean(0))**2).sum())
 ```
 
 읽어야 할 것이 넷이다.
 
-1. **'샘플 품질' 지표는 모드 붕괴를 전혀 못 잡는다.** 모드를 1개만 내는 모델의 품질 점수가
-   완벽한 모델과 `{python} f"{q_gap:.4f}"` 밖에 차이 안 난다. 각 샘플이 '진짜 같은지'만 보기
-   때문이다 — **다양성은 보지 않는다.** Inception Score 나 precision 계열 지표가 이 함정에 빠진다.
-2. **FID 는 모드 붕괴를 잡는다.** 완벽 `{python} f"{SCORES[names[0]][1]:.3f}"`, 모드 4개
-   `{python} f"{SCORES[names[1]][1]:.2f}"`, 모드 1개 `{python} f"{SCORES[n_collapse][1]:.2f}"` —
+1. **'sample 품질' 지표는 mode collapse를 전혀 못 잡는다.** mode를 1개만 내는 모델의 품질 점수가
+   완벽한 모델과 `{python} f"{q_gap:.4f}"`밖에 차이 안 난다. 각 sample이 '진짜 같은지'만 보기
+   때문이다 — **다양성은 보지 않는다.** 한 곡만 완벽하게 부르는 가수에게 만점을 주는 심사위원이다. Inception Score나 precision 계열 지표가 이 함정에 빠진다.
+2. **FID는 mode collapse를 잡는다.** 완벽 `{python} f"{SCORES[names[0]][1]:.3f}"`, mode 4개
+   `{python} f"{SCORES[names[1]][1]:.2f}"`, mode 1개 `{python} f"{SCORES[n_collapse][1]:.2f}"` —
    공분산까지 비교하므로 분포가 좁아지면 벌점을 받는다.
-3. **그런데 FID 도 속는다.** 전부 잡음인 모델(FID `{python} f"{SCORES[n_noise][1]:.2f}"`)이 모드 1개짜리보다
-   FID 가 `{python} f"{fid_ratio:.1f}"`배 좋다. FID 가 실제로 보는 것은 위 표의 평균과 공분산, 그 둘뿐이다.
-   잡음 모델은 평균을 맞히고 퍼짐만 `{python} f"{mom[n_noise][1]/mom['진짜 데이터'][1]:.1f}"`배 틀렸고,
-   모드 1개 모델은 평균이 `{python} f"{mom[n_collapse][0]:.1f}"` 만큼 어긋나고 퍼짐이
-   `{python} f"{mom[n_collapse][1]:.2f}"` 로 붕괴해 평균 차이 항만으로 이미 `{python} f"{mean_term:.2f}"` 를
-   먹는다. 개별 샘플이 전부 엉터리여도 두 모멘트만 맞으면 FID 는 좋게 나온다.
-4. **커버리지 지표도 속는다.** 전부 잡음인 모델이 `{python} f"{SCORES[n_noise][0]}"`/`{python} f"{K}"` 를 커버한다.
-   무작위 잡음이 사방에 흩어지면 모든 모드 근처에 우연히 점이 떨어진다. '커버했다'와
-   '그 모드를 재현한다'는 다른 이야기다.
+3. **그런데 FID도 속는다.** 전부 noise인 모델(FID `{python} f"{SCORES[n_noise][1]:.2f}"`)이 mode 1개짜리보다
+   FID가 `{python} f"{fid_ratio:.1f}"`배 좋다. FID가 실제로 보는 것은 위 표의 평균과 공분산, 그 둘뿐이다.
+   noise 모델은 평균을 맞히고 퍼짐만 `{python} f"{mom[n_noise][1]/mom['진짜 데이터'][1]:.1f}"`배 틀렸고,
+   mode 1개 모델은 평균이 `{python} f"{mom[n_collapse][0]:.1f}"`만큼 어긋나고 퍼짐이
+   `{python} f"{mom[n_collapse][1]:.2f}"`로 collapse해 평균 차이 항만으로 이미 `{python} f"{mean_term:.2f}"`를
+   먹는다. 개별 sample이 전부 엉터리여도 두 moment만 맞으면 FID는 좋게 나온다 — 키와 몸무게의 평균·분산만 맞으면 "같은 인구 집단"이라고 판정하는 셈이다.
+4. **coverage 지표도 속는다.** 전부 noise인 모델이 `{python} f"{SCORES[n_noise][0]}"`/`{python} f"{K}"`를 cover한다.
+   무작위 noise가 사방에 흩어지면 모든 mode 근처에 우연히 점이 떨어진다 — 산탄총을 쏘면 과녁 어딘가에는 맞는다. 'cover했다'와
+   '그 mode를 재현한다'는 다른 이야기다.
 
 **결론: 세 지표 모두 단독으로는 속는다.**
 
-| 지표 | 모드 붕괴 탐지 | 잡음 탐지 |
+| 지표 | mode collapse 탐지 | noise 탐지 |
 |---|---|---|
-| 샘플 품질 (precision) | ✗ | ○ |
+| sample 품질 (precision) | ✗ | ○ |
 | FID | ○ | ✗ |
-| 커버리지 (recall) | ○ | ✗ |
+| coverage (recall) | ○ | ✗ |
 
 그래서 실무는 **여러 지표를 함께** 본다.
 
 - FID — 전체 분포 거리 (기본값이지만 만능 아님)
 - precision / recall (Kynkäänniemi 2019) — 품질과 다양성을 **분리**해 측정
-- density / coverage — precision/recall 의 개선판
+- density / coverage — precision/recall의 개선판
 - **인간 평가** — 여전히 최종 심판. 다만 비싸고 재현이 어렵다
-- 다운스트림 성능 — 생성 데이터로 분류기를 학습시켜 보기
+- downstream 성능 — 생성 데이터로 classifier를 학습시켜 보기
 
-이것은 [1.1](../01_data_science/01_eda.qmd)의 앤스컴 4중주와 같은 교훈이다 —
+이것은 [1.1](../01_data_science/01_eda.qmd)의 Anscombe's quartet과 같은 교훈이다 —
 **요약 숫자 하나가 분포를 대신할 수 없다.**
 
 ---
 
-## 조건부 생성
+## conditional 생성
+
+"고양이 그림"처럼 조건 $c$ 를 주고 $p(x|c)$ 에서 sample하는 것이 **conditional generation**(조건부 생성)이다. 조건을 넣는 방법은 여러 가지다.
 
 | 방법 | 어떻게 | 특징 | 비고 |
 |---|---|---|---|
-| 조건 입력 연결 | $c$ 를 입력에 이어붙임 | 가장 단순 | 약한 제어 |
-| 클래스 임베딩 | 레이블을 임베딩해 주입 | 이산 조건 | AdaIN, FiLM |
-| 교차 어텐션 | 조건을 $K, V$ 로 어텐션 | 텍스트→이미지 | Stable Diffusion |
-| 분류기 가이던스 | 외부 분류기의 그래디언트 | 사후 제어 가능 | 분류기를 따로 학습 |
-| 분류기 없는 가이던스 | 조건부·무조건부를 함께 학습 후 외삽 | **현재 표준** | 품질↑ 다양성↓ |
-| ControlNet 계열 | 구조 조건(에지·자세)을 별도 분기로 | 정밀 제어 | 추가 학습 필요 |
+| 조건 입력 concat | $c$ 를 입력에 이어붙임 | 가장 단순 | 약한 제어 |
+| class embedding | label을 embedding해 주입 | discrete 조건 | AdaIN, FiLM |
+| cross-attention | 조건을 $K, V$ 로 attention | 텍스트→이미지 | Stable Diffusion |
+| classifier guidance | 외부 classifier의 gradient | 사후 제어 가능 | classifier를 따로 학습 |
+| classifier-free guidance | conditional·unconditional을 함께 학습 후 extrapolation | **현재 표준** | 품질↑ 다양성↓ |
+| ControlNet 계열 | 구조 조건(edge·자세)을 별도 분기로 | 정밀 제어 | 추가 학습 필요 |
 
-**분류기 없는 가이던스(CFG)의 핵심 식**은 조건부 예측과 무조건부 예측의 **차이를 $w$ 배 증폭**하는 것이다.
+**classifier-free guidance(CFG)의 핵심 식**은 conditional 예측과 unconditional 예측의 **차이를 $w$ 배 증폭**하는 것이다.
 
 $$\tilde{\epsilon} = \epsilon(x, \varnothing) + w\,\big[\epsilon(x, c) - \epsilon(x, \varnothing)\big]$$
 
-| 가이던스 $w$ | 의미 | 효과 |
+$\epsilon(x, c)$ 는 "조건 $c$ 를 알 때의 예측", $\epsilon(x, \varnothing)$ 은 "조건 없이 한 예측"이고, 둘의 차이가 "조건이 바꾼 부분"이다. 그 부분만 $w$ 배로 키운다 — 사진의 대비를 올리는 것과 같다.
+
+| guidance $w$ | 의미 | 효과 |
 |---|---|---|
-| 0 | 무조건부 생성 | 조건 무시 |
-| 1 | 순수 조건부 | 조건 반영, 다양성 유지 |
+| 0 | unconditional 생성 | 조건 무시 |
+| 1 | 순수 conditional | 조건 반영, 다양성 유지 |
 | 3 | 적당한 증폭 | 조건 충실도↑ |
 | 7.5 | SD 기본값 | 선명하지만 다양성↓ |
-| 20 | 과도한 증폭 | 채도 과포화, 아티팩트 |
+| 20 | 과도한 증폭 | 채도 과포화, artifact |
 
-**$w$ 를 키우면 품질(조건 충실도)이 오르고 다양성이 떨어진다** — 위에서 본 삼중고가 여기서도
+**$w$ 를 키우면 품질(조건 충실도)이 오르고 다양성이 떨어진다** — 위에서 본 trilemma가 여기서도
 그대로 나타난다.
 
 ---
@@ -485,15 +496,15 @@ $$\tilde{\epsilon} = \epsilon(x, \varnothing) + w\,\big[\epsilon(x, c) - \epsilo
 
 | 상황 | 권장 | 이유 |
 |------|------|------|
-| 텍스트 · 이산 시퀀스 | **자기회귀** | 이산에 자연스럽고 우도가 정확 |
-| 이미지 · 오디오 생성 | **확산** | 품질·다양성 최상, 조건부 제어 성숙 |
-| 실시간 생성 필요 | **GAN / 증류 확산** | 1~4 단계 |
-| 밀도 추정 · 이상 탐지 | **흐름 / AR** | 정확한 우도가 필요 |
-| 표현 학습 · 압축 | **VAE / VQ-VAE** | 잠재공간이 목적 |
-| 데이터가 적음 | 판별 모델 또는 사전학습 활용 | 생성은 데이터를 많이 먹는다 |
+| 텍스트 · discrete sequence | **autoregressive** | discrete에 자연스럽고 likelihood가 정확 |
+| 이미지 · 오디오 생성 | **diffusion** | 품질·다양성 최상, conditional 제어 성숙 |
+| 실시간 생성 필요 | **GAN / distilled diffusion** | 1~4 단계 |
+| density estimation · anomaly detection | **flow / AR** | 정확한 likelihood가 필요 |
+| representation learning · 압축 | **VAE / VQ-VAE** | latent space가 목적 |
+| 데이터가 적음 | discriminative model 또는 pretraining 활용 | 생성은 데이터를 많이 먹는다 |
 
 **섞어 쓰는 것이 현재 표준이다.**
-Stable Diffusion = VAE(잠재공간) + 확산(생성) + Transformer(텍스트 조건).
+Stable Diffusion = VAE(latent space) + diffusion(생성) + Transformer(텍스트 조건).
 각 계열의 강점만 취한 조합이다.
 :::
 
@@ -504,33 +515,33 @@ Stable Diffusion = VAE(잠재공간) + 확산(생성) + Transformer(텍스트 �
 
 **① 상한이 실제로 맞는지 잰다**
 2차원 표준정규 데이터에서 $p_{\text{mix}} = (1-\varepsilon)p + \varepsilon\,\mathcal{N}(0, 100 I)$ 의
-평균 로그우도를 몬테카를로로 계산해 손해가 $-\log(1-\varepsilon)$ 이내인지 확인하라.
-같은 모델에서 샘플 1,000개를 그려 $\varepsilon$ = 0.01 의 잡음이 눈에 띄는지도 보라.
+평균 log-likelihood를 Monte Carlo로 계산해 손해가 $-\log(1-\varepsilon)$ 이내인지 확인하라.
+같은 모델에서 sample 1,000개를 그려 $\varepsilon$ = 0.01의 noise가 눈에 띄는지도 보라.
 
-**② 삼중고를 두 축씩 확인한다**
+**② trilemma를 두 축씩 확인한다**
 `trilemma-numbers` 의 세 축(품질·다양성·속도) 중 두 개를 고정하고
 세 번째가 어떻게 희생되는지 각 계열에 대해 한 줄로 적어라.
 
-**③ 암기 모델로 FID 를 속인다**
-`MODELS` 에 "진짜 샘플 50개를 80번 복제한 모델"을 추가하고 세 지표를 재라.
-새로운 것을 하나도 만들지 못하는데 FID 와 커버리지가 좋게 나오는가?
-어떤 지표가 이것을 잡을 수 있겠는가 (힌트: 최근접 훈련 샘플까지의 거리).
+**③ 암기 모델로 FID를 속인다**
+`MODELS` 에 "진짜 sample 50개를 80번 복제한 모델"을 추가하고 세 지표를 재라.
+새로운 것을 하나도 만들지 못하는데 FID와 coverage가 좋게 나오는가?
+어떤 지표가 이것을 잡을 수 있겠는가 (힌트: 최근접 훈련 sample까지의 거리).
 :::
 
 ## 요약
 
 | 개념 | 핵심 |
 |------|------|
-| 판별 vs 생성 | $p(y|x)$ 는 결정 경계만, $p(x)$ 는 분포 전체 |
-| 명시적·정확 | AR, 흐름 — 우도를 계산할 수 있음 |
-| 명시적·근사 | VAE, 확산 — 하한(ELBO)만 |
-| 암묵적 | GAN — 밀도 함수가 아예 없음 |
-| 우도-품질 불일치 | 99% 잡음을 섞어도 손실이 `{python} f"{loss_mnist:.3f}"` nats/dim (d=784) |
-| 반대 방향 | 훈련 데이터 암기 → 샘플 완벽, 우도 $-\infty$ |
-| 삼중고 | 품질·다양성·속도 중 둘만 |
-| 샘플링 단계 | AR $d$ / VAE·GAN 1 / 확산 $T$ |
-| 샘플 품질 지표 | **모드 붕괴를 못 잡음** (1모드와 8모드의 차이 `{python} f"{q_gap:.4f}"`) |
-| FID | 모드 붕괴는 잡지만 **순수 잡음에 속음** (`{python} f"{fid_ratio:.1f}"`배 후하게 평가) |
+| discriminative vs generative | $p(y|x)$ 는 decision boundary만, $p(x)$ 는 분포 전체 — 감별사 vs 위조범 |
+| explicit·정확 | AR, flow — likelihood를 계산할 수 있음 |
+| explicit·근사 | VAE, diffusion — lower bound(ELBO)만 |
+| implicit | GAN — density 함수가 아예 없음 |
+| likelihood-품질 불일치 | 99% noise를 섞어도 손실이 `{python} f"{loss_mnist:.3f}"` nats/dim (d=784) — 큰 장부의 1원 |
+| 반대 방향 | 훈련 데이터 암기 → sample 완벽, likelihood $-\infty$ |
+| trilemma | 품질·다양성·속도 중 둘만 — 빠르고 싸고 좋은 것 중 둘 |
+| sampling 단계 | AR $d$ / VAE·GAN 1 / diffusion $T$ |
+| sample 품질 지표 | **mode collapse를 못 noise** (1 mode와 8 mode의 차이 `{python} f"{q_gap:.4f}"`) — 한 곡만 잘하는 가수 |
+| FID | mode collapse는 잡지만 **순수 noise에 속음** (`{python} f"{fid_ratio:.1f}"`배 후하게 평가) — 평균·분산만 보는 심사 |
 | 평가 결론 | 단일 지표는 전부 속는다 — 여러 개를 함께 |
 
 이 장은 지도였다. 다음 장부터 각 계열을 직접 구현한다.
@@ -539,6 +550,6 @@ Stable Diffusion = VAE(잠재공간) + 확산(생성) + Transformer(텍스트 �
 
 ---
 
-**다음**: [6.1 오토인코더](01_autoencoder.qmd) — 압축과 재구성
+**다음**: [6.1 autoencoder](01_autoencoder.qmd) — 압축과 재구성
 
-**이전**: [5.10 트랜스포머의 대안](../05_transformer/10_alternatives_ssm.qmd)
+**이전**: [5.10 Transformer의 대안](../05_transformer/10_alternatives_ssm.qmd)
