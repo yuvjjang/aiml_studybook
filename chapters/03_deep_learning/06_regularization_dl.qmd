@@ -1,20 +1,28 @@
 ---
-title: "3.6 딥러닝의 정규화"
-subtitle: "드롭아웃·증강·조기종료 — 과적합을 막는 도구상자"
+title: "3.6 딥러닝의 regularization"
+subtitle: "dropout·augmentation·early stopping — overfitting을 막는 도구상자"
 jupyter: ai-ml-study
 ---
 
-[2.1](../02_classical_ml/01_bias_variance.qmd)에서 배운 편향-분산 이야기대로라면,
-파라미터가 데이터보다 100배 많은 모델은 완전히 과적합해야 한다.
+**regularization**(정규화 — 모델이 훈련 데이터를 통째로 외우지 못하게 제약을 거는 모든 기법)은
+[2.2](../02_classical_ml/02_regularization.qmd)에서 봤다. 이 장은 딥러닝에서 실제로 쓰는 도구들을 다룬다.
+([3.5](05_normalization.qmd)의 normalization과 한국어 번역이 같아 헷갈리기 쉽지만 다른 것이다.)
 
-그런데 되지 않는다. **왜 일반화하는지는 아직 완전히 풀리지 않은 문제다.**
+[2.1](../02_classical_ml/01_bias_variance.qmd)에서 배운 bias-variance 이야기대로라면,
+parameter가 데이터보다 100배 많은 모델은 완전히 overfitting해야 한다.
+기출문제 120개로 공부하는 학생에게 암기 용량이 12,000문제분이라면, 답만 통째로 외우고 원리는 안 배울 것 같다.
+
+그런데 되지 않는다. **왜 generalization하는지는 아직 완전히 풀리지 않은 문제다.**
 
 이 장은 그 미스터리를 푸는 대신, 실무에서 실제로 쓰는 도구들이
 **무엇을 하고 무엇을 대가로 요구하는지**를 하나씩 잰다.
 
 ---
 
-## 먼저: 과적합이 실제로 어떻게 생기는가
+## 먼저: overfitting이 실제로 어떻게 생기는가
+
+훈련 샘플을 120개로 고정하고, 망의 폭을 4에서 256까지 키우며 훈련 정확도와 검증 정확도(훈련에 안 쓴 180개)를 잰다.
+고전 이론대로라면 parameter가 120개를 넘는 순간부터 검증 정확도가 무너져야 한다.
 
 ```{python}
 #| label: fig-overfit-baseline
@@ -49,8 +57,8 @@ fig.add_trace(go.Scatter(x=n_params, y=np.array(tr_acc)-np.array(te_acc),
                          mode="lines+markers", showlegend=False,
                          line=dict(color=viz.PINK, width=2.5)), row=1, col=2)
 fig.add_vline(x=len(tr), line=dict(color=viz.YELLOW, dash="dash"),
-              annotation_text="파라미터 = 훈련 샘플 수")
-fig.update_xaxes(title_text="파라미터 수", type="log")
+              annotation_text="parameter = 훈련 샘플 수")
+fig.update_xaxes(title_text="parameter 수", type="log")
 fig.update_yaxes(title_text="정확도", row=1, col=1)
 fig.update_yaxes(title_text="격차", row=1, col=2)
 viz.fig_defaults(fig, height=400, title=f"훈련 샘플 {len(tr)}개 · two-moons(잡음 0.35)")
@@ -64,7 +72,7 @@ fig.show()
 
 import numpy as np
 
-print(f"{'너비':>6} {'파라미터':>10} {'샘플 대비':>10} {'훈련':>8} {'검증':>8} {'격차':>8}")
+print(f"{'너비':>6} {'parameter':>10} {'샘플 대비':>10} {'훈련':>8} {'검증':>8} {'격차':>8}")
 print("-" * 56)
 for w, p_, a, b in zip(widths, n_params, tr_acc, te_acc):
     print(f"{w:>6} {p_:>10,} {p_/len(tr):>9.1f}× {a:>8.3f} {b:>8.3f} {a-b:>8.3f}")
@@ -78,42 +86,48 @@ param_ratio = n_params[-1] / n_params[0]
 ```
 
 검증 정확도가 가장 높은 너비는 `{python} f"{widths[best]}"`
-(파라미터 `{python} f"{n_params[best]:,}"`개, 샘플의 `{python} f"{n_params[best]/len(tr):.1f}"`배)이고,
-파라미터가 샘플보다 많은 구간의 검증 정확도는 `{python} f"{over_lo:.3f}"`~`{python} f"{over_hi:.3f}"` 다.
+(parameter `{python} f"{n_params[best]:,}"`개, 샘플의 `{python} f"{n_params[best]/len(tr):.1f}"`배)이고,
+parameter가 샘플보다 많은 구간의 검증 정확도는 `{python} f"{over_lo:.3f}"`~`{python} f"{over_hi:.3f}"` 다.
 이 차이가 의미 있는지는 검증 집합의 크기로 잰다. 검증 샘플 `{python} f"{len(te)}"`개에서
-정확도 0.85 근처의 표준오차는 약 `{python} f"{se:.3f}"` (샘플 `{python} f"{se*len(te):.1f}"`개분)인데,
+정확도 0.85 근처의 standard error(표준오차 — 정확도 추정치가 우연히 흔들리는 폭)는 약 `{python} f"{se:.3f}"` (샘플 `{python} f"{se*len(te):.1f}"`개분)인데,
 위 검증 정확도들의 전체 폭 `{python} f"{min(te_acc):.3f}"`~`{python} f"{max(te_acc):.3f}"` 는
-그 표준오차의 `{python} f"{spread_se:.1f}"`배에 불과하다.
+그 standard error의 `{python} f"{spread_se:.1f}"`배에 불과하다. 검증 샘플 한두 개를 더 맞히고 덜 맞힌 정도라는 뜻이다.
 
-즉 파라미터를 `{python} f"{param_ratio:,.0f}"`배 늘리는 동안 검증 성능은 **사실상 변하지 않았다.**
+즉 parameter를 `{python} f"{param_ratio:,.0f}"`배 늘리는 동안 검증 성능은 **사실상 변하지 않았다.**
 고전 이론이 예측하는 붕괴가 일어나지 않는다는 것 — 이것이 '미스터리'다.
+그렇다고 아래 도구들이 쓸모없다는 뜻은 아니다. 훈련−검증 격차는 여전히 있고, 도구들은 그 격차를 줄인다.
 
 ---
 
-## G3.6.1 — 드롭아웃
+## G3.6.1 — dropout
 
-학습 시 각 뉴런을 확률 $p$ 로 끈다. 추론 시에는 전부 켠다.
+**dropout**(드롭아웃)은 학습 시 각 neuron(unit)을 확률 $p$ 로 무작위로 끈다(출력을 0으로 만든다). inference 시에는 전부 켠다.
+
+팀원 중 매일 무작위로 30%가 결근한다고 생각하면 된다. 누가 빠질지 모르니 특정 한 사람에게 의존하는 업무 방식이 불가능해지고,
+모두가 여러 역할을 조금씩 익히게 된다. 신경망에서는 특정 몇 개 unit의 우연한 조합에 기대어 훈련 데이터를 외우는 일이 어려워진다.
 
 $$\text{학습:}\ a \leftarrow \frac{a \odot \text{Bernoulli}(1-p)}{1-p}
 \qquad
-\text{추론:}\ a \leftarrow a$$
+\text{inference:}\ a \leftarrow a$$
 
-$1-p$ 로 나누는 **역스케일링**이 핵심이다. 이래야 기댓값이 보존된다.
+$\text{Bernoulli}(1-p)$ 는 확률 $1-p$ 로 1, 확률 $p$ 로 0이 나오는 동전 던지기이고, $\odot$ 은 원소별 곱이다.
+$1-p$ 로 나누는 **inverse scaling**(역스케일링)이 핵심이다. 이래야 기댓값이 보존된다 —
+결근자 몫의 일을 남은 사람들이 나눠 맡아 팀 전체 산출량은 같게 유지하는 것이다.
 
-확인은 한 줄이다. 마스크 $M \sim \text{Bernoulli}(1-p)$ 에 대해
+확인은 한 줄이다. mask $M \sim \text{Bernoulli}(1-p)$ 에 대해
 
 $$\mathbb{E}\!\left[\frac{a\,M}{1-p}\right] = \frac{a}{1-p}\,\mathbb{E}[M] = \frac{a(1-p)}{1-p} = a$$
 
-추론 시 마스크를 끄는 것이 정당한 이유가 이것이다 — 평균적으로 같은 값을 낸다.
+inference 시 mask를 끄는 것이 정당한 이유가 이것이다 — 평균적으로 같은 값을 낸다.
 
-그런데 **분산은 보존되지 않는다.** 같은 계산을 2차 모멘트로 하면
+그런데 **분산은 보존되지 않는다.** 같은 계산을 분산에 대해 하면 ($\operatorname{Var}[M] = p(1-p)$ 는 Bernoulli의 분산)
 
 $$\operatorname{Var}\!\left[\frac{a\,M}{1-p}\right]
 = \frac{a^2}{(1-p)^2}\operatorname{Var}[M]
 = \frac{a^2}{(1-p)^2}\,p(1-p)
 = a^2\,\frac{p}{1-p}$$
 
-드롭아웃이 주입하는 잡음의 크기가 $\frac{p}{1-p}$ 로 **$p$ 에 대해 급격히 커진다.**
+dropout이 주입하는 잡음의 크기가 $\frac{p}{1-p}$ 로 **$p$ 에 대해 급격히 커진다.** 아래 코드가 이것을 난수로 확인한다.
 
 ```{python}
 #| label: dropout-variance
@@ -124,7 +138,7 @@ import numpy as np
 rng = np.random.default_rng(0)
 a = 1.0
 
-print(f"{'드롭 확률 p':>12}{'p/(1-p)':>11}{'실측 분산':>12}{'평균(=a여야)':>14}")
+print(f"{'drop 확률 p':>12}{'p/(1-p)':>11}{'실측 분산':>12}{'평균(=a여야)':>14}")
 for p in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]:
     if p == 0:
         print(f"{p:>12.1f}{0.0:>11.3f}{0.0:>12.4f}{a:>14.4f}")
@@ -135,11 +149,11 @@ for p in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]:
 
 평균은 어느 $p$ 에서나 $a$ 로 보존되지만 분산은 $p/(1-p)$ 로 폭증한다.
 $p=0.9$ 면 잡음 분산이 신호($a^2$)의 9배다 — 학습이 불안정해지는 이유이고,
-실무에서 $p$ 를 0.1~0.5 로 쓰는 이유이기도 하다.
+실무에서 $p$ 를 0.1~0.5로 쓰는 이유이기도 하다.
 
 ```{python}
 #| label: fig-dropout
-#| fig-cap: "드롭 확률에 따른 마스크와 학습 결과"
+#| fig-cap: "drop 확률에 따른 mask와 학습 결과"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -163,8 +177,8 @@ for p in rates:
               float((m.predict(X[te]).argmax(1) == y[te]).mean()))
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
-                    subplot_titles=("드롭아웃 마스크 (은닉 24유닛 × 배치 12)",
-                                    "드롭 확률에 따른 정확도"))
+                    subplot_titles=("dropout mask (hidden 24 unit × batch 12)",
+                                    "drop 확률에 따른 정확도"))
 p0 = 0.3
 fig.add_trace(go.Heatmap(z=masks[p0], colorscale="Blues", showscale=False,
                          zmin=0, zmax=3.5), row=1, col=1)
@@ -173,11 +187,11 @@ fig.add_trace(go.Scatter(x=rates, y=[res[p][0] for p in rates], mode="lines+mark
 fig.add_trace(go.Scatter(x=rates, y=[res[p][1] for p in rates], mode="lines+markers",
                          name="검증", line=dict(color=viz.ACCENT, width=2.5)), row=1, col=2)
 steps = [(f"{p:g}", {"z": [masks[p], None, None]}) for p in rates]
-fig.update_layout(sliders=[viz.slider(steps, prefix="드롭 확률 p = ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="drop 확률 p = ",
                                       active=rates.index(p0), pad_t=52)])
-fig.update_xaxes(title_text="유닛", row=1, col=1)
-fig.update_xaxes(title_text="드롭 확률 p", row=1, col=2)
-fig.update_yaxes(title_text="배치 샘플", row=1, col=1)
+fig.update_xaxes(title_text="unit", row=1, col=1)
+fig.update_xaxes(title_text="drop 확률 p", row=1, col=2)
+fig.update_yaxes(title_text="batch 샘플", row=1, col=1)
 fig.update_yaxes(title_text="정확도", row=1, col=2)
 viz.fig_defaults(fig, height=420, title="MLP[2,128,128,2] · 훈련 120개")
 fig.update_layout(legend=dict(x=0.55, y=0.25, font=dict(size=11)))
@@ -190,7 +204,7 @@ fig.show()
 
 import numpy as np
 
-print(f"{'드롭 확률':>10} {'훈련':>9} {'검증':>9} {'격차':>9}")
+print(f"{'drop 확률':>10} {'훈련':>9} {'검증':>9} {'격차':>9}")
 print("-" * 40)
 for p in rates:
     a, b = res[p]
@@ -198,42 +212,46 @@ for p in rates:
 
 best_p = max(rates, key=lambda p: res[p][1])
 best_gain = res[best_p][1] - res[0.0][1]
-d = 128                                   # 은닉 유닛 수 → 가능한 서브네트워크 수 2^d
+d = 128                                   # hidden unit 수 → 가능한 subnetwork 수 2^d
 ```
 
 검증 최고는 $p$ = `{python} f"{best_p}"` (`{python} f"{res[best_p][1]:.3f}"`, $p=0$ 대비
 `{python} f"{best_gain:+.3f}"`)이다. 앞 절의 표준오차 `{python} f"{se:.3f}"` 와 비교하면
-한 시드의 결과로 순위를 매길 만한 차이는 아니다 — 드롭아웃이 하는 일은 검증 정확도를
+한 seed의 결과로 순위를 매길 만한 차이는 아니다 — dropout이 하는 일은 검증 정확도를
 올리는 것보다 **격차를 좁히는 것**이고, 그 대가로 훈련 정확도가 떨어진다.
 
-드롭아웃을 **앙상블**로 읽는 해석이 있다. 은닉 유닛 `{python} f"{d}"`개에 $p=0.5$ 면
-가능한 마스크(서브네트워크)가 $2^{128}$, 즉 약 10 의 `{python} f"{d*np.log10(2):.0f}"` 제곱 개다.
-모든 서브네트워크의 예측을 평균 내는 것이 이론적 목표이고,
-추론 시 전부 켜는 것은 그 평균의 **1차 근사**다 (선형층에서는 정확).
+dropout을 **ensemble**(앙상블 — 여러 모델의 예측을 평균 내는 것, [2.7](../02_classical_ml/07_ensembles.qmd))로 읽는 해석이 있다. hidden unit `{python} f"{d}"`개에 $p=0.5$ 면
+가능한 mask(subnetwork — 일부 unit만 살아 있는 부분 망)가 $2^{128}$, 즉 약 10의 `{python} f"{d*np.log10(2):.0f}"` 제곱 개다.
+매 step마다 그중 하나를 뽑아 학습시키는 셈이고, 모든 subnetwork의 예측을 평균 내는 것이 이론적 목표이며,
+inference 시 전부 켜는 것은 그 평균의 **1차 근사**다 (선형층에서는 정확).
 
 ::: {.callout-note}
-## 드롭아웃의 위상 변화
+## dropout의 위상 변화
 
-드롭아웃은 2012–2018년 사이 사실상 필수였다. 지금은 다르다.
+dropout은 2012–2018년 사이 사실상 필수였다. 지금은 다르다.
 
-- **CNN** — BatchNorm이 널리 쓰이면서 드롭아웃은 거의 사라졌다.
-  둘을 같이 쓰면 분산 추정이 학습/추론 간에 어긋나 오히려 해롭다는 분석도 있다
-- **Transformer 사전학습** — 데이터가 파라미터보다 훨씬 많아 과적합이 문제가 아니다.
-  Llama, GPT-3 등은 사전학습 시 드롭아웃 0을 쓴다
-- **파인튜닝 / 작은 데이터** — 여전히 유효하다. 0.1 정도를 쓴다
+- **CNN** — BatchNorm이 널리 쓰이면서 dropout은 거의 사라졌다.
+  둘을 같이 쓰면 분산 추정이 학습/inference 간에 어긋나 오히려 해롭다는 분석도 있다
+- **Transformer pretraining** — 데이터가 parameter보다 훨씬 많아 overfitting이 문제가 아니다.
+  Llama, GPT-3 등은 pretraining 시 dropout 0을 쓴다
+- **fine-tuning / 작은 데이터** — 여전히 유효하다. 0.1 정도를 쓴다
 
-**"드롭아웃은 항상 켠다"는 낡은 조언이다.** 데이터 대비 모델 크기를 보고 정해야 한다.
+**"dropout은 항상 켠다"는 낡은 조언이다.** 데이터 대비 모델 크기를 보고 정해야 한다.
 :::
 
 ---
 
 ## G3.6.2 — Mixup
 
-두 샘플을 **입력과 레이블 모두** 섞는다.
+**Mixup**은 두 샘플을 **입력과 label 모두** 섞는다.
+고양이 사진과 개 사진을 7:3으로 반투명하게 겹치고, 정답도 "고양이 0.7, 개 0.3"으로 주는 것이다.
+"두 샘플의 중간에서는 답도 중간이어야 한다"는 지식을 모델에 심는 셈이고, 훈련 샘플 사이의 빈 공간에서 모델이 제멋대로 구는 것을 막는다.
 
 $$\tilde x = \lambda x_i + (1-\lambda)x_j, \qquad
   \tilde y = \lambda y_i + (1-\lambda)y_j, \qquad
   \lambda \sim \text{Beta}(\alpha,\alpha)$$
+
+$\lambda$ 는 섞는 비율이고, 매번 Beta 분포에서 뽑는다. $\alpha$ 가 그 분포의 모양을 정한다 (아래 표).
 
 ```{python}
 #| label: fig-mixup
@@ -335,23 +353,24 @@ best_a = max(alphas, key=lambda a: models[a][1])
 best_a_gain = models[best_a][1] - models[0.0][1]
 ```
 
-$\alpha$ 가 하는 일은 $\lambda$ 의 분포를 정하는 것이다. $\alpha$ 가 작으면 $\lambda$ 가 0 이나 1 근처에 몰려
-거의 원본 샘플이 나오고(약한 정규화), $\alpha$ 가 크면 0.5 근처에 몰려 항상 반반 섞인다(강한 정규화).
+$\alpha$ 가 하는 일은 $\lambda$ 의 분포를 정하는 것이다. $\alpha$ 가 작으면 $\lambda$ 가 0이나 1 근처에 몰려
+거의 원본 샘플이 나오고(약한 regularization), $\alpha$ 가 크면 0.5 근처에 몰려 항상 반반 섞인다(강한 regularization).
 여기서는 $\alpha$ = `{python} f"{best_a}"` 가 최고(`{python} f"{models[best_a][1]:.3f}"`,
-$\alpha=0$ 대비 `{python} f"{best_a_gain:+.3f}"`)이고 이미지 분류의 관례도 $\alpha$ = 0.2~0.4 다.
-단, 이 차이 역시 표준오차(`{python} f"{se:.3f}"`) 안이다 — 훈련 120개짜리 2차원 문제에서
-Mixup 의 이득은 작고, 본래의 효과는 [3.3](03_losses.qmd)에서 본 **과신 억제**에 더 가깝다.
+$\alpha=0$ 대비 `{python} f"{best_a_gain:+.3f}"`)이고 이미지 분류의 관례도 $\alpha$ = 0.2~0.4다.
+단, 이 차이 역시 standard error(`{python} f"{se:.3f}"`) 안이다 — 훈련 120개짜리 2차원 문제에서
+Mixup의 이득은 작고, 본래의 효과는 [3.3](03_losses.qmd)에서 본 **과신 억제**에 더 가깝다.
 
 ---
 
-## 조기 종료
+## early stopping
 
-가장 값싼 정규화다. 검증 손실을 주기적으로 재고, 최저점을 갱신하지 못한 채 `patience` 번이
+**early stopping**(조기 종료)은 가장 값싼 regularization이다. 검증 loss를 주기적으로 재고, 최저점을 갱신하지 못한 채 `patience` 번이
 지나면 멈춘다 — 코드 세 줄이면 되고 계산 비용도 없다.
+시험 공부를 너무 오래 하면 기출문제의 답만 외우게 되므로, 모의고사(검증) 점수가 가장 좋았던 시점에서 멈추는 것이다.
 
 ```{python}
 #| label: fig-early-stopping
-#| fig-cap: "검증 손실이 최저인 지점과 그 이후"
+#| fig-cap: "검증 loss가 최저인 지점과 그 이후"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -372,15 +391,15 @@ tr_loss = np.convolve(h["loss"], np.ones(20)/20, mode="valid")
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=np.arange(len(tr_loss)), y=tr_loss, mode="lines",
-                         name="훈련 손실", line=dict(color=viz.WARM, width=2.5)))
+                         name="훈련 loss", line=dict(color=viz.WARM, width=2.5)))
 fig.add_trace(go.Scatter(x=val_steps, y=val_loss, mode="lines",
-                         name="검증 손실", line=dict(color=viz.ACCENT, width=2.5)))
+                         name="검증 loss", line=dict(color=viz.ACCENT, width=2.5)))
 k = int(np.argmin(val_loss))
 fig.add_vline(x=val_steps[k], line=dict(color=viz.GREEN, dash="dash"),
-              annotation_text=f"검증 최저 (스텝 {val_steps[k]})")
-fig.update_layout(xaxis_title="스텝", yaxis_title="손실", yaxis_type="log",
+              annotation_text=f"검증 최저 (step {val_steps[k]})")
+fig.update_layout(xaxis_title="step", yaxis_title="loss", yaxis_type="log",
                   legend=dict(x=0.6, y=0.98))
-viz.fig_defaults(fig, height=400, title="조기 종료 지점 · 훈련 300개")
+viz.fig_defaults(fig, height=400, title="early stopping 지점 · 훈련 300개")
 fig.show()
 ```
 
@@ -394,11 +413,11 @@ k = int(np.argmin(val_loss))
 best_step = int(val_steps[k]); best_frac = best_step / 4000
 best_val = float(val_loss[k]); last_val = float(val_loss[-1])
 tr_at_best = float(tr_loss[best_step]); tr_last = float(tr_loss[-1])
-# 최저점 이후로 검증 손실이 직전보다 내려간 평가 횟수
+# 최저점 이후로 검증 loss가 직전보다 내려간 평가 횟수
 n_after = len(val_loss) - k - 1
 improve_after = int(np.sum(np.diff(val_loss[k:]) < 0))
 
-print(f"{'patience':>10} {'멈추는 스텝':>12} {'낭비한 스텝':>12} {'찾은 최저 손실':>16}")
+print(f"{'patience':>10} {'멈추는 step':>12} {'낭비한 step':>12} {'찾은 최저 loss':>16}")
 print("-" * 54)
 pat_found = []
 for pat in [3, 5, 10, 20]:
@@ -416,40 +435,44 @@ for pat in [3, 5, 10, 20]:
           f"{val_loss[best_i]:>16.4f}")
 ```
 
-검증 손실의 최저점은 스텝 `{python} f"{best_step}"` (전체 4,000스텝의 `{python} f"{best_frac:.1%}"` 지점),
-손실 `{python} f"{best_val:.4f}"` 다. 끝까지 가면 검증 손실은 `{python} f"{last_val:.4f}"`
-(`{python} f"{last_val/best_val:.2f}"`배)로 올라가는데, 그동안 훈련 손실은
-`{python} f"{tr_at_best:.4f}"` → `{python} f"{tr_last:.4f}"` 로 계속 내려갔다.
-최저점 이후 검증 손실이 직전 평가보다 내려간 횟수가 `{python} f"{improve_after}"` / `{python} f"{n_after}"`
+검증 loss의 최저점은 step `{python} f"{best_step}"` (전체 4,000 step의 `{python} f"{best_frac:.1%}"` 지점),
+loss `{python} f"{best_val:.4f}"` 다. 끝까지 가면 검증 loss는 `{python} f"{last_val:.4f}"`
+(`{python} f"{last_val/best_val:.2f}"`배)로 올라가는데, 그동안 훈련 loss는
+`{python} f"{tr_at_best:.4f}"` → `{python} f"{tr_last:.4f}"` 로 계속 내려갔다 — 훈련은 잘 되는데 검증은 나빠지는 전형적인 overfitting이다.
+최저점 이후 검증 loss가 직전 평가보다 내려간 횟수가 `{python} f"{improve_after}"` / `{python} f"{n_after}"`
 (`{python} f"{improve_after/n_after:.0%}"`)나 되는 만큼 곡선은 계속 출렁이지만,
 최저값 `{python} f"{best_val:.4f}"` 를 다시 넘어서지는 못했다.
 
-네 patience 가 찾은 최저 손실은 `{python} f"{min(pat_found):.4f}"`~`{python} f"{max(pat_found):.4f}"` 로
-**모두 같은 최적 가중치**다. 차이는 낭비한 계산량뿐이다.
+네 patience가 찾은 최저 loss는 `{python} f"{min(pat_found):.4f}"`~`{python} f"{max(pat_found):.4f}"` 로
+**모두 같은 최적 weight**다. 차이는 낭비한 계산량뿐이다.
 여기서는 최저점이 학습 초반(`{python} f"{best_frac:.0%}"`)에 뚜렷하게 찍혀서 운이 좋았다.
-최저점이 학습 후반에 있거나 곡선이 완만하면 patience 3 은 진짜 최저점 전에 멈춰버린다.
-patience 는 '검증 잡음의 크기'와 '남은 예산'을 보고 정해야 한다.
+최저점이 학습 후반에 있거나 곡선이 완만하면 patience 3은 진짜 최저점 전에 멈춰버린다.
+patience는 '검증 잡음의 크기'와 '남은 예산'을 보고 정해야 한다.
 
-실무에서는 '조기 종료'를 학습 중단이 아니라 **최고 체크포인트 저장**으로 구현한다.
-끝까지 학습하되 검증이 최고일 때의 가중치를 따로 남기면, 너무 일찍 멈추는 위험이 없다.
+실무에서는 'early stopping'을 학습 중단이 아니라 **최고 checkpoint 저장**으로 구현한다.
+끝까지 학습하되 검증이 최고일 때의 weight를 따로 남기면, 너무 일찍 멈추는 위험이 없다.
 
 ---
 
-## G3.6.3 — 가중치 평균: EMA와 SWA
+## G3.6.3 — weight averaging: EMA와 SWA
 
-학습 궤적의 **가중치를 평균**하면 더 좋은 해가 나온다는 관찰이 있다.
+학습 궤적의 **weight를 평균**하면 더 좋은 해가 나온다는 관찰이 있다.
+학습 후반의 weight는 최소점 주변을 계속 흔들리며 맴도는데, 손이 흔들려 찍힌 사진 여러 장을 겹쳐 평균 내면 선명해지듯
+그 흔들림의 중심을 취하자는 것이다.
 
 $$\text{EMA:}\ \bar\theta_t = \tau\bar\theta_{t-1} + (1-\tau)\theta_t
 \qquad
 \text{SWA:}\ \bar\theta = \frac{1}{K}\sum_{k} \theta_{t_k}$$
 
-EMA 는 매 스텝 지수 가중 평균을 굴리고, SWA(Stochastic Weight Averaging)는 학습 후반에
-일정 간격으로 찍은 체크포인트 $K$ 개를 단순 평균한다. 둘 다 "궤적이 최소점 주변을 맴돌 때
-그 중심을 취하면 더 평평한 곳에 앉는다"는 같은 직관이고, 아래 실험은 EMA 로 한다.
+EMA(exponential moving average — 지수 이동평균)는 매 step 최근 값에 더 큰 비중을 주는 평균을 굴리고($\tau$ 가 클수록 오래 기억),
+SWA(Stochastic Weight Averaging)는 학습 후반에
+일정 간격으로 찍은 checkpoint $K$ 개를 단순 평균한다. 둘 다 "궤적이 최소점 주변을 맴돌 때
+그 중심을 취하면 더 평평한 곳에 앉는다"는 같은 직관이고, 아래 실험은 EMA로 한다.
+학습은 원래 weight $\theta$ 로 진행하고, EMA 사본 $\bar\theta$ 는 옆에서 따로 갱신하며 검증 loss만 잰다.
 
 ```{python}
 #| label: fig-ema
-#| fig-cap: "EMA 감쇠율에 따른 검증 손실"
+#| fig-cap: "EMA decay rate에 따른 검증 loss"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -492,14 +515,14 @@ for s in range(STEPS_E):
             hist[t].append(Lt)
 
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=eval_steps, y=raw_hist, mode="lines", name="원본 가중치",
+fig.add_trace(go.Scatter(x=eval_steps, y=raw_hist, mode="lines", name="원본 weight",
                          line=dict(color=viz.WARM, width=2.5)))
 for i, t in enumerate(taus[1:], start=1):
     fig.add_trace(go.Scatter(x=eval_steps, y=hist[t], mode="lines", name=f"EMA τ={t}",
                              line=dict(color=viz.color(i), width=2.5)))
-fig.update_layout(xaxis_title="스텝", yaxis_title="검증 손실", yaxis_type="log",
+fig.update_layout(xaxis_title="step", yaxis_title="검증 loss", yaxis_type="log",
                   legend=dict(x=0.6, y=0.98))
-viz.fig_defaults(fig, height=410, title="EMA 가중치의 검증 손실 (MLP[2,64,64,2])")
+viz.fig_defaults(fig, height=410, title="EMA weight의 검증 loss (MLP[2,64,64,2])")
 fig.show()
 ```
 
@@ -509,13 +532,13 @@ fig.show()
 
 import numpy as np
 
-print(f"{'가중치':<14} {'최종 검증 손실':>15} {'최저 검증 손실':>15} {'마지막 200스텝 표준편차':>24}")
+print(f"{'weight':<14} {'최종 검증 loss':>15} {'최저 검증 loss':>15} {'마지막 200 step 표준편차':>24}")
 print("-" * 74)
 arrs = {"원본": np.array(raw_hist)}
 for t in taus[1:]:
     arrs[f"EMA τ={t}"] = np.array(hist[t])
 for name, a in arrs.items():
-    tail = a[-8:]                                  # 평가 8회 = 마지막 200스텝
+    tail = a[-8:]                                  # 평가 8회 = 마지막 200 step
     print(f"{name:<14} {a[-1]:>15.4f} {a.min():>15.4f} {tail.std():>24.5f}")
 
 best_end = min(arrs, key=lambda k: arrs[k][-1])
@@ -524,62 +547,66 @@ best_min = min(arrs, key=lambda k: arrs[k].min())
 min_999 = float(arrs['EMA τ=0.999'].min()); min_raw = float(arrs['원본'].min())
 ```
 
-학습 종료 시점에서 가장 좋은 가중치는 `{python} best_end` 로, 원본보다
+학습 종료 시점에서 가장 좋은 weight는 `{python} best_end` 로, 원본보다
 `{python} f"{end_gain:.4f}"` 낮다. 그런데 학습 전 구간의 최저점은 `{python} best_min`
 (`{python} f"{arrs[best_min].min():.4f}"`, 원본은 `{python} f"{min_raw:.4f}"`)이고,
 $\tau$ 가 너무 크면($0.999$) 반응이 느려 최저점 자체는 오히려 높아진다(`{python} f"{min_999:.4f}"`).
-즉 EMA 가 최저점을 크게 낮춰주지는 않는다 — 이득은 **끝까지 학습해도 나빠지지 않는다**는 데 있다.
+즉 EMA가 최저점을 크게 낮춰주지는 않는다 — 이득은 **끝까지 학습해도 나빠지지 않는다**는 데 있다.
 
-EMA 의 가장 확실한 효과는 **검증 곡선이 매끄러워진다**는 것이다(표준편차 열).
-$\tau$ 가 클수록 반응이 느려지고, 유효 평균 구간은 $1/(1-\tau)$ 스텝 — $\tau=0.9$ 면 10스텝,
-$0.99$ 면 100스텝, $0.999$ 면 1,000스텝이다. 총 `{python} f"{STEPS_E:,}"`스텝짜리 이 실험에서
-$\tau=0.999$ 는 학습의 2/3 를 평균하는 셈이라 초기의 나쁜 가중치가 끝까지 섞여 있고,
-$\tau=0.99$ 는 약 7% 를 평균한다. 아래 관례가 나오는 이유다.
+EMA의 가장 확실한 효과는 **검증 곡선이 매끄러워진다**는 것이다(표준편차 열).
+$\tau$ 가 클수록 반응이 느려지고, 유효 평균 구간은 $1/(1-\tau)$ step — $\tau=0.9$ 면 10 step,
+$0.99$ 면 100 step, $0.999$ 면 1,000 step이다. 총 `{python} f"{STEPS_E:,}"` step짜리 이 실험에서
+$\tau=0.999$ 는 학습의 2/3를 평균하는 셈이라 초기의 나쁜 weight가 끝까지 섞여 있고,
+$\tau=0.99$ 는 약 7%를 평균한다. 아래 관례가 나오는 이유다.
 
 ::: {.key-concept}
-**EMA는 사실상 공짜 정규화다**
+**EMA는 사실상 공짜 regularization이다**
 
 - 학습 자체를 전혀 바꾸지 않는다 (별도 사본을 갱신할 뿐)
-- 추가 비용은 파라미터 1벌 분량의 메모리와 스텝당 곱셈 한 번
-- 확산 모델·자기지도 학습(BYOL, MoCo)에서는 **필수 요소**다
+- 추가 비용은 parameter 1벌 분량의 메모리와 step당 곱셈 한 번
+- diffusion model·self-supervised learning(BYOL, MoCo)에서는 **필수 요소**다
 
-$\tau$ 는 총 스텝 수를 보고 정한다. 유효 구간 $1/(1-\tau)$ 이 총 스텝의
-5–10% 정도가 되게 잡는 것이 관례다 (예: 10만 스텝이면 $\tau = 0.9999$).
+$\tau$ 는 총 step 수를 보고 정한다. 유효 구간 $1/(1-\tau)$ 이 총 step의
+5–10% 정도가 되게 잡는 것이 관례다 (예: 10만 step이면 $\tau = 0.9999$).
 :::
 
 ---
 
-## 데이터 증강: 도메인별 도구
+## data augmentation: domain별 도구
 
-증강은 **지식을 주입하는 일**이다. "이렇게 바꿔도 레이블은 그대로"라는 지식.
+**data augmentation**(데이터 증강)은 훈련 샘플을 변형해 새 샘플처럼 쓰는 것이다.
+같은 물건을 다른 각도·다른 조명에서 여러 번 보여주면 물건 자체를 더 잘 기억하게 되는 것과 같다.
+augmentation은 **지식을 주입하는 일**이다. "이렇게 바꿔도 label은 그대로"라는 지식.
 
-| 도메인 | 기법 | 주입하는 지식 | 주의 |
+| domain | 기법 | 주입하는 지식 | 주의 |
 |---|---|---|---|
 | 이미지 | 좌우 반전 | 좌우 대칭성 | 글자·숫자에는 금물 |
-| 이미지 | RandomCrop | 위치 불변성 | 거의 항상 안전 |
-| 이미지 | 색상 지터 | 조명 불변성 | 색이 레이블이면 금물 |
+| 이미지 | RandomCrop | 위치 invariance(불변성 — 바뀌어도 답이 같음) | 거의 항상 안전 |
+| 이미지 | color jitter (색상 흔들기) | 조명 invariance | 색이 label이면 금물 |
 | 이미지 | RandAugment | 여러 변환 자동 조합 | 탐색 비용 없음 |
-| 이미지 | CutMix | 부분만 보고도 인식 | Mixup의 공간 버전 |
-| 텍스트 | 역번역 | 의미 보존 재표현 | 느리고 비쌈 |
+| 이미지 | CutMix | 부분만 보고도 인식 | Mixup의 공간 버전 (한 사진의 일부를 잘라 다른 사진에 붙임) |
+| 텍스트 | back-translation (역번역) | 의미 보존 재표현 | 느리고 비쌈 |
 | 텍스트 | EDA (동의어 치환) | 어휘 다양성 | 의미가 깨질 수 있음 |
-| 텍스트 | 토큰 드롭 | 부분 정보로 추론 | 간단하고 효과적 |
-| 오디오 | SpecAugment | 주파수·시간 마스킹 | ASR의 표준 |
-| 오디오 | 속도·피치 변화 | 화자 변이 | 음악에는 주의 |
-| 오디오 | 잡음·잔향 추가 | 환경 강건성 | 실전 데이터에 필수 |
+| 텍스트 | token drop | 부분 정보로 inference | 간단하고 효과적 |
+| 오디오 | SpecAugment | 주파수·시간 masking | ASR(음성 인식)의 표준 |
+| 오디오 | 속도·pitch 변화 | 화자 변이 | 음악에는 주의 |
+| 오디오 | 잡음·잔향 추가 | 환경 robustness | 실전 데이터에 필수 |
 
-증강의 위험: **불변성이 아닌 것을 불변으로 가르치는 것.**
-6과 9를 구분해야 하는데 180도 회전 증강을 넣으면 모델은 영영 배울 수 없다.
+augmentation의 위험: **invariance가 아닌 것을 invariant로 가르치는 것.**
+6과 9를 구분해야 하는데 180도 회전 augmentation을 넣으면 모델은 영영 배울 수 없다.
 
 
 ::: {.interaction-hint}
-오디오 증강은 [8.1 푸리에·STFT](../08_audio/01_fourier_stft.qmd),
-이미지 증강은 [9.0 이미지의 표현과 처리](../09_vision_video/00_image_basics.qmd)에서
+오디오 augmentation은 [8.1 Fourier·STFT](../08_audio/01_fourier_stft.qmd),
+이미지 augmentation은 [9.0 이미지의 표현과 처리](../09_vision_video/00_image_basics.qmd)에서
 실제 신호에 적용해 봅니다.
 :::
 
 ---
 
-## 정규화 도구 비교
+## regularization 도구 비교
+
+지금까지의 도구들을 같은 문제(훈련 120개)·같은 예산(2,000 step)에 하나씩 넣어 비교한다.
 
 ```{python}
 #| label: fig-regularizer-comparison
@@ -618,12 +645,12 @@ def run(name, dropout=0.0, wd=0.0, smooth=0.0, mixup=0.0, noise=0.0, steps=2000)
 
 settings = [
     run("없음"),
-    run("드롭아웃 0.3", dropout=0.3),
+    run("dropout 0.3", dropout=0.3),
     run("weight decay 0.05", wd=0.05),
-    run("레이블 스무딩 0.1", smooth=0.1),
+    run("label smoothing 0.1", smooth=0.1),
     run("Mixup α=0.4", mixup=0.4),
     run("입력 잡음 0.1", noise=0.1),
-    run("드롭아웃+WD+Mixup", dropout=0.2, wd=0.02, mixup=0.4),
+    run("dropout+WD+Mixup", dropout=0.2, wd=0.02, mixup=0.4),
 ]
 
 names = [s[0] for s in settings]
@@ -634,7 +661,7 @@ fig.add_trace(go.Bar(x=names, y=[s[2] for s in settings], name="검증",
                      marker_color=viz.ACCENT))
 fig.update_layout(barmode="group", yaxis_title="정확도",
                   yaxis=dict(range=[0.6, 1.02]), legend=dict(x=0.02, y=0.15))
-viz.fig_defaults(fig, height=430, title="정규화 도구 비교 · 훈련 120개")
+viz.fig_defaults(fig, height=430, title="regularization 도구 비교 · 훈련 120개")
 fig.update_layout(xaxis_tickangle=-20)
 fig.show()
 ```
@@ -656,40 +683,42 @@ tight_s = min(settings, key=lambda s: s[1]-s[2])
 wd_s = settings[2]
 ```
 
-weight decay 와 레이블 스무딩은 이 장에서 다루지 않았지만 [3.4](04_optimizers.qmd)와
-[3.3](03_losses.qmd)에서 본 정규화이므로 같은 예산에 넣었다.
+weight decay와 label smoothing은 이 장에서 다루지 않았지만 [3.4](04_optimizers.qmd)와
+[3.3](03_losses.qmd)에서 본 regularization이므로 같은 예산에 넣었다.
+"기준 대비" 열은 아무것도 안 켠 첫 줄과 비교한 검증 정확도 차이다.
 검증 최고는 `{python} best_s[0]` (`{python} f"{best_s[2]:.3f}"`, 기준 대비 `{python} f"{best_s[2]-base_te:+.3f}"`),
 격차 최소도 `{python} tight_s[0]` (`{python} f"{tight_s[1]-tight_s[2]:.3f}"`)이다.
 반대로 `{python} wd_s[0]` 는 검증이 `{python} f"{wd_s[2]-base_te:+.3f}"` 로 오히려 나빠졌는데,
-훈련 정확도도 `{python} f"{wd_s[1]:.3f}"` 로 같이 떨어진 것을 보면 이 문제에는 감쇠가 너무 강한 것이다
-— 정규화는 세기를 맞춰야 하는 도구지 켜기만 하면 되는 스위치가 아니다.
+훈련 정확도도 `{python} f"{wd_s[1]:.3f}"` 로 같이 떨어진 것을 보면 이 문제에는 decay가 너무 강한 것이다
+— regularization은 세기를 맞춰야 하는 도구지 켜기만 하면 되는 스위치가 아니다.
 
-주의할 점이 둘 있다. 이 표는 시드 하나, 데이터셋 하나의 결과이고 표의 차이 대부분은
-앞에서 잰 표준오차(`{python} f"{se:.3f}"`) 안이다. 그리고 격차가 작다고 좋은 것이 아니다 —
-훈련 정확도까지 같이 떨어졌을 수 있다. 실제로는 여러 시드에서 검증 성능의 평균과 분산을 함께 봐야 한다.
+주의할 점이 둘 있다. 이 표는 seed 하나, dataset 하나의 결과이고 표의 차이 대부분은
+앞에서 잰 standard error(`{python} f"{se:.3f}"`) 안이다. 그리고 격차가 작다고 좋은 것이 아니다 —
+훈련 정확도까지 같이 떨어졌을 수 있다. 실제로는 여러 seed에서 검증 성능의 평균과 분산을 함께 봐야 한다.
 
 ---
 
-## 미스터리: 왜 일반화하는가
+## 미스터리: 왜 generalization하는가
 
 ::: {.callout-note}
 ## 아직 답이 없는 질문
 
 Zhang et al.(2017)의 실험이 문제를 선명하게 만들었다.
-**레이블을 완전히 무작위로 바꾼 CIFAR-10 을 신경망은 100% 외운다** (ImageNet 도 95%).
-그러니 "모델이 단순해서 일반화한다"는 설명은 틀렸다.
+**label을 완전히 무작위로 바꾼 CIFAR-10을 신경망은 100% 외운다** (ImageNet도 95%).
+외울 능력은 충분히 있다는 뜻이다. 그런데 label이 제대로 붙어 있으면 외우는 대신 generalization한다.
+그러니 "모델이 단순해서(외울 능력이 없어서) generalization한다"는 설명은 틀렸다.
 
 지금까지 나온 부분적 답들:
 
-- **암묵적 정규화** — SGD 자체가 특정 해를 선호한다 (최소 norm 해 쪽으로)
-- **이중 하강(double descent)** — 파라미터를 더 늘리면 성능이 다시 좋아진다.
+- **implicit regularization**(암묵적 정규화) — SGD 자체가 특정 해를 선호한다 (최소 norm 해 쪽으로)
+- **double descent**(이중 하강) — parameter를 더 늘리면 성능이 다시 좋아진다.
   고전 이론의 U자 곡선 오른쪽에 또 하나의 내리막이 있다
-- **평평한 최소점** — [3.3](03_losses.qmd)에서 봤듯 논쟁 중이다
-- **NTK / 특성 학습** — 무한 너비 극한에서의 이론. 유한 모델과의 간극이 남는다
+- **flat minimum** — [3.3](03_losses.qmd)에서 봤듯 논쟁 중이다
+- **NTK / feature learning** — 무한 너비 극한에서의 이론. 유한 모델과의 간극이 남는다
 
 **실무적 결론**: 위 도구들은 전부 **경험적으로** 효과가 확인된 것이고,
 그 효과는 데이터 대비 모델 크기에 크게 의존한다.
-"항상 켜는 정규화"는 없다. 검증 성능으로 확인하는 수밖에 없다.
+"항상 켜는 regularization"은 없다. 검증 성능으로 확인하는 수밖에 없다.
 :::
 
 ---
@@ -697,16 +726,16 @@ Zhang et al.(2017)의 실험이 문제를 선명하게 만들었다.
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 드롭아웃의 추론 시 스케일을 빼먹는다**
-`dropout-variance` 의 마스크에서 $1/(1-p)$ 나누기를 빼고 평균을 다시 재라.
+**① dropout의 inference 시 scale을 빼먹는다**
+`dropout-variance` 의 mask에서 $1/(1-p)$ 나누기를 빼고 평균을 다시 재라.
 출력이 몇 배 작아지는가? $p=0.5$ 면 예측한 대로인가?
 
 **② mixup이 과신을 어떻게 바꾸는가**
 `fig-mixup` 의 `train_mixup` 으로 $\alpha$ = 0.1·0.4·1.0 모델을 얻어
-검증 집합에서 예측 확률의 히스토그램을 그려라. 1 에 몰린 과신이 줄어드는가?
+검증 집합에서 예측 확률의 히스토그램을 그려라. 1에 몰린 과신이 줄어드는가?
 
-**③ 조기 종료와 Ridge를 맞춰 본다**
-선형 모델에서 GD를 $t$ 스텝 돌린 것과 $\lambda \approx 1/(\eta t)$ 인 Ridge를 비교하라.
+**③ early stopping과 Ridge를 맞춰 본다**
+선형 모델에서 GD를 $t$ step 돌린 것과 $\lambda \approx 1/(\eta t)$ 인 Ridge를 비교하라.
 계수가 얼마나 가까운가?
 :::
 
@@ -714,20 +743,20 @@ Zhang et al.(2017)의 실험이 문제를 선명하게 만들었다.
 
 | 도구 | 하는 일 | 언제 |
 |------|---------|------|
-| 드롭아웃 | 서브네트워크 앙상블 | 데이터 < 파라미터, 파인튜닝 |
-| weight decay | 가중치 norm 억제 (정규화 뒤에선 유효 lr 조절) | 거의 항상 |
-| 레이블 스무딩 | 과신 억제 | 분류, 캘리브레이션 필요 시 |
-| Mixup / CutMix | 샘플 사이 선형 보간을 학습 | 이미지 분류 |
-| 데이터 증강 | **불변성 지식 주입** | 도메인을 알 때 |
-| 조기 종료 | 과적합 전에 멈춤 | 비용 0, 항상 |
-| EMA / SWA | 궤적 가중치 평균 | 비용 거의 0, 항상 |
-| 확률적 깊이 | 블록 단위 드롭 | 매우 깊은 잔차망 |
+| dropout | subnetwork ensemble — 무작위 결근 | 데이터 < parameter, fine-tuning |
+| weight decay | weight norm 억제 (normalization 뒤에선 유효 lr 조절) | 거의 항상 |
+| label smoothing | 과신 억제 | 분류, calibration 필요 시 |
+| Mixup / CutMix | 샘플 사이 linear interpolation을 학습 — 반투명 겹치기 | 이미지 분류 |
+| data augmentation | **invariance 지식 주입** — 다른 각도로 보여주기 | domain을 알 때 |
+| early stopping | overfitting 전에 멈춤 — 모의고사 최고점에서 | 비용 0, 항상 |
+| EMA / SWA | 궤적 weight 평균 — 흔들린 사진 겹치기 | 비용 거의 0, 항상 |
+| stochastic depth | block 단위 drop | 매우 깊은 residual network |
 
-정규화가 학습을 **덜 망가뜨리는** 방법이었다면,
-다음 장은 학습을 **시작할 수 있게** 하는 방법이다 — 초기화.
+regularization이 학습을 **덜 망가뜨리는** 방법이었다면,
+다음 장은 학습을 **시작할 수 있게** 하는 방법이다 — initialization.
 
 ---
 
-**다음**: [3.7 초기화와 그래디언트 흐름](07_initialization.qmd)
+**다음**: [3.7 initialization과 gradient 흐름](07_initialization.qmd)
 
-**이전**: [3.5 정규화 층](05_normalization.qmd)
+**이전**: [3.5 normalization layer](05_normalization.qmd)
