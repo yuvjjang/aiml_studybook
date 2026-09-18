@@ -1,6 +1,6 @@
 ---
-title: "5.9 스케일링 법칙"
-subtitle: "Kaplan·Chinchilla·연산 최적 — 얼마나 키우고 얼마나 먹일 것인가"
+title: "5.9 scaling law"
+subtitle: "Kaplan·Chinchilla·compute-optimal — 얼마나 키우고 얼마나 먹일 것인가"
 jupyter: ai-ml-study
 ---
 
@@ -11,34 +11,36 @@ GPU 1000장과 두 달이 주어졌다. 어떻게 쓸 것인가?
 
 2020년 이전에는 감으로 정했다. 지금은 **계산할 수 있다.**
 
-손실이 모델 크기·데이터·연산량에 대해 놀랍도록 규칙적인 **멱법칙**을 따른다는 것이
-발견되면서, 이 질문이 공학 문제가 되었다. 그리고 그 답이 지난 몇 년간의
+loss가 모델 크기·데이터·연산량에 대해 놀랍도록 규칙적인 **power law**(멱법칙)를 따른다는 것이
+발견되면서, 이 질문이 공학 문제가 되었다 — 이것이 **scaling law**(스케일링 법칙)다. 그리고 그 답이 지난 몇 년간의
 수십억 달러짜리 투자 결정을 이끌었다.
 
 ---
 
-## 멱법칙: 로그-로그에서 직선
+## power law: log-log에서 직선
 
-관측된 사실은 단순하다. 손실 $L$ 이 연산량 $C$, 파라미터 $N$, 데이터 $D$ 각각에 대해
+관측된 사실은 단순하다. loss $L$ 이 연산량 $C$, parameter $N$, 데이터 $D$ 각각에 대해
 
 $$L(X) \approx L_\infty + \left(\frac{X_c}{X}\right)^{\alpha}$$
 
-형태를 따른다. 로그-로그 평면에서 **직선**이 된다는 뜻이다.
+형태를 따른다. $L_\infty$ 는 아무리 키워도 못 줄이는 바닥, $X_c$ 는 단위를 맞추는 상수, $\alpha$ 는 "자원을 10배 늘리면 loss가 얼마나 주는가"를 정하는 지수다.
+양변에 로그를 씌우면 $\log(L - L_\infty) = \alpha\log X_c - \alpha \log X$ — log-log 평면에서 기울기 $-\alpha$ 인 **직선**이 된다는 뜻이다.
 
 ::: {.key-concept}
-멱법칙이 무서운 이유는 **외삽이 된다**는 점이다.
+power law가 무서운 이유는 **extrapolation(외삽)이 된다**는 점이다.
 
 작은 모델 여러 개를 학습시켜 직선을 얻으면,
-아직 만들지 않은 100배 큰 모델의 손실을 예측할 수 있다.
+아직 만들지 않은 100배 큰 모델의 loss를 예측할 수 있다.
+자로 몇 점을 찍고 직선을 그으면 자 밖의 점도 예측되는 것이다.
 수천만 달러를 쓰기 전에 결과를 가늠할 수 있다는 뜻이다.
 
 동시에 무서운 또 하나. 지수 $\alpha$ 가 작다는 것은
-**성능을 조금 올리려면 자원을 엄청나게 늘려야 한다**는 뜻이다.
+**성능을 조금 올리려면 자원을 엄청나게 늘려야 한다**는 뜻이다 — $\alpha = 0.05$ 면 loss를 절반으로 줄이는 데 자원이 $2^{20}$, 즉 백만 배 필요하다.
 :::
 
 ```{python}
 #| label: fig-power-law
-#| fig-cap: "로그-로그 평면에서는 직선, 선형 축에서는 수확 체감으로 보이는 멱법칙"
+#| fig-cap: "log-log 평면에서는 직선, 선형 축에서는 diminishing returns로 보이는 power law"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -47,8 +49,8 @@ from plotly.subplots import make_subplots
 from src import viz
 
 # Kaplan et al. 계열의 대략적 형태 (정성적 재현)
-N = np.logspace(6, 11, 60)          # 파라미터 수
-D = np.logspace(8, 13, 60)          # 학습 토큰
+N = np.logspace(6, 11, 60)          # parameter 수
+D = np.logspace(8, 13, 60)          # 학습 token
 C = np.logspace(17, 25, 60)         # FLOPs
 
 L_N = (8.8e13 / N) ** 0.076
@@ -56,9 +58,9 @@ L_D = (5.4e13 / D) ** 0.095
 L_C = (3.1e8 / C) ** 0.050
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("로그-로그: 직선", "선형 축: 수확 체감"))
+                    subplot_titles=("log-log: 직선", "선형 축: diminishing returns"))
 
-for i, (x, y, name) in enumerate([(N, L_N, "파라미터 N"),
+for i, (x, y, name) in enumerate([(N, L_N, "parameter N"),
                                    (D, L_D, "데이터 D"),
                                    (C, L_C, "연산량 C")]):
     fig.add_trace(go.Scatter(x=x / x[0], y=y, mode="lines", name=name,
@@ -68,10 +70,10 @@ for i, (x, y, name) in enumerate([(N, L_N, "파라미터 N"),
                              line=dict(color=viz.color(i), width=2.5)), row=1, col=2)
 
 fig.update_xaxes(title_text="배율 (최소값 대비)", type="log", row=1, col=1)
-fig.update_yaxes(title_text="손실", type="log", row=1, col=1)
+fig.update_yaxes(title_text="loss", type="log", row=1, col=1)
 fig.update_xaxes(title_text="배율", type="log", row=1, col=2)
-fig.update_yaxes(title_text="손실", row=1, col=2)
-viz.fig_defaults(fig, height=400, title="스케일링 멱법칙 (정성적 형태)")
+fig.update_yaxes(title_text="loss", row=1, col=2)
+viz.fig_defaults(fig, height=400, title="scaling power law (정성적 형태)")
 fig.update_layout(legend=dict(x=0.02, y=0.35))
 fig.show()
 ```
@@ -81,8 +83,8 @@ fig.show()
 
 계수와 지수는 원 논문에서 보고된 값의 **대략적 형태를 재현한 것**이며,
 정확한 재현이 아닙니다. 지수가 0.05~0.1 수준으로 작다는 점,
-로그-로그에서 직선이 된다는 점이 요지입니다.
-실제 값은 데이터셋·토크나이저·아키텍처에 따라 달라집니다.
+log-log에서 직선이 된다는 점이 요지입니다.
+실제 값은 dataset·tokenizer·architecture에 따라 달라집니다.
 :::
 
 ---
@@ -90,16 +92,16 @@ fig.show()
 ## Kaplan에서 Chinchilla로
 
 2020년 Kaplan et al.의 결론은 "**모델을 크게 키우는 것이 우선**"이었다.
-연산이 늘어나면 대부분을 파라미터에 쓰고, 데이터는 상대적으로 덜 늘려도 된다는 것.
+연산이 늘어나면 대부분을 parameter에 쓰고, 데이터는 상대적으로 덜 늘려도 된다는 것.
 
-GPT-3(175B, 300B 토큰)가 이 처방대로 만들어졌다.
+GPT-3(175B, 300B token)가 이 처방대로 만들어졌다.
 
 2022년 Hoffmann et al.(Chinchilla)이 이를 뒤집었다.
 **모델과 데이터를 거의 같은 비율로 늘려야 한다**는 것이다.
 
 $$N_{\text{opt}} \propto C^{0.5}, \qquad D_{\text{opt}} \propto C^{0.5}$$
 
-실용적 요약: **파라미터 1개당 토큰 약 20개.**
+실용적 요약: **parameter 1개당 token 약 20개.** 아래 표는 실제 모델들이 이 비율에 어디쯤 있는지 본 것이다.
 
 ```{python}
 #| label: chinchilla-table
@@ -114,22 +116,23 @@ models = [
     ("LLaMA-2 70B",   70e9, 2000e9),
     ("LLaMA-3 70B",   70e9, 15000e9),
 ]
-print(f"{'모델':<15} {'파라미터':>10} {'토큰':>10} {'토큰/파라미터':>14} {'평가'}")
+print(f"{'모델':<15} {'parameter':>10} {'token':>10} {'token/param':>14} {'평가'}")
 print("-" * 66)
 for name, n, d in models:
     ratio = d / n
     if ratio < 10:
-        verdict = "데이터 부족 (미학습)"
+        verdict = "데이터 부족 (undertrained)"
     elif ratio < 30:
         verdict = "Chinchilla 최적 부근"
     else:
-        verdict = "과학습 (추론 최적화)"
+        verdict = "overtraining (inference 최적화)"
     print(f"{name:<15} {n/1e9:>8.0f}B {d/1e9:>8.0f}B {ratio:>13.0f} {verdict}")
 ```
 
 ::: {.key-concept}
-GPT-3는 **크게 미학습(undertrained)** 되었다. 토큰/파라미터가 1.7밖에 안 된다.
+GPT-3는 **크게 undertrained**(미학습 — 크기에 비해 데이터를 너무 적게 본 상태)되었다. token/parameter가 1.7밖에 안 된다.
 같은 연산으로 더 작은 모델을 더 오래 학습시켰다면 성능이 더 좋았을 것이다.
+큰 교실을 지어 놓고 수업은 며칠만 한 셈이다.
 
 Chinchilla는 GPT-3의 **40%** 크기로 **더 나은 성능**을 냈다.
 이 결과가 이후 모든 모델 설계를 바꿨다.
@@ -141,32 +144,33 @@ Kaplan과 Hoffmann이 서로 다른 답을 낸 것은 데이터가 아니라 **�
 
 | 차이점 | Kaplan (2020) | Chinchilla (2022) |
 |--------|---------------|-------------------|
-| 학습률 스케줄 | 모든 모델에 동일한 길이 가정 | **모델마다 토큰 수에 맞춰 조정** |
-| 학습 종료 | 스케줄이 끝나기 전 중단된 경우 포함 | 각 설정에서 끝까지 |
-| 임베딩 파라미터 | 제외 | 포함 |
+| learning rate schedule | 모든 모델에 동일한 길이 가정 | **모델마다 token 수에 맞춰 조정** |
+| 학습 종료 | schedule이 끝나기 전 중단된 경우 포함 | 각 설정에서 끝까지 |
+| embedding parameter | 제외 | 포함 |
 
-작은 모델을 오래 학습시킬 때 학습률 스케줄을 맞추지 않으면
-성능이 과소평가된다. 그래서 "큰 모델이 유리하다"는 결론이 나왔다.
+작은 모델을 오래 학습시킬 때 learning rate schedule을 맞추지 않으면
+성능이 과소평가된다([3.4](../03_deep_learning/04_optimizers.qmd)의 cosine schedule은 총 step 수를 알아야 제대로 돈다). 그래서 "큰 모델이 유리하다"는 결론이 나왔다.
 
 **실험 설계의 세부가 수십억 달러짜리 결론을 뒤집은 사례다.**
 
 ---
 
-### 연산 최적 배분은 라그랑주 한 번이면 나온다
+### compute-optimal 배분은 Lagrange 한 번이면 나온다
 
 Chinchilla의 결론 — "$N$ 과 $D$ 를 **같은 비율로** 키워라" — 은 관찰이 아니라 계산 결과다.
-손실을 파라미터와 데이터의 함수로 두고
+loss를 parameter와 데이터의 함수로 두고
 
 $$L(N, D) = \underbrace{E}_{\text{줄일 수 없는 항}}
 + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}}$$
 
+$A/N^\alpha$ 는 "모델이 작아서 생기는 loss", $B/D^\beta$ 는 "데이터가 적어서 생기는 loss"다.
 여기에 연산량 제약을 건다. 학습 FLOPs는 경험적으로
 
 $$C \approx 6ND$$
 
-(순전파 2, 역전파 4 — 파라미터당 토큰당 6회 곱셈-덧셈이라는 어림이다.)
+(forward pass 2, backward pass 4 — parameter당 token당 6회 곱셈-덧셈이라는 어림이다. [3.1](../03_deep_learning/01_backpropagation.qmd)에서 본 그 6이다.)
 
-**제약 있는 최소화**이므로 [0.1의 라그랑주](../00_foundations/01_calculus_optimization.qmd)를 쓴다.
+**제약 있는 최소화**이므로 [0.1의 Lagrange multiplier](../00_foundations/01_calculus_optimization.qmd)를 쓴다 — 예산 $C$ 가 정해진 상태에서 $N$ 과 $D$ 에 얼마씩 배분할지 정하는 문제다.
 
 $$\mathcal{L} = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta} + \lambda\,(6ND - C)$$
 
@@ -181,7 +185,7 @@ $\lambda$ 를 소거하기 위해 각각 $N$, $D$ 를 곱해 비교하면 깔끔
 $$\boxed{\ \frac{\alpha A}{N^{\alpha}} = \frac{\beta B}{D^{\beta}}\ }$$
 
 **두 항의 기여가 균형을 이룰 때가 최적**이라는 뜻이다.
-한쪽이 지배하면 그쪽에 자원을 더 주는 것이 이득이므로 당연한 결과이기도 하다.
+한쪽이 지배하면 그쪽에 자원을 더 주는 것이 이득이므로 당연한 결과이기도 하다 — 두 과목 중 한 과목이 훨씬 못하면 그 과목에 시간을 더 쓰는 것이 총점을 올리는 길이다.
 
 여기서 $C=6ND$ 를 대입해 풀면 지수가 나온다.
 
@@ -194,14 +198,14 @@ Chinchilla가 적합한 값은 $\alpha \approx 0.34$, $\beta \approx 0.28$ 로 *
 
 $$N^\star \propto C^{0.45}, \qquad D^\star \propto C^{0.55}$$
 
-두 지수가 $\tfrac12$ 근처라 **"$N$ 과 $D$ 를 대체로 같은 비율로"** 라는 결론이 나온다.
+두 지수가 $\tfrac12$ 근처라 **"$N$ 과 $D$ 를 대체로 같은 비율로"**라는 결론이 나온다.
 다만 $\beta<\alpha$ 라 데이터 쪽 지수가 조금 크고, 그래서 $D/N$ 비는
 연산량이 커질수록 **천천히 증가**한다 — 완전히 일정하지는 않다.
-"토큰 수 ≈ 파라미터 수의 20배"는 Chinchilla 규모 근처에서의 어림이지
+"token 수 ≈ parameter 수의 20배"는 Chinchilla 규모 근처에서의 어림이지
 모든 규모에 통하는 상수가 아니다.
 
 Kaplan이 $N$ 쪽에 치우친 답($N \propto C^{0.73}$)을 얻은 것은
-$\alpha,\beta$ 추정과 학습률 스케줄 처리가 달랐기 때문이고,
+$\alpha,\beta$ 추정과 learning rate schedule 처리가 달랐기 때문이고,
 **지수가 조금만 달라져도 배분이 크게 달라진다**는 것이 위 식에 그대로 보인다.
 
 ```{python}
@@ -222,7 +226,7 @@ def optimal(C):
     i = int(np.argmin(L))
     return Ns[i], Ds[i], L[i]
 
-print(f"{'연산량 C':>10}  {'최적 N':>16}  {'최적 D':>18}  {'D/N':>7}  {'손실':>6}")
+print(f"{'연산량 C':>10}  {'최적 N':>16}  {'최적 D':>18}  {'D/N':>7}  {'loss':>6}")
 ratios = []
 for C in [1e19, 1e21, 1e23, 1e25]:
     N, D, L = optimal(C)
@@ -245,19 +249,19 @@ $\beta < \alpha$ 이므로 데이터 쪽이 조금 더 빨리 커야 하고 $D/N
 ::: {.callout-warning}
 ## 이 표는 Chinchilla 논문의 대표 권고와 어긋납니다
 
-위 계산은 Chinchilla 논문이 보고한 **모수적 적합 형태**
+위 계산은 Chinchilla 논문이 보고한 **parametric fit**(모수적 적합 — 정해진 식 모양에 상수를 맞춘 것) 형태
 $L(N,D) = E + A/N^{0.34} + B/D^{0.28}$ 를 그대로 쓴 것입니다.
-그런데 이 식에서 나오는 최적점은 논문의 대표 권고("토큰/파라미터 ≈ 20")와 어긋납니다 —
+그런데 이 식에서 나오는 최적점은 논문의 대표 권고("token/parameter ≈ 20")와 어긋납니다 —
 위 표는 `{python} f"{ratios[0]:.0f}"`~`{python} f"{ratios[-1]:.0f}"` 을 줍니다.
 
 이것은 계산 실수가 아니라 **원 논문 안에 있는 알려진 불일치**입니다.
 Chinchilla는 세 가지 접근으로 최적점을 추정했는데,
-모수적 적합(접근 3)만 다른 두 방법과 어긋나는 값을 냈고,
-이후 재분석(Besiroglu et al. 2024)에서 그 적합의 신뢰구간과 보고값에 문제가 지적되었습니다.
+parametric fit(접근 3)만 다른 두 방법과 어긋나는 값을 냈고,
+이후 재분석(Besiroglu et al. 2024)에서 그 fit의 신뢰구간과 보고값에 문제가 지적되었습니다.
 
-그러니 이 표는 **"고정 예산에서 U자 곡선이 생기고 최적점이 존재한다"** 는
+그러니 이 표는 **"고정 예산에서 U자 곡선이 생기고 최적점이 존재한다"**는
 구조를 보여주는 용도로만 읽으세요.
-실무 규칙으로는 세 접근이 대체로 합의한 **토큰/파라미터 ≈ 20** 를 쓰는 것이 안전합니다.
+실무 규칙으로는 세 접근이 대체로 합의한 **token/parameter ≈ 20**을 쓰는 것이 안전합니다.
 :::
 
 ::: {.callout-warning}
@@ -265,24 +269,24 @@ Chinchilla는 세 가지 접근으로 최적점을 추정했는데,
 
 - **함수 형태를 가정했다.** $L = E + A/N^\alpha + B/D^\beta$ 는 관측에 맞춘 것이지
   원리에서 유도된 것이 아니다. 다른 형태를 쓰면 결론이 달라진다.
-- **$C=6ND$ 는 어림이다.** 어텐션의 $n^2$ 항, MoE, 활성화 재계산을 무시한다.
-  긴 문맥에서는 어텐션 항이 무시할 수 없어 실제 비용이 이 식보다 커진다.
-- **학습 연산만 센다.** 배포 후 추론 비용을 넣으면 최적점이 **작은 모델 쪽으로** 옮겨간다 —
-  아래 절에서 다룬다. 같은 손실이면 작은 모델이 영원히 싸기 때문이다.
-- $\alpha, \beta$ 는 **데이터·아키텍처·최적화 설정에 의존**한다.
+- **$C=6ND$ 는 어림이다.** attention의 $n^2$ 항, MoE, activation 재계산을 무시한다.
+  긴 문맥에서는 attention 항이 무시할 수 없어 실제 비용이 이 식보다 커진다.
+- **학습 연산만 센다.** 배포 후 inference 비용을 넣으면 최적점이 **작은 모델 쪽으로** 옮겨간다 —
+  아래 절에서 다룬다. 같은 loss면 작은 모델이 영원히 싸기 때문이다.
+- $\alpha, \beta$ 는 **데이터·architecture·optimization 설정에 의존**한다.
   다른 설정에서 측정한 지수를 그대로 가져다 쓰면 안 된다.
 :::
 
 ---
 
-## G5.9.1 — 연산 최적 배분을 그림으로
+## G5.9.1 — compute-optimal 배분을 그림으로
 
-같은 계산을 예산별 손실 곡선으로 본다. 고정 예산에서 $N$ 을 키우면 $D = C/6N$ 이 줄어들므로
+같은 계산을 예산별 loss 곡선으로 본다. 고정 예산에서 $N$ 을 키우면 $D = C/6N$ 이 줄어들므로
 곡선은 U자가 되고, 그 바닥이 최적점이다.
 
 ```{python}
 #| label: fig-compute-optimal
-#| fig-cap: "고정 연산 예산에서 파라미터·데이터 배분에 따른 손실"
+#| fig-cap: "고정 연산 예산에서 parameter·데이터 배분에 따른 loss"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -290,7 +294,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import viz
 
-# Chinchilla 형태의 손실 근사: L(N,D) = E + A/N^a + B/D^b
+# Chinchilla 형태의 loss 근사: L(N,D) = E + A/N^a + B/D^b
 E, A, B, a, b = 1.69, 406.4, 410.7, 0.34, 0.28
 
 def loss_ND(N, D):
@@ -298,7 +302,7 @@ def loss_ND(N, D):
 
 budgets = [1e19, 1e20, 1e21, 1e22, 1e23, 1e24]
 fig = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45],
-                    subplot_titles=("예산별 손실 곡선", "최적 배분"))
+                    subplot_titles=("예산별 loss 곡선", "최적 배분"))
 
 opt_N, opt_D = [], []
 curves = {}
@@ -313,7 +317,7 @@ for C in budgets:
 
 C0 = budgets[3]
 ns0, ls0 = curves[C0]
-fig.add_trace(go.Scatter(x=ns0, y=ls0, mode="lines", name="손실",
+fig.add_trace(go.Scatter(x=ns0, y=ls0, mode="lines", name="loss",
                          line=dict(color=viz.ACCENT, width=3)), row=1, col=1)
 i0 = int(np.argmin(ls0))
 fig.add_trace(go.Scatter(x=[ns0[i0]], y=[ls0[i0]], mode="markers", name="최적점",
@@ -336,8 +340,8 @@ for C in budgets:
 
 fig.update_layout(sliders=[viz.slider(steps, prefix="연산 예산 C = ",
                                       suffix=" FLOPs", active=3, pad_t=60)])
-fig.update_xaxes(title_text="파라미터 N", type="log", row=1, col=1)
-fig.update_yaxes(title_text="예측 손실", row=1, col=1)
+fig.update_xaxes(title_text="parameter N", type="log", row=1, col=1)
+fig.update_yaxes(title_text="예측 loss", row=1, col=1)
 fig.update_xaxes(title_text="연산 예산 C (FLOPs)", type="log", row=1, col=2)
 fig.update_yaxes(title_text="개수", type="log", row=1, col=2)
 viz.fig_defaults(fig, height=440, title="C ≈ 6ND 제약 하의 최적 배분")
@@ -351,16 +355,17 @@ fig.show()
 
 ---
 
-## 추론 비용을 넣으면 답이 달라진다
+## inference 비용을 넣으면 답이 달라진다
 
-Chinchilla는 **학습 연산만** 최적화한다. 그런데 실제 서비스에서는 추론이 압도적으로 많다.
+Chinchilla는 **학습 연산만** 최적화한다. 그런데 실제 서비스에서는 inference가 압도적으로 많다.
 
-모델을 한 번 학습해 수십억 번 추론한다면, **작은 모델을 최적점보다 오래 학습시키는 것**이 낫다.
-학습 비용은 조금 더 들지만 추론 비용이 영구적으로 싸진다.
+모델을 한 번 학습해 수십억 번 inference한다면, **작은 모델을 최적점보다 오래 학습시키는 것**(overtraining — 과학습)이 낫다.
+학습 비용은 조금 더 들지만 inference 비용이 영구적으로 싸진다.
+공장을 지을 때 초기 비용이 더 들더라도 운영비가 싼 설비를 고르는 것과 같다 — 오래 돌릴수록 이득이다.
 
 ```{python}
 #| label: fig-overtraining
-#| fig-cap: "추론 요청이 많을수록 유리해지는 작고 오래 학습한 모델"
+#| fig-cap: "inference 요청이 많을수록 유리해지는 작고 오래 학습한 모델"
 
 import numpy as np
 import plotly.graph_objects as go
@@ -368,62 +373,63 @@ from src import viz
 
 # 같은 성능을 내는 두 선택지 (개략)
 options = [
-    ("70B / 1.4T 토큰 (Chinchilla 최적)", 70e9, 1.4e12),
-    ("30B / 6T 토큰 (과학습)",            30e9, 6.0e12),
-    ("8B / 15T 토큰 (강한 과학습)",        8e9, 15.0e12),
+    ("70B / 1.4T token (Chinchilla 최적)", 70e9, 1.4e12),
+    ("30B / 6T token (overtraining)",     30e9, 6.0e12),
+    ("8B / 15T token (강한 overtraining)", 8e9, 15.0e12),
 ]
 
-n_requests = np.logspace(6, 13, 60)      # 총 추론 토큰 수
+n_requests = np.logspace(6, 13, 60)      # 총 inference token 수
 TOK_PER_REQ = 500
 
 fig = go.Figure()
 for i, (name, N, D) in enumerate(options):
     train = 6 * N * D
-    infer = 2 * N * n_requests            # 추론은 파라미터당 2 FLOPs/토큰
+    infer = 2 * N * n_requests            # inference는 parameter당 2 FLOPs/token
     fig.add_trace(go.Scatter(x=n_requests, y=(train + infer) / 1e21,
                              mode="lines", name=name,
                              line=dict(color=viz.color(i), width=2.5)))
 
-fig.update_layout(xaxis_title="누적 추론 토큰 수", xaxis_type="log",
+fig.update_layout(xaxis_title="누적 inference token 수", xaxis_type="log",
                   yaxis_title="총 연산량 (10²¹ FLOPs)", yaxis_type="log",
                   legend=dict(x=0.02, y=0.98))
-viz.fig_defaults(fig, height=410, title="학습 + 추론 총비용 (개략 모델)")
+viz.fig_defaults(fig, height=410, title="학습 + inference 총비용 (개략 모델)")
 fig.show()
 ```
 
 ::: {.interaction-hint}
-왼쪽 끝(추론이 적을 때)은 학습 비용이 지배해 큰 모델이 불리합니다. 오른쪽으로 갈수록 선들이 갈라지며 **작은 모델이 확실히 유리**해집니다. LLaMA-3 8B가 15조 토큰(비율 1875)으로 학습된 이유입니다.
+왼쪽 끝(inference가 적을 때)은 학습 비용이 지배해 큰 모델이 불리합니다. 오른쪽으로 갈수록 선들이 갈라지며 **작은 모델이 확실히 유리**해집니다. LLaMA-3 8B가 15조 token(비율 1875)으로 학습된 이유입니다.
 :::
 
 ---
 
 ## 데이터가 부족해지면
 
-토큰/파라미터 비율을 계속 올리려면 데이터가 계속 필요하다.
+token/parameter 비율을 계속 올리려면 데이터가 계속 필요하다.
 그런데 고품질 웹 텍스트는 유한하다.
 
-같은 데이터를 반복(에폭)하면 어떻게 되는가?
+같은 데이터를 반복(epoch — 전체 데이터를 한 바퀴 도는 것)하면 어떻게 되는가?
 
 | 반복 횟수 | 효과 |
 |-----------|------|
 | ~4회까지 | 새 데이터와 거의 동등한 효과 |
-| 4~16회 | 수확 체감이 뚜렷해짐 |
+| 4~16회 | diminishing returns(수확 체감)가 뚜렷해짐 |
 | 16회 이상 | 거의 이득 없음, 암기 위험 증가 |
 
 이 제약이 최근 흐름 몇 가지를 설명한다 —
-[데이터 품질 필터링](../07_language/05_pretraining_data.qmd)에 대한 투자,
-합성 데이터, 그리고 **다음 장의 추론 시간 스케일링**.
+[데이터 품질 filtering](../07_language/05_pretraining_data.qmd)에 대한 투자,
+합성 데이터, 그리고 **inference-time scaling**(모델을 키우는 대신 답할 때 더 오래 생각하게 하기).
 
 ---
 
-## 창발은 실재하는가
+## emergence는 실재하는가
 
-모델을 키우면 특정 크기에서 능력이 **갑자기** 나타난다는 주장이 있었다(창발, emergence).
+모델을 키우면 특정 크기에서 능력이 **갑자기** 나타난다는 주장이 있었다 — **emergence**(창발).
 이후 이것이 상당 부분 **측정 방식의 산물**이라는 반론이 제기되었다.
+아래는 "token 하나를 맞힐 확률"은 부드럽게 오르는데, "6단계를 전부 맞혀야 정답"인 지표로 재면 계단처럼 보이는 것을 만들어 본 것이다.
 
 ```{python}
 #| label: fig-emergence
-#| fig-cap: "지표를 바꾸면 완만해지는 '창발'의 계단"
+#| fig-cap: "지표를 바꾸면 완만해지는 'emergence'의 계단"
 
 import numpy as np
 import plotly.graph_objects as go
@@ -431,14 +437,14 @@ from plotly.subplots import make_subplots
 from src import viz
 
 scale = np.logspace(8, 12, 80)
-# 토큰당 정답 확률은 부드럽게 증가한다고 가정
+# token당 정답 확률은 부드럽게 증가한다고 가정
 p_tok = 1 / (1 + (3e10 / scale) ** 0.8)
 n_steps_task = 6
 exact_match = p_tok ** n_steps_task        # 전부 맞아야 정답 → 계단처럼 보임
 
 fig = make_subplots(rows=1, cols=2,
                     subplot_titles=("완전 일치 정확도 (불연속 지표)",
-                                    "토큰 단위 확률 (연속 지표)"))
+                                    "token 단위 확률 (연속 지표)"))
 fig.add_trace(go.Scatter(x=scale, y=exact_match, mode="lines", showlegend=False,
                          line=dict(color=viz.WARM, width=3)), row=1, col=1)
 fig.add_trace(go.Scatter(x=scale, y=p_tok, mode="lines", showlegend=False,
@@ -446,7 +452,7 @@ fig.add_trace(go.Scatter(x=scale, y=p_tok, mode="lines", showlegend=False,
 
 fig.update_xaxes(title_text="모델 크기", type="log")
 fig.update_yaxes(title_text="정확도", row=1, col=1)
-fig.update_yaxes(title_text="토큰당 정답 확률", row=1, col=2)
+fig.update_yaxes(title_text="token당 정답 확률", row=1, col=2)
 viz.fig_defaults(fig, height=380,
                  title="같은 기저 능력, 다른 지표 (6단계 과제 가정)")
 fig.show()
@@ -456,56 +462,56 @@ fig.show()
 왼쪽처럼 **모든 단계를 맞혀야 점수를 주는 지표**는 부드러운 개선을 계단으로 바꾼다.
 $p^6$ 이므로 $p$ 가 0.5→0.9로 완만히 오를 때 점수는 0.016→0.53으로 급등한다.
 
-이것이 창발 논쟁의 핵심이다. 능력 자체가 갑자기 생기는 것이 아니라,
+이것이 emergence 논쟁의 핵심이다. 능력 자체가 갑자기 생기는 것이 아니라,
 **우리가 쓰는 자가 계단을 만든다**는 것이다.
 
-다만 이것이 "창발은 없다"를 뜻하지는 않는다.
+다만 이것이 "emergence는 없다"를 뜻하지는 않는다.
 실사용에서는 "6단계를 다 맞혀야 쓸모 있는" 과제가 실제로 많고,
 그 관점에서는 계단이 진짜다.
 :::
 
 ---
 
-## 스케일링 법칙의 한계
+## scaling law의 한계
 
 ::: {.callout-warning}
 ## 언제 이 법칙을 믿으면 안 되는가
 
-1. **아키텍처를 바꾸면 상수가 바뀐다.** 곡선의 기울기는 비슷해도 위치가 이동한다.
+1. **architecture를 바꾸면 상수가 바뀐다.** 곡선의 기울기는 비슷해도 위치가 이동한다.
    MoE, SSM 등은 별도의 법칙을 다시 측정해야 한다.
 2. **데이터 품질이 바뀌면 무효다.** 법칙은 특정 데이터 분포에서 측정된 것이다.
-3. **손실 ≠ 유용성.** 사전학습 손실이 낮아도 지시를 안 따르면 쓸모없다
-   ([7.7 정렬](../07_language/07_alignment.qmd)).
-4. **외삽 범위를 벗어나면 모른다.** 측정한 구간의 100배까지는 대체로 맞았지만,
+3. **loss ≠ 유용성.** pretraining loss가 낮아도 지시를 안 따르면 쓸모없다
+   ([7.7 alignment](../07_language/07_alignment.qmd)).
+4. **extrapolation 범위를 벗어나면 모른다.** 측정한 구간의 100배까지는 대체로 맞았지만,
    보장은 없다.
-5. **하이퍼파라미터가 최적이어야 한다.** Kaplan/Chinchilla 사례가 보여주듯,
-   학습률 하나가 결론을 뒤집는다.
+5. **hyperparameter가 최적이어야 한다.** Kaplan/Chinchilla 사례가 보여주듯,
+   learning rate 하나가 결론을 뒤집는다.
 :::
 
 ### μP: 작은 모델로 큰 모델의 설정 찾기
 
-큰 모델의 하이퍼파라미터를 튜닝하는 것은 너무 비싸다.
-**μP(Maximal Update Parametrization)** 는 초기화와 학습률을 폭에 맞춰 스케일링해,
-작은 모델에서 찾은 최적 학습률이 **큰 모델에서도 그대로 최적**이 되게 만든다.
+큰 모델의 hyperparameter를 tuning하는 것은 너무 비싸다.
+**μP**(Maximal Update Parametrization)는 initialization과 learning rate를 폭에 맞춰 scaling해,
+작은 모델에서 찾은 최적 learning rate가 **큰 모델에서도 그대로 최적**이 되게 만든다.
 
-실무에서 큰 모델 학습의 표준 절차가 되었다 — 작게 탐색하고, 크게 전이한다.
+실무에서 큰 모델 학습의 표준 절차가 되었다 — 작게 탐색하고, 크게 전이한다. 모형 비행기로 풍동 실험을 하고 실제 비행기를 만드는 것과 같다.
 
 ---
 
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① Kaplan 의 지수를 역산한다**
-$N^\star \propto C^{\beta/(\alpha+\beta)}$ 에서 Kaplan 의 $N \propto C^{0.73}$ 이 나오려면
+**① Kaplan의 지수를 역산한다**
+$N^\star \propto C^{\beta/(\alpha+\beta)}$ 에서 Kaplan의 $N \propto C^{0.73}$ 이 나오려면
 $\beta/\alpha$ 가 얼마여야 하는가? `compute-optimal` 의 $\alpha, \beta$ 를 그 비로 바꿔
-$D/N$ 이 예산에 따라 어떻게 변하는지 보고, GPT-3 의 토큰/파라미터 1.7 이 왜 나왔는지 설명하라.
+$D/N$ 이 예산에 따라 어떻게 변하는지 보고, GPT-3의 token/parameter 1.7이 왜 나왔는지 설명하라.
 
 **② 예산을 10배 늘린다**
 `compute-optimal` 에서 $C$ 를 10배 하면 $N$ 과 $D$ 는 각각 몇 배가 되는가?
 $C^{0.5}$ 씩이라면 둘 다 약 3.16배다. 확인하라.
 
-**③ 추론 비용을 넣으면 답이 바뀐다**
-학습 후 토큰 $T$ 개를 서빙한다고 하면 총비용은 $6ND + 2NT$ 다.
+**③ inference 비용을 넣으면 답이 바뀐다**
+학습 후 token $T$ 개를 serving한다고 하면 총비용은 $6ND + 2NT$ 다.
 $T$ 가 클 때 최적 $N$ 이 작아지는 것을 수치로 보여라.
 :::
 
@@ -513,21 +519,21 @@ $T$ 가 클 때 최적 $N$ 이 작아지는 것을 수치로 보여라.
 
 | 개념 | 내용 |
 |------|------|
-| 멱법칙 | 로그-로그에서 직선. 외삽 가능하지만 지수가 작다 |
+| power law | log-log에서 직선. extrapolation 가능하지만 지수가 작다 — 자 밖의 점도 예측 |
 | $C \approx 6ND$ | 학습 연산량 근사 |
 | Kaplan (2020) | 모델 크기 우선 → GPT-3 설계 근거 |
-| **Chinchilla (2022)** | $N$ 과 $D$ 를 함께. **토큰/파라미터 ≈ 20** |
-| 왜 갈렸나 | 학습률 스케줄 등 **실험 설계 차이** |
-| 과학습 | 추론이 많으면 작은 모델을 더 오래 — LLaMA-3 8B는 비율 1875 |
-| 데이터 반복 | ~4에폭까지는 새 데이터와 비슷 |
-| 창발 | 상당 부분 불연속 지표의 산물 |
-| μP | 작은 모델의 최적 학습률을 큰 모델로 전이 |
+| **Chinchilla (2022)** | $N$ 과 $D$ 를 함께. **token/parameter ≈ 20** — 못하는 과목에 시간 더 쓰기 |
+| 왜 갈렸나 | learning rate schedule 등 **실험 설계 차이** |
+| overtraining | inference가 많으면 작은 모델을 더 오래 — 운영비 싼 설비, LLaMA-3 8B는 비율 1875 |
+| 데이터 반복 | ~4 epoch까지는 새 데이터와 비슷 |
+| emergence | 상당 부분 불연속 지표의 산물 |
+| μP | 작은 모델의 최적 learning rate를 큰 모델로 전이 — 모형 비행기 풍동 실험 |
 
 이 장까지가 Transformer를 **크게 만드는** 이야기다.
-마지막 장은 정반대 질문을 던진다 — 어텐션 말고 다른 방법은 없는가.
+마지막 장은 정반대 질문을 던진다 — attention 말고 다른 방법은 없는가.
 
 ---
 
-**다음**: [5.10 트랜스포머의 대안](10_alternatives_ssm.qmd) — 상태공간 모델·Mamba·하이브리드
+**다음**: [5.10 Transformer의 대안](10_alternatives_ssm.qmd) — state space model·Mamba·hybrid
 
-**이전**: [5.8 전문가 혼합(MoE)](08_mixture_of_experts.qmd)
+**이전**: [5.8 Mixture of Experts(MoE)](08_mixture_of_experts.qmd)
