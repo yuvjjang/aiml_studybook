@@ -1,68 +1,73 @@
 ---
-title: "10.0 마르코프 결정 과정"
-subtitle: "상태·행동·보상·가치 — 순차적 의사결정의 형식화"
+title: "10.0 Markov decision process"
+subtitle: "state·action·reward·value — 순차적 의사결정의 형식화"
 jupyter: ai-ml-study
 ---
 
 지금까지의 모든 학습은 **정답이 있었다.**
-이 이미지는 고양이다, 이 문장 다음 토큰은 "the" 다, 이 두 프레임은 같은 사람이다.
+이 이미지는 고양이다, 이 문장 다음 token은 "the"다, 이 두 frame은 같은 사람이다.
 
-강화학습은 정답을 안 준다. **결과만 준다.**
+**reinforcement learning**(강화학습, RL)은 정답을 안 준다. **결과만 준다.**
 바둑을 두고 200수 뒤에 이겼는지 졌는지만 알려 준다. 어느 수가 좋았는지는 말해 주지 않는다.
+요리를 내놓고 "맛없다"는 말만 듣는 것과 같다 — 소금이 문제였는지 불 조절이 문제였는지는 스스로 알아내야 한다.
 
 이 차이에서 세 가지 문제가 한꺼번에 생긴다.
 
-| 문제 | 지도학습에서는 | 강화학습에서는 |
+| 문제 | supervised learning에서는 | reinforcement learning에서는 |
 |------|---------------|---------------|
-| **지연 보상** | 손실이 즉시 나온다 | 결과가 한참 뒤에 온다 — 어느 행동의 공인가 |
-| **탐색** | 데이터가 주어진다 | **안 해 본 것의 가치는 모른다** |
-| **분포 이동** | 데이터 분포가 고정 | **정책이 바뀌면 데이터도 바뀐다** |
+| **delayed reward**(지연 보상) | loss가 즉시 나온다 | 결과가 한참 뒤에 온다 — 어느 행동의 공인가 |
+| **exploration**(탐색) | 데이터가 주어진다 | **안 해 본 것의 가치는 모른다** |
+| **distribution shift**(분포 이동) | 데이터 분포가 고정 | **policy가 바뀌면 데이터도 바뀐다** |
 
 세 번째가 가장 근본적이고, 이 장에서 직접 재 볼 것이다.
 
 그리고 이 틀은 [7.7](../07_language/07_alignment.qmd)의 RLHF로 곧장 이어진다.
-LLM 정렬도 결국 이 형식 위에 있다 — [10.5](05_rl_for_llm.qmd)에서 그 대응을 정리한다.
+LLM alignment도 결국 이 형식 위에 있다 — [10.5](05_rl_for_llm.qmd)에서 그 대응을 정리한다.
 
 ---
 
 ## MDP: 다섯 개의 기호
 
-순차적 의사결정을 형식화하면 다섯 요소가 된다.
+순차적 의사결정을 형식화하면 다섯 요소가 된다. 이것이 **Markov decision process**(마르코프 결정 과정, MDP)다.
 
 $$\mathcal{M} = (\mathcal{S}, \mathcal{A}, P, R, \gamma)$$
 
 | 기호 | 뜻 |
 |------|-----|
-| $\mathcal{S}$ | 상태 집합 |
-| $\mathcal{A}$ | 행동 집합 |
-| $P(s'\mid s,a)$ | 전이 확률 |
-| $R(s,a)$ | 기대 즉시 보상 |
-| $\gamma \in [0,1)$ | 할인율 |
+| $\mathcal{S}$ | state(상태) 집합 — 지금 어디에 있는가 |
+| $\mathcal{A}$ | action(행동) 집합 — 무엇을 할 수 있는가 |
+| $P(s'\mid s,a)$ | transition probability(전이 확률) — 여기서 이걸 하면 어디로 가는가 |
+| $R(s,a)$ | 기대 즉시 reward(보상) — 그 순간 얼마를 받는가 |
+| $\gamma \in [0,1)$ | discount factor(할인율) — 미래의 보상을 얼마나 깎아서 볼 것인가 |
 
-**마르코프 성질**이 이 형식의 전제다 — 미래는 현재 상태에만 달려 있고, 어떻게 왔는지는 상관없다.
+**Markov property**(마르코프 성질)가 이 형식의 전제다 — 미래는 현재 상태에만 달려 있고, 어떻게 왔는지는 상관없다.
+체스판의 현재 배치만 알면 지난 수순을 몰라도 다음 수를 둘 수 있는 것과 같다.
 
 $$P(s_{t+1} \mid s_t, a_t, s_{t-1}, \dots) = P(s_{t+1}\mid s_t, a_t)$$
 
-정책 $\pi$ 를 따를 때의 **가치**는 앞으로 받을 할인 보상의 기댓값이다.
+**policy**(정책) $\pi$는 "상태마다 어떤 행동을 할지"를 정한 규칙이다. policy $\pi$를 따를 때의 **가치**(value)는 앞으로 받을 할인 보상의 기댓값이다.
 
 $$V^\pi(s) = \mathbb{E}_\pi\!\left[\sum_{k=0}^{\infty}\gamma^k R_{t+k}\ \middle|\ s_t=s\right],
 \qquad
 Q^\pi(s,a) = \mathbb{E}_\pi\!\left[\sum_{k=0}^{\infty}\gamma^k R_{t+k}\ \middle|\ s_t=s, a_t=a\right]$$
 
-여기서 **벨만 기대 방정식**이 나온다. 가치를 "한 스텝 + 나머지"로 쪼개면 자기 자신이 나온다.
+$V^\pi(s)$는 상태 $s$에서 출발했을 때의 가치, $Q^\pi(s,a)$는 상태 $s$에서 행동 $a$를 먼저 한 뒤의 가치다.
+여기서 **Bellman expectation equation**(벨만 기대 방정식)이 나온다. 가치를 "한 step + 나머지"로 쪼개면 자기 자신이 나온다. "여기서의 가치 = 지금 한 걸음의 보상 + 다음 칸부터의 가치"라는 뜻이다.
 
 $$V^\pi(s) = \sum_a \pi(a\mid s)\Big[R(s,a) + \gamma\sum_{s'}P(s'\mid s,a)V^\pi(s')\Big]$$
 
-최적 정책에 대해서는 합 대신 최댓값이 들어간다 — **벨만 최적 방정식**이다.
+최적 policy에 대해서는 합 대신 최댓값이 들어간다 — **Bellman optimality equation**(벨만 최적 방정식)이다.
 
 $$V^*(s) = \max_a \Big[R(s,a) + \gamma\sum_{s'}P(s'\mid s,a)V^*(s')\Big]$$
 
-이 두 식이 Part 10 전체의 뼈대다. 이후의 모든 알고리즘은
+이 두 식이 Part 10 전체의 뼈대다. 이후의 모든 algorithm은
 **이 식을 어떻게 풀 것인가** 혹은 **모를 때 어떻게 근사할 것인가**의 답이다.
 
 ---
 
-## 준비: 미끄러지는 그리드월드
+## 준비: 미끄러지는 GridWorld
+
+GridWorld는 격자판 위를 한 칸씩 움직이는 가장 단순한 RL 환경이다. 여기서는 바닥이 미끄럽다.
 
 ```{python}
 #| label: setup
@@ -77,13 +82,13 @@ TERM = {(0, 6): 1.0, (3, 3): -1.0}
 gw = rl.GridWorld(rows=5, cols=7, walls=WALLS, terminals=TERM,
                   step_cost=-0.04, slip=0.2)
 
-print(f"상태 {gw.nS}개 (벽 {len(gw.walls)}, 종단 {len(gw.terminals)}), "
+print(f"상태 {gw.nS}개 (벽 {len(gw.walls)}, terminal(끝나는 칸) {len(gw.terminals)}), "
       f"행동 {gw.nA}개")
-print(f"  전이확률 합이 1인가: {np.allclose(gw.P.sum(2), 1.0)}")
+print(f"  transition probability 합이 1인가: {np.allclose(gw.P.sum(2), 1.0)}")
 print()
 print("**환경 설정**")
-print(f"  · 목표 (0,6) 에 도착하면 +1.0, 함정 (3,3) 은 −1.0")
-print(f"  · 매 스텝 {gw.step_cost:+.2f} — 오래 걸리면 손해다")
+print(f"  · 목표 (0,6)에 도착하면 +1.0, 함정 (3,3)은 −1.0")
+print(f"  · 매 step {gw.step_cost:+.2f} — 오래 걸리면 손해다")
 print(f"  · **미끄러짐 {gw.slip:.0%}** — 의도한 방향 대신 직각으로 간다")
 print()
 print("격자 (█=벽, +=목표, −=함정)")
@@ -96,18 +101,18 @@ for r in range(gw.rows):
     print("  " + row)
 print()
 print("**미끄러짐이 이 문제를 흥미롭게 만든다.**")
-for s in ["확률적 전이가 없으면 최단 경로 찾기일 뿐이다",
+for s in ["확률적 transition이 없으면 최단 경로 찾기일 뿐이다",
           "미끄러지면 **함정 옆으로 지나가는 것이 위험**해진다",
-          "그래서 최적 정책이 '돌아가는' 경로를 고르기도 한다 — 곧 확인한다"]:
+          "그래서 최적 policy가 '돌아가는' 경로를 고르기도 한다 — 곧 확인한다"]:
     print(f"  · {s}")
 ```
 
 ---
 
-## G10.0.1 — 할인율은 얼마나 멀리까지 보게 하는가
+## G10.0.1 — discount factor는 얼마나 멀리까지 보게 하는가
 
-$\gamma$ 는 "미래를 얼마나 중요하게 볼 것인가"를 정한다.
-$\gamma^k$ 로 감쇠하므로, 흔히 **유효 지평 $1/(1-\gamma)$** 로 이야기한다.
+$\gamma$는 "미래를 얼마나 중요하게 볼 것인가"를 정한다. 내년의 100만 원이 지금의 100만 원보다 덜 값진 것처럼, $k$ step 뒤의 보상은 $\gamma^k$배로 깎아 센다.
+$\gamma^k$로 감쇠하므로, 흔히 **effective horizon**(유효 지평) $1/(1-\gamma)$로 이야기한다 — "대략 이만큼 앞까지 본다"는 눈금이다.
 
 그 숫자가 실제로 무엇을 뜻하는지 재 보자.
 목표에서 거리별로 가치가 어떻게 떨어지는지를 본다.
@@ -138,7 +143,7 @@ def half_dist(prof):
     return next((i + 1 for i, v in enumerate(prof) if v < prof[0]/2), None)
 
 
-print("할인율별 — 유효 지평과 실제 가치 전파")
+print("discount factor별 — effective horizon과 실제 가치 전파")
 print()
 print(f"{'γ':>6} {'1/(1−γ)':>9} {'ln0.5/lnγ':>11} {'실측 반감 거리':>14} "
       f"{'V 최소':>9} {'V 최대':>9}")
@@ -152,13 +157,13 @@ for g_ in GAM:
           f"{str(half_dist(prof)):>14} {V[ok].min():>9.3f} {V[ok].max():>9.3f}")
 print()
 print("**세 숫자가 서로 다르다.**")
-for s in ["**1/(1−γ)** 는 '보상이 몇 스텝까지 유의미하게 남는가'의 눈금이다 "
-          "— γ=0.99 면 100",
-          "**ln0.5/lnγ** 는 할인만으로 가치가 반이 되는 거리 — γ=0.99 면 69",
-          "**실측 반감 거리**는 그보다 훨씬 짧다 — γ=0.99 에서도 8"]:
+for s in ["**1/(1−γ)**는 '보상이 몇 step까지 유의미하게 남는가'의 눈금이다 "
+          "— γ=0.99면 100",
+          "**ln0.5/lnγ**는 할인만으로 가치가 반이 되는 거리 — γ=0.99면 69",
+          "**실측 반감 거리**는 그보다 훨씬 짧다 — γ=0.99에서도 8"]:
     print(f"  · {s}")
 print()
-print("**왜 짧은가? 스텝 비용 때문이다.**")
+print("**왜 짧은가? step 비용 때문이다.**")
 ```
 
 ```{python}
@@ -170,9 +175,9 @@ from src import rl
 
 gw0 = rl.GridWorld(rows=5, cols=7, walls=WALLS, terminals=TERM,
                    step_cost=0.0, slip=0.2)
-print("같은 환경에서 스텝 비용만 0 으로 바꾸면")
+print("같은 환경에서 step 비용만 0으로 바꾸면")
 print()
-print(f"{'γ':>6} {'스텝비용 −0.04':>15} {'스텝비용 0':>13} {'할인만의 예측':>14}")
+print(f"{'γ':>6} {'step 비용 −0.04':>15} {'step 비용 0':>13} {'할인만의 예측':>14}")
 print("-" * 52)
 NC = {}
 for g_ in GAM:
@@ -182,27 +187,27 @@ for g_ in GAM:
     print(f"{g_:>6.2f} {fmt(half_dist(PROF[g_])):>15} {fmt(NC[g_]):>13} "
           f"{np.log(0.5)/np.log(g_):>14.1f}")
 print()
-print("**비용을 없애면 낮은 γ 에서 이론값에 붙는다.**")
+print("**비용을 없애면 낮은 γ에서 이론값에 붙는다.**")
 for g_ in [0.8, 0.9]:
     print(f"  γ={g_}: 비용 있을 때 {half_dist(PROF[g_])}, 없을 때 {NC[g_]}, "
           f"할인만의 예측 {np.log(0.5)/np.log(g_):.1f}")
 print()
-print("**높은 γ 에서는 아예 반으로 안 떨어진다** — γ≥0.95 에서 '격자 밖'.")
-print("  예측대로라면 13.5·69 스텝이 필요한데, 이 격자는 그만큼 넓지 않다.")
-print("  즉 비용이 0 이면 **가치가 격자 전체에 고르게 퍼진다**.")
+print("**높은 γ에서는 아예 반으로 안 떨어진다** — γ≥0.95에서 '격자 밖'.")
+print("  예측대로라면 13.5·69 step이 필요한데, 이 격자는 그만큼 넓지 않다.")
+print("  즉 비용이 0이면 **가치가 격자 전체에 고르게 퍼진다**.")
 for s in ["가치가 떨어지는 이유는 **할인과 비용 두 가지**다",
           "$V(d) \\approx \\gamma^d R_{goal} - c\\frac{1-\\gamma^d}{1-\\gamma}$ — "
-          "뒤쪽 항이 거리와 함께 커진다",
-          "**'γ 를 키우면 멀리 본다'는 말은 절반만 맞다** — "
-          "스텝 비용이 크면 γ 를 키워도 소용없다",
-          "실무에서 γ 와 스텝 비용(또는 보상 스케일)은 **같이 조율해야 하는 짝**이다",
-          "γ 를 1 에 너무 붙이면 가치가 발산에 가까워져 학습이 불안정해지기도 한다"]:
+          "앞 항은 거리 $d$만큼 깎인 목표 보상, 뒤 항은 그동안 쌓이는 step 비용 $c$다. 뒤쪽 항이 거리와 함께 커진다",
+          "**'γ를 키우면 멀리 본다'는 말은 절반만 맞다** — "
+          "step 비용이 크면 γ를 키워도 소용없다",
+          "실무에서 γ와 step 비용(또는 reward scale)은 **같이 조율해야 하는 짝**이다",
+          "γ를 1에 너무 붙이면 가치가 발산에 가까워져 학습이 불안정해지기도 한다"]:
     print(f"  · {s}")
 ```
 
 ```{python}
 #| label: fig-gamma
-#| fig-cap: "G10.0.1 — 할인율과 가치 전파. 슬라이더로 γ를 바꾸면 목표(오른쪽 위)에서 가치가 얼마나 멀리 번지는지 보인다. γ를 키워도 스텝 비용이 전파를 막는다."
+#| fig-cap: "G10.0.1 — discount factor와 가치 전파. slider로 γ를 바꾸면 목표(오른쪽 위)에서 가치가 얼마나 멀리 번지는지 보인다. γ를 키워도 step 비용이 전파를 막는다."
 
 import numpy as np
 import plotly.graph_objects as go
@@ -227,7 +232,7 @@ for r in range(gw.rows):
             fig.add_annotation(x=c, y=r, text=lbl, showarrow=False,
                                font=dict(size=11, color="white"))
 steps = [(f"{g_:.2f}", dict(z=[MAPS[i]])) for i, g_ in enumerate(GS)]
-viz.fig_defaults(fig, "할인율에 따른 최적 가치 함수", height=420)
+viz.fig_defaults(fig, "discount factor에 따른 최적 value function", height=420)
 fig.update_layout(sliders=[viz.slider(steps, prefix="γ = ", active=3, pad_t=40)])
 fig.update_yaxes(autorange="reversed", showticklabels=False)
 fig.update_xaxes(showticklabels=False)
@@ -235,19 +240,19 @@ fig
 ```
 
 ::: {.interaction-hint}
-γ 를 0.5에서 0.99로 올려 보라.
+γ를 0.5에서 0.99로 올려 보라.
 가치가 목표에서 번져 나가지만, 왼쪽 아래 구석까지는 좀처럼 닿지 않는다.
 
-**할인율은 '얼마나 멀리 보는가'가 아니라 '얼마나 멀리까지 신호가 살아남는가'를 정한다.**
-이것이 희소 보상 문제가 어려운 이유이기도 하다 —
-보상이 아주 멀리 있으면 어떤 γ 로도 신호가 도달하지 않는다.
+**discount factor는 '얼마나 멀리 보는가'가 아니라 '얼마나 멀리까지 신호가 살아남는가'를 정한다.**
+이것이 sparse reward(희소 보상 — 보상이 아주 드물게만 나오는) 문제가 어려운 이유이기도 하다 —
+보상이 아주 멀리 있으면 어떤 γ로도 신호가 도달하지 않는다.
 :::
 
 ---
 
-## G10.0.2 — 벨만 백업을 손으로 한 번
+## G10.0.2 — Bellman backup을 손으로 한 번
 
-벨만 방정식은 추상적으로 보이지만, 한 스텝 계산을 직접 펼치면 단순한 산수다.
+Bellman equation은 추상적으로 보이지만, 한 step 계산을 직접 펼치면 단순한 산수다. 이 "다음 상태의 가치를 끌어와 지금 상태의 가치를 갱신하는 한 번의 계산"을 **Bellman backup**(벨만 백업)이라 한다.
 
 ```{python}
 #| label: backup
@@ -261,7 +266,7 @@ V, PI, iters = rl.value_iteration(gw.P, gw.R, gamma)
 Q = rl.q_from_v(gw.P, gw.R, V, gamma)
 
 s = gw.idx((1, 4))
-print(f"상태 {gw.rc(s)} 에서 각 행동의 Q 를 벨만 백업으로 계산한다 (γ={gamma})")
+print(f"상태 {gw.rc(s)}에서 각 행동의 Q를 Bellman backup으로 계산한다 (γ={gamma})")
 print()
 for a in range(gw.nA):
     nz = np.nonzero(gw.P[s, a])[0]
@@ -276,17 +281,17 @@ print(f"  max_a Q = {Q[s].max():+.4f}, V(s) = {V[s]:+.4f} "
 print(f"  최적 행동: {rl.ARROWS[int(PI[s])]}")
 print()
 print("**미끄러짐이 계산에 어떻게 들어가는지 보라.**")
-for s_ in ["의도한 방향의 확률이 0.8, 직각 두 방향이 각각 0.1 이다",
-           "그래서 **한 행동의 Q 가 세 상태의 가치를 섞는다**",
-           "위험한 이웃(함정)이 있으면 그쪽으로 미끄러질 확률이 Q 를 끌어내린다",
-           "이것이 확률적 환경에서 '안전한 경로'가 나오는 메커니즘이다"]:
+for s_ in ["의도한 방향의 확률이 0.8, 직각 두 방향이 각각 0.1이다",
+           "그래서 **한 행동의 Q가 세 상태의 가치를 섞는다**",
+           "위험한 이웃(함정)이 있으면 그쪽으로 미끄러질 확률이 Q를 끌어내린다",
+           "이것이 확률적 환경에서 '안전한 경로'가 나오는 mechanism이다 — 절벽 옆 지름길보다 멀어도 안쪽 길"]:
     print(f"  · {s_}")
 print()
-print(f"**가치 반복이 수렴하는 데 {iters}번 걸렸다.**")
-print("  각 반복이 모든 상태에 이 백업을 한 번씩 적용한 것이다.")
+print(f"**value iteration(가치 반복)이 수렴하는 데 {iters}번 걸렸다.**")
+print("  각 반복이 모든 상태에 이 backup을 한 번씩 적용한 것이다.")
 print("  이것을 어떻게 효율화할지가 [10.1](01_dynamic_programming.qmd)의 주제다.")
 print()
-print("최적 정책 (미끄러짐 20%)")
+print("최적 policy (미끄러짐 20%)")
 for line in gw.arrows(PI):
     print("  " + line)
 ```
@@ -298,7 +303,7 @@ for line in gw.arrows(PI):
 import numpy as np
 from src import rl
 
-print("미끄러짐이 정책을 어떻게 바꾸는가")
+print("미끄러짐이 policy를 어떻게 바꾸는가")
 print()
 for sl in [0.0, 0.2, 0.4]:
     env = rl.GridWorld(5, 7, WALLS, TERM, step_cost=-0.04, slip=sl)
@@ -309,22 +314,24 @@ for sl in [0.0, 0.2, 0.4]:
     for line in env.arrows(PI_):
         print("    " + line)
     print()
-print("**미끄러짐이 커질수록 함정 주변에서 정책이 보수적으로 바뀐다.**")
+print("**미끄러짐이 커질수록 함정 주변에서 policy가 보수적으로 바뀐다.**")
 print("  그리고 평균 가치가 떨어진다 — 불확실성 자체가 비용이다.")
 ```
 
 ---
 
-## G10.0.3 — 정책이 데이터를 바꾼다
+## G10.0.3 — policy가 데이터를 바꾼다
 
-지도학습과 강화학습을 가르는 가장 깊은 차이가 이것이다.
+supervised learning과 reinforcement learning을 가르는 가장 깊은 차이가 이것이다.
 
-지도학습에서 데이터 분포는 **고정**이다. 모델이 바뀌어도 훈련 집합은 그대로다.
-강화학습에서는 **정책이 데이터를 만든다.** 정책이 바뀌면 방문하는 상태가 바뀐다.
+supervised learning에서 데이터 분포는 **고정**이다. 모델이 바뀌어도 훈련 집합은 그대로다.
+reinforcement learning에서는 **policy가 데이터를 만든다.** policy가 바뀌면 방문하는 상태가 바뀐다.
+운전 연습에서 어느 길로 가느냐에 따라 만나는 교차로와 상황이 완전히 달라지는 것과 같다.
 
 $$d^\pi(s) = (1-\gamma)\sum_{t=0}^{\infty}\gamma^t \Pr(s_t = s \mid \pi)$$
 
-세 정책의 방문 분포를 재 본다.
+$d^\pi(s)$는 **visitation distribution**(방문 분포) — policy $\pi$를 따를 때 각 상태에 얼마나 자주 가는지를 할인해서 센 것이다.
+세 policy의 방문 분포를 재 본다.
 
 ```{python}
 #| label: visitation
@@ -347,9 +354,9 @@ ok = np.array([not gw.is_wall(gw.rc(s)) and not gw.is_terminal(s)
                for s in range(gw.nS)])
 tv = lambda a, b: float(0.5*np.abs(a - b).sum())
 
-print("시작 상태 (4,0) 하나에서 출발할 때의 할인 방문 분포")
+print("시작 상태 (4,0) 하나에서 출발할 때의 할인 visitation distribution")
 print()
-print(f"{'정책':<12} {'거의 안 가는 상태':>16} {'상위 5개 집중도':>16} {'가치 J':>10}")
+print(f"{'policy':<12} {'거의 안 가는 상태':>16} {'상위 5개 집중도':>16} {'가치 J':>10}")
 print("-" * 58)
 for nm in D:
     d = D[nm]
@@ -358,7 +365,7 @@ for nm in D:
     print(f"{nm:<12} {f'{int(((d<0.001)&ok).sum())}/{int(ok.sum())}':>16} "
           f"{np.sort(d)[::-1][:5].sum():>16.3f} {J:>10.4f}")
 print()
-print(f"**분포가 얼마나 다른가 (전변동 거리)**")
+print(f"**분포가 얼마나 다른가 (total variation distance — 두 분포가 겹치지 않는 비율, 0~1)**")
 print(f"  최적 vs 무작위    {tv(D['최적'], D['무작위']):.4f}")
 print(f"  최적 vs 항상왼쪽  {tv(D['최적'], D['항상 왼쪽']):.4f}")
 ratio = D["최적"]/np.maximum(D["무작위"], 1e-12)
@@ -367,24 +374,24 @@ print(f"  가장 갈리는 상태 {gw.rc(i)}: 최적 {D['최적'][i]:.4f} vs "
       f"무작위 {D['무작위'][i]:.4f} — **{ratio[i]:.0f}배**")
 print()
 print("**이 사실이 만드는 결과들**")
-for s in ["**분포 이동** — 정책을 개선하면 학습 데이터의 분포가 따라 움직인다. "
+for s in ["**distribution shift** — policy를 개선하면 학습 데이터의 분포가 따라 움직인다. "
           "어제 잘 맞던 가치 추정이 오늘 틀릴 수 있다",
-          "**탐색 필요** — '항상 왼쪽'은 24개 상태를 거의 안 간다. "
+          "**exploration 필요** — '항상 왼쪽'은 24개 상태를 거의 안 간다. "
           "안 가 본 곳의 가치는 배울 수 없다",
-          "**off-policy 의 어려움** — 다른 정책이 모은 데이터로 평가하면 "
-          "분포가 안 맞는다 ([10.2](02_model_free.qmd)의 중요도 샘플링)",
-          "**오프라인 RL 의 근본 문제** — 데이터에 없는 행동의 가치는 "
-          "외삽할 수밖에 없고, 그 외삽이 과대평가된다"]:
+          "**off-policy의 어려움** — 다른 policy가 모은 데이터로 평가하면 "
+          "분포가 안 맞는다 ([10.2](02_model_free.qmd)의 importance sampling)",
+          "**offline RL의 근본 문제** — 데이터에 없는 행동의 가치는 "
+          "extrapolation(외삽 — 본 적 없는 곳을 추세로 짐작)할 수밖에 없고, 그 추측이 과대평가된다"]:
     print(f"  · {s}")
 print()
-print("  이 문제가 LLM 정렬에서도 그대로 나온다 — "
-      "모델이 바뀌면 생성하는 응답이 바뀌고, 보상 모델이 "
+print("  이 문제가 LLM alignment에서도 그대로 나온다 — "
+      "모델이 바뀌면 생성하는 응답이 바뀌고, reward model이 "
       "**본 적 없는 응답**을 채점하게 된다 ([10.5](05_rl_for_llm.qmd)).")
 ```
 
 ```{python}
 #| label: fig-visitation
-#| fig-cap: "G10.0.3 — 정책별 상태 방문 분포. 같은 환경, 같은 시작점인데 정책에 따라 데이터가 완전히 달라진다. 지도학습에는 없는 축이다."
+#| fig-cap: "G10.0.3 — policy별 visitation distribution. 같은 환경, 같은 시작점인데 policy에 따라 데이터가 완전히 달라진다. supervised learning에는 없는 축이다."
 
 import numpy as np
 import plotly.graph_objects as go
@@ -400,7 +407,7 @@ for i, nm in enumerate(names):
                              xgap=1, ygap=1, showscale=(i == 2),
                              colorbar=dict(title="방문", x=1.02)),
                   row=1, col=i+1)
-viz.fig_defaults(fig, "정책이 만드는 데이터 분포 (시작점 왼쪽 아래)", height=330)
+viz.fig_defaults(fig, "policy가 만드는 데이터 분포 (시작점 왼쪽 아래)", height=330)
 fig.update_yaxes(autorange="reversed", showticklabels=False)
 fig.update_xaxes(showticklabels=False)
 fig
@@ -408,12 +415,13 @@ fig
 
 ---
 
-## G10.0.4 — 탐색과 활용
+## G10.0.4 — exploration과 exploitation
 
 안 해 본 행동의 가치는 모른다. 그런데 알아보려면 **손해를 감수하고 해 봐야** 한다.
+단골 식당에 가면 실패는 없지만, 더 맛있는 집을 영영 못 찾는다. 새 식당을 찔러 보는 것이 **exploration**(탐색), 아는 최고를 고르는 것이 **exploitation**(활용)이다.
 
-가장 순수한 형태가 **다중 슬롯머신**이다. 상태가 하나뿐이라 지연 보상도 없다.
-오직 탐색-활용만 남는다.
+가장 순수한 형태가 **multi-armed bandit**(다중 슬롯머신 — 당첨률이 다른 슬롯머신 여러 대 중 어느 팔을 당길까)이다. 상태가 하나뿐이라 delayed reward도 없다.
+오직 exploration-exploitation만 남는다.
 
 ```{python}
 #| label: bandit
@@ -424,18 +432,19 @@ from src import rl
 
 MEANS = np.array([1.0, 0.9, 0.8, 0.6, 0.2])
 N, SEEDS = 2000, 60
-print(f"팔 {len(MEANS)}개, 평균 보상 {MEANS} (잡음 σ=1), {N} 스텝, "
-      f"시드 {SEEDS}개")
+print(f"팔 {len(MEANS)}개, 평균 보상 {MEANS} (잡음 σ=1), {N} step, "
+      f"seed {SEEDS}개")
+print("  regret(후회) = 늘 최적 팔만 당겼을 때 대비 덜 받은 보상의 누적")
 print()
-print(f"{'알고리즘':<18} {'최종 누적 후회':>14} {'최적 팔 선택률':>15}")
-print("-" * 50)
+print(f"{'algorithm':<20} {'최종 누적 regret':>16} {'최적 팔 선택률':>15}")
+print("-" * 54)
 BAND = []
-for nm, kw in [("탐욕 (탐색 없음)", dict(algo="greedy")),
-               ("ε-탐욕 (ε=0.01)", dict(algo="eps", eps=0.01)),
-               ("ε-탐욕 (ε=0.1)", dict(algo="eps", eps=0.1)),
-               ("ε-탐욕 (ε=0.3)", dict(algo="eps", eps=0.3)),
+for nm, kw in [("greedy (탐색 없음)", dict(algo="greedy")),
+               ("ε-greedy (ε=0.01)", dict(algo="eps", eps=0.01)),
+               ("ε-greedy (ε=0.1)", dict(algo="eps", eps=0.1)),
+               ("ε-greedy (ε=0.3)", dict(algo="eps", eps=0.3)),
                ("UCB (c=1)", dict(algo="ucb", c=1.0)),
-               ("톰슨 샘플링", dict(algo="thompson"))]:
+               ("Thompson sampling", dict(algo="thompson"))]:
     Rs, Fs, curves = [], [], []
     for sd in range(SEEDS):
         r, n = rl.bandit_run(MEANS, n_steps=N,
@@ -443,43 +452,43 @@ for nm, kw in [("탐욕 (탐색 없음)", dict(algo="greedy")),
         Rs.append(r[-1]); Fs.append(n[0]/N); curves.append(r)
     BAND.append((nm, float(np.mean(Rs)), float(np.mean(Fs)),
                  np.mean(curves, 0)))
-    print(f"{nm:<18} {BAND[-1][1]:>14.2f} {BAND[-1][2]:>15.4f}")
+    print(f"{nm:<20} {BAND[-1][1]:>16.2f} {BAND[-1][2]:>15.4f}")
 print()
 gr = BAND[0]; e1 = BAND[2]; ucb = BAND[4]
 print("**① 탐색을 안 하면 망한다.**")
-print(f"  탐욕은 최적 팔을 {gr[2]:.1%} 만 고른다 — 후회 {gr[1]:.0f}.")
-print("  처음 몇 번 운 나쁘게 나온 최적 팔을 **영원히 안 건드린다**.")
+print(f"  greedy는 최적 팔을 {gr[2]:.1%}만 고른다 — regret {gr[1]:.0f}.")
+print("  처음 몇 번 운 나쁘게 나온 최적 팔을 **영원히 안 건드린다**. 첫날 맛없던 식당에 두 번 다시 안 가는 셈이다.")
 print()
 print("**② 그런데 탐색을 많이 해도 망한다.**")
 for nm, r, f, _ in BAND[1:4]:
-    print(f"  {nm}: 후회 {r:.0f}, 최적 팔 {f:.1%}")
-print("  ε 가 크면 최적 팔을 알고도 계속 다른 걸 찔러 본다 — "
-      "**후회가 스텝 수에 선형으로 쌓인다**.")
+    print(f"  {nm}: regret {r:.0f}, 최적 팔 {f:.1%}")
+print("  ε가 크면 최적 팔을 알고도 계속 다른 걸 찔러 본다 — "
+      "**regret이 step 수에 선형으로 쌓인다**.")
 print()
-print(f"**③ 불확실성을 재는 쪽이 이긴다.** UCB 후회 {ucb[1]:.0f}, "
-      f"ε=0.1 의 {ucb[1]/e1[1]:.2f}배.")
-for s in ["UCB 는 **적게 뽑아 본 팔에 보너스**를 준다 — "
-          "$\\bar{\\mu}_a + c\\sqrt{\\ln t / n_a}$",
+print(f"**③ 불확실성을 재는 쪽이 이긴다.** UCB regret {ucb[1]:.0f}, "
+      f"ε=0.1의 {ucb[1]/e1[1]:.2f}배.")
+for s in ["UCB(upper confidence bound)는 **적게 뽑아 본 팔에 보너스**를 준다 — "
+          "$\\bar{\\mu}_a + c\\sqrt{\\ln t / n_a}$ (지금까지의 평균 + 덜 가 본 만큼의 보너스)",
           "확신이 생기면 보너스가 저절로 줄어 탐색이 잦아든다",
-          "톰슨 샘플링은 사후분포에서 표본을 뽑아 그중 최고를 고른다 — "
-          "같은 발상의 베이즈 판",
-          "**둘 다 후회가 로그로 자란다**. ε-탐욕은 선형이다",
+          "Thompson sampling은 posterior(사후분포)에서 표본을 뽑아 그중 최고를 고른다 — "
+          "같은 발상의 Bayes 판",
+          "**둘 다 regret이 로그로 자란다**. ε-greedy는 선형이다",
           "이것이 '탐색량을 상수로 고정하지 말고 **불확실성에 비례**시키라'는 원칙이다"]:
     print(f"  · {s}")
 print()
-print("**MDP 로 오면 문제가 더 어려워진다**")
-for s in ["밴딧은 상태가 하나라 '어떤 팔이 좋은가'만 알면 된다",
-          "MDP 에서는 **어떤 상태에 가 봐야 하는지**까지 정해야 한다",
+print("**MDP로 오면 문제가 더 어려워진다**")
+for s in ["bandit은 상태가 하나라 '어떤 팔이 좋은가'만 알면 된다",
+          "MDP에서는 **어떤 상태에 가 봐야 하는지**까지 정해야 한다",
           "깊은 곳의 보상을 찾으려면 **연속으로 여러 번** 탐색적 행동을 해야 한다",
-          "ε-탐욕은 매 스텝 독립이라 깊은 탐색을 못 한다 — "
-          "몬테주마의 복수 같은 문제가 어려운 이유",
-          "그래서 내재적 동기(호기심), 계수 기반 탐색 같은 방법들이 나왔다"]:
+          "ε-greedy는 매 step 독립이라 깊은 탐색을 못 한다 — "
+          "Montezuma's Revenge(열쇠를 찾아 여러 방을 지나야 점수가 나는 게임) 같은 문제가 어려운 이유",
+          "그래서 intrinsic motivation(내재적 동기 — 호기심), count-based(방문 횟수 기반) 탐색 같은 방법들이 나왔다"]:
     print(f"  · {s}")
 ```
 
 ```{python}
 #| label: fig-bandit
-#| fig-cap: "G10.0.4 — 누적 후회 곡선. 탐욕과 큰 ε는 선형으로 자라고, UCB·톰슨 샘플링은 굽어서 로그에 가까워진다. 기울기가 곧 '지금도 손해 보고 있는 정도'다."
+#| fig-cap: "G10.0.4 — 누적 regret 곡선. greedy와 큰 ε는 선형으로 자라고, UCB·Thompson sampling은 굽어서 로그에 가까워진다. 기울기가 곧 '지금도 손해 보고 있는 정도'다."
 
 import numpy as np
 import plotly.graph_objects as go
@@ -491,8 +500,8 @@ for i, (nm, fin, frac, curve) in enumerate(BAND):
     fig.add_trace(go.Scatter(x=t[::10], y=curve[::10], mode="lines", name=nm,
                              line=dict(color=viz.color(i), width=2.2)))
 viz.fig_defaults(
-    fig, "누적 후회 (시드 60개 평균)", height=460,
-    xaxis_title="스텝", yaxis_title="누적 후회")
+    fig, "누적 regret (seed 60개 평균)", height=460,
+    xaxis_title="step", yaxis_title="누적 regret")
 viz.annotate_box(fig, "곡선이 평평해질수록<br><b>최적 팔에 정착한 것</b>",
                  x=0.02, y=0.98, xanchor="left", yanchor="top")
 fig
@@ -500,14 +509,15 @@ fig
 
 ---
 
-## G10.0.5 — 마르코프 성질이 깨지면
+## G10.0.5 — Markov property가 깨지면
 
 MDP는 "상태가 필요한 정보를 다 담고 있다"고 가정한다.
 현실에서는 대개 그렇지 않다. 카메라는 뒤를 못 보고, 대화 기록은 상대의 의도를 안 담는다.
+이렇게 상태의 일부만 관측되는 문제를 **POMDP**(partially observable MDP, 부분 관측 MDP)라 한다.
 
 관측이 상태의 일부만 줄 때 무엇을 잃는지 재 보자.
-그리드월드에서 **행 또는 열 하나만** 볼 수 있다고 하고,
-그 관측만으로 정할 수 있는 최고의 정책을 전수 탐색한다.
+GridWorld에서 **행 또는 열 하나만** 볼 수 있다고 하고,
+그 관측만으로 정할 수 있는 최고의 policy를 전수 탐색한다.
 
 ```{python}
 #| label: pomdp
@@ -522,7 +532,7 @@ mu0 = np.zeros(gw.nS); mu0[gw.idx((4, 0))] = 1.0
 J = lambda pi: float(mu0 @ rl.policy_value(gw.P, gw.R, pi, gamma))
 J_full = J(pi_opt)
 
-print("관측이 좁아지면 얼마를 잃는가 (기억 없는 정책만 허용)")
+print("관측이 좁아지면 얼마를 잃는가 (기억 없는 policy만 허용)")
 print()
 print(f"{'관측':<18} {'구별 가능한 상태':>16} {'최고 J':>10} {'완전관측 대비':>14}")
 print("-" * 62)
@@ -550,8 +560,9 @@ print("**왜 이렇게 나쁜가**")
 for s in ["같은 열에 있는 서로 다른 행의 상태들이 **하나로 뭉뚱그려진다**",
           "어떤 행에서는 위로 가야 하고 어떤 행에서는 아래로 가야 하는데 "
           "**하나만 고를 수 있다**",
-          "이것을 **지각적 앨리어싱**(perceptual aliasing)이라 한다",
-          "기억 없는 정책으로는 원리적으로 극복할 수 없다"]:
+          "이것을 **perceptual aliasing**(지각적 앨리어싱 — 다른 상태가 똑같이 보이는 것)이라 한다. "
+          "똑같이 생긴 복도가 여러 개인 건물에서 길을 잃는 것과 같다",
+          "기억 없는 policy로는 원리적으로 극복할 수 없다"]:
     print(f"  · {s}")
 print()
 print("**해법의 갈래**")
@@ -559,18 +570,18 @@ print()
 print(f"{'접근':<20} {'무엇을 하나':<32} {'대가'}")
 print("-" * 74)
 for a, b, c in [
-    ("신념 상태", "관측 이력으로 상태의 사후분포를 유지", "정확하지만 계산이 폭발"),
-    ("프레임 스택", "최근 k개 관측을 이어 붙인다", "간단, [10.3](03_deep_rl.qmd)의 DQN"),
-    ("순환 정책", "RNN/트랜스포머로 이력을 요약", "학습이 어렵다"),
-    ("확률적 정책", "여러 행동을 섞어 앨리어싱을 완화", "결정적 정책보다 나을 수 있다"),
+    ("belief state(신념 상태)", "관측 이력으로 상태의 posterior를 유지", "정확하지만 계산이 폭발"),
+    ("frame stacking", "최근 k개 관측을 이어 붙인다", "간단, [10.3](03_deep_rl.qmd)의 DQN"),
+    ("recurrent policy", "RNN/Transformer로 이력을 요약", "학습이 어렵다"),
+    ("stochastic policy", "여러 행동을 섞어 aliasing을 완화", "deterministic policy보다 나을 수 있다"),
 ]:
     print(f"{a:<20} {b:<32} {c}")
 print()
 print("**네 번째 줄이 흥미롭다.**")
-print("  완전 관측 MDP 에서는 **항상 결정적 최적 정책이 존재**한다.")
-print("  그런데 부분 관측에서는 확률적 정책이 더 나을 수 있다.")
-print("  이것이 [10.4](04_policy_gradient.qmd)의 정책 경사법이 "
-      "확률적 정책을 다루는 이유 중 하나다.")
+print("  완전 관측 MDP에서는 **항상 deterministic(결정적 — 상태마다 행동 하나로 정해진) 최적 policy가 존재**한다.")
+print("  그런데 부분 관측에서는 stochastic(확률적 — 행동을 확률로 섞는) policy가 더 나을 수 있다.")
+print("  이것이 [10.4](04_policy_gradient.qmd)의 policy gradient가 "
+      "stochastic policy를 다루는 이유 중 하나다.")
 ```
 
 ---
@@ -578,43 +589,43 @@ print("  이것이 [10.4](04_policy_gradient.qmd)의 정책 경사법이 "
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 할인율이 지평선을 정한다**
-`gamma` 를 0.9·0.99·0.999로 바꾸며 유효 지평선 $1/(1-\gamma)$ 를 계산하고,
-최적 정책이 실제로 그만큼 먼 보상을 고려하는지 확인하라.
+**① discount factor가 horizon을 정한다**
+`gamma` 를 0.9·0.99·0.999로 바꾸며 effective horizon $1/(1-\gamma)$를 계산하고,
+최적 policy가 실제로 그만큼 먼 보상을 고려하는지 확인하라.
 
 **② 미끄러짐 확률을 키운다**
-`slip-compare` 의 전이 잡음을 0·0.1·0.3으로 바꾸면 최적 정책이
+`slip-compare` 의 transition 잡음을 0·0.1·0.3으로 바꾸면 최적 policy가
 어떻게 보수적으로 변하는가? 절벽 근처에서 특히 그런가?
 
 **③ 상태를 숨겨 POMDP로 만든다**
-`pomdp` 에서 관측을 일부만 주면 마르코프 성질이 깨진다.
-과거 관측 $k$ 개를 붙이면 몇 개부터 성능이 회복되는가?
+`pomdp` 에서 관측을 일부만 주면 Markov property가 깨진다.
+과거 관측 $k$개를 붙이면 몇 개부터 성능이 회복되는가?
 :::
 
 ## 요약
 
 | 개념 | 수치·핵심 | |
 |------|----------|--|
-| 지도학습과의 차이 | 지연 보상 · 탐색 · **분포 이동** | 셋 다 정답이 없어서 생긴다 |
-| MDP 5요소 | $(\mathcal{S},\mathcal{A},P,R,\gamma)$ | 마르코프 성질이 전제 |
-| 벨만 방정식 | 가치를 "한 스텝 + 나머지"로 | Part 10 전체의 뼈대 |
-| **유효 지평** | $1/(1-\gamma)$: γ=0.99면 100 | 그러나 실측 반감 거리는 8 |
-| 왜 다른가 | 스텝 비용을 0으로 하면 이론값에 붙는다 | 할인과 비용, **두 원인** |
-| 그래서 | γ와 보상 스케일은 **같이 조율**해야 | γ만 키워도 소용없다 |
-| 벨만 백업 | 한 행동의 Q가 여러 상태 가치를 섞는다 | 미끄러짐이 안전한 경로를 만든다 |
-| **분포 이동** | 최적 vs 무작위 TV 거리 **0.67** | 정책이 데이터를 만든다 |
+| supervised learning과의 차이 | delayed reward · exploration · **distribution shift** | 셋 다 정답이 없어서 생긴다 (맛없다는 말만 듣는 요리사) |
+| MDP 5요소 | $(\mathcal{S},\mathcal{A},P,R,\gamma)$ | Markov property가 전제 (체스판만 보면 된다) |
+| Bellman equation | 가치를 "한 step + 나머지"로 | Part 10 전체의 뼈대 |
+| **effective horizon** | $1/(1-\gamma)$: γ=0.99면 100 | 그러나 실측 반감 거리는 8 |
+| 왜 다른가 | step 비용을 0으로 하면 이론값에 붙는다 | 할인과 비용, **두 원인** |
+| 그래서 | γ와 reward scale은 **같이 조율**해야 | γ만 키워도 소용없다 |
+| Bellman backup | 한 행동의 Q가 여러 상태 가치를 섞는다 | 미끄러짐이 안전한 경로를 만든다 |
+| **distribution shift** | 최적 vs 무작위 TV 거리 **0.67** | policy가 데이터를 만든다 (어느 길로 가느냐가 만나는 상황을 정한다) |
 | 특정 상태 | 최적이 무작위보다 **21배** 방문 | 어제의 추정이 오늘 틀린다 |
-| 탐색 없으면 | 탐욕은 최적 팔 **34.7%** | 초반 운에 영원히 갇힌다 |
-| 탐색 과하면 | ε=0.3 후회가 선형으로 쌓인다 | 알고도 계속 찔러 본다 |
-| **UCB·톰슨** | 후회가 ε-탐욕의 **0.57배** | 불확실성에 비례한 탐색 |
-| **부분 관측** | 열만 보면 J가 **음수** (−0.087) | 지각적 앨리어싱 |
-| 그 함의 | 확률적 정책이 나을 수 있다 | 10.4의 동기 중 하나 |
+| 탐색 없으면 | greedy는 최적 팔 **34.7%** | 초반 운에 영원히 갇힌다 (첫날 맛없던 식당) |
+| 탐색 과하면 | ε=0.3 regret이 선형으로 쌓인다 | 알고도 계속 찔러 본다 |
+| **UCB·Thompson** | regret이 ε-greedy의 **0.57배** | 불확실성에 비례한 탐색 |
+| **partial observation** | 열만 보면 J가 **음수** (−0.087) | perceptual aliasing (똑같이 생긴 복도) |
+| 그 함의 | stochastic policy가 나을 수 있다 | 10.4의 동기 중 하나 |
 
 형식은 세웠다.
-**모델 $P$ 와 $R$ 을 다 안다면** 이 방정식을 어떻게 풀 것인가 — 다음 장의 주제다.
+**모델 $P$와 $R$을 다 안다면** 이 방정식을 어떻게 풀 것인가 — 다음 장의 주제다.
 
 ---
 
-**다음**: [10.1 동적계획법](01_dynamic_programming.qmd) — 모델을 알 때의 정답
+**다음**: [10.1 dynamic programming](01_dynamic_programming.qmd) — 모델을 알 때의 정답
 
-**이전**: [9.9 비전-언어 모델](../09_vision_video/09_vlm.qmd)
+**이전**: [9.9 vision-language model](../09_vision_video/09_vlm.qmd)
