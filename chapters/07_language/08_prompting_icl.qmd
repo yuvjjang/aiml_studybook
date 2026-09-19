@@ -1,36 +1,38 @@
 ---
-title: "7.8 프롬프팅과 문맥 내 학습"
-subtitle: "few-shot·CoT·구조화 프롬프트 — 가중치를 건드리지 않는 프로그래밍"
+title: "7.8 prompting과 in-context learning"
+subtitle: "few-shot·CoT·구조화 prompt — weight를 건드리지 않는 프로그래밍"
 jupyter: ai-ml-study
 ---
 
 GPT-3 논문의 제목은 "Language Models are Few-Shot Learners"였다.
 그 주장의 핵심은 이것이다.
 
-> 프롬프트에 예시 몇 개를 넣으면 **가중치를 바꾸지 않고** 과제가 바뀐다.
+> prompt(모델에 넣는 입력 텍스트)에 예시 몇 개를 넣으면 **weight를 바꾸지 않고** 과제가 바뀐다.
 
-이것은 예상된 능력이 아니었다. 사전학습 목표는 다음 토큰 예측뿐이었고,
+이것이 **in-context learning**(ICL — 문맥 내 학습)이고, few-shot(예시 몇 개를 보여 주기)은 그 대표적 형태다.
+예상된 능력이 아니었다. pretraining 목표는 next-token prediction뿐이었고,
 "예시를 보고 규칙을 추론하라"고 가르친 적이 없다.
 
 이 장은 두 가지를 한다.
 
 1. **ICL을 계산 가능한 모델로 세워** 그 곡선이 어떤 모양인지 본다
-2. 프롬프팅의 **취약성**을 정량화한다 — 순서, 예시 선택, 자기일관성
+2. prompting의 **취약성**을 정량화한다 — 순서, 예시 선택, self-consistency
 
-실제 LLM을 돌릴 수는 없으니, **계산 가능한 대리 모델**로 메커니즘을 본다.
-그 대리 모델이 무엇을 설명하고 무엇을 설명하지 못하는지도 함께 밝힌다.
+실제 LLM을 돌릴 수는 없으니, **계산 가능한 proxy 모델**로 메커니즘을 본다.
+그 proxy 모델이 무엇을 설명하고 무엇을 설명하지 못하는지도 함께 밝힌다.
 
 ---
 
-## G7.8.1 — ICL을 베이즈 갱신으로 보기
+## G7.8.1 — ICL을 Bayesian 갱신으로 보기
 
-가장 잘 알려진 설명은 **암묵적 베이즈 추론**이다 (Xie et al. 2022).
+가장 잘 알려진 설명은 **implicit Bayesian inference**(암묵적 베이즈 추론)다 (Xie et al. 2022).
 
-> 사전학습 말뭉치에는 여러 "과제"의 데이터가 섞여 있다.
+> pretraining 말뭉치에는 여러 "과제"의 데이터가 섞여 있다.
 > 모델은 문맥을 보고 **어느 과제인지 추론**한 뒤 그에 맞게 예측한다.
 > 예시는 새 능력을 가르치는 것이 아니라 **과제를 특정**한다.
 
-이 설명이 맞다면 ICL 곡선은 **사후분포가 좁아지는 속도**를 따라야 한다.
+숙련된 통역사에게 문장 두어 개를 보여 주면 "아, 법률 문서구나"라고 알아채고 그 말투로 번역하는 것과 같다 — 번역을 새로 배우는 것이 아니라 어떤 번역인지 알아차리는 것이다.
+이 설명이 맞다면 ICL 곡선은 **posterior(사후분포 — 예시를 본 뒤 "어느 과제인가"에 대한 확률)가 좁아지는 속도**를 따라야 한다.
 직접 계산해 본다.
 
 ```{python}
@@ -40,14 +42,14 @@ GPT-3 논문의 제목은 "Language Models are Few-Shot Learners"였다.
 import sys; sys.path.append("../..")
 import numpy as np
 
-NT, NX, NY = 20, 12, 4        # 과제 20종, 입력 12종, 라벨 4종
-NOISE = 0.10                  # 라벨 잡음
+NT, NX, NY = 20, 12, 4        # 과제 20종, 입력 12종, label 4종
+NOISE = 0.10                  # label noise
 rg = np.random.default_rng(1)
-TASKS = rg.integers(0, NY, (NT, NX))     # 각 과제 = 입력→라벨 사상
+TASKS = rg.integers(0, NY, (NT, NX))     # 각 과제 = 입력→label 사상
 
 
 def predict(xs, ys, xq, recency=None):
-    """예시 (xs, ys) 로 과제 사후분포를 구하고 xq 의 라벨을 예측한다."""
+    """예시 (xs, ys)로 과제 posterior를 구하고 xq의 label을 예측한다."""
     k = len(xs)
     w = np.ones(k) if recency is None else recency**np.arange(k-1, -1, -1)
     logp = np.zeros(NT)
@@ -74,13 +76,13 @@ def icl_accuracy(k, n_trial=4000, seed=0, recency=None):
     return ok/n_trial
 
 
-print(f"{'예시 수 k':>10} {'정확도':>10} {'무작위 대비':>12} {'사후분포 엔트로피':>18}")
+print(f"{'예시 수 k':>10} {'정확도':>10} {'무작위 대비':>12} {'posterior entropy':>18}")
 print("-" * 56)
 ICL = []
 gg = np.random.default_rng(5)
 for k in [0, 1, 2, 4, 8, 16, 32]:
     a = icl_accuracy(k)
-    # 사후분포가 얼마나 좁아졌는지
+    # posterior가 얼마나 좁아졌는지
     ents = []
     for _ in range(300):
         t = gg.integers(NT)
@@ -96,33 +98,33 @@ ICL0, ICL8 = ICL[0], ICL[4]
 H_TASK = np.log2(NT)
 ```
 
-설정은 과제 `{python} f"{NT}"`종, 입력 `{python} f"{NX}"`종, 라벨 `{python} f"{NY}"`종, 라벨 잡음 `{python} f"{NOISE:.0%}"` 다.
-모델은 과제 목록을 "알고" 있고(= 사전학습), 어느 과제인지만 추론한다.
-**정확도가 오르는 속도와 사후분포가 좁아지는 속도가 함께 간다.**
-$k = 0$ 에서 엔트로피 `{python} f"{ICL0[2]:.2f}"` bits (과제 `{python} f"{NT}"`종 = `{python} f"{H_TASK:.2f}"` bits 의 불확실성),
-$k = 8$ 에서 `{python} f"{ICL8[2]:.3f}"` bits — 과제가 거의 특정되었고 정확도는 `{python} f"{ICL8[1]:.2f}"` 다.
+설정은 과제 `{python} f"{NT}"`종, 입력 `{python} f"{NX}"`종, label `{python} f"{NY}"`종, label noise `{python} f"{NOISE:.0%}"`다.
+모델은 과제 목록을 "알고" 있고(= pretraining), 어느 과제인지만 추론한다.
+**정확도가 오르는 속도와 posterior가 좁아지는 속도가 함께 간다.**
+$k = 0$ 에서 entropy `{python} f"{ICL0[2]:.2f}"` bits (과제 `{python} f"{NT}"`종 = `{python} f"{H_TASK:.2f}"` bits의 불확실성),
+$k = 8$ 에서 `{python} f"{ICL8[2]:.3f}"` bits — 과제가 거의 특정되었고 정확도는 `{python} f"{ICL8[1]:.2f}"`다.
 
-**곡선이 포화한다.** 과제를 알아낸 뒤에는 예시를 더 줘도 소용없다.
-실제 few-shot 곡선이 보통 5~10개에서 포화하는 것과 같은 모양이다.
+**곡선이 saturate한다.** 과제를 알아낸 뒤에는 예시를 더 줘도 소용없다.
+실제 few-shot 곡선이 보통 5~10개에서 saturate하는 것과 같은 모양이다.
 
 ::: {.callout-warning}
 ### 이 모델이 설명하지 못하는 것
 
-베이즈 모델은 ICL 곡선의 **모양**을 잘 설명한다. 그런데 실제 LLM에서 관측된
+Bayesian 모델은 ICL 곡선의 **모양**을 잘 설명한다. 그런데 실제 LLM에서 관측된
 다음 현상들은 설명하지 못한다.
 
-- **라벨을 무작위로 바꿔도 성능이 크게 안 떨어진다** (Min et al. 2022)
-  → 베이즈 모델이라면 잘못된 라벨이 사후분포를 망쳐야 한다
-- **형식만 맞으면 된다** — 입력-라벨 대응보다 "예시가 있다"는 사실이 더 중요할 때가 있다
-- **모델이 클수록 라벨 정보를 실제로 쓴다** (Wei et al. 2023) — 크기에 따라 달라진다
+- **label을 무작위로 바꿔도 성능이 크게 안 떨어진다** (Min et al. 2022)
+  → Bayesian 모델이라면 잘못된 label이 posterior를 망쳐야 한다
+- **형식만 맞으면 된다** — 입력-label 대응보다 "예시가 있다"는 사실이 더 중요할 때가 있다
+- **모델이 클수록 label 정보를 실제로 쓴다** (Wei et al. 2023) — 크기에 따라 달라진다
 
-즉 ICL은 **하나의 메커니즘이 아니다.** 과제 인식(task recognition)과
-과제 학습(task learning)이 섞여 있고, 비중은 모델 크기와 과제에 따라 다르다.
+즉 ICL은 **하나의 메커니즘이 아니다.** task recognition(과제 인식)과
+task learning(과제 학습)이 섞여 있고, 비중은 모델 크기와 과제에 따라 다르다.
 
 다른 유력 가설도 있다:
 
-- **암묵적 경사하강** — 어텐션이 문맥 예시로 선형회귀를 수행한다는 구성적 증명 (von Oswald 2023)
-- **인덕션 헤드** — `[A][B]...[A]` 패턴을 보고 `[B]`를 복사하는 회로 (Olsson 2022).
+- **implicit gradient descent** — attention이 문맥 예시로 linear regression을 수행한다는 구성적 증명 (von Oswald 2023)
+- **induction head** — `[A][B]...[A]` pattern을 보고 `[B]`를 복사하는 회로 (Olsson 2022).
   이 회로가 형성되는 시점과 ICL 능력이 나타나는 시점이 일치한다
 :::
 
@@ -130,10 +132,10 @@ $k = 8$ 에서 `{python} f"{ICL8[2]:.3f}"` bits — 과제가 거의 특정되�
 
 ## G7.8.2 — 예시 순서가 왜 답을 바꾸는가
 
-베이즈 학습자는 **교환가능(exchangeable)** 하다 — 예시 순서가 결과를 바꾸지 않는다.
+Bayesian 학습자는 **exchangeable(교환가능)**하다 — 예시 순서가 결과를 바꾸지 않는다.
 그런데 실제 LLM은 순서에 민감하다. 왜인가.
 
-가설: **최근 토큰에 더 큰 가중치가 실린다.** 그 효과를 모델에 넣어 본다.
+가설: **최근 token에 더 큰 weight가 실린다.** 그 효과를 모델에 넣어 본다 — recency(최근성) weight $\gamma$ 가 1보다 작을수록 앞쪽 예시가 희미해진다.
 
 ```{python}
 #| label: order
@@ -141,7 +143,7 @@ $k = 8$ 에서 `{python} f"{ICL8[2]:.3f}"` bits — 과제가 거의 특정되�
 
 import numpy as np
 
-print(f"{'최근성 가중 γ':>16} {'평균 정확도':>12} {'문제별 표준편차':>16} "
+print(f"{'recency 가중 γ':>16} {'평균 정확도':>12} {'문제별 표준편차':>16} "
       f"{'순서에 따라 답이 바뀐 비율':>26}")
 print("-" * 76)
 ORDER = []
@@ -164,7 +166,7 @@ for rec in [None, 0.95, 0.85, 0.7, 0.5]:
         preds = np.array(preds)
         accs.append((preds == gold).mean())
         changed += len(set(preds.tolist())) > 1
-    lbl = "없음 (교환가능)" if rec is None else f"γ = {rec}"
+    lbl = "없음 (exchangeable)" if rec is None else f"γ = {rec}"
     ORDER.append((lbl, float(np.mean(accs)), float(np.std(accs)),
                   changed/n))
     print(f"{lbl:>16} {np.mean(accs):>12.4f} {np.std(accs):>16.4f} "
@@ -173,32 +175,32 @@ ORD_EX, ORD_LAST = ORDER[0], ORDER[-1]
 ```
 
 같은 예시 집합을 12가지 순서로 섞어 봤다 (예시 6개, 문제 800개).
-**교환가능한 학습자는 순서에 전혀 흔들리지 않는다 (`{python} f"{ORD_EX[3]:.1%}"`).**
-**최근성 가중을 넣으면 흔들린다** — $\gamma = 0.5$ 에서 `{python} f"{ORD_LAST[3]:.1%}"` 의 문제에서 답이 바뀐다.
-평균 정확도도 `{python} f"{ORD_EX[1]:.4f}"` → `{python} f"{ORD_LAST[1]:.4f}"` 로 떨어진다.
+**exchangeable한 학습자는 순서에 전혀 흔들리지 않는다 (`{python} f"{ORD_EX[3]:.1%}"`).**
+**recency 가중을 넣으면 흔들린다** — $\gamma = 0.5$ 에서 `{python} f"{ORD_LAST[3]:.1%}"`의 문제에서 답이 바뀐다.
+평균 정확도도 `{python} f"{ORD_EX[1]:.4f}"` → `{python} f"{ORD_LAST[1]:.4f}"`로 떨어진다.
 
 **이것이 실제로 보고된 현상의 한 가지 설명이다.**
-Lu et al.(2022)은 같은 예시 집합의 순열만 바꿔도 일부 과제에서 SOTA 부터 무작위 추측까지
+Lu et al.(2022)은 같은 예시 집합의 순열만 바꿔도 일부 과제에서 SOTA부터 무작위 추측까지
 흔들린다고 보고했다.
 
-**다만 최근성만으로 전부 설명되지는 않는다.** 다른 요인들:
+**다만 recency만으로 전부 설명되지는 않는다.** 다른 요인들:
 
-- **다수 라벨 편향** — 예시에 많이 나온 라벨을 더 예측한다
-- **최근 라벨 편향** — 마지막 예시의 라벨을 따라가는 경향
+- **majority label bias** — 예시에 많이 나온 label을 더 예측한다
+- **recency label bias** — 마지막 예시의 label을 따라가는 경향
 - 표면 형식 — 구분자·줄바꿈·공백이 결과를 바꾼다
-- 위치 인코딩의 특성 — 긴 문맥에서 중간이 묻힌다 (lost in the middle)
+- positional encoding의 특성 — 긴 문맥에서 중간이 묻힌다 (lost in the middle)
 
 **실무 대응:**
 
-- 예시 순서를 **여러 개 시도해 보고** 검증셋으로 고른다
-- 라벨 분포를 균형 있게 배치한다
-- **보정(calibration)** — 빈 입력의 예측 분포로 편향을 빼준다 (Zhao 2021)
+- 예시 순서를 **여러 개 시도해 보고** validation set으로 고른다
+- label 분포를 균형 있게 배치한다
+- **calibration(보정)** — 빈 입력의 예측 분포로 bias를 빼준다 (Zhao 2021)
 - 결정적 순서를 고정한다 (재현성)
-- **프롬프트도 하이퍼파라미터다** — 튜닝하고 기록해야 한다
+- **prompt도 hyperparameter다** — tuning하고 기록해야 한다
 
 ```{python}
 #| label: fig-icl
-#| fig-cap: "예시 수에 따른 정확도·사후분포 엔트로피와 순서 민감도"
+#| fig-cap: "예시 수에 따른 정확도·posterior entropy와 순서 민감도"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -208,21 +210,21 @@ from src import viz
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
                     specs=[[{"secondary_y": True}, {"type": "xy"}]],
-                    subplot_titles=("예시 수와 정확도 / 사후분포 엔트로피",
+                    subplot_titles=("예시 수와 정확도 / posterior entropy",
                                     "순서 민감도"))
 ks = [c[0] for c in ICL]
 fig.add_trace(go.Scatter(x=ks, y=[c[1] for c in ICL], mode="lines+markers",
                          name="정확도", line=dict(color=viz.ACCENT, width=2.5),
                          marker=dict(size=10)), row=1, col=1)
 fig.add_trace(go.Scatter(x=ks, y=[c[2] for c in ICL], mode="lines+markers",
-                         name="사후분포 엔트로피 (bits)",
+                         name="posterior entropy (bits)",
                          line=dict(color=viz.WARM, width=2.5, dash="dash"),
                          marker=dict(size=9)), row=1, col=1, secondary_y=True)
 fig.add_hline(y=1/NY, line=dict(color=viz.YELLOW, dash="dot"),
               annotation_text="무작위 추측", row=1, col=1)
 fig.update_xaxes(title_text="예시 수 k", row=1, col=1)
 fig.update_yaxes(title_text="정확도", row=1, col=1)
-fig.update_yaxes(title_text="엔트로피 (bits)", row=1, col=1, secondary_y=True)
+fig.update_yaxes(title_text="entropy (bits)", row=1, col=1, secondary_y=True)
 
 fig.add_trace(go.Bar(x=[o[0] for o in ORDER], y=[o[3] for o in ORDER],
                      showlegend=False, marker_color=viz.PINK,
@@ -236,33 +238,33 @@ fig.show()
 
 ---
 
-## G7.8.3 — 사고 연쇄와 자기일관성
+## G7.8.3 — chain-of-thought와 self-consistency
 
-**Chain-of-Thought**: "단계별로 생각해 보자"를 붙이면 추론 과제 성능이 오른다.
+**Chain-of-Thought**(CoT — 사고 연쇄): "단계별로 생각해 보자"를 붙이면 reasoning 과제 성능이 오른다.
 
 왜 작동하는가에 대한 설명은 두 층이다.
 
-**① 계산량 층위.** Transformer 한 번의 순전파는 **고정된 깊이**의 계산이다.
+**① 계산량 층위.** Transformer 한 번의 forward pass는 **고정된 깊이**의 계산이다.
 깊이 $L$ 인 모델은 $L$ 단계 이상의 순차 계산을 한 번에 할 수 없다.
-**중간 결과를 토큰으로 뱉으면 그것이 다음 순전파의 입력이 된다** —
-즉 CoT 는 시퀀스 길이를 계산 깊이로 바꾸는 장치다.
+**중간 결과를 token으로 뱉으면 그것이 다음 forward pass의 입력이 된다** —
+즉 CoT는 sequence 길이를 계산 깊이로 바꾸는 장치다. 암산으로는 못 푸는 문제를 종이에 중간 계산을 적어 가며 푸는 것이다.
 이론적으로도 뒷받침된다: Merrill & Sabharwal(2023) 등은
-중간 단계를 허용하면 Transformer 의 표현 가능한 계산 종류가 넓어짐을 보였다.
+중간 단계를 허용하면 Transformer의 표현 가능한 계산 종류가 넓어짐을 보였다.
 
-**② 분포 층위.** 사전학습 말뭉치에서 "풀이 과정이 있는 텍스트"는
+**② 분포 층위.** pretraining 말뭉치에서 "풀이 과정이 있는 텍스트"는
 "답만 있는 텍스트"보다 정답률이 높다. 풀이를 유도하면 **그 더 신뢰할 만한 분포**로 옮겨간다.
 
-토큰 비용은 다음과 같다 (답만 쓸 때 5 토큰 기준).
+token 비용은 다음과 같다 (답만 쓸 때 5 token 기준).
 
-| 방식 | 출력 토큰 | 상대 비용·지연 |
+| 방식 | 출력 token | 상대 비용·지연 |
 |---|---|---|
 | 답만 | 5 | 1x |
 | 간단한 CoT | 80 | 16x |
 | 상세한 CoT | 300 | 60x |
 | self-consistency ×8 | 2,400 | 480x |
-| 긴 추론 ([7.12](12_reasoning_models.qmd)) | 3,000 | 600x |
+| 긴 reasoning ([7.12](12_reasoning_models.qmd)) | 3,000 | 600x |
 
-**CoT 는 공짜가 아니다.** 출력 토큰이 비용이자 지연이다.
+**CoT는 공짜가 아니다.** 출력 token이 비용이자 지연이다.
 간단한 과제에 붙이면 손해다 — 정확도는 그대로인데 비용만 오른다.
 **어떤 과제에 붙일지가 설계 결정이다.**
 
@@ -286,13 +288,13 @@ p7 = [s for s in SC if s[0] == 0.7][0]
 p3 = [s for s in SC if s[0] == 0.3][0]
 ```
 
-self-consistency 는 추론 경로 $n$ 개의 다수결이다.
-각 경로가 **독립적으로** 확률 $p$ 로 맞는다고 하면, 정답이 최다득표를 받을 확률은 이항분포로 정확히 계산된다.
+**self-consistency**(자기일관성)는 reasoning 경로 $n$ 개를 따로 생성해 다수결로 답을 정하는 것이다.
+각 경로가 **독립적으로** 확률 $p$ 로 맞는다고 하면, 정답이 최다득표를 받을 확률은 이항분포로 정확히 계산된다 — 같은 문제를 여러 번 풀어 가장 많이 나온 답을 고르는 것이다.
 
-**$p > 0.5$ 이면 다수결이 정확도를 올린다** — $p = 0.7$ 에서 $n = 1$ 의 `{python} f"{p7[1][0]:.3f}"` 이
-$n = 41$ 에서 `{python} f"{p7[1][-1]:.3f}"` 이 된다.
+**$p > 0.5$ 이면 다수결이 정확도를 올린다** — $p = 0.7$ 에서 $n = 1$ 의 `{python} f"{p7[1][0]:.3f}"`이
+$n = 41$ 에서 `{python} f"{p7[1][-1]:.3f}"`이 된다.
 **$p < 0.5$ 이면 다수결이 정확도를 내린다** — $p = 0.3$ 에서 `{python} f"{p3[1][0]:.3f}"` → `{python} f"{p3[1][-1]:.4f}"`.
-**틀린 답에 수렴한다.** 샘플을 늘릴수록 확실하게 틀린다.
+**틀린 답에 수렴한다.** sample을 늘릴수록 확실하게 틀린다.
 
 **그런데 여기에 중요한 단서가 있다.**
 위 계산은 "오답이 하나뿐"이라고 가정했다. 실제로는 여러 갈래로 틀린다.
@@ -325,19 +327,19 @@ d3 = [d for d in DISP if d[0] == 0.3][0]
 D3_LO, D3_HI = d3[1][0], d3[1][-1]
 ```
 
-오답이 여러 종류로 흩어지면 어떻게 되는가 (경로 `{python} f"{N_PATH}"`개, 몬테카를로 20,000회).
+오답이 여러 종류로 흩어지면 어떻게 되는가 (경로 `{python} f"{N_PATH}"`개, Monte Carlo 20,000회).
 **$p = 0.3$ (단일 경로로는 30%밖에 못 맞히는 과제)에서도** 오답이 1종이면 다수결 정확도
-`{python} f"{D3_LO:.3f}"` 로 **크게 나빠지지만**, 오답이 10종이면 `{python} f"{D3_HI:.3f}"` —
+`{python} f"{D3_LO:.3f}"`로 **크게 나빠지지만**, 오답이 10종이면 `{python} f"{D3_HI:.3f}"` —
 **`{python} f"{D3_HI/0.3:.0f}"`배로 좋아진다.**
 
-**이것이 self-consistency 가 실제로 작동하는 이유다.**
-추론 과제에서 정답은 하나인데 **틀리는 방식은 여러 가지다.**
-오답이 흩어지면 정답이 상대 다수가 되기 쉽다.
+**이것이 self-consistency가 실제로 작동하는 이유다.**
+reasoning 과제에서 정답은 하나인데 **틀리는 방식은 여러 가지다.**
+오답이 흩어지면 정답이 상대 다수가 되기 쉽다. 후보가 열 명인 선거에서 30% 득표로도 당선되는 것과 같다.
 
-**그래서 self-consistency 가 잘 듣는 조건이 있다:**
+**그래서 self-consistency가 잘 듣는 조건이 있다:**
 
-- **답이 이산적이고 비교 가능해야 한다** (수치·객관식) — 자유 서술은 어렵다
-- 경로가 실제로 다양해야 한다 (온도를 0 으로 두면 의미가 없다 — [7.9](09_decoding.qmd))
+- **답이 discrete하고 비교 가능해야 한다** (수치·객관식) — 자유 서술은 어렵다
+- 경로가 실제로 다양해야 한다 (temperature를 0으로 두면 의미가 없다 — [7.9](09_decoding.qmd))
 - 오답이 한 곳으로 몰리는 체계적 오류에는 무력하다 — 모델이 같은 오개념을 가지고 있으면 다수결이 그것을 확증한다
 - 비용이 $n$ 배다
 
@@ -362,7 +364,7 @@ for i, (p, row) in enumerate(SC):
                                                       width=2.2),
                              marker=dict(size=7)), row=1, col=1)
 fig.add_hline(y=0.5, line=dict(color=viz.YELLOW, dash="dot"), row=1, col=1)
-fig.update_xaxes(title_text="추론 경로 수 n", type="log", row=1, col=1)
+fig.update_xaxes(title_text="reasoning 경로 수 n", type="log", row=1, col=1)
 fig.update_yaxes(title_text="다수결 정확도", row=1, col=1)
 
 for i, (p, row) in enumerate(DISP):
@@ -380,8 +382,8 @@ fig.show()
 
 ## G7.8.4 — 출력 형식 강제
 
-프롬프트로 "JSON으로만 답하라"고 해도 어길 때가 있다.
-**디코딩 단계에서 막으면** 확률이 아니라 **보장**이 된다.
+prompt로 "JSON으로만 답하라"고 해도 어길 때가 있다.
+**decoding 단계에서 막으면** 확률이 아니라 **보장**이 된다 — **constrained decoding**(제약 디코딩)이다.
 
 ```{python}
 #| label: constrained
@@ -395,7 +397,7 @@ V2I = {c: i for i, c in enumerate(VOCAB)}
 
 
 def allowed(state):
-    """상태별 허용 토큰 — 유한 상태 기계로 문법을 표현한다."""
+    """상태별 허용 token — finite state machine으로 문법을 표현한다."""
     return {
         0: ['{'], 1: ['"'], 2: ['a'], 3: ['"'], 4: [':'],
         5: [' '], 6: ['0', '1', '2'], 7: ['0', '1', '2', '}'],
@@ -412,7 +414,7 @@ def step(state, tok):
 
 
 rng_c = np.random.default_rng(0)
-LOGITS = rng_c.normal(0, 1.5, (9, len(VOCAB)))     # '모델' 의 로짓 (무작위)
+LOGITS = rng_c.normal(0, 1.5, (9, len(VOCAB)))     # '모델'의 logit (무작위)
 
 
 def softmax(z):
@@ -452,7 +454,7 @@ def valid(s):
 print('목표 문법:  {"a": <숫자>}')
 print()
 OK = {}
-for tag, con in [("제약 없음", False), ("문법 제약 디코딩", True)]:
+for tag, con in [("제약 없음", False), ("문법 constrained decoding", True)]:
     outs = [generate(con, i) for i in range(200)]
     OK[tag] = sum(valid(o) for o in outs)
     print(f"{tag}")
@@ -461,37 +463,37 @@ for tag, con in [("제약 없음", False), ("문법 제약 디코딩", True)]:
     print()
 ```
 
-제약 없는 쪽은 유효 출력이 `{python} f"{OK['제약 없음']}"`/200 이다 — 로짓이 무작위이므로 문법과 아무 관계가 없다.
-문법 제약을 걸면 `{python} f"{OK['문법 제약 디코딩']}"`/200 이다.
+제약 없는 쪽은 유효 출력이 `{python} f"{OK['제약 없음']}"`/200이다 — logit이 무작위이므로 문법과 아무 관계가 없다.
+문법 제약을 걸면 `{python} f"{OK['문법 constrained decoding']}"`/200이다.
 
-**한 가지 미묘한 점: 제약은 "유효한 접두사"만 보장한다.**
-문법이 종료 토큰을 강제하지는 않는다 — 샘플러가 언젠가 `}` 를 뽑아야 한다.
+**한 가지 미묘한 점: 제약은 "유효한 prefix"만 보장한다.**
+문법이 종료 token을 강제하지는 않는다 — sampler가 언젠가 `}` 를 뽑아야 한다.
 최대 길이에서 잘리면 미완성 출력이 나온다.
 실무에서는 최대 길이를 넉넉히 두거나, 길이에 따라 종료를 유도한다.
 
-**제약 디코딩은 확률이 아니라 보장이다.**
-문법이 허용하지 않는 토큰의 확률을 0 으로 만들고 재정규화한다.
-100% 유효한 출력이 나온다 — 프롬프트로는 얻을 수 없는 성질이다.
+**constrained decoding은 확률이 아니라 보장이다.**
+문법이 허용하지 않는 token의 확률을 0으로 만들고 재normalize한다. 객관식 답안지에 없는 번호는 아예 고를 수 없게 하는 것이다.
+100% 유효한 출력이 나온다 — prompt로는 얻을 수 없는 성질이다.
 
 | 방법 | 유효성 | 비용 | 주의 |
 |---|---|---|---|
-| 프롬프트로 요청 | 확률적 | 없음 | 긴 출력에서 자주 깨진다 |
-| **정규식/문법 제약** | **보장** | 마스킹 오버헤드 | 문법 작성이 필요 |
-| JSON 스키마 | 보장 | 동일 | 라이브러리 지원 많음 |
+| prompt로 요청 | 확률적 | 없음 | 긴 출력에서 자주 깨진다 |
+| **정규식/문법 제약** | **보장** | masking overhead | 문법 작성이 필요 |
+| JSON schema | 보장 | 동일 | library 지원 많음 |
 | 재시도 + 검증 | 높음 | 실패 시 n배 | 가장 단순, 지연 편차 큼 |
-| 함수 호출 API | 보장 | 제공자 의존 | 모델이 그 형식으로 학습됨 |
+| function calling API | 보장 | 제공자 의존 | 모델이 그 형식으로 학습됨 |
 
-**제약 디코딩의 함정**
+**constrained decoding의 함정**
 
-- 문법이 강제하면 **모델이 원래 가려던 답과 달라질 수 있다** — 예: 스키마가 필드를 요구하면 모델이 값을 "지어낸다"
+- 문법이 강제하면 **모델이 원래 가려던 답과 달라질 수 있다** — 예: schema가 field를 요구하면 모델이 값을 "지어낸다"
 - 확률 질량이 좁아져 품질이 떨어질 수 있다는 보고도 있다
 - **형식은 보장되지만 내용의 정확성은 보장되지 않는다**
 
 ---
 
-## 프롬프트 설계와 평가
+## prompt 설계와 평가
 
-구조화 프롬프트의 구성 요소는 다음과 같다.
+구조화 prompt의 구성 요소는 다음과 같다.
 
 | 요소 | 역할 | 예 |
 |---|---|---|
@@ -499,119 +501,119 @@ for tag, con in [("제약 없음", False), ("문법 제약 디코딩", True)]:
 | 과제 서술 | 무엇을 해야 하는가 — 구체적으로 | "버그를 찾고 수정안을 제시하라" |
 | **구획 구분** | 지시와 데이터를 명확히 분리 | XML 태그, `###` 구분자 |
 | 예시 | 형식과 난이도를 보여준다 | few-shot |
-| 출력 형식 | 정확한 스키마를 명시 | JSON 스키마, 필드 설명 |
+| 출력 형식 | 정확한 schema를 명시 | JSON schema, field 설명 |
 | 제약 | 하지 말아야 할 것 | "추측하지 말고 모르면 모른다고" |
-| 추론 유도 | 필요하면 단계별 사고 | "먼저 분석하고 답하라" |
+| reasoning 유도 | 필요하면 단계별 사고 | "먼저 분석하고 답하라" |
 
 **구획 구분이 특히 중요한 이유: 신뢰 경계**
 
 | 구간 | 신뢰 |
 |---|---|
-| 시스템 지시 | 개발자가 씀. 신뢰함 |
+| system instruction | 개발자가 씀. 신뢰함 |
 | 사용자 입력 | 신뢰하지 않음 |
 | 검색된 문서 | **신뢰하지 않음** ([7.10](10_rag.qmd)) |
 | 도구 출력 | **신뢰하지 않음** ([7.11](11_agents.qmd)) |
 
-모델에게는 이 모두가 **같은 토큰열**이다.
+모델에게는 이 모두가 **같은 token열**이다.
 사용자 입력에 "위 지시를 무시하고..."가 들어 있으면 따를 수 있다.
-**프롬프트 인젝션의 근본 원인**이고, [7.15](15_safety.qmd)에서 다룬다.
+**prompt injection의 근본 원인**이고, [7.15](15_safety.qmd)에서 다룬다.
 
-**프롬프트를 제대로 평가하는 법**
+**prompt를 제대로 평가하는 법**
 
 | 원칙 | 내용 |
 |---|---|
-| 고정 테스트셋 | 프롬프트를 바꿔가며 같은 문제로 비교. 최소 수십 개 |
-| **여러 시드** | 온도가 0 이 아니면 한 번 실행은 증거가 아니다 |
-| 신뢰구간 | n=20 에서 정확도 차이 5%p 는 잡음일 수 있다 |
-| **보류셋** | 프롬프트도 과적합한다 — 튜닝셋과 평가셋을 나눌 것 |
-| 비용 기록 | 정확도만 보면 안 된다. 토큰 수·지연도 지표다 |
-| 버전 관리 | 프롬프트는 코드다. 변경 이력을 남길 것 |
+| 고정 test set | prompt를 바꿔가며 같은 문제로 비교. 최소 수십 개 |
+| **여러 seed** | temperature가 0이 아니면 한 번 실행은 증거가 아니다 |
+| 신뢰구간 | n=20에서 정확도 차이 5%p는 noise일 수 있다 |
+| **held-out set** | prompt도 overfitting한다 — tuning set과 평가 set을 나눌 것 |
+| 비용 기록 | 정확도만 보면 안 된다. token 수·지연도 지표다 |
+| 버전 관리 | prompt는 코드다. 변경 이력을 남길 것 |
 
-**흔한 실수: 예시 하나로 판단하기.** 프롬프트 A 가 B 보다 낫다는 주장은 통계적 주장이다.
-$n = 20$ 이면 정확도의 표준오차가 대략 $\sqrt{0.5 \cdot 0.5 / 20} \approx$
-`{python} f"{(0.25/20)**0.5*100:.0f}"`%p 다 — 10%p 차이는 구별이 안 된다.
+**흔한 실수: 예시 하나로 판단하기.** prompt A가 B보다 낫다는 주장은 통계적 주장이다.
+$n = 20$ 이면 정확도의 standard error가 대략 $\sqrt{0.5 \cdot 0.5 / 20} \approx$
+`{python} f"{(0.25/20)**0.5*100:.0f}"`%p다 — 10%p 차이는 구별이 안 된다.
 
-**프롬프트 자동 최적화**
+**prompt 자동 최적화**
 
-- APE — LLM 이 프롬프트 후보를 생성하고 점수로 고른다
-- **DSPy** — 프롬프트를 "컴파일"한다. 예시 선택·지시문을 자동 탐색
-- OPRO — 최적화 궤적을 프롬프트에 넣어 LLM 이 개선하게 한다
+- APE — LLM이 prompt 후보를 생성하고 점수로 고른다
+- **DSPy** — prompt를 "compile"한다. 예시 선택·instruction을 자동 탐색
+- OPRO — 최적화 궤적을 prompt에 넣어 LLM이 개선하게 한다
 - 공통점 — **평가 지표가 있어야 작동한다.** 그것이 없으면 자동화도 없다
 
 ---
 
-## 언제 프롬프팅이고 언제 아닌가
+## 언제 prompting이고 언제 아닌가
 
 | 상황 | 권장 | 이유 |
 |---|---|---|
-| 빠른 시제품 | **프롬프팅** | 몇 분. 학습 불필요 |
-| 과제가 자주 바뀜 | **프롬프팅** | 재학습 비용이 없다 |
-| 예시가 10개 미만 | 프롬프팅 | 학습하기엔 너무 적다 |
-| 형식을 항상 지켜야 함 | 제약 디코딩 | 프롬프트로는 보장 안 됨 |
-| 예시가 1,000개 이상 | 미세조정 ([7.6](06_finetuning_peft.qmd)) | 문맥에 다 못 넣는다 |
-| 지연·비용이 중요 | 미세조정 | 긴 프롬프트는 매 요청 비용 |
-| 최신 사실이 필요 | RAG ([7.10](10_rag.qmd)) | 프롬프트에 넣을 것을 찾아야 한다 |
-| 복잡한 다단계 추론 | CoT + self-consistency | 또는 추론 모델 ([7.12](12_reasoning_models.qmd)) |
+| 빠른 시제품 | **prompting** | 몇 분. 학습 불필요 |
+| 과제가 자주 바뀜 | **prompting** | 재학습 비용이 없다 |
+| 예시가 10개 미만 | prompting | 학습하기엔 너무 적다 |
+| 형식을 항상 지켜야 함 | constrained decoding | prompt로는 보장 안 됨 |
+| 예시가 1,000개 이상 | fine-tuning ([7.6](06_finetuning_peft.qmd)) | 문맥에 다 못 넣는다 |
+| 지연·비용이 중요 | fine-tuning | 긴 prompt는 매 요청 비용 |
+| 최신 사실이 필요 | RAG ([7.10](10_rag.qmd)) | prompt에 넣을 것을 찾아야 한다 |
+| 복잡한 다단계 reasoning | CoT + self-consistency | 또는 reasoning model ([7.12](12_reasoning_models.qmd)) |
 
-**프롬프팅의 진짜 이점은 반복 속도다.** 미세조정 한 번 = 몇 시간. 프롬프트 수정 = 몇 초.
-**먼저 프롬프팅으로 상한을 확인하고**, 그 다음에 학습을 고려한다.
+**prompting의 진짜 이점은 반복 속도다.** fine-tuning 한 번 = 몇 시간. prompt 수정 = 몇 초.
+**먼저 prompting으로 상한을 확인하고**, 그 다음에 학습을 고려한다.
 
-**긴 프롬프트의 숨은 비용.** 예시가 많은 프롬프트가 2,000 토큰이라면
+**긴 prompt의 숨은 비용.** 예시가 많은 prompt가 2,000 token이라면
 
-- 매 요청마다 그만큼 처리한다 (프리필 비용)
-- 문맥 창을 그만큼 차지한다
-- 프롬프트 캐싱이 있으면 크게 줄지만, 공통 접두사여야 한다 ([7.14](14_inference_optimization.qmd))
+- 매 요청마다 그만큼 처리한다 (prefill 비용)
+- context window를 그만큼 차지한다
+- prompt caching이 있으면 크게 줄지만, 공통 prefix여야 한다 ([7.14](14_inference_optimization.qmd))
 
-같은 능력을 미세조정으로 넣으면 요청당 0 토큰이다.
-**요청 수가 많아지면 어느 시점에 미세조정이 싸진다.**
+같은 능력을 fine-tuning으로 넣으면 요청당 0 token이다.
+**요청 수가 많아지면 어느 시점에 fine-tuning이 싸진다.**
 
 ---
 
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 라벨을 무작위로 바꾼다**
-`icl-bayes` 의 `icl_accuracy` 에서 예시 라벨을 전부 무작위로 바꿔(`NOISE` 를 1.0 에 가깝게) $k$ 를 늘려 보라.
-베이즈 학습자의 정확도는 어떻게 되는가? Min et al.(2022)이 실제 LLM 에서 본 "라벨을 섞어도 성능 유지"와
-비교해, 이 모델이 ICL 의 무엇을 놓치고 있는지 써라.
+**① label을 무작위로 바꾼다**
+`icl-bayes` 의 `icl_accuracy` 에서 예시 label을 전부 무작위로 바꿔(`NOISE` 를 1.0에 가깝게) $k$ 를 늘려 보라.
+Bayesian 학습자의 정확도는 어떻게 되는가? Min et al.(2022)이 실제 LLM에서 본 "label을 섞어도 성능 유지"와
+비교해, 이 모델이 ICL의 무엇을 놓치고 있는지 써라.
 
-**② 최근성의 세기와 정확도**
-`order` 의 $\gamma$ 를 0.99·0.9·0.3 으로 더 촘촘히 훑어 "답이 바뀐 비율"과 평균 정확도를 함께 그려라.
+**② recency의 세기와 정확도**
+`order` 의 $\gamma$ 를 0.99·0.9·0.3으로 더 촘촘히 훑어 "답이 바뀐 비율"과 평균 정확도를 함께 그려라.
 순서 민감도가 정확도 손실로 이어지는 문턱이 있는가?
 
 **③ 다수결이 이득이 되는 경계**
 `dispersion` 을 $p$ 0.1~0.6, 오답 종류 $k$ 1~20 격자로 돌려, 다수결 정확도가 단일 경로 $p$ 를 넘는
-경계 $p^*(k)$ 를 그려라. 오답이 흩어질수록 self-consistency 의 손익분기점이 얼마나 내려가는가?
+경계 $p^*(k)$ 를 그려라. 오답이 흩어질수록 self-consistency의 손익분기점이 얼마나 내려가는가?
 :::
 
 ## 요약
 
 | 개념 | 핵심 |
 |------|------|
-| ICL | 가중치를 바꾸지 않고 프롬프트로 과제를 바꾼다 |
-| 베이즈 모델 | 예시가 **과제를 특정**한다 — 사후분포가 좁아진다 |
-| 측정된 곡선 | k=0에서 `{python} f"{ICL0[1]:.2f}"` → k=8에서 `{python} f"{ICL8[1]:.2f}"`, 엔트로피 `{python} f"{ICL0[2]:.1f}"` → `{python} f"{ICL8[2]:.2f}"` bits |
-| 포화 | 과제를 알아낸 뒤에는 예시를 더 줘도 소용없다 |
-| **모델의 한계** | 라벨을 무작위로 해도 성능이 유지된다는 관측은 설명 못 함 |
-| 다른 가설 | 암묵적 경사하강, 인덕션 헤드 — ICL은 단일 메커니즘이 아니다 |
-| 순서 민감도 | 교환가능 학습자는 `{python} f"{ORD_EX[3]:.0%}"`, 최근성 γ=0.5면 **`{python} f"{ORD_LAST[3]:.0%}"`가 답이 바뀐다** |
-| 대응 | 순서를 튜닝하고, 보정하고, **프롬프트를 하이퍼파라미터로 다룬다** |
-| CoT | 시퀀스 길이를 **계산 깊이**로 바꾸는 장치 |
-| CoT의 비용 | 출력 토큰이 60배, self-consistency면 480배 |
+| ICL | weight를 바꾸지 않고 prompt로 과제를 바꾼다 |
+| Bayesian 모델 | 예시가 **과제를 특정**한다 — posterior가 좁아진다 (통역사가 문서 종류를 알아채기) |
+| 측정된 곡선 | k=0에서 `{python} f"{ICL0[1]:.2f}"` → k=8에서 `{python} f"{ICL8[1]:.2f}"`, entropy `{python} f"{ICL0[2]:.1f}"` → `{python} f"{ICL8[2]:.2f}"` bits |
+| saturation | 과제를 알아낸 뒤에는 예시를 더 줘도 소용없다 |
+| **모델의 한계** | label을 무작위로 해도 성능이 유지된다는 관측은 설명 못 함 |
+| 다른 가설 | implicit gradient descent, induction head — ICL은 단일 메커니즘이 아니다 |
+| 순서 민감도 | exchangeable 학습자는 `{python} f"{ORD_EX[3]:.0%}"`, recency γ=0.5면 **`{python} f"{ORD_LAST[3]:.0%}"`가 답이 바뀐다** |
+| 대응 | 순서를 tuning하고, calibration하고, **prompt를 hyperparameter로 다룬다** |
+| CoT | sequence 길이를 **계산 깊이**로 바꾸는 장치 — 종이에 중간 계산 적기 |
+| CoT의 비용 | 출력 token이 60배, self-consistency면 480배 |
 | self-consistency | $p > 0.5$면 도움, $p < 0.5$면 **해가 된다** |
 | 측정 | p=0.3, n=41이면 정확도가 `{python} f"{p3[1][0]:.2f}"` → **`{python} f"{p3[1][-1]:.4f}"`** |
-| 결정적 단서 | **오답이 흩어지면** p=0.3에서도 `{python} f"{D3_LO:.3f}"` → `{python} f"{D3_HI:.3f}"` |
-| 조건 | 답이 이산적이고, 경로가 다양하고, 오류가 체계적이지 않을 것 |
-| 제약 디코딩 | 확률이 아니라 **보장** — `{python} f"{OK['제약 없음']}"`/200 → `{python} f"{OK['문법 제약 디코딩']}"`/200 유효 출력 |
+| 결정적 단서 | **오답이 흩어지면** p=0.3에서도 `{python} f"{D3_LO:.3f}"` → `{python} f"{D3_HI:.3f}"` (후보 열 명 선거) |
+| 조건 | 답이 discrete하고, 경로가 다양하고, 오류가 체계적이지 않을 것 |
+| constrained decoding | 확률이 아니라 **보장** — `{python} f"{OK['제약 없음']}"`/200 → `{python} f"{OK['문법 constrained decoding']}"`/200 유효 출력 |
 | 제약의 함정 | 형식은 보장되지만 **내용의 정확성은 아니다** |
-| 신뢰 경계 | 모델에게는 지시·입력·문서·도구 출력이 전부 같은 토큰열 |
-| 평가 | n=20에서 10%p 차이는 표준오차 `{python} f"{(0.25/20)**0.5*100:.0f}"`%p — **구별 불가** |
+| 신뢰 경계 | 모델에게는 instruction·입력·문서·도구 출력이 전부 같은 token열 |
+| 평가 | n=20에서 10%p 차이는 standard error `{python} f"{(0.25/20)**0.5*100:.0f}"`%p — **구별 불가** |
 
-프롬프트로 무엇을 요청할지는 정했다.
-이제 모델이 그 확률 분포에서 **실제로 토큰을 꺼내는 방법**이다.
+prompt로 무엇을 요청할지는 정했다.
+이제 모델이 그 확률 분포에서 **실제로 token을 꺼내는 방법**이다.
 
 ---
 
-**다음**: [7.9 디코딩 전략](09_decoding.qmd)
+**다음**: [7.9 decoding 전략](09_decoding.qmd)
 
-**이전**: [7.7 지시 조정과 정렬](07_alignment.qmd)
+**이전**: [7.7 instruction tuning과 alignment](07_alignment.qmd)
