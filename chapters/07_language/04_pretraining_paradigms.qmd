@@ -1,30 +1,30 @@
 ---
-title: "7.4 사전학습 패러다임"
-subtitle: "ELMo·BERT·GPT·T5 — 자기지도 목표의 설계"
+title: "7.4 pretraining paradigm"
+subtitle: "ELMo·BERT·GPT·T5 — self-supervised 목표의 설계"
 jupyter: ai-ml-study
 ---
 
 [7.3](03_word_embeddings.qmd)은 벽에 부딪혔다.
 
-> '배'는 과일이기도 하고 선박이기도 한데, 정적 임베딩은 벡터를 하나만 준다.
+> '배'는 과일이기도 하고 선박이기도 한데, static embedding은 벡터를 하나만 준다.
 > 두 뜻 중심이 서로 등을 돌리고 있어 **기하학적으로** 둘 다 가까울 수 없다.
 
 답은 명확했다. **문맥에 따라 벡터를 만들면 된다.**
-그러려면 문맥을 읽는 모델이 필요하고, 그 모델을 레이블 없이 학습시켜야 한다.
+그러려면 문맥을 읽는 모델이 필요하고, 그 모델을 label 없이 학습시켜야 한다 — **pretraining**(사전학습 — 특정 과제 전에 대량의 텍스트로 미리 배워 두기)이고, 정답을 텍스트 자체에서 만들어 내므로 **self-supervised**(자기지도)다.
 
 2018년부터 몇 년간 이 분야는 한 질문을 두고 갈렸다.
 
 > **무엇을 맞히게 할 것인가?**
 
-- 다음 토큰? (GPT)
-- 가려진 토큰? (BERT)
+- 다음 token? (GPT)
+- 가려진 token? (BERT)
 - 가려진 구간? (T5)
-- 이 토큰이 진짜인지 가짜인지? (ELECTRA)
+- 이 token이 진짜인지 가짜인지? (ELECTRA)
 
-선택이 달라지면 **모델이 할 수 있는 일이 달라진다.**
-이 장은 그 선택지들을 비교하고, 왜 결국 자기회귀가 이겼는지를 본다.
+선택이 달라지면 **모델이 할 수 있는 일이 달라진다.** 같은 교과서로도 "다음 줄 이어 쓰기"로 공부한 학생과 "빈칸 채우기"로 공부한 학생은 다른 능력을 갖게 된다.
+이 장은 그 선택지들을 비교하고, 왜 결국 autoregressive가 이겼는지를 본다.
 
-먼저 논쟁의 핵심 수치부터 정확히 계산한다 — **양방향 문맥은 얼마나 더 유용한가.**
+먼저 논쟁의 핵심 수치부터 정확히 계산한다 — **bidirectional(양방향) 문맥은 얼마나 더 유용한가.**
 
 ---
 
@@ -35,33 +35,35 @@ $\tilde{\mathbf{x}}$ 는 망가뜨린 입력, $\mathcal{M}$ 은 가린 위치의
 
 $$
 \begin{aligned}
-\textbf{인과 LM (GPT)}\quad
+\textbf{causal LM (GPT)}\quad
 &\max \sum_{t=1}^{T} \log p(x_t \mid x_{<t})
 &&\text{모든 위치}\\[4pt]
-\textbf{마스크 LM (BERT)}\quad
+\textbf{masked LM (BERT)}\quad
 &\max \sum_{t\in\mathcal{M}} \log p(x_t \mid \tilde{\mathbf{x}})
 &&|\mathcal{M}| \approx 0.15\,T\\[4pt]
-\textbf{구간 복원 (T5)}\quad
+\textbf{span corruption (T5)}\quad
 &\max \sum_{s} \log p(\text{span}_s \mid \tilde{\mathbf{x}})
 &&\text{구간을 통째로}\\[4pt]
-\textbf{치환 판별 (ELECTRA)}\quad
+\textbf{replaced token detection (ELECTRA)}\quad
 &\max \sum_{t=1}^{T} \log p\big(\mathbb{1}[x_t \text{ 가 원본}] \mid \tilde{\mathbf{x}}\big)
 &&\text{모든 위치, 이진}
 \end{aligned}
 $$
 
+(causal LM = 인과 언어모델, 왼쪽에서 오른쪽으로 다음 token 예측. masked LM = 마스크 언어모델, 일부 token을 가리고 그것만 맞히기. span corruption = 연속 구간 통째로 가리고 복원. replaced token detection = 바꿔치기된 token 찾아내기.)
+
 세 축으로 갈린다.
 
 | | 문맥 | 예측 대상 수 | 목표당 정보량 |
 |---|---|---|---|
-| 인과 LM | 왼쪽만 | $T$ | $\log V$ 비트급 |
-| 마스크 LM | 양방향 | $0.15\,T$ | $\log V$ 비트급 |
-| 구간 복원 | 양방향(인코더) | 구간 수 | 구간 길이에 비례 |
-| 치환 판별 | 양방향 | $T$ | **1비트** |
+| causal LM | 왼쪽만 | $T$ | $\log V$ bit급 |
+| masked LM | bidirectional | $0.15\,T$ | $\log V$ bit급 |
+| span corruption | bidirectional(encoder) | 구간 수 | 구간 길이에 비례 |
+| replaced token detection | bidirectional | $T$ | **1 bit** |
 
-ELECTRA의 위치가 흥미롭다. **모든 위치에서 신호를 받지만 각 신호가 1비트**뿐이다.
+ELECTRA의 위치가 흥미롭다. **모든 위치에서 신호를 받지만 각 신호가 1 bit**뿐이다.
 그래서 같은 연산에서 BERT보다 빠르게 배우지만(신호가 $6.7$ 배 많다),
-생성 능력은 얻지 못한다 — 판별자는 분포를 모형화하지 않는다.
+생성 능력은 얻지 못한다 — discriminator는 분포를 모형화하지 않는다.
 
 ```{python}
 #| label: objective-signal
@@ -73,46 +75,46 @@ T, V = 512, 32_000
 bits_token = np.log2(V)
 
 rows = [
-    ("인과 LM (GPT)",        T,             bits_token, "생성 O"),
-    ("마스크 LM (BERT)",     int(0.15 * T), bits_token, "생성 X"),
-    ("구간 복원 (T5)",       int(0.15 * T), bits_token, "생성 O (조건부)"),
-    ("치환 판별 (ELECTRA)",  T,             1.0,        "생성 X"),
+    ("causal LM (GPT)",        T,             bits_token, "생성 O"),
+    ("masked LM (BERT)",       int(0.15 * T), bits_token, "생성 X"),
+    ("span corruption (T5)",   int(0.15 * T), bits_token, "생성 O (conditional)"),
+    ("RTD (ELECTRA)",          T,             1.0,        "생성 X"),
 ]
 
-print(f"{'목표':<22}{'예측 수':>9}{'신호당 비트':>13}{'총 비트':>12}{'생성':>16}")
+print(f"{'목표':<24}{'예측 수':>9}{'신호당 bit':>13}{'총 bit':>12}{'생성':>20}")
 for name, k, b, gen in rows:
-    print(f"{name:<22}{k:>9,}{b:>13.1f}{k*b:>12,.0f}{gen:>16}")
+    print(f"{name:<24}{k:>9,}{b:>13.1f}{k*b:>12,.0f}{gen:>20}")
 TOTAL = {name: k*b for name, k, b, _ in rows}
-ELECTRA_FRAC = TOTAL["인과 LM (GPT)"]/TOTAL["치환 판별 (ELECTRA)"]
+ELECTRA_FRAC = TOTAL["causal LM (GPT)"]/TOTAL["RTD (ELECTRA)"]
 ```
 
-시퀀스 길이 `{python} f"{T}"`, 어휘 `{python} f"{V:,}"` 기준이다.
-총 비트만 보면 인과 LM 이 압도적이다.
-ELECTRA 는 예측 수는 같지만 신호당 1비트라 총량이 1/`{python} f"{ELECTRA_FRAC:.0f}"` 이다.
-그럼에도 BERT 보다 효율적인 것은, 판별 과제가 훨씬 쉬워서
-같은 비트를 얻는 데 드는 연산이 적기 때문이다 — 비트 수와 학습 효율은 다른 축이다.
+sequence 길이 `{python} f"{T}"`, vocabulary `{python} f"{V:,}"` 기준이다.
+총 bit만 보면 causal LM이 압도적이다.
+ELECTRA는 예측 수는 같지만 신호당 1 bit라 총량이 1/`{python} f"{ELECTRA_FRAC:.0f}"`이다.
+그럼에도 BERT보다 효율적인 것은, 판별 과제가 훨씬 쉬워서
+같은 bit를 얻는 데 드는 연산이 적기 때문이다 — bit 수와 학습 효율은 다른 축이다.
 
 ::: {.key-concept}
-이 표가 [5.5의 마스크 세기](../05_transformer/05_encoder_decoder.qmd)와 같은 이야기를 한다.
-**인과 LM은 문맥을 절반만 보는 대신 신호를 6.7배 얻는다.**
+이 표가 [5.5의 mask 세기](../05_transformer/05_encoder_decoder.qmd)와 같은 이야기를 한다.
+**causal LM은 문맥을 절반만 보는 대신 신호를 6.7배 얻는다.**
 
 여기에 두 가지가 더해져 승부가 갈렸다.
 
-- **생성 가능성** — 인과 분해 $p(x) = \prod_t p(x_t\mid x_{<t})$ 는 정확한 분해라
-  그대로 샘플링하면 된다. 양방향 목표에는 대응하는 분해가 없다.
-- **과제 통합** — 분류·요약·번역을 전부 "이어 쓰기"로 표현할 수 있어
-  과제마다 헤드를 붙일 필요가 없다.
+- **생성 가능성** — causal 분해 $p(x) = \prod_t p(x_t\mid x_{<t})$ 는 정확한 분해라
+  그대로 sampling하면 된다. bidirectional 목표에는 대응하는 분해가 없다.
+- **과제 통합** — 분류·요약·번역을 전부 "이어 쓰기"로 representation할 수 있어
+  과제마다 head를 붙일 필요가 없다.
 
-한편 양방향 목표가 사라진 것은 아니다. 문장 전체가 한꺼번에 주어지는
-검색·재순위·분류에서는 여전히 유리해서, 임베딩 모델 계열로 남아 있다.
+한편 bidirectional 목표가 사라진 것은 아니다. 문장 전체가 한꺼번에 주어지는
+검색·reranking·분류에서는 여전히 유리해서, embedding 모델 계열로 남아 있다.
 :::
 
 ---
 
-## G7.4.1 — 양방향성의 가치를 정확히 계산한다
+## G7.4.1 — bidirectionality의 가치를 정확히 계산한다
 
-[7.2](02_language_models.qmd)의 2차 마르코프 소스를 다시 쓴다.
-참 분포를 알고 있으니 **조건부 엔트로피를 정확히 계산할 수 있다.**
+[7.2](02_language_models.qmd)의 2차 Markov source를 다시 쓴다.
+참 분포를 알고 있으니 **conditional entropy(조건부 엔트로피 — 문맥을 안 뒤에 남는 불확실성)를 정확히 계산할 수 있다.**
 
 ```{python}
 #| label: bidirectional
@@ -163,31 +165,31 @@ H_BI = float(-(Jc*np.log2(np.maximum(cond, 1e-300))).sum())
 print(f"{'조건':<34} {'H (bits)':>10} {'PPL':>9}")
 print("-" * 56)
 print(f"{'문맥 없음 (균등)':<34} {np.log2(V):>10.4f} {V:>9.3f}")
-print(f"{'좌측만  x_{t-2}, x_{t-1}  (CLM)':<34} {H_LEFT:>10.4f} "
+print(f"{'왼쪽만  x_{t-2}, x_{t-1}  (CLM)':<34} {H_LEFT:>10.4f} "
       f"{2**H_LEFT:>9.3f}")
 print(f"{'양쪽    + x_{t+1}, x_{t+2}  (MLM)':<34} {H_BI:>10.4f} "
       f"{2**H_BI:>9.3f}")
 GAIN_BITS, PPL_DROP = H_LEFT-H_BI, 1-2**H_BI/2**H_LEFT
 ```
 
-2차 마르코프 소스에서 가운데 토큰 $x_t$ 를 맞히는 문제다.
-**양방향 문맥이 `{python} f"{GAIN_BITS:.4f}"` bits 를 더 준다** —
-퍼플렉서티가 `{python} f"{PPL_DROP:.1%}"` 줄어든다.
+2차 Markov source에서 가운데 token $x_t$ 를 맞히는 문제다.
+**bidirectional 문맥이 `{python} f"{GAIN_BITS:.4f}"` bits를 더 준다** —
+perplexity가 `{python} f"{PPL_DROP:.1%}"` 줄어든다.
 
-**이 소스는 "미래가 과거에 의존하는" 구조라 뒤쪽 토큰이 정보를 담는다.**
+**이 source는 "미래가 과거에 의존하는" 구조라 뒤쪽 token이 정보를 담는다.**
 $x_{t+1}$ 은 $(x_{t-1}, x_t)$ 에 의존하므로 $x_t$ 에 대한 단서가 된다.
-실제 언어도 마찬가지다 — 뒤 문장이 앞 단어의 뜻을 확정하는 일이 흔하다.
-**BERT 가 양방향을 택한 것은 근거가 있다.** 문제는 대가다.
+실제 언어도 마찬가지다 — 뒤 문장이 앞 단어의 뜻을 확정하는 일이 흔하다. "배를 ___ 항구에 댔다"는 뒤를 읽어야 '배'가 선박임을 안다.
+**BERT가 bidirectional을 택한 것은 근거가 있다.** 문제는 대가다.
 
 ::: {.callout-warning}
-### 양방향성의 대가
+### bidirectionality의 대가
 
 $H(x_t \mid \text{양쪽})$ 을 아무리 잘 배워도 **문장을 생성할 수 없다.**
 
 생성은 $p(x_1)p(x_2|x_1)p(x_3|x_{1:2})\cdots$ 로 진행되는데,
-양방향 모델은 $x_{t+1}$ 을 이미 안다고 가정하고 학습되었기 때문이다.
+bidirectional 모델은 $x_{t+1}$ 을 이미 안다고 가정하고 학습되었기 때문이다. 아직 쓰지 않은 다음 단어를 보고 현재 단어를 정하는 법만 배운 셈이다.
 
-그래서 BERT는 **표현을 만드는 모델**이고, GPT는 **생성하는 모델**이다.
+그래서 BERT는 **representation을 만드는 모델**이고, GPT는 **생성하는 모델**이다.
 이 구분이 2018–2020년 이 분야를 둘로 갈랐다.
 :::
 
@@ -204,14 +206,14 @@ TOKENS = ["오늘", "서울", "의", "날씨", "는", "매우", "맑고", "따�
 print("원본:  " + " ".join(TOKENS))
 print()
 
-print("① CLM (GPT) — 다음 토큰 예측, 입력을 망가뜨리지 않는다")
+print("① CLM (GPT) — next-token prediction, 입력을 망가뜨리지 않는다")
 for t in [3, 5]:
     print(f"   입력 {' '.join(TOKENS[:t]):<28} → 정답 '{TOKENS[t]}'")
-print(f"   길이 {len(TOKENS)} 인 시퀀스에서 학습 신호 {len(TOKENS)-1}개 "
+print(f"   길이 {len(TOKENS)}인 sequence에서 학습 신호 {len(TOKENS)-1}개 "
       f"(모든 위치)")
 print()
 
-print("② MLM (BERT) — 15% 를 [MASK] 로 바꾸고 그것만 맞힌다")
+print("② MLM (BERT) — 15%를 [MASK]로 바꾸고 그것만 맞힌다")
 masked = TOKENS.copy()
 masked[3] = "[MASK]"
 print(f"   입력 {' '.join(masked)}")
@@ -219,13 +221,13 @@ print(f"   정답 위치 3 = '{TOKENS[3]}'")
 print(f"   학습 신호 1개 (15% × 8 ≈ 1)")
 print()
 
-print("③ span corruption (T5) — 연속 구간을 하나의 센티널로")
+print("③ span corruption (T5) — 연속 구간을 하나의 sentinel token으로")
 print(f"   입력  오늘 서울 의 <X> 는 <Y> 따뜻하다")
 print(f"   정답  <X> 날씨 <Y> 매우 맑고 <Z>")
-print("   가려진 구간을 **순서대로 생성**한다 — 인코더-디코더 구조가 필요하다")
+print("   가려진 구간을 **순서대로 생성**한다 — encoder-decoder 구조가 필요하다")
 print()
 
-print("④ RTD (ELECTRA) — 작은 생성자가 바꿔치기하고, 판별자가 찾아낸다")
+print("④ RTD (ELECTRA) — 작은 generator가 바꿔치기하고, discriminator가 찾아낸다")
 corrupted = TOKENS.copy()
 corrupted[1] = "부산"
 corrupted[5] = "조금"
@@ -235,26 +237,26 @@ print(f"   정답 " + " ".join("가짜" if TOKENS[i] != corrupted[i] else "진�
 print(f"   학습 신호 {len(TOKENS)}개 — **모든 위치**에서 이진 분류")
 ```
 
-BERT 의 마스킹은 사실 세 갈래다 — 가릴 15% 중 80% 는 `[MASK]` 로 교체, 10% 는 무작위 토큰으로 교체,
-10% 는 **그대로 둔다**. 미세조정 때는 `[MASK]` 가 없으므로 그 불일치를 줄이려는 장치다.
+BERT의 masking은 사실 세 갈래다 — 가릴 15% 중 80%는 `[MASK]`로 교체, 10%는 무작위 token으로 교체,
+10%는 **그대로 둔다**. fine-tuning 때는 `[MASK]`가 없으므로 그 불일치를 줄이려는 장치다.
 
-학습 신호 밀도를 시퀀스 길이 128 기준으로 세면 다음과 같다.
+학습 신호 밀도를 sequence 길이 128 기준으로 세면 다음과 같다.
 
 | 목표 | 학습 위치 | 비율 | 예측 대상 |
 |---|---|---|---|
-| CLM (GPT) | 128 | 1.00 | 다음 토큰 (어휘 전체) |
-| MLM 15% (BERT) | 19 | 0.15 | 가려진 토큰 (어휘 전체) |
-| span corruption (T5) | 19 | 0.15 | 가려진 스팬 (어휘 전체) |
+| CLM (GPT) | 128 | 1.00 | 다음 token (vocabulary 전체) |
+| MLM 15% (BERT) | 19 | 0.15 | 가려진 token (vocabulary 전체) |
+| span corruption (T5) | 19 | 0.15 | 가려진 span (vocabulary 전체) |
 | RTD (ELECTRA) | 128 | 1.00 | **진짜/가짜 (이진)** |
 
-**BERT 는 순전파 한 번에 15% 만 배운다.**
-ELECTRA 의 동기가 정확히 이것이다 — 같은 계산으로 6.7배 많은 위치에서 배운다.
-대신 각 신호가 약하다 (어휘 전체 대신 이진 판정).
+**BERT는 forward pass 한 번에 15%만 배운다.** 문제집 한 권을 다 읽고 문제는 15%만 푸는 셈이다.
+ELECTRA의 동기가 정확히 이것이다 — 같은 계산으로 6.7배 많은 위치에서 배운다.
+대신 각 신호가 약하다 (vocabulary 전체 대신 이진 판정).
 ELECTRA 논문은 그 교환이 **작은 모델에서 특히 유리**하다고 보고했다.
 
 ---
 
-## G7.4.3 — 마스킹 비율: 무엇을 재고 무엇을 못 재는가
+## G7.4.3 — masking 비율: 무엇을 재고 무엇을 못 재는가
 
 ```{python}
 #| label: mask-ratio
@@ -275,7 +277,7 @@ def windows(seq):
 
 
 def encode(X, mask):
-    """마스킹된 자리는 별도의 [MASK] 인덱스 V 로 표시한다."""
+    """masking된 자리는 별도의 [MASK] index V로 표시한다."""
     n = len(X)
     O = np.zeros((n, W*(V+1)))
     for j in range(W):
@@ -288,7 +290,7 @@ X_TR, X_TE = windows(TR), windows(TE)
 m_te = np.zeros(X_TE.shape, bool)
 m_te[:, CEN] = True
 
-print(f"{'추가 마스킹 비율':>16} {'평균 가려진 위치':>16} {'남은 문맥':>10} "
+print(f"{'추가 masking 비율':>16} {'평균 가려진 위치':>16} {'남은 문맥':>10} "
       f"{'가운데 예측 PPL':>17}")
 print("-" * 66)
 MR = []
@@ -309,33 +311,33 @@ for ratio in [0.0, 0.2, 0.4, 0.6, 0.8]:
     print(f"{ratio:>16.1f} {n_masked:>16.2f} {W-n_masked:>10.2f} "
           f"{2**ce:>17.3f}")
 print("-" * 66)
-print(f"{'양방향 하한':>16} {'':>16} {'':>10} {2**H_BI:>17.3f}")
+print(f"{'bidirectional 하한':>16} {'':>16} {'':>10} {2**H_BI:>17.3f}")
 MR_LO, MR_HI = MR[0][3], MR[-1][3]
 MR_RATIO = MR_HI/MR_LO
 ```
 
-창 크기 `{python} f"{W}"` 에서 가운데 위치를 맞힌다 (훈련 `{python} f"{len(X_TR):,}"`개).
-가운데는 항상 마스킹하고, **나머지 위치를 추가로 얼마나 가릴지**를 바꿨다.
-**마스킹을 늘릴수록 예측이 나빠진다** (`{python} f"{MR_LO:.3f}"` → `{python} f"{MR_HI:.3f}"`,
-`{python} f"{MR_RATIO:.1f}"`배). 문맥이 줄어드니 당연하다. **이것이 마스킹의 비용이다.**
+창 크기 `{python} f"{W}"`에서 가운데 위치를 맞힌다 (훈련 `{python} f"{len(X_TR):,}"`개).
+가운데는 항상 masking하고, **나머지 위치를 추가로 얼마나 가릴지**를 바꿨다.
+**masking을 늘릴수록 예측이 나빠진다** (`{python} f"{MR_LO:.3f}"` → `{python} f"{MR_HI:.3f}"`,
+`{python} f"{MR_RATIO:.1f}"`배). 문맥이 줄어드니 당연하다. **이것이 masking의 비용이다.**
 
-**그런데 이 실험은 트레이드오프의 절반만 잰다.**
+**그런데 이 실험은 trade-off의 절반만 잰다.**
 
 - 비용 — 위 표. 많이 가릴수록 조건이 약해져 예측이 어려워진다
-- 이득 — 순전파 한 번에 더 많은 위치를 배운다 (앞 절의 신호 밀도)
+- 이득 — forward pass 한 번에 더 많은 위치를 배운다 (앞 절의 신호 밀도)
 
 두 힘의 균형점은 **모델 크기·데이터·계산 예산에 함께 의존**한다.
 우리 실험은 고정된 작은 모델이라 이득 쪽을 재현하지 못한다.
-BERT 의 15% 는 그 균형에 대한 **경험적 선택**이었고, 이후 연구는 그 값이 절대적이지 않다고 보고했다:
+BERT의 15%는 그 균형에 대한 **경험적 선택**이었고, 이후 연구는 그 값이 절대적이지 않다고 보고했다:
 
-- RoBERTa — 동적 마스킹(매 에폭 다시 마스킹)이 정적보다 낫다
-- Wettig et al.(2023) — 큰 모델에서는 **40% 가 15% 보다 낫다**
-- whole-word masking — 서브워드 조각이 아니라 단어 전체를 가린다
-- **즉 15% 는 정답이 아니라 특정 설정의 최적값이었다**
+- RoBERTa — dynamic masking(매 epoch 다시 masking)이 static보다 낫다
+- Wettig et al.(2023) — 큰 모델에서는 **40%가 15%보다 낫다**
+- whole-word masking — subword 조각이 아니라 단어 전체를 가린다
+- **즉 15%는 정답이 아니라 특정 설정의 최적값이었다**
 
 ```{python}
 #| label: fig-objectives
-#| fig-cap: "마스킹 비용 곡선과 목표별 학습 신호 밀도"
+#| fig-cap: "masking 비용 곡선과 목표별 학습 신호 밀도"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -344,18 +346,18 @@ from plotly.subplots import make_subplots
 from src import viz
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
-                    subplot_titles=("마스킹을 늘릴 때의 비용",
+                    subplot_titles=("masking을 늘릴 때의 비용",
                                     "목표별 학습 신호 밀도 (길이 128)"))
 fig.add_trace(go.Scatter(x=[m[0] for m in MR], y=[m[3] for m in MR],
                          mode="lines+markers", name="가운데 예측 PPL",
                          line=dict(color=viz.WARM, width=2.5),
                          marker=dict(size=10)), row=1, col=1)
 fig.add_hline(y=2**H_BI, line=dict(color=viz.GREEN, dash="dash"),
-              annotation_text=f"양방향 하한 {2**H_BI:.2f}", row=1, col=1)
+              annotation_text=f"bidirectional 하한 {2**H_BI:.2f}", row=1, col=1)
 fig.add_hline(y=2**H_LEFT, line=dict(color=viz.YELLOW, dash="dot"),
-              annotation_text=f"좌측만 {2**H_LEFT:.2f}", row=1, col=1)
-fig.update_xaxes(title_text="추가 마스킹 비율", row=1, col=1)
-fig.update_yaxes(title_text="퍼플렉서티", row=1, col=1)
+              annotation_text=f"왼쪽만 {2**H_LEFT:.2f}", row=1, col=1)
+fig.update_xaxes(title_text="추가 masking 비율", row=1, col=1)
+fig.update_yaxes(title_text="perplexity", row=1, col=1)
 
 names = ["CLM\n(GPT)", "MLM 15%\n(BERT)", "span\n(T5)", "RTD\n(ELECTRA)"]
 vals = [128, 19, 19, 128]
@@ -371,10 +373,10 @@ fig.show()
 
 ---
 
-## G7.4.4 — 문맥적 표현이 정말 생기는가
+## G7.4.4 — contextual representation이 정말 생기는가
 
 [7.3](03_word_embeddings.qmd)의 '배' 문제로 돌아간다.
-문맥을 읽는 모델은 같은 토큰에 다른 벡터를 줄까?
+문맥을 읽는 모델은 같은 token에 다른 벡터를 줄까?
 
 ```{python}
 #| label: contextual
@@ -384,7 +386,7 @@ import sys; sys.path.append("../..")
 import numpy as np
 from src import nn
 
-# BERT 처럼 가운데를 **80% 만** 마스킹한다 (나머지 20% 는 원래 토큰을 그대로)
+# BERT처럼 가운데를 **80%만** masking한다 (나머지 20%는 원래 token을 그대로)
 gm2 = np.random.default_rng(3)
 m_tr2 = gm2.random(X_TR.shape) < 0.2
 m_tr2[:, CEN] = gm2.random(len(X_TR)) < 0.8
@@ -395,20 +397,20 @@ nn.train(CTXNET, encode(X_TR, m_tr2), X_TR[:, CEN], loss="softmax_ce",
 
 
 def hidden(X, mask):
-    """마지막 은닉층 활성 = 문맥적 표현."""
+    """마지막 hidden layer activation = contextual representation."""
     h = encode(X, mask)
     for i in range(len(CTXNET.W)-1):
         h = np.tanh(h @ CTXNET.W[i] + CTXNET.b[i])
     return h
 
 
-# 가운데를 마스킹하지 않고, **주변 문맥만** 바꿔가며 표현을 본다
+# 가운데를 masking하지 않고, **주변 문맥만** 바꿔가며 representation을 본다
 m_none = np.zeros((len(X_TE), W), bool)
 H_ALL = hidden(X_TE, m_none)
 mid = X_TE[:, CEN]
 
-print(f"{'토큰':>5} {'등장 횟수':>10} {'같은 토큰끼리 코사인':>20} "
-      f"{'다른 토큰과 코사인':>19}")
+print(f"{'token':>5} {'등장 횟수':>10} {'같은 token끼리 cosine':>20} "
+      f"{'다른 token과 cosine':>19}")
 print("-" * 60)
 CTXVAR = []
 for tok in range(min(V, 6)):
@@ -430,71 +432,71 @@ print("-" * 60)
 print(f"{'평균':>5} {'':>10} {w_avg:>20.4f} {b_avg:>19.4f}")
 ```
 
-가운데를 80% 만 마스킹해 학습했다 — BERT 의 80/10/10 과 같은 이유다.
-항상 마스킹하면 모델이 그 자리의 입력을 아예 무시하도록 배우고,
-그러면 평가 때 토큰을 보여줘도 표현에 반영되지 않는다.
-표는 같은 가운데 토큰인데 주변 문맥이 다를 때 표현이 달라지는지를 잰 것이다.
+가운데를 80%만 masking해 학습했다 — BERT의 80/10/10과 같은 이유다.
+항상 masking하면 모델이 그 자리의 입력을 아예 무시하도록 배우고,
+그러면 평가 때 token을 보여줘도 representation에 반영되지 않는다.
+표는 같은 가운데 token인데 주변 문맥이 다를 때 representation이 달라지는지를 잰 것이다.
 
-**같은 토큰끼리도 코사인이 1.0 이 아니다** — 문맥에 따라 벡터가 움직인다.
-동시에 다른 토큰보다는 확실히 가깝다 — 토큰 정체성도 유지한다.
-**정적 임베딩이라면 같은 토큰끼리 코사인이 정확히 1.0 이었을 것이다.**
-여기서는 `{python} f"{w_avg:.3f}"` 다. 그 차이가 "문맥적"이라는 말의 실체다.
-같은 토큰끼리(`{python} f"{w_avg:.3f}"`)가 다른 토큰과(`{python} f"{b_avg:.3f}"`)보다
-`{python} f"{SEP:.0f}"`배 가깝다 — 토큰 정체성과 문맥이 **한 벡터 안에 함께** 들어 있다.
+**같은 token끼리도 cosine이 1.0이 아니다** — 문맥에 따라 벡터가 움직인다.
+동시에 다른 token보다는 확실히 가깝다 — token 정체성도 유지한다.
+**static embedding이라면 같은 token끼리 cosine이 정확히 1.0이었을 것이다.**
+여기서는 `{python} f"{w_avg:.3f}"`다. 그 차이가 "contextual"이라는 말의 실체다.
+같은 token끼리(`{python} f"{w_avg:.3f}"`)가 다른 token과(`{python} f"{b_avg:.3f}"`)보다
+`{python} f"{SEP:.0f}"`배 가깝다 — token 정체성과 문맥이 **한 벡터 안에 함께** 들어 있다. 같은 사람이라도 회사에서와 집에서 조금 다른 모습이지만 여전히 같은 사람인 것처럼.
 
-실제 BERT 에서 보고된 것들:
+실제 BERT에서 보고된 것들:
 
-- 층이 깊어질수록 같은 단어의 표현이 더 흩어진다 (문맥 의존↑)
+- 층이 깊어질수록 같은 단어의 representation이 더 흩어진다 (문맥 의존↑)
 - 얕은 층은 표면 형태, 중간 층은 구문, 깊은 층은 의미에 가깝다
-- 마지막 층은 사전학습 목표에 과하게 특화되어 미세조정에 덜 유용할 수 있다
-- **이방성(anisotropy)** — 모든 표현이 좁은 원뿔에 몰린다
+- 마지막 층은 pretraining 목표에 과하게 특화되어 fine-tuning에 덜 유용할 수 있다
+- **anisotropy(이방성 — 방향에 따라 성질이 다름)** — 모든 representation이 좁은 원뿔에 몰린다
   ([4.5](../04_architectures/05_embeddings.qmd)에서 재 봤는데, 얕은 합성 실험에서는 재현되지 않았다)
 
 ---
 
 ## 목표별로 무엇을 할 수 있게 되는가
 
-| 모델 | 사전학습 목표 | 주 능력 | 특징 |
+| 모델 | pretraining 목표 | 주 능력 | 특징 |
 |---|---|---|---|
-| ELMo (2018) | 양방향 LSTM, 두 방향 별도 CLM | 특징 추출 | 문맥적 임베딩의 시작. 얕은 양방향 |
-| BERT (2018) | MLM + NSP, 인코더 | **이해** | 분류·NER·QA에 강함. 생성 불가 |
-| RoBERTa (2019) | MLM만, 동적 마스킹, 더 오래 | 이해 | NSP 제거가 오히려 나았다 |
-| ALBERT (2019) | 파라미터 공유 + SOP | 이해 | 메모리 절약, 속도는 그대로 |
-| ELECTRA (2020) | RTD (모든 위치 이진 판정) | 이해 | **샘플 효율** — 같은 계산에 더 좋은 성능 |
-| GPT-1/2/3 | CLM, 디코더 | **생성 + 이해** | 규모를 키우자 문맥 내 학습이 나타났다 |
-| T5 (2019) | span corruption, 인코더-디코더 | 조건부 생성 | 모든 과제를 text-to-text로 |
-| BART (2019) | 여러 잡음 + 복원, 인코더-디코더 | 조건부 생성 | 요약·번역에 강함 |
+| ELMo (2018) | bidirectional LSTM, 두 방향 별도 CLM | feature 추출 | contextual embedding의 시작. 얕은 bidirectional |
+| BERT (2018) | MLM + NSP(next sentence prediction), encoder | **이해** | 분류·NER·QA에 강함. 생성 불가 |
+| RoBERTa (2019) | MLM만, dynamic masking, 더 오래 | 이해 | NSP 제거가 오히려 나았다 |
+| ALBERT (2019) | parameter 공유 + SOP | 이해 | 메모리 절약, 속도는 그대로 |
+| ELECTRA (2020) | RTD (모든 위치 이진 판정) | 이해 | **sample 효율** — 같은 계산에 더 좋은 성능 |
+| GPT-1/2/3 | CLM, decoder | **생성 + 이해** | 규모를 키우자 in-context learning이 나타났다 |
+| T5 (2019) | span corruption, encoder-decoder | conditional 생성 | 모든 과제를 text-to-text로 |
+| BART (2019) | 여러 noise + 복원, encoder-decoder | conditional 생성 | 요약·번역에 강함 |
 | UL2 (2022) | 여러 목표를 섞음 (mixture-of-denoisers) | 통합 | 목표 선택 자체를 학습에 넣음 |
 
-**왜 decoder-only 자기회귀가 이겼는가**
+**왜 decoder-only autoregressive가 이겼는가**
 
 | 이유 | 설명 |
 |---|---|
-| 생성이 된다 | 인코더 전용은 문장을 만들 수 없다. 그것만으로 용도가 갈린다 |
+| 생성이 된다 | encoder 전용은 문장을 만들 수 없다. 그것만으로 용도가 갈린다 |
 | **학습 신호가 조밀하다** | 모든 위치에서 배운다 (MLM은 15%) |
-| 구조가 단순하다 | 인코더-디코더의 교차 어텐션이 없어 스케일링이 쉽다 |
-| **문맥 내 학습** | 프롬프트만으로 과제를 바꾼다 — 미세조정 없이 (7.8) |
-| KV 캐시 | 생성 시 증분 계산이 가능하다 (7.14) |
-| 과제 통합 | 모든 것을 '다음 토큰'으로 표현할 수 있다 |
+| 구조가 단순하다 | encoder-decoder의 cross-attention이 없어 scaling이 쉽다 |
+| **in-context learning** | prompt만으로 과제를 바꾼다 — fine-tuning 없이 (7.8) |
+| KV cache | 생성 시 증분 계산이 가능하다 (7.14) |
+| 과제 통합 | 모든 것을 '다음 token'으로 representation할 수 있다 |
 
-**그런데 '이해' 만 필요하면 지금도 인코더가 낫다.**
+**그런데 '이해'만 필요하면 지금도 encoder가 낫다.**
 
-- 문장 임베딩·검색 — BERT 계열(E5, BGE)이 여전히 표준 (7.10)
-- 분류·NER — 작은 인코더가 훨씬 싸고 충분히 정확하다
-- **양방향 문맥이 유리하다는 사실은 변하지 않았다** (이 장 첫 실험)
+- sentence embedding·검색 — BERT 계열(E5, BGE)이 여전히 표준 (7.10)
+- 분류·NER — 작은 encoder가 훨씬 싸고 충분히 정확하다
+- **bidirectional 문맥이 유리하다는 사실은 변하지 않았다** (이 장 첫 실험)
 - 바뀐 것은 '생성이 필요한 용도가 압도적으로 많아졌다'는 것
 
 **그리고 두 세계가 다시 만나고 있다:**
 
-- prefix LM — 앞부분은 양방향, 뒷부분은 인과적
+- prefix LM — 앞부분은 bidirectional, 뒷부분은 causal
 - FIM (fill-in-the-middle) — 코드 자동완성을 위해 순서를 재배열해 학습
-- '접두사 + 접미사 + 중간' 순서로 바꾸면 자기회귀로 빈칸을 채울 수 있다
+- 'prefix + suffix + middle' 순서로 바꾸면 autoregressive로 빈칸을 채울 수 있다
 - UL2 — 여러 손상 방식을 한 모델에 섞는다
-- 인코더-디코더의 부활 — 번역·요약 전용 모델에서는 여전히 경쟁력
+- encoder-decoder의 부활 — 번역·요약 전용 모델에서는 여전히 경쟁력
 
 
-**FIM(fill-in-the-middle)**은 자기회귀로 빈칸을 채우는 방법이다.
-문제는 CLM 이 왼쪽만 본다는 것인데, 코드 자동완성은 뒤쪽도 봐야 한다.
+**FIM(fill-in-the-middle)**은 autoregressive로 빈칸을 채우는 방법이다.
+문제는 CLM이 왼쪽만 본다는 것인데, 코드 자동완성은 뒤쪽도 봐야 한다.
 원본 `def add(a,b): return a+b` 에서 `return` 을 채우고 싶다고 하자.
 해법은 **학습 데이터의 순서를 바꾸는 것**이다.
 
@@ -502,39 +504,39 @@ print(f"{'평균':>5} {'':>10} {w_avg:>20.4f} {b_avg:>19.4f}")
 <PRE> def add(a,b): <SUF> a+b <MID> return
 ```
 
-이렇게 학습하면, 추론 때 `<PRE> 접두사 <SUF> 접미사 <MID>` 를 주고
-**평범한 자기회귀 생성**으로 가운데를 만들 수 있다.
+이렇게 학습하면, inference 때 `<PRE> prefix <SUF> suffix <MID>` 를 주고
+**평범한 autoregressive 생성**으로 가운데를 만들 수 있다.
 
-**아키텍처를 바꾸지 않고 목표만 바꿔서 양방향 능력을 얻은 것이다.**
+**architecture를 바꾸지 않고 목표만 바꿔서 bidirectional 능력을 얻은 것이다.**
 Bavarian et al.(2022)은 FIM을 섞어도 **좌→우 성능이 떨어지지 않는다**고
 보고했다 (FIM-for-free). 그래서 코드 모델은 대부분 FIM을 함께 학습한다.
 
 이것이 이 장의 교훈을 요약한다:
-**목표의 선택은 아키텍처의 선택보다 유연하다.**
-같은 디코더로도 무엇을 맞히게 하느냐에 따라 능력이 달라진다.
+**목표의 선택은 architecture의 선택보다 유연하다.**
+같은 decoder로도 무엇을 맞히게 하느냐에 따라 능력이 달라진다.
 
 
 ---
 
-## 전이학습이라는 전제
+## transfer learning이라는 전제
 
-사전학습-미세조정 패러다임이 성립하는 이유는 가정 하나다:
-**저수준 표현은 과제와 무관하게 공유된다.**
-그래서 큰 데이터로 표현을 배우고, 작은 데이터로 과제를 배운다.
+pretraining–fine-tuning paradigm이 성립하는 이유는 가정 하나다:
+**저수준 representation은 과제와 무관하게 공유된다.**
+그래서 큰 데이터로 representation을 배우고, 작은 데이터로 과제를 배운다 — **transfer learning**(전이학습)이다. 국어를 잘 배워 둔 학생이 어떤 과목의 교과서든 빨리 읽는 것과 같다.
 
 | 시기 | 전이 단위 | 방법 | 함의 |
 |---|---|---|---|
-| 2013~2017 | 단어 임베딩만 전이 | Word2Vec/GloVe를 초기값으로 | 나머지는 과제별로 처음부터 |
-| 2018~2020 | **모델 전체 전이** | BERT/GPT를 미세조정 | 과제별 데이터가 수천 개면 충분 |
-| 2020~2022 | 전이 없이 프롬프트 | GPT-3의 문맥 내 학습 | 가중치를 안 바꾸고 과제를 바꾼다 |
-| 2022~ | 지시 조정 + 정렬 | 하나의 모델이 모든 과제 | 미세조정은 능력이 아니라 행동을 바꾼다 |
+| 2013~2017 | word embedding만 전이 | Word2Vec/GloVe를 초기값으로 | 나머지는 과제별로 처음부터 |
+| 2018~2020 | **모델 전체 전이** | BERT/GPT를 fine-tuning | 과제별 데이터가 수천 개면 충분 |
+| 2020~2022 | 전이 없이 prompt | GPT-3의 in-context learning | weight를 안 바꾸고 과제를 바꾼다 |
+| 2022~ | instruction tuning + alignment | 하나의 모델이 모든 과제 | fine-tuning은 능력이 아니라 행동을 바꾼다 |
 
-**주목할 변화: 미세조정의 역할이 바뀌었다.**
+**주목할 변화: fine-tuning의 역할이 바뀌었다.**
 
-- 2019년 — 미세조정이 **과제를 가르치는** 단계였다
-- 지금 — 사전학습이 이미 능력을 갖고 있고, 미세조정은 **그것을 꺼내는 방법**을 가르친다
+- 2019년 — fine-tuning이 **과제를 가르치는** 단계였다
+- 지금 — pretraining이 이미 능력을 갖고 있고, fine-tuning은 **그것을 꺼내는 방법**을 가르친다
 
-이 변화가 [7.6](06_finetuning_peft.qmd)(PEFT)과 [7.7](07_alignment.qmd)(정렬)의 전제다.
+이 변화가 [7.6](06_finetuning_peft.qmd)(PEFT)과 [7.7](07_alignment.qmd)(alignment)의 전제다.
 작은 개입으로 충분한 이유가 '가르치는 것이 적기 때문'이다.
 
 
@@ -544,45 +546,45 @@ Bavarian et al.(2022)은 FIM을 섞어도 **좌→우 성능이 떨어지지 않
 ## 직접 해보기
 
 **① 이득 쪽도 재 본다**
-`mask-ratio` 는 비용만 잰다. 학습 스텝을 1500 에서 300 으로 줄여 **계산 예산이 빠듯한** 상황을
-만들고 같은 표를 다시 그려라. 추가 마스킹이 많은 쪽이 유리해지는 구간이 생기는가?
+`mask-ratio` 는 비용만 잰다. 학습 step을 1500에서 300으로 줄여 **계산 예산이 빠듯한** 상황을
+만들고 같은 표를 다시 그려라. 추가 masking이 많은 쪽이 유리해지는 구간이 생기는가?
 (힌트: 가운데 하나만 맞히는 지금 구조로는 이득이 안 보인다 — 가려진 모든 위치를 맞히도록 바꿔야 한다.)
 
-**② 어휘 크기와 ELECTRA**
-`objective-signal` 의 `V` 를 256(바이트)·32k·256k 로 바꿔라.
-ELECTRA 의 총 비트가 CLM 대비 몇 분의 1 이 되는가? 어휘가 클수록 이진 판정의 손해가 커지는 이유를 써라.
+**② vocabulary 크기와 ELECTRA**
+`objective-signal` 의 `V` 를 256(byte)·32k·256k로 바꿔라.
+ELECTRA의 총 bit가 CLM 대비 몇 분의 1이 되는가? vocabulary가 클수록 이진 판정의 손해가 커지는 이유를 써라.
 
-**③ 항상 마스킹하면**
-`contextual` 의 가운데 마스킹 확률 0.8 을 1.0 으로 바꿔 다시 학습하고 같은 토큰끼리/다른 토큰과
-코사인을 재라. 두 값이 어떻게 변하는가? 그것이 BERT 80/10/10 의 이유와 어떻게 이어지는가.
+**③ 항상 masking하면**
+`contextual` 의 가운데 masking 확률 0.8을 1.0으로 바꿔 다시 학습하고 같은 token끼리/다른 token과
+cosine을 재라. 두 값이 어떻게 변하는가? 그것이 BERT 80/10/10의 이유와 어떻게 이어지는가.
 :::
 
 ## 요약
 
 | 개념 | 핵심 |
 |------|------|
-| 핵심 질문 | **무엇을 맞히게 할 것인가** — 선택이 능력을 정한다 |
-| 양방향의 가치 | 참 분포에서 정확히 계산: $H$ `{python} f"{H_LEFT:.3f}"` → `{python} f"{H_BI:.3f}"` bits |
-| 측정된 이득 | 퍼플렉서티 **`{python} f"{PPL_DROP:.1%}"` 감소** — 근거 있는 선택이었다 |
-| 양방향의 대가 | **생성할 수 없다** — BERT는 표현, GPT는 생성 |
+| 핵심 질문 | **무엇을 맞히게 할 것인가** — 선택이 능력을 정한다 (이어 쓰기 vs 빈칸 채우기) |
+| bidirectional의 가치 | 참 분포에서 정확히 계산: $H$ `{python} f"{H_LEFT:.3f}"` → `{python} f"{H_BI:.3f}"` bits |
+| 측정된 이득 | perplexity **`{python} f"{PPL_DROP:.1%}"` 감소** — 근거 있는 선택이었다 |
+| bidirectional의 대가 | **생성할 수 없다** — BERT는 representation, GPT는 생성 |
 | CLM | 모든 위치에서 학습 (128/128) |
-| MLM | 15%만 학습 (19/128) — 순전파의 85%가 낭비 |
+| MLM | 15%만 학습 (19/128) — forward pass의 85%가 낭비 (문제집 15%만 풀기) |
 | BERT의 80/10/10 | [MASK] 불일치를 줄이려는 장치 |
 | ELECTRA | 모든 위치에서 이진 판정 — 밀도 6.7배, 신호는 약함 |
-| 마스킹 비용 | 추가 마스킹 0% → 80%에서 PPL `{python} f"{MR_LO:.3f}"` → `{python} f"{MR_HI:.3f}"` (`{python} f"{MR_RATIO:.1f}"`배) |
+| masking 비용 | 추가 masking 0% → 80%에서 PPL `{python} f"{MR_LO:.3f}"` → `{python} f"{MR_HI:.3f}"` (`{python} f"{MR_RATIO:.1f}"`배) |
 | **못 잰 것** | 신호 밀도의 이득 — 작은 모델에서는 재현되지 않는다 |
 | 15%는 정답이 아니다 | 큰 모델에서는 40%가 낫다는 보고 (Wettig 2023) |
-| 문맥적 표현 | 같은 토큰끼리 `{python} f"{w_avg:.3f}"`, 다른 토큰과 `{python} f"{b_avg:.3f}"` — `{python} f"{SEP:.0f}"`배 분리되면서도 1.0은 아니다 |
-| decoder-only 승리 | 생성 + 신호 밀도 + 구조 단순 + 문맥 내 학습 + KV 캐시 |
-| 인코더의 생존 | 임베딩·검색·분류에서는 여전히 표준 |
-| FIM | 순서를 바꿔 자기회귀로 빈칸 채우기 — 아키텍처 변경 없이 |
-| 전이의 변화 | 미세조정이 '과제를 가르치는 것'에서 '꺼내는 법'으로 |
+| contextual representation | 같은 token끼리 `{python} f"{w_avg:.3f}"`, 다른 token과 `{python} f"{b_avg:.3f}"` — `{python} f"{SEP:.0f}"`배 분리되면서도 1.0은 아니다 |
+| decoder-only 승리 | 생성 + 신호 밀도 + 구조 단순 + in-context learning + KV cache |
+| encoder의 생존 | embedding·검색·분류에서는 여전히 표준 |
+| FIM | 순서를 바꿔 autoregressive로 빈칸 채우기 — architecture 변경 없이 |
+| 전이의 변화 | fine-tuning이 '과제를 가르치는 것'에서 '꺼내는 법'으로 |
 
 목표를 정했으니 이제 **무엇을 먹일지**가 남았다.
-같은 목표, 같은 아키텍처에서 성능 차이를 만드는 것은 거의 언제나 데이터다.
+같은 목표, 같은 architecture에서 성능 차이를 만드는 것은 거의 언제나 데이터다.
 
 ---
 
-**다음**: [7.5 사전학습 데이터](05_pretraining_data.qmd)
+**다음**: [7.5 pretraining 데이터](05_pretraining_data.qmd)
 
-**이전**: [7.3 단어 임베딩](03_word_embeddings.qmd)
+**이전**: [7.3 word embedding](03_word_embeddings.qmd)
