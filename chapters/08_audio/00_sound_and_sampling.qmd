@@ -1,6 +1,6 @@
 ---
 title: "8.0 소리와 디지털 신호"
-subtitle: "파형·샘플링·양자화 — 오디오가 배열이 되기까지"
+subtitle: "waveform·sampling·quantization — 오디오가 배열이 되기까지"
 jupyter: ai-ml-study
 ---
 
@@ -12,9 +12,9 @@ Whisper에 넣는 것도, HiFi-GAN이 뱉는 것도 결국 **숫자 배열 하�
 
 | 증상 | 진짜 원인 |
 |------|----------|
-| 리샘플링했더니 이상한 저음이 생겼다 | **에일리어싱** — 안티에일리어싱 필터를 안 걸었다 |
-| 조용히 녹음한 파일만 인식률이 나쁘다 | **헤드룸** — 비트 깊이를 실제로 몇 비트만 쓰고 있다 |
-| 조용한 구간에서 지직거린다 | **양자화 왜곡** — 오차가 신호와 상관되어 있다 |
+| resampling했더니 이상한 저음이 생겼다 | **aliasing** — anti-aliasing filter를 안 걸었다 |
+| 조용히 녹음한 파일만 인식률이 나쁘다 | **headroom** — bit depth를 실제로 몇 bit만 쓰고 있다 |
+| 조용한 구간에서 지직거린다 | **quantization 왜곡** — 오차가 신호와 상관되어 있다 |
 
 셋 다 이 장에서 직접 만들어 보고 재 본다.
 
@@ -24,33 +24,34 @@ Whisper에 넣는 것도, HiFi-GAN이 뱉는 것도 결국 **숫자 배열 하�
 
 물체가 진동하면 주변 공기의 압력이 평형 기준으로 오르내린다.
 그 압력 변화가 파동으로 퍼지고, 고막이나 마이크의 진동판을 흔든다.
-마이크는 그 변위를 전압으로 바꾸고, ADC가 전압을 숫자로 바꾼다.
+마이크는 그 변위를 전압으로 바꾸고, ADC(analog-to-digital converter — 전압을 숫자로 바꾸는 장치)가 전압을 숫자로 바꾼다.
+시간에 따른 그 숫자의 흐름을 그린 것이 **waveform**(파형)이다.
 
-가장 단순한 압력 변화가 **정현파**다.
+가장 단순한 압력 변화가 **sine wave**(정현파 — 사인 함수 모양의 파동)다.
 
 $$x(t) = A \sin(2\pi f t + \phi)$$
 
 | 기호 | 이름 | 지각되는 것 |
 |------|------|-----------|
-| $A$ | 진폭 | 크기(loudness) |
-| $f$ | 주파수 (Hz) | 음높이(pitch) |
-| $\phi$ | 위상 | **거의 지각되지 않는다** |
+| $A$ | 진폭(amplitude) | 크기(loudness) |
+| $f$ | 주파수(frequency, Hz) | 음높이(pitch) |
+| $\phi$ | 위상(phase) | **거의 지각되지 않는다** |
 
 마지막 줄이 중요하다. 위상은 소리의 성격을 거의 바꾸지 않는데,
-그래서 [8.1](01_fourier_stft.qmd)에서 스펙트로그램이 위상을 버려도 인식에는 문제가 없다.
+그래서 [8.1](01_fourier_stft.qmd)에서 spectrogram이 위상을 버려도 인식에는 문제가 없다.
 
-그런데 실제 악기나 목소리는 정현파 하나가 아니다.
-기본 주파수 $f_0$ 의 **정수배** 성분들이 함께 울린다.
+그런데 실제 악기나 목소리는 sine wave 하나가 아니다.
+fundamental frequency(기본 주파수) $f_0$의 **정수배** 성분들이 함께 울린다. 이 정수배 성분들을 **harmonic**(배음)이라 부른다.
 
 $$x(t) = \sum_{k=1}^{K} A_k \sin(2\pi k f_0 t + \phi_k)$$
 
-$f_0$ 가 음높이를 정하고, **$A_k$ 의 비율이 음색을 정한다.**
+$f_0$가 음높이를 정하고, **$A_k$의 비율이 timbre(음색 — 같은 음높이라도 피아노와 바이올린을 구별하게 하는 소리의 색깔)를 정한다.**
 
 ---
 
-## G8.0.1 — 배음 비율이 음색을 만든다
+## G8.0.1 — harmonic 비율이 음색을 만든다
 
-같은 $f_0 = 220$ Hz 인데 배음 구조만 바꿔 본다.
+같은 $f_0 = 220$ Hz인데 harmonic 구조만 바꿔 본다.
 
 ```{python}
 #| label: harmonics
@@ -80,13 +81,13 @@ def build(kind, n=10, dur=0.5, sr=SR):
     return y/np.max(np.abs(y))
 
 
-KINDS = [("sine", "순음 (정현파 하나)"), ("soft", "부드러운 음 (1/k^2.5)"),
-         ("clarinet", "클라리넷 풍 (홀수 배음, 1/k²)"),
-         ("saw", "톱니파 (모든 배음, 1/k)"),
-         ("square", "사각파 (홀수 배음, 1/k)")]
+KINDS = [("sine", "pure tone (sine 하나)"), ("soft", "부드러운 음 (1/k^2.5)"),
+         ("clarinet", "클라리넷 풍 (홀수 harmonic, 1/k²)"),
+         ("saw", "sawtooth (모든 harmonic, 1/k)"),
+         ("square", "square wave (홀수 harmonic, 1/k)")]
 
-print(f"f0 = {F0} Hz 로 고정. 배음 진폭만 바꾼다.")
-print("(실제 크기 스펙트럼에서 잰 값 — 기본파를 1.00 으로 정규화)")
+print(f"f0 = {F0} Hz로 고정. harmonic 진폭만 바꾼다.")
+print("(실제 magnitude spectrum에서 잰 값 — 기본파를 1.00으로 normalization)")
 print()
 print(f"{'음색':<26} " + " ".join(f"{'k=' + str(k):>7}" for k in range(1, 7)))
 print("-" * 72)
@@ -99,19 +100,19 @@ for kind, lbl in KINDS:
     HARM[kind] = (lbl, y, amps)
     print(f"{lbl:<26} " + " ".join(f"{a:>7.3f}" for a in amps))
 print()
-print("**다섯 파형 모두 음높이는 같다** — 기본파가 220 Hz 로 같기 때문이다.")
+print("**다섯 waveform 모두 음높이는 같다** — 기본파가 220 Hz로 같기 때문이다.")
 print("  귀에 다르게 들리는 것은 오직 2번째 열 이후의 숫자들이다.")
 print()
-print("**홀수 배음만 있으면 속이 빈 소리가 난다** (클라리넷, 사각파).")
-print("  위 표에서 k=2, 4, 6 열이 0.000 인 것을 확인할 수 있다.")
+print("**홀수 harmonic만 있으면 속이 빈 소리가 난다** (클라리넷, square wave).")
+print("  위 표에서 k=2, 4, 6 열이 0.000인 것을 확인할 수 있다.")
 print()
-print("  그리고 배음이 많을수록 파형이 뾰족해진다 —")
+print("  그리고 harmonic이 많을수록 waveform이 뾰족해진다 —")
 print("  같은 진폭이라도 **에너지가 고주파에 몰린다**는 뜻이다.")
 ```
 
 ```{python}
 #| label: fig-harmonics
-#| fig-cap: "기본 주파수가 같아도 배음 비율이 음색을 만듭니다. 슬라이더로 음색을 바꾸세요."
+#| fig-cap: "fundamental frequency가 같아도 harmonic 비율이 음색을 만듭니다. slider로 음색을 바꾸세요."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -122,13 +123,13 @@ from src import audio, viz
 t = audio.time_axis(0.5, SR)
 nshow = int(SR*0.018)                      # 약 4주기
 fr, _ = audio.dft_magnitude(HARM["saw"][1], SR)
-# 막대는 배음 위치에만 세운다 (그 사이는 전부 0 이라 그릴 필요가 없다)
+# 막대는 harmonic 위치에만 세운다 (그 사이는 전부 0이라 그릴 필요가 없다)
 KMAX = 11
 hb = np.array([k*F0 for k in range(1, KMAX + 1)])
 hidx = [int(np.argmin(np.abs(fr - f))) for f in hb]
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
-                    subplot_titles=("파형 (약 4주기)", "크기 스펙트럼"))
+                    subplot_titles=("waveform (약 4주기)", "magnitude spectrum"))
 init = 3
 kind0 = KINDS[init][0]
 fig.add_trace(go.Scatter(x=t[:nshow], y=HARM[kind0][1][:nshow], mode="lines",
@@ -149,21 +150,21 @@ fig.update_xaxes(title_text="시간 (s)", row=1, col=1)
 fig.update_yaxes(title_text="진폭", range=[-1.1, 1.1], row=1, col=1)
 fig.update_xaxes(title_text="주파수 (Hz)", row=1, col=2)
 fig.update_yaxes(title_text="|X(f)|", row=1, col=2)
-viz.fig_defaults(fig, height=430, title=f"f0 = {F0} Hz 고정, 배음만 변경")
+viz.fig_defaults(fig, height=430, title=f"f0 = {F0} Hz 고정, harmonic만 변경")
 fig.update_layout(margin=dict(l=60, r=30, t=60, b=90))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-"순음"에서 "톱니파"로 옮겨 보세요. 오른쪽 막대가 220Hz 간격으로 늘어서고, 왼쪽 파형이 매끄러운 곡선에서 톱니 모양으로 변합니다. **막대의 위치는 그대로이고 높이만 바뀝니다** — 음높이는 그대로, 음색만 변합니다.
+"pure tone"에서 "sawtooth"로 옮겨 보세요. 오른쪽 막대가 220Hz 간격으로 늘어서고, 왼쪽 waveform이 매끄러운 곡선에서 톱니 모양으로 변합니다. **막대의 위치는 그대로이고 높이만 바뀝니다** — 음높이는 그대로, 음색만 변합니다.
 :::
 
 ---
 
-## 데시벨: 왜 로그를 쓰는가
+## decibel: 왜 로그를 쓰는가
 
 인간의 청각은 압력에 **비례**하지 않고 대략 **로그**로 반응한다.
-진폭이 2배가 되어도 "두 배 크게" 들리지 않는다.
+진폭이 2배가 되어도 "두 배 크게" 들리지 않는다. 그래서 지진 규모나 별의 등급처럼 로그 눈금을 쓴다 — 그것이 **decibel**(데시벨, dB)이다.
 
 $$L = 20 \log_{10}\frac{A}{A_{\text{ref}}} \; \text{[dB]}$$
 
@@ -173,7 +174,7 @@ $$L = 20 \log_{10}\frac{A}{A_{\text{ref}}} \; \text{[dB]}$$
 
 import numpy as np
 
-print("데시벨이 실제로 무엇을 압축하는가")
+print("decibel이 실제로 무엇을 압축하는가")
 print()
 print(f"{'진폭비':>10} {'dB':>9}  {'느낌'}")
 print("-" * 46)
@@ -192,40 +193,42 @@ fr, mg = audio.dft_magnitude(y, SR)
 peaks = {k: float(mg[int(np.argmin(np.abs(fr - 220*k)))])
          for k in [1, 2, 4, 8, 16, 24]}
 b1 = peaks[1]
-print("배음 진폭 (위 신호 실측, 1/k² 감쇠)")
-print(f"{'배음':>6} {'선형(최대=1 기준)':>18} {'dB':>9} "
+print("harmonic 진폭 (위 신호 실측, 1/k² 감쇠)")
+print(f"{'harmonic':>8} {'선형(최대=1 기준)':>18} {'dB':>9} "
       f"{'세로 400px 그림에서':>20}")
 print("-" * 60)
 for k, v in peaks.items():
     print(f"{k:>6} {v/b1:>18.5f} {20*np.log10(v/b1):>8.1f}dB "
           f"{v/b1*400:>18.1f}px")
 print()
-print(f"**24번째 배음은 선형 축에서 최대치의 {peaks[24]/b1:.5f} 배다** — "
-      f"세로 400픽셀 그림에서 {peaks[24]/b1*400:.1f} 픽셀이다.")
-print(f"  dB 로는 {20*np.log10(peaks[24]/b1):.1f} dB — 또렷이 보인다.")
-print("  **스펙트로그램을 언제나 dB 로 그리는 이유가 이것이다** (8.1).")
+print(f"**24번째 harmonic은 선형 축에서 최대치의 {peaks[24]/b1:.5f}배다** — "
+      f"세로 400 pixel 그림에서 {peaks[24]/b1*400:.1f} pixel이다.")
+print(f"  dB로는 {20*np.log10(peaks[24]/b1):.1f} dB — 또렷이 보인다.")
+print("  **spectrogram을 언제나 dB로 그리는 이유가 이것이다** (8.1).")
 ```
 
 ---
 
-## 샘플링 정리
+## sampling 정리
 
-연속 시간 신호 $x(t)$ 를 일정 간격 $T_s = 1/f_s$ 로 찍어 수열을 만든다.
+**sampling**(샘플링)은 연속 시간 신호 $x(t)$를 일정 간격 $T_s = 1/f_s$로 찍어 수열을 만드는 것이다. 영화가 연속된 움직임을 초당 24장의 사진으로 찍는 것과 같다.
 
 $$x[n] = x(nT_s)$$
 
-**나이키스트-섀넌 샘플링 정리**: 신호에 $f_s/2$ 이상의 성분이 없으면,
-$x[n]$ 만으로 $x(t)$ 를 **완전히** 복원할 수 있다.
+$f_s$가 **sample rate**(샘플레이트 — 초당 찍는 횟수, 예: 16 kHz = 초당 16,000번)다.
 
-$f_s/2$ 를 **나이키스트 주파수**라 부른다. 이 조건이 깨지면 어떻게 되는가?
+**Nyquist-Shannon sampling 정리**: 신호에 $f_s/2$ 이상의 성분이 없으면,
+$x[n]$만으로 $x(t)$를 **완전히** 복원할 수 있다.
+
+$f_s/2$를 **Nyquist frequency**(나이키스트 주파수)라 부른다. 이 조건이 깨지면 어떻게 되는가?
 
 $$f_{\text{보이는}} = \left| f - f_s \cdot \operatorname{round}(f/f_s) \right|$$
 
-높은 주파수가 낮은 주파수로 **접혀서(fold)** 나타난다. 직접 확인한다.
+높은 주파수가 낮은 주파수로 **접혀서(fold)** 나타난다. 영화에서 빠르게 도는 마차 바퀴가 느리게 거꾸로 도는 것처럼 보이는 현상과 같은 원리다. 이것이 **aliasing**(에일리어싱)이다. 직접 확인한다.
 
 ---
 
-## G8.0.2 — 에일리어싱: 접힘 공식 검증
+## G8.0.2 — aliasing: 접힘 공식 검증
 
 ```{python}
 #| label: aliasing
@@ -248,10 +251,10 @@ def fold(f, sr):
 
 
 SR_LOW = 8000
-print(f"16 kHz 로 만든 정현파를 {SR_LOW//1000} kHz 로 "
-      f"**필터 없이** 다시 뽑는다 (나이키스트 {SR_LOW//2} Hz)")
+print(f"16 kHz로 만든 sine wave를 {SR_LOW//1000} kHz로 "
+      f"**filter 없이** 다시 뽑는다 (Nyquist {SR_LOW//2} Hz)")
 print()
-print(f"{'원 주파수':>10} {'접힘 예측':>10} {'실측 피크':>10} {'일치':>8} {'상태'}")
+print(f"{'원 주파수':>10} {'접힘 예측':>10} {'실측 peak':>10} {'일치':>8} {'상태'}")
 print("-" * 56)
 ALIAS = []
 for f0 in [300, 1500, 3000, 3900, 5000, 7000, 9000]:
@@ -259,21 +262,21 @@ for f0 in [300, 1500, 3000, 3900, 5000, 7000, 9000]:
     y = audio.resample_naive(x, SR, SR_LOW)
     pk, pred = peak_freq(y, SR_LOW), fold(f0, SR_LOW)
     ALIAS.append((f0, pred, pk))
-    st = "정상" if f0 < SR_LOW/2 else "**에일리어싱**"
+    st = "정상" if f0 < SR_LOW/2 else "**aliasing**"
     print(f"{f0:>10} {pred:>10.1f} {pk:>10.1f} "
           f"{('예' if abs(pk-pred) < 3 else '아니오'):>8} {st}")
 print()
 print("**접힘 공식이 정확히 맞는다.**")
-print(f"  5,000 Hz 가 {fold(5000, SR_LOW):.0f} Hz 로, "
-      f"7,000 Hz 가 {fold(7000, SR_LOW):.0f} Hz 로 나타난다.")
+print(f"  5,000 Hz가 {fold(5000, SR_LOW):.0f} Hz로, "
+      f"7,000 Hz가 {fold(7000, SR_LOW):.0f} Hz로 나타난다.")
 print()
 print("**그리고 이것은 되돌릴 수 없다.**")
-print("  샘플만 보면 그 3,000 Hz 가 원래 3,000 Hz 였는지 5,000 Hz 였는지 알 수 없다.")
+print("  sample만 보면 그 3,000 Hz가 원래 3,000 Hz였는지 5,000 Hz였는지 알 수 없다.")
 print("  정보가 사라진 것이 아니라 **다른 정보와 섞여 버린** 것이다.")
 print()
-print("해법은 하나뿐이다 — **줄이기 전에 저역통과 필터를 건다.**")
+print("해법은 하나뿐이다 — **줄이기 전에 low-pass filter(저역통과 필터 — 낮은 주파수만 통과시키는 filter)를 건다.**")
 print()
-print(f"{'원 주파수':>10} {'필터 없음: 피크 진폭':>20} {'필터 있음: 피크 진폭':>20} "
+print(f"{'원 주파수':>10} {'filter 없음: peak 진폭':>20} {'filter 있음: peak 진폭':>20} "
       f"{'억제량':>10}")
 print("-" * 66)
 AA = []
@@ -287,28 +290,28 @@ for f0 in [1500, 3000, 3900, 5000, 7000]:
           f"{20*np.log10(max(a2, 1e-9)/a1):>9.1f}dB")
 print()
 a39 = [a for a in AA if a[0] == 3900][0]
-print("**통과 대역은 그대로 두고 나이키스트 위를 지운다.**")
-print(f"  다만 완벽한 벽이 아니다 — 3,900 Hz 는 통과 대역인데도 "
-      f"{20*np.log10(a39[2]/a39[1]):.1f} dB 를 잃는다.")
-print("  실제 필터에는 **전이 대역**이 있고, 그것을 좁힐수록 필터가 길어진다.")
+print("**passband(통과 대역)는 그대로 두고 Nyquist 위를 지운다.**")
+print(f"  다만 완벽한 벽이 아니다 — 3,900 Hz는 passband인데도 "
+      f"{20*np.log10(a39[2]/a39[1]):.1f} dB를 잃는다.")
+print("  실제 filter에는 **transition band(전이 대역 — 통과와 차단 사이의 비탈)**가 있고, 그것을 좁힐수록 filter가 길어진다.")
 a5 = [a for a in AA if a[0] == 5000][0]
-print(f"  5,000 Hz 성분이 {a5[1]:.3f} → {a5[2]:.4f} 로 "
+print(f"  5,000 Hz 성분이 {a5[1]:.3f} → {a5[2]:.4f}로 "
       f"{20*np.log10(a5[2]/a5[1]):.0f} dB 억제된다.")
 print("  고주파 정보는 **잃는다**. 하지만 저주파를 오염시키지는 않는다.")
 print("  **잃는 것과 오염되는 것은 전혀 다른 문제다.**")
 print()
 print("실무 규칙")
-for s in ["리샘플링에 **직접 인덱싱을 쓰지 말 것** (`x[::2]` 은 위 표의 왼쪽 열이다)",
-          "`scipy.signal.resample_poly` 또는 `soxr`, `librosa.resample` 을 쓴다",
-          "**업샘플링에도 필터가 필요하다** — 이미지(image) 성분을 지워야 한다",
-          "학습 데이터와 추론 입력의 샘플레이트·리샘플러를 **반드시 일치**시킨다",
-          "  같은 16 kHz 라도 리샘플러가 다르면 고주파 특성이 달라진다"]:
+for s in ["resampling에 **직접 indexing을 쓰지 말 것** (`x[::2]`은 위 표의 왼쪽 열이다)",
+          "`scipy.signal.resample_poly` 또는 `soxr`, `librosa.resample`을 쓴다",
+          "**upsampling에도 filter가 필요하다** — image(거울상) 성분을 지워야 한다",
+          "학습 데이터와 inference 입력의 sample rate·resampler를 **반드시 일치**시킨다",
+          "  같은 16 kHz라도 resampler가 다르면 고주파 특성이 달라진다"]:
     print(f"  · {s}")
 ```
 
 ```{python}
 #| label: fig-aliasing
-#| fig-cap: "나이키스트를 넘는 성분은 사라지지 않고 낮은 주파수로 접혀 들어옵니다"
+#| fig-cap: "Nyquist를 넘는 성분은 사라지지 않고 낮은 주파수로 접혀 들어옵니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -318,8 +321,8 @@ from src import audio, viz
 
 FS = [300, 1500, 3000, 3900, 5000, 7000, 9000]
 fig = make_subplots(rows=1, cols=2, column_widths=[0.52, 0.48],
-                    subplot_titles=("파형 — 원본(16kHz)과 재추출(8kHz)",
-                                    "8kHz로 본 크기 스펙트럼"))
+                    subplot_titles=("waveform — 원본(16kHz)과 재추출(8kHz)",
+                                    "8kHz로 본 magnitude spectrum"))
 tt = audio.time_axis(0.006, SR)
 t2 = audio.time_axis(0.006, SR_LOW)
 init = 4
@@ -348,7 +351,7 @@ for f0 in FS:
 fig.update_layout(sliders=[viz.slider(steps, prefix="원 주파수 = ",
                                       active=init, pad_t=45)])
 fig.add_vline(x=SR_LOW/2, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
-              annotation_text="나이키스트", row=1, col=2)
+              annotation_text="Nyquist", row=1, col=2)
 fig.update_xaxes(title_text="시간 (s)", row=1, col=1)
 fig.update_yaxes(title_text="진폭", row=1, col=1)
 fig.update_xaxes(title_text="주파수 (Hz)", row=1, col=2)
@@ -360,39 +363,39 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-3,900Hz까지는 주황 점이 파란 파형을 제대로 따라갑니다. 5,000Hz로 올리면 **주황 점들이 훨씬 느린 파형을 그립니다** — 오른쪽 스펙트럼의 봉우리도 3,000Hz로 내려옵니다. 9,000Hz에서는 1,000Hz짜리 저음처럼 보입니다.
+3,900Hz까지는 주황 점이 파란 waveform을 제대로 따라갑니다. 5,000Hz로 올리면 **주황 점들이 훨씬 느린 waveform을 그립니다** — 오른쪽 spectrum의 봉우리도 3,000Hz로 내려옵니다. 9,000Hz에서는 1,000Hz짜리 저음처럼 보입니다.
 :::
 
 ::: {.callout-note}
-## 샘플레이트가 정해지는 방식
+## sample rate가 정해지는 방식
 
-| 용도 | 샘플레이트 | 이유 |
+| 용도 | sample rate | 이유 |
 |------|-----------|------|
 | 전화 | 8 kHz | 음성 명료도의 대부분이 4 kHz 아래에 있다 |
-| **음성 모델** | **16 kHz** | Whisper·wav2vec 2.0·대부분의 ASR 표준 |
-| CD | 44.1 kHz | 가청 상한 20 kHz × 2 + 필터 여유 |
-| 제작/TTS | 22.05 / 24 / 48 kHz | 보코더 출력 품질에 여유를 둔다 |
+| **음성 모델** | **16 kHz** | Whisper·wav2vec 2.0·대부분의 ASR(automatic speech recognition — 음성 인식) 표준 |
+| CD | 44.1 kHz | 가청 상한 20 kHz × 2 + filter 여유 |
+| 제작/TTS | 22.05 / 24 / 48 kHz | vocoder 출력 품질에 여유를 둔다 |
 
-ASR이 16 kHz를 쓰는 것은 **8 kHz까지면 음소를 구별하기에 충분**하기 때문이다.
-치찰음(/s/, /ʃ/)의 에너지가 그 위에도 있지만, 구별에 필요한 만큼은 아래에 있다.
+ASR이 16 kHz를 쓰는 것은 **8 kHz까지면 phoneme(음소 — 말소리의 최소 단위)을 구별하기에 충분**하기 때문이다.
+치찰음(/s/, /ʃ/ 같은 "스" 소리)의 에너지가 그 위에도 있지만, 구별에 필요한 만큼은 아래에 있다.
 :::
 
 ---
 
-## 양자화: 세로축을 자르기
+## quantization: 세로축을 자르기
 
-샘플링이 시간축을 자른다면, 양자화는 **진폭축**을 자른다.
-$b$ 비트면 $2^b$ 단계뿐이다.
+sampling이 시간축을 자른다면, **quantization**(양자화)은 **진폭축**을 자른다.
+$b$ bit면 $2^b$ 단계뿐이다. 키를 1 cm 단위로만 적는 것과 같다 — 173.4 cm는 173 cm가 되고, 그 0.4 cm가 quantization 오차다.
 
 오차를 균등 분포로 보면 이론값이 나온다.
 
 $$\text{SNR} \approx 6.02\,b + 1.76 \; \text{[dB]}$$
 
-**1비트당 약 6 dB.** 정말 그런지 재 보자.
+SNR(signal-to-noise ratio — 신호 대 noise비, 신호 에너지 ÷ 오차 에너지)이다. **1 bit당 약 6 dB.** 정말 그런지 재 보자.
 
 ---
 
-## G8.0.3 — 양자화 SNR과 헤드룸
+## G8.0.3 — quantization SNR과 headroom
 
 ```{python}
 #| label: quantization
@@ -408,9 +411,9 @@ def snr_db(clean, q):
 
 
 x_full = audio.tone(440, 1.0, SR, amp=1.0)
-print("풀스케일 정현파를 양자화했을 때")
+print("full-scale(진폭 1.0으로 범위를 꽉 채운) sine wave를 quantization했을 때")
 print()
-print(f"{'비트':>5} {'단계 수':>10} {'실측 SNR':>11} {'이론 6.02b+1.76':>17} "
+print(f"{'bit':>5} {'단계 수':>10} {'실측 SNR':>11} {'이론 6.02b+1.76':>17} "
       f"{'차이':>8}")
 print("-" * 56)
 QT = []
@@ -420,14 +423,14 @@ for b in [3, 4, 6, 8, 10, 12, 16]:
     QT.append((b, s, th))
     print(f"{b:>5} {2**b:>10,} {s:>10.2f}dB {th:>16.2f}dB {s-th:>+7.2f}")
 print()
-print("**이론과 0.5 dB 안에서 맞는다.** 1비트가 정확히 6 dB 다.")
+print("**이론과 0.5 dB 안에서 맞는다.** 1 bit가 정확히 6 dB다.")
 print()
 print("그런데 이 공식에는 **숨은 가정**이 있다 — 신호가 전 범위를 다 쓴다는 것.")
 print()
-print("8비트로 고정하고 진폭만 낮춰 본다")
+print("8 bit로 고정하고 진폭만 낮춰 본다. 남겨 둔 여유 범위가 headroom(헤드룸)이다.")
 print()
-print(f"{'진폭':>8} {'헤드룸':>10} {'실측 SNR':>11} {'이론−헤드룸':>14} "
-      f"{'실효 비트':>11}")
+print(f"{'진폭':>8} {'headroom':>10} {'실측 SNR':>11} {'이론−headroom':>14} "
+      f"{'실효 bit':>11}")
 print("-" * 60)
 HEAD = []
 for amp in [1.0, 0.5, 0.25, 0.1, 0.03]:
@@ -439,29 +442,31 @@ for amp in [1.0, 0.5, 0.25, 0.1, 0.03]:
           f"{6.02*8 + 1.76 - hd:>13.2f}dB {(s - 1.76)/6.02:>11.2f}")
 print()
 h1, h5 = HEAD[0], HEAD[-1]
-print(f"**진폭을 {h5[0]:.2f} 로 낮추면 8비트가 실효 "
-      f"{(h5[2]-1.76)/6.02:.1f}비트가 된다.**")
+print(f"**진폭을 {h5[0]:.2f}로 낮추면 8 bit가 실효 "
+      f"{(h5[2]-1.76)/6.02:.1f} bit가 된다.**")
 print(f"  SNR {h1[2]:.1f} dB → {h5[2]:.1f} dB. "
-      f"헤드룸 {h5[1]:.0f} dB 를 그대로 손해 본 것이다.")
+      f"headroom {h5[1]:.0f} dB를 그대로 손해 본 것이다.")
+print("  30 cm 자를 갖고 있으면서 5 cm짜리 물건만 재는 셈이다 — 눈금 대부분이 놀고 있다.")
 print()
 print("**이것이 '조용히 녹음한 파일만 인식률이 나쁜' 이유다.**")
-for s in ["**녹음 단계에서** 게인을 맞춘다 — 사후 정규화로는 이미 잃은 비트를 못 되찾는다",
-          "다만 클리핑은 훨씬 나쁘다. 피크가 -3 ~ -6 dBFS 쯤 되게 잡는다",
-          "16비트(98 dB)면 대부분의 음성에 충분하다. 24비트는 **녹음 여유**를 위한 것",
-          "학습 파이프라인에서는 float32 로 올려 두고 **-1~1 범위로 정규화**한다",
-          "  이후 연산에서 다시 양자화되지 않으므로 손실이 누적되지 않는다"]:
+for s in ["**녹음 단계에서** gain(증폭량)을 맞춘다 — 사후 normalization으로는 이미 잃은 bit를 못 되찾는다",
+          "다만 clipping(범위를 넘어 잘리는 것)은 훨씬 나쁘다. peak가 -3 ~ -6 dBFS쯤 되게 잡는다",
+          "16 bit(98 dB)면 대부분의 음성에 충분하다. 24 bit는 **녹음 여유**를 위한 것",
+          "학습 pipeline에서는 float32로 올려 두고 **-1~1 범위로 normalization**한다",
+          "  이후 연산에서 다시 quantization되지 않으므로 손실이 누적되지 않는다"]:
     print(f"  · {s}")
 ```
 
 ---
 
-## G8.0.4 — 디더링: 오차를 잡음으로 바꾸기
+## G8.0.4 — dithering: 오차를 noise로 바꾸기
 
-양자화 오차는 무작위가 아니다. **신호에 따라 결정되므로 신호와 상관되어 있다.**
-정현파를 양자화하면 오차도 주기적이고, 그 주기성이 **고조파**로 나타난다.
+quantization 오차는 무작위가 아니다. **신호에 따라 결정되므로 신호와 상관되어 있다.**
+sine wave를 quantization하면 오차도 주기적이고, 그 주기성이 **harmonic distortion(고조파 왜곡 — 원래 없던 정수배 주파수 성분)**으로 나타난다.
 
-귀는 백색 잡음보다 고조파 왜곡을 훨씬 잘 알아챈다.
-그래서 일부러 **잡음을 더한 뒤** 양자화한다. 이것이 디더링이다.
+귀는 white noise(백색 잡음 — 모든 주파수가 고르게 섞인 "쉬-" 소리)보다 harmonic distortion을 훨씬 잘 알아챈다.
+그래서 일부러 **noise를 더한 뒤** quantization한다. 이것이 **dithering**(디더링)이다.
+흑백 프린터가 회색을 찍을 때 규칙적인 줄무늬 대신 무작위 점을 뿌리는 것과 같은 원리다.
 
 ```{python}
 #| label: dither
@@ -475,7 +480,7 @@ x = audio.tone(440, 1.0, SR, amp=0.8)
 
 
 def spur_thd_floor(y, f0, sr, nh=10):
-    """(최대 고조파, THD, 고조파를 뺀 잡음 바닥) — 전부 기본파 대비 dB"""
+    """(최대 harmonic, THD, harmonic을 뺀 noise floor) — 전부 기본파 대비 dB"""
     f, m = audio.dft_magnitude(y, sr)
     base = m[int(np.argmin(np.abs(f - f0)))]
     hidx = [int(np.argmin(np.abs(f - k*f0))) for k in range(2, nh + 1)]
@@ -489,9 +494,9 @@ def spur_thd_floor(y, f0, sr, nh=10):
     return (20*np.log10(spur/base), 20*np.log10(thd), 20*np.log10(floor))
 
 
-print("440 Hz 정현파. 디더는 ±0.5 LSB 균등 잡음을 더한 뒤 양자화한다.")
+print("440 Hz sine wave. dither는 ±0.5 LSB(least significant bit — quantization 한 단계) 균등 noise를 더한 뒤 quantization한다.")
 print()
-print(f"{'비트':>5} {'디더':>7} {'최대 고조파':>13} {'THD':>10} {'잡음 바닥':>11} "
+print(f"{'bit':>5} {'dither':>7} {'최대 harmonic':>13} {'THD':>10} {'noise floor':>11} "
       f"{'SNR':>10}")
 print("-" * 62)
 rgd = np.random.default_rng(0)
@@ -508,33 +513,33 @@ for b in [5, 8, 12]:
               f"{snr:>9.2f}dB")
 print()
 d5n, d5y = DITH[0], DITH[1]
-print(f"**5비트에서 최대 고조파가 {d5n[2]:.1f} → {d5y[2]:.1f} dB 로 "
+print(f"**5 bit에서 최대 harmonic이 {d5n[2]:.1f} → {d5y[2]:.1f} dB로 "
       f"{d5y[2]-d5n[2]:.0f} dB 내려간다.**")
-print(f"  THD 도 {d5n[3]:.1f} → {d5y[3]:.1f} dB.")
-print(f"  대가는 잡음 바닥 {d5n[4]:.1f} → {d5y[4]:.1f} dB, "
+print(f"  THD(total harmonic distortion)도 {d5n[3]:.1f} → {d5y[3]:.1f} dB.")
+print(f"  대가는 noise floor {d5n[4]:.1f} → {d5y[4]:.1f} dB, "
       f"SNR {d5n[5]:.2f} → {d5y[5]:.2f} dB.")
 print()
-print("**즉 SNR 약 3 dB 를 내주고 고조파 왜곡을 10 dB 넘게 산다.**")
-print("  세 비트 깊이에서 모두 같은 크기의 거래가 일어난다 (위 표).")
+print("**즉 SNR 약 3 dB를 내주고 harmonic distortion을 10 dB 넘게 산다.**")
+print("  세 bit depth에서 모두 같은 크기의 거래가 일어난다 (위 표).")
 print()
 print("**왜 이것이 이득인가**")
 for s in ["귀는 **소리와 상관된** 왜곡을 훨씬 잘 알아챈다 (지직거림, 금속성 잔향)",
-          "상관 없는 잡음은 같은 세기여도 '조용한 배경'으로 지각된다",
+          "상관 없는 noise는 같은 세기여도 '조용한 배경'으로 지각된다",
           "그래서 오차의 **총량**이 아니라 **성질**을 바꾸는 것이 목적이다",
-          "noise shaping 을 더하면 잡음을 귀가 둔한 고주파로 밀어낼 수 있다",
-          "**16비트 이상에서는 실무적으로 신경 쓰지 않아도 된다** — "
-          "위 표에서도 12비트면 이미 -85 dB 다"]:
+          "noise shaping을 더하면 noise를 귀가 둔한 고주파로 밀어낼 수 있다",
+          "**16 bit 이상에서는 실무적으로 신경 쓰지 않아도 된다** — "
+          "위 표에서도 12 bit면 이미 -85 dB다"]:
     print(f"  · {s}")
 print()
 print("**모델 학습 관점에서 더 중요한 이야기**")
-print("  양자화 왜곡은 신호와 상관되므로 **학습 데이터의 체계적 편향**이 된다.")
-print("  녹음 장비가 바뀌면 이 편향도 바뀌고, 모델은 그것까지 학습한다.")
-print("  도메인 이동(domain shift)의 흔한 원인 중 하나다.")
+print("  quantization 왜곡은 신호와 상관되므로 **학습 데이터의 systematic bias(체계적 편향)**가 된다.")
+print("  녹음 장비가 바뀌면 이 bias도 바뀌고, 모델은 그것까지 학습한다.")
+print("  domain shift(학습 환경과 실제 환경의 차이)의 흔한 원인 중 하나다.")
 ```
 
 ```{python}
 #| label: fig-quant
-#| fig-cap: "비트를 줄이면 계단이 보이고, 오차가 신호와 상관되어 고조파로 나타납니다"
+#| fig-cap: "bit를 줄이면 계단이 보이고, 오차가 신호와 상관되어 harmonic으로 나타납니다"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -562,12 +567,12 @@ b0 = BITS[init]
 fig = make_subplots(rows=2, cols=2, row_heights=[0.55, 0.45],
                     specs=[[{}, {"rowspan": 2}], [{}, None]],
                     vertical_spacing=0.13,
-                    subplot_titles=("원 파형과 양자화된 파형",
-                                    "크기 스펙트럼 (dB, 최대=0)",
-                                    "양자화 오차 (= 신호와 상관되어 있다)"))
-fig.add_trace(go.Scatter(x=tt, y=xs[:n], mode="lines", name="원 파형",
+                    subplot_titles=("원 waveform과 quantization된 waveform",
+                                    "magnitude spectrum (dB, 최대=0)",
+                                    "quantization 오차 (= 신호와 상관되어 있다)"))
+fig.add_trace(go.Scatter(x=tt, y=xs[:n], mode="lines", name="원 waveform",
                          line=dict(color=viz.ACCENT, width=1.6)), row=1, col=1)
-fig.add_trace(go.Scatter(x=tt, y=qs[b0], mode="lines", name="양자화",
+fig.add_trace(go.Scatter(x=tt, y=qs[b0], mode="lines", name="quantization",
                          line=dict(color=viz.WARM, width=2, shape="hv")),
               row=1, col=1)
 fig.add_trace(go.Scatter(x=tt, y=es[b0], mode="lines", showlegend=False,
@@ -581,7 +586,7 @@ steps = []
 for b in BITS:
     steps.append((f"{b}", {"x": [tt, tt, tt, fq[keepf]],
                            "y": [xs[:n], qs[b], es[b], sps[b]]}))
-fig.update_layout(sliders=[viz.slider(steps, prefix="비트 깊이 = ",
+fig.update_layout(sliders=[viz.slider(steps, prefix="bit depth = ",
                                       suffix=" bit", active=init, pad_t=45)])
 fig.update_yaxes(title_text="진폭", range=[-1.05, 1.05], row=1, col=1)
 fig.update_xaxes(title_text="시간 (s)", row=2, col=1)
@@ -595,21 +600,23 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-2~4비트에서 오른쪽 스펙트럼에 **440Hz의 정수배 위치마다 뾰족한 봉우리**가 서는 것을 보세요. 무작위 잡음이라면 평평해야 합니다. 왼쪽 아래 오차 파형이 톱니처럼 규칙적인 것이 그 원인입니다. 8비트 이상으로 올리면 봉우리가 바닥으로 내려갑니다.
+2~4 bit에서 오른쪽 spectrum에 **440Hz의 정수배 위치마다 뾰족한 봉우리**가 서는 것을 보세요. 무작위 noise라면 평평해야 합니다. 왼쪽 아래 오차 waveform이 톱니처럼 규칙적인 것이 그 원인입니다. 8 bit 이상으로 올리면 봉우리가 바닥으로 내려갑니다.
 :::
 
 ---
 
-## G8.0.5 — 시간 영역만으로 알 수 있는 것
+## G8.0.5 — time domain만으로 알 수 있는 것
 
-스펙트로그램을 만들기 전에도 쓸 만한 특성이 몇 개 있다.
-계산이 싸서 실시간 전처리(VAD, 무음 제거)에 쓰인다.
+spectrogram을 만들기 전에도 쓸 만한 feature(특성)가 몇 개 있다.
+계산이 싸서 실시간 전처리(VAD — voice activity detection, 무음 제거)에 쓰인다.
 
-| 특성 | 정의 | 무엇을 잡는가 |
+| feature | 정의 | 무엇을 잡는가 |
 |------|------|-------------|
-| 단구간 에너지 | $\frac{1}{N}\sum x[n]^2$ | 소리의 유무, 크기 |
-| 영교차율(ZCR) | 부호가 바뀌는 비율 | 고주파 비중 → 유성/무성 |
-| 엔벨로프 | $\|x\|$ 의 저역통과 | 음절 리듬, 어택/릴리스 |
+| short-time energy(단구간 에너지) | $\frac{1}{N}\sum x[n]^2$ | 소리의 유무, 크기 |
+| zero-crossing rate(영교차율, ZCR) | 부호가 바뀌는 비율 (waveform이 0선을 몇 번 넘나드는가) | 고주파 비중 → voiced/unvoiced |
+| envelope(엔벨로프) | $\|x\|$의 low-pass | 음절 리듬, attack/release |
+
+voiced(유성음)는 성대가 떨리는 소리(모음, /m/, /z/), unvoiced(무성음)는 성대 떨림 없이 공기만 지나가는 소리(/s/, /f/, /h/)다.
 
 ```{python}
 #| label: timedomain
@@ -621,7 +628,7 @@ from src import audio
 
 
 def framed(x, n=400, hop=160):
-    """25 ms 프레임 / 10 ms 홉 (16 kHz 기준) — 8.1의 STFT와 같은 관례."""
+    """25 ms frame / 10 ms hop (16 kHz 기준) — 8.1의 STFT와 같은 관례."""
     k = 1 + (len(x) - n)//hop
     return np.stack([x[i*hop:i*hop + n] for i in range(k)])
 
@@ -635,11 +642,11 @@ def zcr(F):
 
 
 g = np.random.default_rng(1)
-SEGS = [("유성음 (모음 풍)", audio.harmonic_tone(120, 12, 0.4, SR, decay=1.2)),
-        ("무성음 (/s/ 풍 잡음)", g.normal(0, 0.3, int(0.4*SR))),
-        ("묵음 (배경 잡음만)", g.normal(0, 0.002, int(0.4*SR)))]
+SEGS = [("voiced (모음 풍)", audio.harmonic_tone(120, 12, 0.4, SR, decay=1.2)),
+        ("unvoiced (/s/ 풍 noise)", g.normal(0, 0.3, int(0.4*SR))),
+        ("묵음 (배경 noise만)", g.normal(0, 0.002, int(0.4*SR)))]
 
-print("25 ms 프레임 / 10 ms 홉으로 잰 값")
+print("25 ms frame / 10 ms hop으로 잰 값")
 print()
 print(f"{'구간':<22} {'평균 에너지':>13} {'에너지 dB':>12} {'평균 ZCR':>11}")
 print("-" * 62)
@@ -653,26 +660,26 @@ for nm, s in SEGS:
 print()
 v, u, sil = TD
 print("**두 지표가 서로 다른 축을 잡는다.**")
-print(f"  에너지: 유성음 {v[1]:.4f} / 무성음 {u[1]:.4f} / 묵음 {sil[1]:.6f}")
-print(f"    → 묵음은 확실히 갈라내지만 유성/무성은 "
+print(f"  에너지: voiced {v[1]:.4f} / unvoiced {u[1]:.4f} / 묵음 {sil[1]:.6f}")
+print(f"    → 묵음은 확실히 갈라내지만 voiced/unvoiced는 "
       f"{v[1]/u[1]:.1f}배 차이뿐이다")
-print(f"  ZCR:   유성음 {v[2]:.3f} / 무성음 {u[2]:.3f} / 묵음 {sil[2]:.3f}")
-print(f"    → **유성/무성을 확실히 가른다** ({u[2]/v[2]:.0f}배)")
-print(f"    → 그런데 묵음도 {sil[2]:.3f} 로 무성음과 구별되지 않는다")
+print(f"  ZCR:   voiced {v[2]:.3f} / unvoiced {u[2]:.3f} / 묵음 {sil[2]:.3f}")
+print(f"    → **voiced/unvoiced를 확실히 가른다** ({u[2]/v[2]:.0f}배)")
+print(f"    → 그런데 묵음도 {sil[2]:.3f}로 unvoiced와 구별되지 않는다")
 print()
 print("**그래서 둘을 함께 쓴다.**")
 print(f"{'판정':<14} {'에너지':<16} {'ZCR'}")
 print("-" * 48)
-for a, b, c in [("묵음", "낮다", "무의미 (잡음이라 높다)"),
-                ("유성음", "높다", "**낮다**"),
-                ("무성음", "중간", "**높다**")]:
+for a, b, c in [("묵음", "낮다", "무의미 (noise라 높다)"),
+                ("voiced", "높다", "**낮다**"),
+                ("unvoiced", "중간", "**높다**")]:
     print(f"{a:<14} {b:<16} {c}")
 print()
-print("**한계 — 이것이 8.1 이 필요한 이유다**")
-for s in ["에너지 문턱은 **배경 잡음 크기에 따라 매번 달라진다**",
-          "ZCR 은 저주파 잡음(에어컨, 핸들링 노이즈)에 쉽게 무너진다",
+print("**한계 — 이것이 8.1이 필요한 이유다**")
+for s in ["에너지 threshold는 **배경 noise 크기에 따라 매번 달라진다**",
+          "ZCR은 저주파 noise(에어컨, handling noise)에 쉽게 무너진다",
           "무엇보다 **어느 주파수에 에너지가 있는지**를 전혀 모른다",
-          "  모음 /아/ 와 /이/ 는 에너지도 ZCR 도 비슷하다",
+          "  모음 /아/와 /이/는 에너지도 ZCR도 비슷하다",
           "그 정보를 얻으려면 시간을 주파수로 펼쳐야 한다 → 8.1"]:
     print(f"  · {s}")
 print()
@@ -680,28 +687,29 @@ print("실무에서 자주 쓰는 전처리")
 print(f"{'단계':<20} {'무엇을 하는가':<30} {'주의'}")
 print("-" * 78)
 for a, b, c in [
-    ("리샘플링", "모델의 샘플레이트에 맞춘다", "**안티에일리어싱 필수**"),
-    ("DC 오프셋 제거", "평균을 뺀다", "마이크·ADC 편향 제거"),
-    ("정규화", "피크 또는 RMS 를 맞춘다", "구간별로 하면 다이내믹을 망친다"),
-    ("프리엠퍼시스", "y[n]=x[n]−0.97x[n−1]", "고주파를 들어올린다 (8.3)"),
-    ("무음 제거 (VAD)", "위 표의 에너지·ZCR", "문턱이 환경마다 다르다"),
-    ("모노 다운믹스", "채널 평균", "위상이 어긋나면 상쇄된다"),
+    ("resampling", "모델의 sample rate에 맞춘다", "**anti-aliasing 필수**"),
+    ("DC offset 제거", "평균을 뺀다", "마이크·ADC bias 제거"),
+    ("normalization", "peak 또는 RMS를 맞춘다", "구간별로 하면 dynamic을 망친다"),
+    ("pre-emphasis", "y[n]=x[n]−0.97x[n−1]", "고주파를 들어올린다 (8.3)"),
+    ("무음 제거 (VAD)", "위 표의 에너지·ZCR", "threshold가 환경마다 다르다"),
+    ("mono downmix", "channel 평균", "위상이 어긋나면 상쇄된다"),
 ]:
     print(f"{a:<20} {b:<30} {c}")
 ```
 
 ---
 
-## G8.0.6 — 소스-필터 모델
+## G8.0.6 — source-filter 모델
 
-음성은 두 부분의 곱으로 잘 설명된다.
+음성은 두 부분의 곱으로 잘 설명된다 — **source-filter 모델**(source-filter 모델)이다.
 
-$$\underbrace{X(f)}_{\text{관측}} \;=\; \underbrace{S(f)}_{\text{소스: 성대}} \cdot \underbrace{H(f)}_{\text{필터: 성도}}$$
+$$\underbrace{X(f)}_{\text{관측}} \;=\; \underbrace{S(f)}_{\text{source: 성대}} \cdot \underbrace{H(f)}_{\text{filter: 성도}}$$
 
-- **소스** — 성대의 주기적 진동(유성음) 또는 난류 잡음(무성음). $f_0$ 를 정한다
-- **필터** — 입·혀·목의 모양이 만드는 공명. **포먼트**를 정한다
+- **source**(소스) — 성대(vocal folds)의 주기적 진동(voiced) 또는 난류 noise(unvoiced). $f_0$를 정한다
+- **filter**(필터) — 입·혀·목의 모양(성도, vocal tract)이 만드는 공명(resonance). **formant**(포먼트 — 성도가 증폭하는 주파수 대역의 봉우리)를 정한다
 
-그리고 우리가 듣는 모음은 **필터가 정한다.** 확인해 보자.
+트럼펫에 비유하면 입술의 떨림이 source, 관의 모양이 filter다. 같은 입술 떨림도 관을 바꾸면 다른 소리가 난다.
+그리고 우리가 듣는 모음은 **filter가 정한다.** 확인해 보자.
 
 ```{python}
 #| label: sourcefilter
@@ -714,7 +722,7 @@ from src import audio
 
 
 def formant_coeffs(formants, bws, sr):
-    """포먼트마다 2차 공명기를 직렬로 쌓는다."""
+    """formant마다 2차 resonator를 직렬로 쌓는다."""
     b, a = np.array([1.0]), np.array([1.0])
     for f, bw in zip(formants, bws):
         r = np.exp(-np.pi*bw/sr)
@@ -725,7 +733,7 @@ def formant_coeffs(formants, bws, sr):
 
 
 def pulse_train(f0, dur, sr):
-    """성대 진동을 흉내낸 임펄스 열 (유성음 소스)."""
+    """성대 진동을 흉내낸 impulse train (voiced source)."""
     x = np.zeros(int(dur*sr))
     x[::max(1, int(round(sr/f0)))] = 1.0
     return x
@@ -736,9 +744,9 @@ VOWELS = {"아 (a)": (730, 1090, 2440), "이 (i)": (270, 2290, 3010),
           "오 (o)": (570, 840, 2410)}
 BWS = [80, 90, 120]
 
-print("성도 필터의 주파수 응답에서 봉우리를 찾아 목표 포먼트와 비교한다")
+print("성도 filter의 frequency response(주파수 응답)에서 봉우리를 찾아 목표 formant와 비교한다")
 print()
-print(f"{'모음':>10} {'목표 F1/F2/F3':>22} {'필터 응답 피크':>24}")
+print(f"{'모음':>10} {'목표 F1/F2/F3':>22} {'filter 응답 peak':>24}")
 print("-" * 60)
 FILT = {}
 for nm, fs in VOWELS.items():
@@ -751,12 +759,12 @@ for nm, fs in VOWELS.items():
     print(f"{nm:>10} {'/'.join(map(str, fs)):>22} "
           f"{'  '.join(f'{w[i]:.0f}' for i in top):>24}")
 print()
-print("**공명기를 놓은 자리에 정확히 봉우리가 선다.** 당연하지만 확인은 필요하다.")
+print("**resonator를 놓은 자리에 정확히 봉우리가 선다.** 당연하지만 확인은 필요하다.")
 print()
-print("이제 소스를 바꿔 본다 — 필터 계수는 **한 글자도 건드리지 않는다**")
+print("이제 source를 바꿔 본다 — filter 계수는 **한 글자도 건드리지 않는다**")
 print()
 b_a, a_a = formant_coeffs(VOWELS["아 (a)"], BWS, SR)
-print(f"{'F0':>6} {'하모닉 간격 (실측)':>20} {'필터 (변경 없음)':>18}")
+print(f"{'F0':>6} {'harmonic 간격 (실측)':>20} {'filter (변경 없음)':>18}")
 print("-" * 50)
 for f0 in [100, 150, 220]:
     y = signal.lfilter(b_a, a_a, pulse_train(f0, 1.0, SR))
@@ -768,31 +776,31 @@ for f0 in [100, 150, 220]:
     sp = float(np.median(np.diff(fr[pk]))) if len(pk) > 3 else float("nan")
     print(f"{f0:>6} {sp:>19.1f}Hz {'/'.join(map(str, VOWELS['아 (a)'])):>18}")
 print()
-print("**하모닉 간격은 F0 를 그대로 따라가고, 포먼트는 필터가 잡고 있다.**")
-print("  이것이 '같은 사람이 다른 음높이로 같은 모음을 말한다' 는 것의 정체다.")
+print("**harmonic 간격은 F0를 그대로 따라가고, formant는 filter가 잡고 있다.**")
+print("  이것이 '같은 사람이 다른 음높이로 같은 모음을 말한다'는 것의 정체다.")
 print()
 print("**여기서 오디오 처리의 큰 줄기가 갈린다**")
 print(f"{'과제':<20} {'무엇이 필요한가'}")
 print("-" * 62)
-for a_, b_ in [("음성 인식", "**필터**(포먼트). 화자의 F0 는 방해 요소다"),
-               ("화자 인식", "필터의 개인차 + F0 범위"),
-               ("음높이 추정", "**소스**(F0). 포먼트는 방해 요소다"),
+for a_, b_ in [("음성 인식", "**filter**(formant). 화자의 F0는 방해 요소다"),
+               ("화자 인식", "filter의 개인차 + F0 범위"),
+               ("음높이 추정", "**source**(F0). formant는 방해 요소다"),
                ("음성 합성", "둘 다 — 그리고 자연스럽게 이어 붙여야 한다"),
                ("감정·운율", "주로 F0 궤적과 에너지 변화")]:
     print(f"{a_:<20} {b_}")
 print()
 print("**그래서 둘을 분리하는 도구가 필요해진다.**")
-print("  관측 스펙트럼은 소스와 필터의 **곱**이므로, 로그를 씌우면 **합**이 된다.")
+print("  관측 spectrum은 source와 filter의 **곱**이므로, 로그를 씌우면 **합**이 된다.")
 print("  합으로 만든 뒤 다시 변환하면 둘이 다른 위치로 갈라진다 —")
-print("  이것이 **켑스트럼**이고, [8.2](02_mel_mfcc.qmd)의 MFCC 가 하는 일이다.")
+print("  이것이 **cepstrum**(켑스트럼)이고, [8.2](02_mel_mfcc.qmd)의 MFCC가 하는 일이다.")
 print()
-print("  같은 분리를 다른 방식으로 하는 것이 **LPC**다 ([8.3](03_classical_speech.qmd)).")
-print("  성도를 전극(all-pole) 필터로 보고 그 계수를 직접 추정한다.")
+print("  같은 분리를 다른 방식으로 하는 것이 **LPC**(linear predictive coding)다 ([8.3](03_classical_speech.qmd)).")
+print("  성도를 all-pole(전극) filter로 보고 그 계수를 직접 추정한다.")
 ```
 
 ```{python}
 #| label: fig-sourcefilter
-#| fig-cap: "음높이는 소스가, 모음은 필터가 정합니다. 슬라이더로 모음을 바꿔 보세요."
+#| fig-cap: "음높이는 source가, 모음은 filter가 정합니다. slider로 모음을 바꿔 보세요."
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -802,8 +810,8 @@ from plotly.subplots import make_subplots
 from src import audio, viz
 
 fig = make_subplots(rows=1, cols=2, column_widths=[0.5, 0.5],
-                    subplot_titles=("성도 필터의 주파수 응답 H(f)",
-                                    "출력 스펙트럼 |X(f)| = |S(f)·H(f)|"))
+                    subplot_titles=("성도 filter의 frequency response H(f)",
+                                    "출력 spectrum |X(f)| = |S(f)·H(f)|"))
 names = list(VOWELS.keys())
 init = 0
 outs = {}
@@ -841,38 +849,38 @@ fig.show()
 ```
 
 ::: {.interaction-hint}
-왼쪽은 매끄러운 봉우리 몇 개(포먼트), 오른쪽은 140Hz 간격의 빗살(하모닉)입니다. **오른쪽 빗살의 높이 윤곽이 왼쪽 곡선을 따라갑니다** — 소스가 촘촘한 눈금을 만들고, 필터가 그 위에 모양을 씌웁니다. 모음을 바꾸면 빗살 위치는 그대로이고 윤곽만 움직입니다.
+왼쪽은 매끄러운 봉우리 몇 개(formant), 오른쪽은 140Hz 간격의 빗살(harmonic)입니다. **오른쪽 빗살의 높이 윤곽이 왼쪽 곡선을 따라갑니다** — source가 촘촘한 눈금을 만들고, filter가 그 위에 모양을 씌웁니다. 모음을 바꾸면 빗살 위치는 그대로이고 윤곽만 움직입니다.
 :::
 
 ---
 
-## PCM과 파일 포맷
+## PCM과 파일 format
 
 PCM — 지금까지 만든 것의 이름
-샘플링(시간) + 양자화(진폭) = Pulse Code Modulation
+sampling(시간) + quantization(진폭) = Pulse Code Modulation
 
 | 항목 | 흔한 값 | 주의 |
 |---|---|---|
-| 샘플레이트 | 16k / 22.05k / 44.1k / 48k | 모델 요구값과 일치시킬 것 |
-| 비트 깊이 | 16-bit int / 32-bit float | 학습에는 float32 −1~1 |
-| 채널 | mono / stereo | **대부분의 음성 모델은 모노** |
-| 인터리빙 | L R L R ... | 채널 분리를 잊으면 반속 재생처럼 들린다 |
-| 바이트 순서 | little-endian이 표준 | 깨지면 백색 잡음이 된다 |
+| sample rate | 16k / 22.05k / 44.1k / 48k | 모델 요구값과 일치시킬 것 |
+| bit depth | 16-bit int / 32-bit float | 학습에는 float32 −1~1 |
+| channel | mono / stereo | **대부분의 음성 모델은 mono** |
+| interleaving | L R L R ... | channel 분리를 잊으면 반속 재생처럼 들린다 |
+| byte order | little-endian이 표준 | 깨지면 white noise가 된다 |
 
-| 포맷 | 압축 | 쓰는 곳 |
+| format | 압축 | 쓰는 곳 |
 |---|---|---|
 | WAV | 무압축 PCM | **학습 데이터의 기본** |
-| FLAC | 무손실 | 용량이 문제일 때 — 디코딩 후 동일 |
-| MP3/AAC | 손실 | 고주파가 잘린다. 학습 데이터로는 주의 |
-| Opus | 손실 (저지연) | 실시간 통신 — ASR 입력으로 흔하다 |
+| FLAC | lossless(무손실) | 용량이 문제일 때 — decoding 후 동일 |
+| MP3/AAC | lossy(손실) | 고주파가 잘린다. 학습 데이터로는 주의 |
+| Opus | lossy (저지연) | 실시간 통신 — ASR 입력으로 흔하다 |
 
-**손실 압축이 학습에 미치는 영향은 실재한다.**
+**lossy 압축이 학습에 미치는 영향은 실재한다.**
 
 - MP3/Opus는 지각적으로 덜 중요한 성분을 버린다 — **고주파부터**
 - 깨끗한 WAV로 학습한 모델이 압축된 입력에서 성능이 떨어진다
-- 반대도 마찬가지다 — 압축 아티팩트를 학습해 버릴 수 있다
-- **학습 데이터에 배포 환경과 같은 코덱을 통과시키는 것**이 흔한 증강이다
-- 1초 16 kHz 16-bit 모노 = 32 KB. 1만 시간이면 약 1.1 TB
+- 반대도 마찬가지다 — 압축 artifact(인위적 흔적)를 학습해 버릴 수 있다
+- **학습 데이터에 배포 환경과 같은 codec을 통과시키는 것**이 흔한 augmentation이다
+- 1초 16 kHz 16-bit mono = 32 KB. 1만 시간이면 약 1.1 TB
 
 
 ---
@@ -880,46 +888,46 @@ PCM — 지금까지 만든 것의 이름
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 앨리어싱을 귀로 만든다**
-`aliasing` 에서 샘플링 주파수를 8kHz로 두고 5kHz 사인파를 넣어라.
-어느 주파수로 접히는가? $|f - kf_s|$ 로 예측하고 확인하라.
+**① aliasing을 귀로 만든다**
+`aliasing` 에서 sample rate를 8kHz로 두고 5kHz sine wave를 넣어라.
+어느 주파수로 접히는가? $|f - kf_s|$로 예측하고 확인하라.
 
-**② 양자화 잡음의 SNR을 계산한다**
-비트 수 $b$ 에 대해 SNR은 약 $6.02b + 1.76$ dB 다.
-`quantization` 에서 8·12·16비트의 실측과 비교하라.
+**② quantization noise의 SNR을 계산한다**
+bit 수 $b$에 대해 SNR은 약 $6.02b + 1.76$ dB다.
+`quantization` 에서 8·12·16 bit의 실측과 비교하라.
 
-**③ 디더의 효과를 본다**
-`dither` 를 끄고 아주 낮은 진폭 신호를 4비트로 양자화하면
-어떤 왜곡이 생기는가? 디더를 넣으면 잡음이 늘어도 왜 나은가?
+**③ dither의 효과를 본다**
+`dither` 를 끄고 아주 낮은 진폭 신호를 4 bit로 quantization하면
+어떤 왜곡이 생기는가? dither를 넣으면 noise가 늘어도 왜 나은가?
 :::
 
 ## 요약
 
 | 개념 | 수식·수치 | 핵심 |
 |------|----------|------|
-| 정현파 | $A\sin(2\pi ft+\phi)$ | $f$=음높이, $A$=크기, $\phi$=**거의 안 들린다** |
-| 음색 | 배음 진폭 $A_k$ 의 비율 | $f_0$ 가 같아도 $A_k$ 가 다르면 다른 악기 |
-| 데시벨 | $20\log_{10}(A/A_\text{ref})$ | 24번 배음이 선형 0.0017 → dB **−55** |
-| **샘플링 정리** | $f_s > 2f_\text{max}$ | 조건이 맞으면 완전 복원 가능 |
-| **에일리어싱** | $\|f - f_s\operatorname{round}(f/f_s)\|$ | 공식대로 5,000→3,000, 7,000→1,000 Hz |
+| sine wave | $A\sin(2\pi ft+\phi)$ | $f$=음높이, $A$=크기, $\phi$=**거의 안 들린다** |
+| 음색(timbre) | harmonic 진폭 $A_k$의 비율 | $f_0$가 같아도 $A_k$가 다르면 다른 악기 |
+| decibel | $20\log_{10}(A/A_\text{ref})$ | 24번 harmonic이 선형 0.0017 → dB **−55** |
+| **sampling 정리** | $f_s > 2f_\text{max}$ | 조건이 맞으면 완전 복원 가능 |
+| **aliasing** | $\|f - f_s\operatorname{round}(f/f_s)\|$ | 공식대로 5,000→3,000, 7,000→1,000 Hz (거꾸로 도는 마차 바퀴) |
 | 되돌릴 수 없다 | — | 정보가 사라진 게 아니라 **섞였다** |
-| 안티에일리어싱 | 저역통과 후 재추출 | 5 kHz 성분을 **−57 dB** 억제 |
-| **양자화 SNR** | $6.02b+1.76$ dB | 실측이 이론과 0.5 dB 이내 — 1비트=6 dB |
-| **헤드룸** | 진폭 0.03 → 실효 3.0비트 | 조용한 녹음은 비트를 버리는 것 |
-| 디더링 | ±0.5 LSB 잡음 | THD **−44→−55 dB**, 대가는 SNR 3 dB |
+| anti-aliasing | low-pass 후 재추출 | 5 kHz 성분을 **−57 dB** 억제 |
+| **quantization SNR** | $6.02b+1.76$ dB | 실측이 이론과 0.5 dB 이내 — 1 bit=6 dB |
+| **headroom** | 진폭 0.03 → 실효 3.0 bit | 조용한 녹음은 bit를 버리는 것 (30 cm 자로 5 cm 재기) |
+| dithering | ±0.5 LSB noise | THD **−44→−55 dB**, 대가는 SNR 3 dB |
 | 왜 이득인가 | — | 오차의 **양**이 아니라 **성질**을 바꾼다 |
-| 에너지 | $\frac1N\sum x^2$ | 묵음은 가르지만 유성/무성은 못 가른다 |
-| ZCR | 부호 변화 비율 | 유성 0.015 vs 무성 0.500 — **33배** |
+| 에너지 | $\frac1N\sum x^2$ | 묵음은 가르지만 voiced/unvoiced는 못 가른다 |
+| ZCR | 부호 변화 비율 | voiced 0.015 vs unvoiced 0.500 — **33배** |
 | 둘의 한계 | — | **어느 주파수인지를 모른다** → 8.1 |
-| **소스-필터** | $X = S \cdot H$ | 소스가 $f_0$, 필터가 포먼트(모음) |
-| 분리의 필요 | 곱 → 로그 → 합 | 켑스트럼(8.2), LPC(8.3) |
-| PCM | sr × bits × ch | 학습은 float32 모노, 원본은 WAV |
+| **source-filter** | $X = S \cdot H$ | source가 $f_0$, filter가 formant(모음) — 입술과 관 |
+| 분리의 필요 | 곱 → 로그 → 합 | cepstrum(8.2), LPC(8.3) |
+| PCM | sr × bits × ch | 학습은 float32 mono, 원본은 WAV |
 
-파형을 배열로 만들었다. 그런데 이 배열은 여전히 읽히지 않는다.
+waveform을 배열로 만들었다. 그런데 이 배열은 여전히 읽히지 않는다.
 다음 장에서 **시간을 주파수로 펼친다.**
 
 ---
 
-**다음**: [8.1 푸리에 변환과 스펙트로그램](01_fourier_stft.qmd) — 시간을 주파수로 펼치기
+**다음**: [8.1 Fourier 변환과 spectrogram](01_fourier_stft.qmd) — 시간을 주파수로 펼치기
 
 **이전**: [7.15 안전성과 신뢰](../07_language/15_safety.qmd)
