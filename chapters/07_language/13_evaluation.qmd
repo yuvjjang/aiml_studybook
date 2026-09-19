@@ -1,6 +1,6 @@
 ---
 title: "7.13 LLM 평가"
-subtitle: "벤치마크·LLM-as-judge·오염 — 무엇을 측정하고 있는가"
+subtitle: "benchmark·LLM-as-judge·contamination — 무엇을 측정하고 있는가"
 jupyter: ai-ml-study
 ---
 
@@ -9,26 +9,29 @@ jupyter: ai-ml-study
 평가는 이 분야에서 **가장 신뢰도가 낮은 부분**이다. 이유는 단순하다.
 
 > 개선했다는 주장은 측정 오차보다 커야 한다.
-> 그런데 대부분의 평가셋은 그 오차를 재지 않는다.
+> 그런데 대부분의 evaluation set(평가셋 — 모델을 채점하는 문항 모음)은 그 오차를 재지 않는다.
+
+부엌 저울로 1g 차이를 재려는 것과 같다 — 저울 눈금이 5g 단위면 "1g 늘었다"는 말은 의미가 없다.
 
 이 장은 네 가지를 직접 계산한다.
 
-1. 내 평가셋이 **얼마나 작은 차이를 볼 수 있는가** (검정력)
-2. LLM 판정자의 편향 중 **무엇이 고쳐지고 무엇이 안 고쳐지는가**
-3. 두 모델을 리더보드에서 가르려면 **몇 표가 필요한가**
-4. 오염이 점수를 **얼마나 부풀리고**, 탐지가 **어디서 실패하는가**
+1. 내 evaluation set이 **얼마나 작은 차이를 볼 수 있는가** (statistical power)
+2. LLM judge(판정자)의 bias 중 **무엇이 고쳐지고 무엇이 안 고쳐지는가**
+3. 두 모델을 leaderboard에서 가르려면 **몇 표가 필요한가**
+4. contamination(오염)이 점수를 **얼마나 부풀리고**, detection(탐지)이 **어디서 실패하는가**
 
 ---
 
-## G7.13.1 — 평가셋 크기와 검정력
+## G7.13.1 — evaluation set 크기와 statistical power
 
 가장 먼저 물어야 할 질문이다.
 
-> 내 평가셋 200문항으로 **3%p 개선**을 감지할 수 있는가?
+> 내 evaluation set 200문항으로 **3%p 개선**을 감지할 수 있는가?
 
-정답을 아는 시뮬레이션으로 정확히 계산할 수 있다.
-문항마다 난이도가 다르고, **같은 문항을 두 모델이 함께 풀므로 정오가 상관된다.**
-가우시안 코퓰라로 그 상관($\rho = 0.7$)을 정확히 넣는다.
+**statistical power**(검정력 — 실제로 차이가 있을 때 그 차이를 통계적으로 잡아낼 확률)를 계산하면 답이 나온다.
+정답을 아는 simulation으로 정확히 계산할 수 있다.
+문항마다 난이도가 다르고, **같은 문항을 두 모델이 함께 풀므로 정오가 correlated된다** (어려운 문항은 둘 다 틀리기 쉽다).
+Gaussian copula(코퓰라 — 각 변수의 분포는 그대로 두고 변수 사이의 상관만 심는 장치)로 그 상관($\rho = 0.7$)을 정확히 넣는다.
 
 ```{python}
 #| label: power
@@ -42,7 +45,7 @@ RHO = 0.7
 
 
 def power(n, delta, trials=2000, seed=0, paired=True, rho=RHO):
-    """유의수준 0.05 양측. paired=True 는 같은 문항으로 비교 (McNemar)."""
+    """significance level(유의수준) 0.05 양측. paired=True는 같은 문항으로 비교 (McNemar test)."""
     g = np.random.default_rng(seed)
     q = g.beta(5, 2.5, (trials, n))*0.9 + 0.05        # 문항 난이도
     z0 = g.normal(0, 1, (trials, n))
@@ -76,7 +79,7 @@ p200 = [r for r in POW if r[0] == 200][0]
 NEED_N = {}
 for i, d in enumerate(DS):
     NEED_N[d] = next((r[0] for r in POW if r[i+1] >= 0.80), None)
-NEED_TXT = ", ".join(f"+{int(d*100)}%p 는 " + (f"{n:,}문항" if n else "5,000문항으로도 부족")
+NEED_TXT = ", ".join(f"+{int(d*100)}%p는 " + (f"{n:,}문항" if n else "5,000문항으로도 부족")
                      for d, n in NEED_N.items())
 print()
 print(f"{'문항 수':>9} {'같은 문항':>11} {'다른 문항':>11}")
@@ -89,32 +92,32 @@ for n in [100, 200, 500, 1000, 2000]:
 p500 = [r for r in PAIR if r[0] == 500][0]
 ```
 
-첫 표는 실제 개선을 감지할 확률(검정력)이다. 0.80 이상이어야 쓸 만하다.
-**200문항으로는 5%p 개선도 세 번에 한 번만 보인다** (검정력 `{python} f"{p200[3]:.2f}"`).
+첫 표는 실제 개선을 감지할 확률(statistical power)이다. 0.80 이상이어야 쓸 만하다.
+**200문항으로는 5%p 개선도 세 번에 한 번만 보인다** (power `{python} f"{p200[3]:.2f}"`).
 1%p 개선은 사실상 보이지 않는다 (`{python} f"{p200[1]:.2f}"`) —
-"올랐다"고 보고되는 대부분의 작은 개선은 잡음과 구별되지 않는다.
-80% 검정력에 필요한 대략적인 문항 수는 `{python} NEED_TXT` 이다.
+"올랐다"고 보고되는 대부분의 작은 개선은 noise와 구별되지 않는다.
+80% power에 필요한 대략적인 문항 수는 `{python} NEED_TXT`이다.
 
-**짝짓기(같은 문항으로 비교)가 공짜로 검정력을 준다** (둘째 표, +5%p 기준) —
+**paired 비교(짝짓기 — 같은 문항으로 두 모델을 비교하는 것)가 공짜로 power를 준다** (둘째 표, +5%p 기준) —
 500문항에서 `{python} f"{p500[1]:.2f}"` vs `{python} f"{p500[2]:.2f}"`.
-문항 난이도의 분산이 통째로 상쇄되기 때문이다.
+문항 난이도의 분산이 통째로 상쇄되기 때문이다 — 두 학생에게 같은 시험지를 주면 "시험이 어려웠는지"는 비교에서 빠지고 둘의 차이만 남는다.
 **A/B 비교는 반드시 같은 문항으로 하고, 문항별 정오를 저장해 둘 것.**
 총점만 저장하면 이 이득을 나중에 되찾을 수 없다.
 
 ::: {.callout-warning}
 ## 여기서 나오는 실무 규칙
 
-- **평가셋 100문항으로 리더보드 순위를 논하지 말 것.** 3%p 차이는 잡음이다
-- 여러 벤치마크를 동시에 보면 **다중 비교** 문제가 생긴다.
-  10개 중 하나에서 유의하게 나오는 것은 우연으로도 흔하다
-- 유의성은 필요조건이지 충분조건이 아니다. **효과 크기**를 함께 본다
-- 신뢰구간을 붙이지 않은 벤치마크 표는 정보가 절반뿐이다
+- **evaluation set 100문항으로 leaderboard 순위를 논하지 말 것.** 3%p 차이는 noise다
+- 여러 benchmark를 동시에 보면 **multiple comparison(다중 비교)** 문제가 생긴다.
+  10개 중 하나에서 유의하게 나오는 것은 우연으로도 흔하다 (동전을 10번 던져 앞면 하나쯤은 나온다)
+- 유의성은 필요조건이지 충분조건이 아니다. **effect size(효과 크기 — 차이가 얼마나 큰가)**를 함께 본다
+- confidence interval(신뢰구간)을 붙이지 않은 benchmark 표는 정보가 절반뿐이다
 - 개선이 작을 것으로 예상되면 **먼저 필요한 문항 수를 계산하고** 시작한다
 :::
 
 ```{python}
 #| label: fig-power
-#| fig-cap: "개선 폭·문항 수에 따른 검정력과 짝짓기 비교의 이득"
+#| fig-cap: "개선 폭·문항 수에 따른 statistical power와 paired 비교의 이득"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -123,7 +126,7 @@ from plotly.subplots import make_subplots
 from src import viz
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("개선 폭별 검정력",
+                    subplot_titles=("개선 폭별 power",
                                     "같은 문항 vs 다른 문항 (+5%p)"))
 ns = [r[0] for r in POW]
 for i, d in enumerate(DS):
@@ -133,8 +136,8 @@ for i, d in enumerate(DS):
                              marker=dict(size=8)), row=1, col=1)
 fig.add_hline(y=0.8, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
               row=1, col=1)
-fig.update_xaxes(title_text="평가셋 문항 수", type="log", row=1, col=1)
-fig.update_yaxes(title_text="검정력", range=[0, 1.05], row=1, col=1)
+fig.update_xaxes(title_text="evaluation set 문항 수", type="log", row=1, col=1)
+fig.update_yaxes(title_text="power", range=[0, 1.05], row=1, col=1)
 
 fig.add_trace(go.Scatter(x=[r[0] for r in PAIR], y=[r[1] for r in PAIR],
                          mode="lines+markers", name="같은 문항 (McNemar)",
@@ -146,23 +149,26 @@ fig.add_trace(go.Scatter(x=[r[0] for r in PAIR], y=[r[2] for r in PAIR],
                          marker=dict(size=9)), row=1, col=2)
 fig.add_hline(y=0.8, line=dict(color=viz.YELLOW, width=1.5, dash="dash"),
               row=1, col=2)
-fig.update_xaxes(title_text="평가셋 문항 수", type="log", row=1, col=2)
-fig.update_yaxes(title_text="검정력", range=[0, 1.05], row=1, col=2)
+fig.update_xaxes(title_text="evaluation set 문항 수", type="log", row=1, col=2)
+fig.update_yaxes(title_text="power", range=[0, 1.05], row=1, col=2)
 viz.fig_defaults(fig, height=420, title="")
 fig.show()
 ```
 
 ---
 
-## G7.13.2 — LLM 판정자: 순서 평균화가 무엇을 고치는가
+## G7.13.2 — LLM judge: position swap이 무엇을 고치는가
 
-생성 과제는 정답이 하나가 아니므로 채점을 LLM에 맡긴다.
-그 판정자에 편향이 있다는 것은 잘 알려져 있다. **어느 편향이 고쳐지는가**가 질문이다.
+생성 과제는 정답이 하나가 아니므로 채점을 LLM에 맡긴다 — **LLM-as-judge**(LLM 판정자)다.
+그 judge에 bias가 있다는 것은 잘 알려져 있다. **어느 bias가 고쳐지는가**가 질문이다.
 
-판정자를 이렇게 모형화한다.
+judge를 이렇게 모형화한다. 두 답변 중 먼저 보여 준 쪽의 점수는
 
 $$s_{\text{먼저}} = q + \underbrace{\beta_{\text{pos}}}_{\text{먼저 나온 쪽 가산점}}
 + \beta_{\text{len}}\log \ell + \varepsilon$$
+
+$q$는 참 품질, $\beta_{\text{pos}}$는 **position bias**(위치 편향 — 먼저 본 답을 더 좋게 보는 경향), $\beta_{\text{len}}\log\ell$은 **length bias**(길이 편향 — 긴 답을 더 좋게 보는 경향), $\varepsilon$은 noise다.
+면접관이 먼저 본 지원자에게 후하고, 두꺼운 보고서를 더 알차다고 느끼는 것과 같다.
 
 ```{python}
 #| label: judge
@@ -178,7 +184,7 @@ TRUE_A = qa > qb
 
 
 def judge(pos_b, len_b, noise, swap, seed=2):
-    """A를 먼저 제시하면 pos_b 만큼 유리. 반환값은 'A 승리' 여부."""
+    """A를 먼저 제시하면 pos_b만큼 유리. 반환값은 'A 승리' 여부."""
     gg = np.random.default_rng(seed)
     fq, sq = (qb, qa) if swap else (qa, qb)
     fl, sl = (lb, la) if swap else (la, lb)
@@ -192,11 +198,11 @@ print(f"{'설정':<16} {'A먼저':>8} {'B먼저':>8} {'일관성':>8} {'무승�
       f"{'결정한 것 정확도':>17} {'긴 쪽 승률':>11}")
 print("-" * 86)
 JUD = []
-for lbl, pb, lb_, nz in [("편향 없음", 0.0, 0.0, 0.4),
-                         ("위치 0.3", 0.3, 0.0, 0.4),
-                         ("위치 0.8", 0.8, 0.0, 0.4),
-                         ("길이 0.6", 0.0, 0.6, 0.4),
-                         ("위치+길이", 0.5, 0.6, 0.4)]:
+for lbl, pb, lb_, nz in [("bias 없음", 0.0, 0.0, 0.4),
+                         ("position 0.3", 0.3, 0.0, 0.4),
+                         ("position 0.8", 0.8, 0.0, 0.4),
+                         ("length 0.6", 0.0, 0.6, 0.4),
+                         ("position+length", 0.5, 0.6, 0.4)]:
     w1, w2 = judge(pb, lb_, nz, False), judge(pb, lb_, nz, True)
     avg = (w1.astype(int) + w2.astype(int))/2
     tie = (avg == 0.5)
@@ -212,49 +218,50 @@ p8, ln, j0 = JUD[2], JUD[3], JUD[0]
 POS_SWING = (p8[1] - p8[2])*100
 ```
 
-참 A 승률은 `{python} f"{TRUE_A.mean():.3f}"`, A가 더 긴 비율은 `{python} f"{(la > lb).mean():.3f}"` 다.
-길이는 품질과 **무관하게** 만들었다. 길이 편향은 순수한 오류다.
+참 A 승률은 `{python} f"{TRUE_A.mean():.3f}"`, A가 더 긴 비율은 `{python} f"{(la > lb).mean():.3f}"`다.
+길이는 품질과 **무관하게** 만들었다. length bias는 순수한 오류다.
 
-**위치 편향 0.8: A를 먼저 놓으면 승률 `{python} f"{p8[1]:.3f}"`, 나중에 놓으면 `{python} f"{p8[2]:.3f}"`.**
+**position bias 0.8: A를 먼저 놓으면 승률 `{python} f"{p8[1]:.3f}"`, 나중에 놓으면 `{python} f"{p8[2]:.3f}"`.**
 같은 두 답변인데 순서만 바꿔 승률이 `{python} f"{POS_SWING:.0f}"`%p 움직인다.
 
-**순서를 바꿔 평균 내면 위치 편향은 완전히 사라진다.**
-결정한 것의 정확도가 `{python} f"{p8[5]:.3f}"` 로 유지된다.
-**대신 무승부가 `{python} f"{j0[4]:.3f}"` → `{python} f"{p8[4]:.3f}"` 로 늘어난다.**
-즉 편향이 오답으로 가는 대신 **"판정 불가"로 간다.**
-이것이 정확히 옳은 결과다 — 판정자가 모르는 것을 모른다고 말하게 된 것이다.
+**position swap(순서를 바꿔 두 번 판정하고 평균)을 하면 position bias는 완전히 사라진다.**
+결정한 것의 정확도가 `{python} f"{p8[5]:.3f}"`로 유지된다.
+**대신 무승부가 `{python} f"{j0[4]:.3f}"` → `{python} f"{p8[4]:.3f}"`로 늘어난다.**
+즉 bias가 오답으로 가는 대신 **"판정 불가"로 간다.**
+이것이 정확히 옳은 결과다 — judge가 모르는 것을 모른다고 말하게 된 것이다.
 
-**길이 편향은 순서 평균화로 전혀 고쳐지지 않는다.**
-긴 쪽 승률 `{python} f"{j0[6]:.3f}"` (편향 없음) → `{python} f"{ln[6]:.3f}"` (길이 편향),
-결정한 것의 정확도도 `{python} f"{j0[5]:.3f}"` → `{python} f"{ln[5]:.3f}"` 로 떨어진다.
+**length bias는 position swap으로 전혀 고쳐지지 않는다.**
+긴 쪽 승률 `{python} f"{j0[6]:.3f}"` (bias 없음) → `{python} f"{ln[6]:.3f}"` (length bias),
+결정한 것의 정확도도 `{python} f"{j0[5]:.3f}"` → `{python} f"{ln[5]:.3f}"`로 떨어진다.
 **순서를 바꿔도 긴 답은 여전히 길기 때문이다.**
 
 **여기서 나오는 규칙:**
 
-- 순서를 바꿔 두 번 판정하고 평균한다 — **위치 편향은 이걸로 끝난다**
-- 일관성(두 순서의 일치율)을 **판정자 품질 지표로 보고**한다
+- 순서를 바꿔 두 번 판정하고 평균한다 — **position bias는 이걸로 끝난다**
+- consistency(일관성 — 두 순서의 일치율)를 **judge 품질 지표로 보고**한다
 - 무승부를 억지로 가르지 말 것. 무승부는 정보다
-- **길이는 통제해야 한다** — 길이를 회귀로 빼거나(length-controlled),
+- **길이는 통제해야 한다** — 길이를 regression으로 빼거나(length-controlled),
   비교 대상의 길이를 맞추거나, 길이 자체를 평가 항목으로 명시한다
-- 자기선호 편향 — 판정자와 피평가자가 같은 모델 계열이면 따로 측정한다
-- 판정자를 **사람 라벨과 대조해 보정**한다. 일치율을 모르면 쓸 수 없다
+- self-preference bias(자기선호 편향) — judge와 피평가자가 같은 모델 계열이면 따로 측정한다
+- judge를 **사람 label과 대조해 calibration(보정)**한다. 일치율을 모르면 쓸 수 없다
 
 ::: {.callout-note}
 ## 이 실험이 낙관적인 지점
 
-여기서 위치 편향을 **상수 가산점**으로 모형화했다. 그래서 순서 평균화가 정확히 상쇄한다.
-실제 판정자의 위치 편향은 내용에 따라 달라지므로 상쇄가 완전하지 않다.
+여기서 position bias를 **상수 가산점**으로 모형화했다. 그래서 position swap이 정확히 상쇄한다.
+실제 judge의 position bias는 내용에 따라 달라지므로 상쇄가 완전하지 않다.
 
-또 "편향 없음"에서 결정한 것의 정확도가 1.000 인 이유는,
+또 "bias 없음"에서 결정한 것의 정확도가 1.000인 이유는,
 두 순서가 일치한 사례가 곧 **품질 차이가 큰 사례**이기 때문이다.
 어려운 판정은 전부 무승부로 빠졌다. 이 지표를 볼 때는 무승부 비율을 함께 봐야 한다.
 :::
 
 ---
 
-## G7.13.3 — 쌍 비교와 Elo: 몇 표가 필요한가
+## G7.13.3 — pairwise 비교와 Elo: 몇 표가 필요한가
 
-Arena 방식은 사람이 두 응답을 비교하고, Bradley-Terry로 레이팅을 추정한다.
+Arena 방식은 사람이 두 응답을 비교하고(pairwise 비교), Bradley-Terry 모델로 rating(실력 점수)을 추정한다.
+Elo는 바둑·체스에서 쓰는 rating이다 — 두 선수의 점수 차가 승률을 정하고, 400점 차이면 강한 쪽 승률이 약 91%다.
 
 $$P(i \succ j) = \frac{e^{r_i}}{e^{r_i} + e^{r_j}}, \qquad
 \text{Elo 격차 } \Delta E \Rightarrow p = \frac{1}{1 + 10^{-\Delta E/400}}$$
@@ -271,13 +278,13 @@ TRUE_R = np.linspace(-1.2, 1.2, NM)
 
 
 def bt_fit(n_cmp, seed=0, judge_noise=0.0):
-    """MM 알고리즘으로 Bradley-Terry 레이팅 추정."""
+    """MM algorithm으로 Bradley-Terry rating 추정."""
     g = np.random.default_rng(seed)
     W = np.zeros((NM, NM))
     for _ in range(n_cmp):
         i, j = g.choice(NM, 2, replace=False)
         p = 1/(1 + np.exp(-(TRUE_R[i] - TRUE_R[j])))
-        p = p*(1 - judge_noise) + 0.5*judge_noise      # 판정 잡음
+        p = p*(1 - judge_noise) + 0.5*judge_noise      # 판정 noise
         if g.random() < p:
             W[i, j] += 1
         else:
@@ -317,7 +324,7 @@ for de in [5, 10, 20, 30, 50, 100]:
     print(f"{de:>7} {p:>10.4f} {int(np.ceil(n)):>16,}")
 NEED10 = NEED[1][2]
 print()
-print(f"{'비교 수':>9} {'잡음 0':>9} {'잡음 0.3':>10} {'잡음 0.6':>10}")
+print(f"{'비교 수':>9} {'noise 0':>9} {'noise 0.3':>10} {'noise 0.6':>10}")
 print("-" * 42)
 NOISE = []
 for n in [1000, 10000, 30000]:
@@ -333,27 +340,28 @@ NZ_LAST = NOISE[-1]
 ```
 
 모델 `{python} f"{NM}"`개의 참 실력을 등간격으로 두고 무작위 쌍을 비교했다 (첫 표).
-**비교 1,000회면 전체 순위 상관은 `{python} f"{e1[2]:.3f}"` 로 이미 훌륭하다.**
-그런데 **인접한 두 모델을 제대로 가르는 비율은 `{python} f"{e1[3]:.3f}"`** 다.
-리더보드의 큰 그림은 금방 맞고, **1~2위 다툼은 오래 안 맞는다.**
+**비교 1,000회면 전체 rank correlation(순위 상관 — 추정 순위와 참 순위가 얼마나 일치하는가)은 `{python} f"{e1[2]:.3f}"`로 이미 훌륭하다.**
+그런데 **인접한 두 모델을 제대로 가르는 비율은 `{python} f"{e1[3]:.3f}"`**다.
+leaderboard의 큰 그림은 금방 맞고, **1~2위 다툼은 오래 안 맞는다.** 실력이 비슷한 두 선수의 우열은 여러 판을 붙여 봐야 안다.
 
-둘째 표는 두 모델을 Elo 격차 $\Delta E$ 로 가르는 데 필요한 비교 수다 (검정력 0.8, 유의수준 0.05).
-**10 Elo 를 가르려면 그 두 모델 사이에서만 `{python} f"{NEED10:,}"`번 비교해야 한다.**
-리더보드에서 10점 차이는 대부분 **구분되지 않는다.**
-그래서 Arena 는 신뢰구간을 함께 보고하고, 구간이 겹치면 공동 순위로 둔다.
+둘째 표는 두 모델을 Elo 격차 $\Delta E$로 가르는 데 필요한 비교 수다 (power 0.8, significance level 0.05).
+**10 Elo를 가르려면 그 두 모델 사이에서만 `{python} f"{NEED10:,}"`번 비교해야 한다.**
+leaderboard에서 10점 차이는 대부분 **구분되지 않는다.**
+그래서 Arena는 confidence interval을 함께 보고하고, 구간이 겹치면 공동 순위로 둔다.
 
-셋째 표는 판정자에 잡음이 있을 때(승률이 0.5 쪽으로 눌린다)의 인접 쌍 정순위 비율이다.
-**판정 잡음은 필요한 표 수를 곱으로 늘린다.** 편향처럼 상쇄되지 않는다.
-잡음 0.6 이면 `{python} f"{NZ_LAST[0]:,}"`번을 해도 인접 쌍을 `{python} f"{NZ_LAST[3]:.0%}"` 밖에 못 가른다.
+셋째 표는 judge에 noise가 있을 때(승률이 0.5 쪽으로 눌린다 — 심판이 일부 판정을 동전 던지기로 하는 셈)의 인접 쌍 정순위 비율이다.
+**판정 noise는 필요한 표 수를 곱으로 늘린다.** bias처럼 상쇄되지 않는다.
+noise 0.6이면 `{python} f"{NZ_LAST[0]:,}"`번을 해도 인접 쌍을 `{python} f"{NZ_LAST[3]:.0%}"`밖에 못 가른다.
 
 ---
 
-## G7.13.4 — 오염: 기억 용량이 부풀림을 만든다
+## G7.13.4 — contamination: memorization 용량이 부풀림을 만든다
 
-벤치마크가 학습 데이터에 섞이면 점수가 오른다. **얼마나** 오르는가?
+**contamination**(오염)은 benchmark 문항이 학습 데이터에 섞여 들어가는 것이다 — 시험 문제를 미리 본 학생이다.
+benchmark가 학습 데이터에 섞이면 점수가 오른다. **얼마나** 오르는가?
 그리고 **왜** 큰 모델일수록 문제가 되는가?
 
-[7.2](02_language_models.qmd)의 마르코프 소스를 다시 쓴다.
+[7.2](02_language_models.qmd)의 Markov source를 다시 쓴다.
 참 분포를 알고 있으므로 "부풀림"과 "진짜 실력"을 분리할 수 있다.
 
 ```{python}
@@ -385,8 +393,8 @@ TRAIN, TEST, FRESH = gen(NTR, g0), gen(NTE, g0), gen(NTE, g0)
 
 
 class NGram:
-    """m개 토큰 문맥을 기억하고, 없으면 bigram 으로 백오프한다.
-    m 이 클수록 '기억 용량'이 크다."""
+    """m개 token 문맥을 기억하고, 없으면 bigram으로 backoff한다.
+    m이 클수록 'memorization 용량'이 크다."""
 
     def __init__(self, data, m, alpha=1.0):
         self.m, self.alpha = m, alpha
@@ -425,8 +433,8 @@ CON = []
 for m in [1, 2, 4, 8]:
     base = NGram(TRAIN, m).ppl(TEST)
     print(f"── 기억 문맥 m={m} ──")
-    print(f"{'유출':>7} {'벤치 PPL':>10} {'신규 PPL':>10} {'부풀림':>9} "
-          f"{str(m+1) + '-gram 탐지':>14}")
+    print(f"{'유출':>7} {'bench PPL':>10} {'신규 PPL':>10} {'부풀림':>9} "
+          f"{str(m+1) + '-gram detection':>14}")
     print("-" * 54)
     for f in [0.0, 0.10, 0.25, 0.50, 1.0]:
         tr = TRAIN + list(TEST[:int(NTE*f)])*3
@@ -446,22 +454,22 @@ FRESH_BASE = NGram(TRAIN, 8).ppl(FRESH)
 FRESH_GAIN = FRESH_BASE/f8[3] - 1
 ```
 
-벤치마크 문항을 학습셋에 3번씩 넣고 퍼플렉서티를 다시 쟀다.
-"신규 PPL"은 같은 소스에서 새로 뽑은 문장 — **진짜 실력**이다.
-**같은 오염, 같은 데이터인데 부풀림이 기억 용량에 달려 있다.** 100% 유출에서
-m=1 은 `{python} f"{full[1][4]:.2f}"`배, m=2 는 `{python} f"{full[2][4]:.2f}"`배,
-m=4 는 `{python} f"{full[4][4]:.2f}"`배, m=8 은 `{python} f"{full[8][4]:.2f}"`배다.
-m=1 은 문장을 외울 수 없어 오염돼도 점수가 거의 안 변하고, m=8 은 문맥을 통째로 외우므로 벤치마크 PPL 이 무너진다.
+benchmark 문항을 학습셋에 3번씩 넣고 perplexity(PPL — 낮을수록 모델이 그 문장을 잘 예측한다는 뜻, [7.2](02_language_models.qmd))를 다시 쟀다.
+"신규 PPL"은 같은 source에서 새로 뽑은 문장 — **진짜 실력**이다.
+**같은 contamination, 같은 데이터인데 부풀림이 memorization 용량에 달려 있다.** 100% 유출에서
+m=1은 `{python} f"{full[1][4]:.2f}"`배, m=2는 `{python} f"{full[2][4]:.2f}"`배,
+m=4는 `{python} f"{full[4][4]:.2f}"`배, m=8은 `{python} f"{full[8][4]:.2f}"`배다.
+m=1은 문장을 외울 수 없어 오염돼도 점수가 거의 안 변하고, m=8은 문맥을 통째로 외우므로 benchmark PPL이 무너진다.
 
-**이것이 "큰 모델일수록 오염이 심각하다"의 메커니즘이다.**
-오염의 피해는 데이터의 성질이 아니라 **모델의 기억 용량**이 정한다.
-같은 코퍼스가 작은 모델에는 무해하고 큰 모델에는 치명적일 수 있다.
+**이것이 "큰 모델일수록 contamination이 심각하다"의 mechanism이다.**
+contamination의 피해는 데이터의 성질이 아니라 **모델의 memorization 용량**이 정한다.
+같은 corpus가 작은 모델에는 무해하고 큰 모델에는 치명적일 수 있다 — 시험 문제를 미리 봐도 암기력이 없는 학생은 이득이 없고, 암기력이 좋은 학생은 답을 통째로 외운다.
 
-**그리고 신규 데이터 PPL 은 전혀 개선되지 않았다.** m=8, 100% 유출에서
-벤치 `{python} f"{f8[2]:.3f}"` vs 신규 `{python} f"{f8[3]:.3f}"` — 신규 PPL 은 오염 전과
+**그리고 신규 데이터 PPL은 전혀 개선되지 않았다.** m=8, 100% 유출에서
+bench `{python} f"{f8[2]:.3f}"` vs 신규 `{python} f"{f8[3]:.3f}"` — 신규 PPL은 contamination 전과
 `{python} f"{abs(FRESH_GAIN):.1%}"` 차이다. 부풀림은 순수한 착시다.
 
-이제 **탐지**를 본다. 유출된 문항을 그대로가 아니라 조금 바꿔 넣으면?
+이제 **detection(탐지)**을 본다. 유출된 문항을 그대로가 아니라 조금 바꿔 넣으면?
 
 ```{python}
 #| label: paraphrase
@@ -483,8 +491,8 @@ def mutate(items, k, g):
     return out
 
 
-print(f"{'바꾼 토큰 수':>12} {'벤치 PPL':>10} {'부풀림':>9} "
-      f"{str(M+1) + '-gram 탐지':>14}")
+print(f"{'바꾼 token 수':>12} {'bench PPL':>10} {'부풀림':>9} "
+      f"{str(M+1) + '-gram detection':>14}")
 print("-" * 50)
 PARA = []
 for k in [0, 1, 2, 3, 4]:
@@ -501,7 +509,7 @@ p0, p1, p2 = PARA[0], PARA[1], PARA[2]
 ex0 = p0[2] - 1
 DET_LEFT, INF_LEFT = p1[3]/p0[3], (p1[2]-1)/ex0
 print()
-print(f"{'n-gram 길이':>12} {'오염 없음(오탐)':>16} {'100% 유출(정탐)':>17}")
+print(f"{'n-gram 길이':>12} {'오염 없음(false positive)':>16} {'100% 유출(true positive)':>17}")
 print("-" * 50)
 for m in [2, 3, 5, 9]:
     s0 = ngram_seen(TRAIN, m - 1)
@@ -514,30 +522,30 @@ for m in [2, 3, 5, 9]:
     print(f"{m:>12} {fp:>16.3f} {tp:>17.3f}")
 ```
 
-문항 전체를 유출하되 토큰 몇 개만 바꿨다 (m=`{python} f"{M}"`, 첫 표).
-**토큰 하나만 바꿔도 n-gram 탐지가 무너진다.**
-탐지는 `{python} f"{p0[3]:.3f}"` → `{python} f"{p1[3]:.3f}"` → `{python} f"{p2[3]:.3f}"`,
+문항 전체를 유출하되 token 몇 개만 바꿨다 (m=`{python} f"{M}"`, 첫 표).
+**token 하나만 바꿔도 n-gram detection이 무너진다.** 표절 검사기가 단어 하나 바꾼 문장을 못 잡는 것과 같다.
+detection은 `{python} f"{p0[3]:.3f}"` → `{python} f"{p1[3]:.3f}"` → `{python} f"{p2[3]:.3f}"`,
 부풀림은 `{python} f"{p0[2]:.2f}"`배 → `{python} f"{p1[2]:.2f}"`배 → `{python} f"{p2[2]:.2f}"`배다.
 
-**둘 다 떨어지지만 탐지가 훨씬 빨리 떨어진다.**
-토큰 1개 변형에서 탐지는 `{python} f"{DET_LEFT:.1%}"` 만 남는데 부풀림은 `{python} f"{INF_LEFT:.0%}"` 가 남는다 —
+**둘 다 떨어지지만 detection이 훨씬 빨리 떨어진다.**
+token 1개 변형에서 detection은 `{python} f"{DET_LEFT:.1%}"`만 남는데 부풀림은 `{python} f"{INF_LEFT:.0%}"`가 남는다 —
 약 `{python} f"{INF_LEFT/DET_LEFT:.0f}"`배 차이다.
-토큰 2개 변형에서 탐지는 `{python} f"{p2[3]:.3f}"` (사실상 0)인데 부풀림은 아직 `{python} f"{p2[2]:.2f}"`배다.
+token 2개 변형에서 detection은 `{python} f"{p2[3]:.3f}"` (사실상 0)인데 부풀림은 아직 `{python} f"{p2[2]:.2f}"`배다.
 
-**따라서 "오염 검사를 통과했다"는 오염이 없다는 뜻이 아니다.**
+**따라서 "contamination 검사를 통과했다"는 contamination이 없다는 뜻이 아니다.**
 
 - n-gram 겹침은 **정확한 복사만** 잡는다
 - 번역·재작성·형식 변경은 전부 통과한다 — 그런데 부풀림은 남는다
-- 짧은 n-gram 을 쓰면 잡히지만 **오탐**이 급증한다 (둘째 표)
-- **진짜 해법은 탐지가 아니라 비공개 홀드아웃이다** — 모델 공개일 이후에 만든 문항, 또는 애초에 공개하지 않은 문항
+- 짧은 n-gram을 쓰면 잡히지만 **false positive(오탐 — 깨끗한 것을 오염으로 판정)**가 급증한다 (둘째 표)
+- **진짜 해법은 detection이 아니라 비공개 holdout(홀드아웃 — 따로 떼어 두고 절대 학습에 쓰지 않는 문항)이다** — 모델 공개일 이후에 만든 문항, 또는 애초에 공개하지 않은 문항
 
-둘째 표는 오염이 전혀 없을 때의 탐지율(오탐)이다.
-**짧은 n-gram 은 깨끗한 데이터도 오염으로 판정한다.**
-임계값 선택이 곧 오탐/미탐 교환이다 — 공짜 점심은 없다.
+둘째 표는 contamination이 전혀 없을 때의 detection율(false positive)이다.
+**짧은 n-gram은 깨끗한 데이터도 오염으로 판정한다.**
+threshold(임계값) 선택이 곧 false positive/false negative 교환이다 — 공짜 점심은 없다.
 
 ```{python}
 #| label: fig-contam
-#| fig-cap: "기억 용량별 점수 부풀림과 변형에 따른 탐지율·부풀림"
+#| fig-cap: "memorization 용량별 점수 부풀림과 변형에 따른 detection율·부풀림"
 
 import sys; sys.path.append("../..")
 import numpy as np
@@ -546,8 +554,8 @@ from plotly.subplots import make_subplots
 from src import viz
 
 fig = make_subplots(rows=1, cols=2,
-                    subplot_titles=("기억 용량별 점수 부풀림",
-                                    "변형을 주면 — 탐지 vs 부풀림"))
+                    subplot_titles=("memorization 용량별 점수 부풀림",
+                                    "변형을 주면 — detection vs 부풀림"))
 for i, m in enumerate([1, 2, 4, 8]):
     rows = [c for c in CON if c[0] == m]
     fig.add_trace(go.Scatter(x=[c[1] for c in rows], y=[c[4] for c in rows],
@@ -555,18 +563,18 @@ for i, m in enumerate([1, 2, 4, 8]):
                              line=dict(color=viz.color(i), width=2.5),
                              marker=dict(size=9)), row=1, col=1)
 fig.update_xaxes(title_text="유출 비율", tickformat=".0%", row=1, col=1)
-fig.update_yaxes(title_text="퍼플렉서티 부풀림 (배)", row=1, col=1)
+fig.update_yaxes(title_text="perplexity 부풀림 (배)", row=1, col=1)
 
 ks = [p[0] for p in PARA]
 fig.add_trace(go.Scatter(x=ks, y=[p[3] for p in PARA], mode="lines+markers",
-                         name="n-gram 탐지율",
+                         name="n-gram detection율",
                          line=dict(color=viz.WARM, width=2.5),
                          marker=dict(size=10)), row=1, col=2)
 fig.add_trace(go.Scatter(x=ks, y=[(p[2] - 1)/(PARA[0][2] - 1) for p in PARA],
                          mode="lines+markers", name="남은 부풀림 (정규화)",
                          line=dict(color=viz.GREEN, width=2.5),
                          marker=dict(size=10)), row=1, col=2)
-fig.update_xaxes(title_text="변형한 토큰 수", row=1, col=2)
+fig.update_xaxes(title_text="변형한 token 수", row=1, col=2)
 fig.update_yaxes(title_text="비율", range=[-0.05, 1.05], row=1, col=2)
 viz.fig_defaults(fig, height=420, title="")
 fig.show()
@@ -574,9 +582,10 @@ fig.show()
 
 ---
 
-## G7.13.5 — 벤치마크 상관: 무엇이 중복인가
+## G7.13.5 — benchmark 상관: 무엇이 중복인가
 
-벤치마크 열 개의 평균을 보고한다고 하자. 그것은 열 개의 독립적인 증거인가?
+benchmark 열 개의 평균을 보고한다고 하자. 그것은 열 개의 독립적인 증거인가?
+국어·영어·사회 점수가 모두 "전반적으로 공부를 잘하는 정도"와 강하게 묶여 있다면, 세 과목은 세 개의 독립적인 정보가 아니다.
 
 ```{python}
 #| label: corr
@@ -586,7 +595,7 @@ import numpy as np
 
 NMOD, NB = 60, 6
 gm = np.random.default_rng(3)
-ability = gm.normal(0, 1, NMOD)                 # 잠재 '일반 능력'
+ability = gm.normal(0, 1, NMOD)                 # latent '일반 능력'
 LOADING = np.array([0.95, 0.90, 0.85, 0.60, 0.40, 0.10])
 NAMES = ["지식", "추론", "수학", "코드", "다국어", "안전"]
 S = np.stack([ability*L + gm.normal(0, np.sqrt(1 - L**2), NMOD)
@@ -601,59 +610,59 @@ ev = np.linalg.eigvalsh(C)[::-1]
 eff = float((ev.sum()**2)/(ev**2).sum())
 PC1_SHARE = ev[0]/NB
 print()
-print("고윳값: " + "  ".join(f"{v:.2f}" for v in ev))
+print("eigenvalue: " + "  ".join(f"{v:.2f}" for v in ev))
 ```
 
-모델 `{python} f"{NMOD}"`개의 벤치마크 점수 상관 행렬이다. 첫 성분이 분산의 **`{python} f"{PC1_SHARE:.0%}"`** 를 설명하고,
-실효 차원은 **`{python} f"{eff:.2f}"`** (벤치마크 `{python} f"{NB}"`개 중)이다.
-**벤치마크 `{python} f"{NB}"`개를 돌렸지만 독립적인 정보는 `{python} f"{eff:.1f}"`개어치다.**
-대부분의 벤치마크가 같은 잠재 능력을 다시 재고 있다.
+모델 `{python} f"{NMOD}"`개의 benchmark 점수 correlation matrix(상관 행렬)다. 첫 principal component(주성분, [2.10](../02_classical_ml/10_dimensionality_reduction.qmd))가 분산의 **`{python} f"{PC1_SHARE:.0%}"`**를 설명하고,
+effective dimension(실효 차원 — 실제로 독립적인 축이 몇 개인가, eigenvalue로 계산)은 **`{python} f"{eff:.2f}"`** (benchmark `{python} f"{NB}"`개 중)이다.
+**benchmark `{python} f"{NB}"`개를 돌렸지만 독립적인 정보는 `{python} f"{eff:.1f}"`개어치다.**
+대부분의 benchmark가 같은 latent(잠재 — 직접 보이지 않지만 점수들 뒤에 깔린) 능력을 다시 재고 있다.
 
 **이것의 실무적 의미:**
 
-- 상관 0.85 인 두 벤치마크를 함께 보고하는 것은 **증거를 두 번 세는 것**이다
-- 평균 점수는 적재량이 큰 벤치마크에 사실상 지배된다
-- **정말로 봐야 할 것은 잔차다** — 일반 능력으로 설명되지 않는 부분
+- 상관 0.85인 두 benchmark를 함께 보고하는 것은 **증거를 두 번 세는 것**이다
+- 평균 점수는 loading(적재량 — 일반 능력과 묶인 정도)이 큰 benchmark에 사실상 지배된다
+- **정말로 봐야 할 것은 residual(잔차)이다** — 일반 능력으로 설명되지 않는 부분
 - "`{python} NAMES[-1]`"처럼 상관이 낮은 축이 실제로 새로운 정보를 준다
-- 벤치마크를 고를 때는 점수가 아니라 **상관 행렬**을 먼저 본다
-- 선택 기준: 서로 상관이 낮으면서 내 사용 사례와 상관이 높은 것
+- benchmark를 고를 때는 점수가 아니라 **correlation matrix**를 먼저 본다
+- 선택 기준: 서로 상관이 낮으면서 내 use case와 상관이 높은 것
 
-**그리고 이 구조가 리더보드 과적합을 만든다.**
-공개 벤치마크 몇 개를 목표로 최적화하면 그 잠재 축만 올라간다.
+**그리고 이 구조가 leaderboard overfitting을 만든다.**
+공개 benchmark 몇 개를 목표로 최적화하면 그 latent 축만 올라간다.
 실제 사용 경험은 그 축과 상관이 낮은 부분에 많이 걸려 있다.
 
 ---
 
-## 실서비스 평가: 오프라인만으로는 부족하다
+## 실서비스 평가: offline만으로는 부족하다
 
-평가는 스택이다 — 한 층으로는 부족하다.
+평가는 stack(층층이 쌓은 것)이다 — 한 층으로는 부족하다.
 
 | 층 | 무엇을 잡는가 | 한계 |
 |---|---|---|
-| 골든셋(회귀) | 이미 아는 실패가 되살아나는 것 | 새 실패는 못 잡는다 |
-| 벤치마크 | 일반 능력의 큰 변화 | 내 도메인과 상관이 낮다 |
-| LLM 판정자 | 생성 품질의 대략적 방향 | 편향·잡음 (G7.13.2) |
+| golden set(regression test) | 이미 아는 실패가 되살아나는 것 | 새 실패는 못 잡는다 |
+| benchmark | 일반 능력의 큰 변화 | 내 domain과 상관이 낮다 |
+| LLM judge | 생성 품질의 대략적 방향 | bias·noise (G7.13.2) |
 | 사람 평가 | 진짜 선호 | 비싸고 느리고 일치도가 낮다 |
-| 온라인 실험 | 실제 사용자 행동 | 느리고 위험하다 |
-| 사용자 피드백 | 예상 못 한 실패 양식 | 편향된 표본 (불만만 온다) |
+| online 실험 | 실제 사용자 행동 | 느리고 위험하다 |
+| 사용자 feedback | 예상 못 한 실패 양식 | biased 표본 (불만만 온다) |
 
-**골든셋 운영 규칙**
+**golden set(골든셋 — 정답이 확정된, 반드시 통과해야 하는 문항 모음) 운영 규칙**
 
-- 실제로 터진 버그를 문항으로 만든다 — 이것이 가장 값싼 평가셋이다
-- **문항별 정오를 저장**한다 (G7.13.1의 짝짓기 이득 때문)
+- 실제로 터진 bug를 문항으로 만든다 — 이것이 가장 값싼 evaluation set이다
+- **문항별 정오를 저장**한다 (G7.13.1의 paired 비교 이득 때문)
 - 판정 기준을 문항에 함께 적는다. 3개월 뒤의 나를 위해
-- 골든셋은 **절대 학습에 넣지 않는다** — 넣는 순간 의미가 사라진다
+- golden set은 **절대 학습에 넣지 않는다** — 넣는 순간 의미가 사라진다
 - 통과율 100%가 되면 문항을 더한다. 100%는 정보가 0이라는 뜻이다
 
-**평가 결과를 읽을 때의 체크리스트**
+**평가 결과를 읽을 때의 checklist**
 
-- 문항 수는? → 검정력은? (G7.13.1)
-- 신뢰구간이 있는가? 겹치는가?
+- 문항 수는? → power는? (G7.13.1)
+- confidence interval이 있는가? 겹치는가?
 - 같은 문항으로 비교했는가?
-- 판정자를 썼다면 순서를 바꿨는가? 길이를 통제했는가?
-- 벤치마크가 모델 공개일보다 오래되었는가? (오염)
-- 여러 벤치마크가 서로 상관되어 있지 않은가?
-- **추론 연산량을 맞췄는가?** (7.12 — n을 밝히지 않은 점수)
+- judge를 썼다면 순서를 바꿨는가? 길이를 통제했는가?
+- benchmark가 모델 공개일보다 오래되었는가? (contamination)
+- 여러 benchmark가 서로 correlated되어 있지 않은가?
+- **inference compute를 맞췄는가?** (7.12 — n을 밝히지 않은 점수)
 
 
 ---
@@ -661,16 +670,16 @@ print("고윳값: " + "  ".join(f"{v:.2f}" for v in ev))
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① 짝짓기 이득은 상관에 달려 있다**
-`power` 의 `RHO` 를 0.3·0.7·0.9 로 바꿔 같은 문항/다른 문항의 검정력 차이를 재라.
-두 모델의 정오가 거의 독립이면(ρ→0) 짝짓기가 무엇을 잃는가?
+**① paired 비교의 이득은 상관에 달려 있다**
+`power` 의 `RHO` 를 0.3·0.7·0.9로 바꿔 같은 문항/다른 문항의 power 차이를 재라.
+두 모델의 정오가 거의 독립이면(ρ→0) paired 비교가 무엇을 잃는가?
 
 **② 길이를 맞추면**
-`judge` 의 길이 편향 0.6 을 둔 채 비교 쌍의 길이를 같게 만들어라 (`lb = la`).
+`judge` 의 length bias 0.6을 둔 채 비교 쌍의 길이를 같게 만들어라 (`lb = la`).
 긴 쪽 승률과 결정한 것의 정확도가 회복되는가? length-controlled 평가가 하는 일이 정확히 무엇인지 써라.
 
 **③ 유출 반복 횟수**
-`contam` 은 벤치마크를 3번씩 넣는다. 1번·10번으로 바꿔 m=8 의 부풀림이 어떻게 변하는지 재라.
+`contam` 은 benchmark를 3번씩 넣는다. 1번·10번으로 바꿔 m=8의 부풀림이 어떻게 변하는지 재라.
 [7.5](05_pretraining_data.qmd)의 반복 실험과 어떻게 이어지는가?
 :::
 
@@ -678,30 +687,30 @@ print("고윳값: " + "  ".join(f"{v:.2f}" for v in ev))
 
 | 개념 | 핵심 |
 |------|------|
-| **검정력** | 200문항으로 +5%p 개선을 볼 확률은 **`{python} f"{p200[3]:.2f}"`**. +1%p는 `{python} f"{p200[1]:.2f}"` |
+| **statistical power** | 200문항으로 +5%p 개선을 볼 확률은 **`{python} f"{p200[3]:.2f}"`**. +1%p는 `{python} f"{p200[1]:.2f}"` (눈금이 거친 저울) |
 | 필요한 규모 | +5%p를 80%로 보려면 **`{python} f"{NEED_N[0.05]:,}"`문항**, +1%p는 5,000문항으로도 부족 |
-| **짝짓기** | 같은 문항으로 비교하면 500문항에서 `{python} f"{p500[1]:.2f}"` vs `{python} f"{p500[2]:.2f}"` — 공짜 이득 |
+| **paired 비교** | 같은 문항으로 비교하면 500문항에서 `{python} f"{p500[1]:.2f}"` vs `{python} f"{p500[2]:.2f}"` — 공짜 이득 (같은 시험지) |
 | 실무 규칙 | 총점만 저장하지 말고 **문항별 정오**를 남긴다 |
-| 위치 편향 | 순서만 바꿔 승률이 `{python} f"{p8[1]:.3f}"` ↔ `{python} f"{p8[2]:.3f}"`로 움직인다 |
-| **순서 평균화** | 위치 편향을 오답이 아니라 **무승부**로 바꾼다 (`{python} f"{j0[4]:.2f}"`→`{python} f"{p8[4]:.2f}"`) |
-| **길이 편향** | 순서 평균화로 전혀 안 고쳐진다 — 긴 쪽 승률 `{python} f"{j0[6]:.2f}"`→`{python} f"{ln[6]:.2f}"` |
-| 판정자 지표 | 일관성(두 순서 일치율)을 품질 지표로 함께 보고한다 |
-| Elo 수렴 | 1,000 비교로 순위 상관 `{python} f"{e1[2]:.3f}"`, **인접 쌍 정순위는 `{python} f"{e1[3]:.3f}"`** |
-| 리더보드 해석 | 10 Elo를 가르려면 그 쌍만 **`{python} f"{NEED10:,}"`번** 비교해야 한다 |
-| 판정 잡음 | 편향과 달리 상쇄되지 않는다 — 필요한 표 수를 곱으로 늘린다 |
-| **오염의 원인** | 데이터가 아니라 **기억 용량**. m=1은 `{python} f"{full[1][4]:.2f}"`x, m=8은 `{python} f"{full[8][4]:.2f}"`x |
+| position bias | 순서만 바꿔 승률이 `{python} f"{p8[1]:.3f}"` ↔ `{python} f"{p8[2]:.3f}"`로 움직인다 |
+| **position swap** | position bias를 오답이 아니라 **무승부**로 바꾼다 (`{python} f"{j0[4]:.2f}"`→`{python} f"{p8[4]:.2f}"`) |
+| **length bias** | position swap으로 전혀 안 고쳐진다 — 긴 쪽 승률 `{python} f"{j0[6]:.2f}"`→`{python} f"{ln[6]:.2f}"` |
+| judge 지표 | consistency(두 순서 일치율)를 품질 지표로 함께 보고한다 |
+| Elo 수렴 | 1,000 비교로 rank correlation `{python} f"{e1[2]:.3f}"`, **인접 쌍 정순위는 `{python} f"{e1[3]:.3f}"`** |
+| leaderboard 해석 | 10 Elo를 가르려면 그 쌍만 **`{python} f"{NEED10:,}"`번** 비교해야 한다 |
+| 판정 noise | bias와 달리 상쇄되지 않는다 — 필요한 표 수를 곱으로 늘린다 |
+| **contamination의 원인** | 데이터가 아니라 **memorization 용량**. m=1은 `{python} f"{full[1][4]:.2f}"`x, m=8은 `{python} f"{full[8][4]:.2f}"`x (암기력 좋은 학생) |
 | 부풀림의 정체 | 신규 데이터 PPL은 그대로 (차이 `{python} f"{abs(FRESH_GAIN):.1%}"`) — 착시다 |
-| **탐지의 실패** | 토큰 1개 변형에 탐지는 `{python} f"{DET_LEFT:.1%}"`만 남는데 부풀림은 `{python} f"{INF_LEFT:.0%}"` 남는다 |
-| 오탐 | 짧은 n-gram은 깨끗한 데이터도 오염으로 판정한다 |
-| 진짜 해법 | 탐지가 아니라 **비공개·사후 홀드아웃** |
-| 벤치마크 상관 | `{python} f"{NB}"`개를 돌려도 실효 차원은 **`{python} f"{eff:.2f}"`** — 대부분 같은 축을 잰다 |
-| 봐야 할 것 | 평균이 아니라 **잔차**. 상관이 낮은 축이 새 정보다 |
-| 실서비스 | 골든셋 + 벤치마크 + 판정자 + 온라인. 한 층으로는 부족하다 |
+| **detection의 실패** | token 1개 변형에 detection은 `{python} f"{DET_LEFT:.1%}"`만 남는데 부풀림은 `{python} f"{INF_LEFT:.0%}"` 남는다 |
+| false positive | 짧은 n-gram은 깨끗한 데이터도 오염으로 판정한다 |
+| 진짜 해법 | detection이 아니라 **비공개·사후 holdout** |
+| benchmark 상관 | `{python} f"{NB}"`개를 돌려도 effective dimension은 **`{python} f"{eff:.2f}"`** — 대부분 같은 축을 잰다 |
+| 봐야 할 것 | 평균이 아니라 **residual**. 상관이 낮은 축이 새 정보다 |
+| 실서비스 | golden set + benchmark + judge + online. 한 층으로는 부족하다 |
 
 평가를 설계했다. 이제 그 모델을 **실제로 서비스**해야 한다.
 
 ---
 
-**다음**: [7.14 추론 최적화](14_inference_optimization.qmd)
+**다음**: [7.14 inference 최적화](14_inference_optimization.qmd)
 
-**이전**: [7.12 추론 모델](12_reasoning_models.qmd)
+**이전**: [7.12 reasoning model](12_reasoning_models.qmd)
