@@ -597,6 +597,6 @@ Part 11은 그 앞 단계다 — **재지 않는 것은 지표조차 없다.**
 
 ---
 
-**다음**: [12.0 설명 가능성](../12_trust/00_interpretability.qmd) — Part 12 해석가능성과 신뢰
+**다음**: [12.0 explainability](../12_trust/00_interpretability.qmd) — Part 12 해석가능성과 신뢰
 
 **이전**: [11.5 모델 serving과 배포](05_serving.qmd)
