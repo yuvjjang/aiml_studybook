@@ -170,6 +170,7 @@ book:
     - part: "부록: 설정"
       chapters:
         - settings.qmd
+        - bookmarks.qmd
 
 format:
   html:
@@ -180,6 +181,7 @@ format:
     include-in-header:
       - mathjax-config.html
       - theme-settings.html
+      - bookmarks-header.html
     grid:
       sidebar-width: 290px
       body-width: 2000px

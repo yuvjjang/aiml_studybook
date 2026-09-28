@@ -1,0 +1,112 @@
+<!-- 북마크: 챕터·섹션 제목 옆에 버튼을 달고, 표시한 위치를 저장한다 (bookmarks.qmd 에서 목록 보기)
+     파일 이름을 bookmarks.html 로 하면 bookmarks.qmd 의 렌더 결과와 겹쳐 지워진다. -->
+<script>
+/* 챕터 제목(h1.title)과 섹션 제목(h2, h3) 옆에 북마크 버튼을 단다.
+ *
+ * 저장 형식 (localStorage "aimlstudy.bookmarks"):
+ *   { "<path>#<anchor>": { path, anchor, chapter, section, order, note, added } }
+ *   - path   : 페이지 경로 (location.pathname). 호스트가 하위 경로여도 그대로 맞는다
+ *   - anchor : 섹션 id. 챕터 제목이면 ""
+ *   - order  : 페이지 안에서 제목의 순서. 목록 페이지에서 정렬에 쓴다
+ * 값은 이 브라우저에만 저장되며 서버로 가지 않는다.
+ */
+(function () {
+  "use strict";
+
+  var KEY = "aimlstudy.bookmarks";
+
+  function read() {
+    try {
+      var raw = window.localStorage.getItem(KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function write(all) {
+    try {
+      window.localStorage.setItem(KEY, JSON.stringify(all));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function currentPath() {
+    return window.location.pathname.replace(/index\.html$/, "");
+  }
+
+  // 제목 글자만 뽑는다 (앵커 링크·북마크 버튼 제외)
+  function headingText(h) {
+    var c = h.cloneNode(true);
+    c.querySelectorAll(".bm-btn, .anchorjs-link").forEach(function (n) { n.remove(); });
+    return c.textContent.replace(/\s+/g, " ").trim();
+  }
+
+  var ICON = '<svg viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true">' +
+             '<path d="M6 3h12v18l-6-4.5L6 21z"/></svg>';
+
+  function setState(btn, on) {
+    btn.classList.toggle("bm-on", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.title = on ? "북마크 해제" : "북마크 추가 — 나중에 다시 볼 곳";
+  }
+
+  function decorate() {
+    var main = document.querySelector("main.content");
+    var path = currentPath();
+    if (!main || /\/bookmarks\.html$/.test(path)) { return; }   // 목록 페이지 자신은 제외
+
+    var titleEl = document.querySelector("#title-block-header h1.title");
+    var chapter = titleEl ? headingText(titleEl) : document.title;
+
+    var targets = [];
+    if (titleEl) { targets.push({ h: titleEl, anchor: "" }); }
+    main.querySelectorAll("section.level2 > h2, section.level3 > h3").forEach(function (h) {
+      var id = h.parentElement.id;
+      if (id) { targets.push({ h: h, anchor: id }); }
+    });
+
+    var saved = read();
+    targets.forEach(function (t, i) {
+      var key = path + "#" + t.anchor;
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "bm-btn";
+      btn.innerHTML = ICON;
+      setState(btn, !!saved[key]);
+
+      btn.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        var all = read();
+        if (all[key]) {
+          delete all[key];
+        } else {
+          all[key] = {
+            path: path,
+            anchor: t.anchor,
+            chapter: chapter,
+            section: t.anchor ? headingText(t.h) : "",
+            order: i,
+            note: "",
+            added: new Date().toISOString()
+          };
+        }
+        if (write(all)) { setState(btn, !!all[key]); }
+      });
+
+      t.h.appendChild(btn);
+    });
+  }
+
+  // bookmarks.qmd 가 쓰는 최소 API
+  window.readerBookmarks = { key: KEY, get: read, set: write };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", decorate);
+  } else {
+    decorate();
+  }
+})();
+</script>

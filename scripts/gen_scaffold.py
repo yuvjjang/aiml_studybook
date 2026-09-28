@@ -91,6 +91,7 @@ def build_quarto_yml():
         '    - part: "부록: 설정"',
         "      chapters:",
         "        - settings.qmd",
+        "        - bookmarks.qmd",
         "",
         "format:",
         "  html:",
@@ -102,6 +103,7 @@ def build_quarto_yml():
         "    include-in-header:",
         "      - mathjax-config.html",
         "      - theme-settings.html",
+        "      - bookmarks-header.html",
         # Quarto 기본 본문 열은 850px 라 넓은 화면에서 양옆이 크게 남는다.
         # 여기를 넉넉히 잡아 두고, 실제 상한은 styles.css 의 --reader-measure
         # (설정 페이지의 '본문 최대 너비')가 정하게 한다.

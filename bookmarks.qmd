@@ -1,0 +1,173 @@
+---
+title: "북마크"
+subtitle: "나중에 다시 볼 곳"
+number-sections: false
+code-tools: false
+---
+
+각 장의 **제목**과 **섹션 제목** 옆에 있는 책갈피 버튼
+(<svg viewBox="0 0 24 24" width="0.9em" height="0.9em" style="vertical-align:-0.1em;fill:currentColor"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg>)을
+누르면 그 위치가 여기에 모입니다. 한 번 더 누르면 해제됩니다.
+
+값은 **이 브라우저에만** 저장됩니다. 다른 기기나 브라우저로 옮기려면
+**[내보내기]** 로 JSON 파일을 받아 그쪽에서 **[가져오기]** 하세요.
+같은 위치가 양쪽에 있으면 가져온 쪽의 메모가 남습니다.
+
+```{=html}
+<div class="rs-actions">
+  <button type="button" id="bm-export">내보내기 (JSON)</button>
+  <button type="button" id="bm-import">가져오기</button>
+  <input type="file" id="bm-file" accept="application/json,.json" hidden>
+</div>
+
+<p class="rs-status" id="bm-status" role="status" aria-live="polite"></p>
+
+<div id="bm-list" class="bm-list"></div>
+
+<script>
+(function () {
+  "use strict";
+  var BM = window.readerBookmarks;
+  if (!BM) { return; }
+
+  var el = function (id) { return document.getElementById(id); };
+  var list = el("bm-list");
+
+  function status(msg, cls) {
+    var s = el("bm-status");
+    s.textContent = msg;
+    s.className = "rs-status" + (cls ? " " + cls : "");
+  }
+
+  // 사이드바에 나오는 순서 = 책의 순서
+  function chapterOrder() {
+    var order = {};
+    document.querySelectorAll("#quarto-sidebar a.sidebar-link").forEach(function (a, i) {
+      var p = a.pathname.replace(/index\.html$/, "");
+      if (!(p in order)) { order[p] = i; }
+    });
+    return order;
+  }
+
+  function node(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (text) { n.textContent = text; }
+    return n;
+  }
+
+  function render() {
+    var all = BM.get();
+    var keys = Object.keys(all);
+    list.textContent = "";
+
+    if (!keys.length) {
+      list.appendChild(node("p", "bm-empty", "아직 북마크가 없습니다."));
+      return;
+    }
+
+    // 장별로 묶는다
+    var groups = {};
+    keys.forEach(function (k) {
+      var b = all[k];
+      (groups[b.path] = groups[b.path] || []).push(k);
+    });
+
+    var order = chapterOrder();
+    var paths = Object.keys(groups).sort(function (a, b) {
+      var oa = a in order ? order[a] : 1e9;
+      var ob = b in order ? order[b] : 1e9;
+      return oa - ob || a.localeCompare(b);
+    });
+
+    paths.forEach(function (p) {
+      var ks = groups[p].sort(function (a, b) { return all[a].order - all[b].order; });
+
+      var box = node("section", "bm-chapter");
+      var h = node("h3", "bm-chapter-title");
+      var a = node("a", null, all[ks[0]].chapter || p);
+      a.href = p;
+      h.appendChild(a);
+      box.appendChild(h);
+
+      var ul = node("ul", "bm-items");
+      ks.forEach(function (k) {
+        var b = all[k];
+        var li = node("li", "bm-item");
+
+        var head = node("div", "bm-item-head");
+        var link = node("a", null, b.anchor ? b.section : "(장 전체)");
+        link.href = b.path + (b.anchor ? "#" + b.anchor : "");
+        head.appendChild(link);
+        head.appendChild(node("span", "bm-date", (b.added || "").slice(0, 10)));
+
+        var del = node("button", "bm-del", "삭제");
+        del.type = "button";
+        del.addEventListener("click", function () {
+          var cur = BM.get();
+          delete cur[k];
+          BM.set(cur);
+          render();
+        });
+        head.appendChild(del);
+        li.appendChild(head);
+
+        var note = node("input", "bm-note");
+        note.type = "text";
+        note.placeholder = "메모 (예: 유도 다시 따라가기)";
+        note.value = b.note || "";
+        note.addEventListener("change", function () {
+          var cur = BM.get();
+          if (cur[k]) {
+            cur[k].note = note.value;
+            status(BM.set(cur) ? "메모를 저장했습니다." : "저장할 수 없습니다.",
+                   "rs-saved");
+          }
+        });
+        li.appendChild(note);
+
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+      list.appendChild(box);
+    });
+  }
+
+  el("bm-export").addEventListener("click", function () {
+    var blob = new Blob([JSON.stringify(BM.get(), null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "aimlstudy-bookmarks.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  el("bm-import").addEventListener("click", function () { el("bm-file").click(); });
+
+  el("bm-file").addEventListener("change", function () {
+    var f = this.files[0];
+    if (!f) { return; }
+    f.text().then(function (txt) {
+      var incoming = JSON.parse(txt);
+      var cur = BM.get();
+      var n = 0;
+      Object.keys(incoming).forEach(function (k) {
+        var b = incoming[k];
+        if (b && typeof b.path === "string" && typeof b.anchor === "string") {
+          cur[k] = b;
+          n += 1;
+        }
+      });
+      BM.set(cur);
+      render();
+      status(n + "개를 가져왔습니다.", "rs-saved");
+    }).catch(function () {
+      status("JSON 파일을 읽을 수 없습니다.", "rs-bad");
+    });
+    this.value = "";
+  });
+
+  render();
+})();
+</script>
+```
