@@ -988,6 +988,287 @@ $n=30$ 에서 정규 곡선에 붙는지 본다. 붙지 않으면 $n$ 을 얼마
 Cholesky factor와 whitening이 어떻게 되는가. [0.5의 condition number](05_numerical_computing.qmd)와 연결해 설명해 보라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 그래픽과 코드를 만지며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 양성이 두 번 나오면
+
+본문의 검사를 다시 쓴다. 유병률 1%, 병이 있으면 99%로 양성, 건강해도 5%로 양성이다.
+양성 한 번 뒤에 병일 확률은 약 0.167이었다.
+
+(a) 같은 사람이 **독립적인** 두 번째 검사에서도 양성이 나왔다. 이제 병일 확률은?
+(b) 처음으로 돌아가, 건강한 사람의 양성률(5%)을 1%로 낮춘 더 좋은 검사를 쓰면 양성 한 번 뒤의 확률은?
+(c) 두 결과에서 "검사를 개선하는 것"과 "검사를 반복하는 것"에 대해 무엇을 알 수 있는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 첫 검사의 posterior 0.167이 두 번째 검사의 prior가 된다. 오늘의 결론이 내일의 출발점이다.
+
+$$p(\text{병}\mid\text{양성 2회}) = \frac{0.99 \times 0.167}{0.99 \times 0.167 + 0.05 \times 0.833} \approx \frac{0.165}{0.165 + 0.042} \approx 0.80$$
+
+처음부터 한 번에 계산해도 같다: $\dfrac{0.99^2 \times 0.01}{0.99^2 \times 0.01 + 0.05^2 \times 0.99} \approx 0.80$.
+두 검사가 독립이라 likelihood가 곱해질 뿐이다.
+
+(b) $\dfrac{0.99 \times 0.01}{0.99 \times 0.01 + 0.01 \times 0.99} = 0.5$ 다.
+병자 중 양성인 사람 수와 건강한 사람 중 양성인 사람 수가 똑같아졌다.
+
+(c) 드문 병에서 posterior를 끌어내리는 주범은 **건강한 사람들의 거짓 양성**이다. 건강한 사람이 압도적으로 많기 때문이다.
+그래서 검사의 거짓 양성률을 5분의 1로 줄이면 0.167이 0.5로 크게 오른다.
+검사를 반복하는 것은 거짓 양성률을 $0.05^2$ 로 제곱해 줄이는 효과가 있어서 더 강력하다 — 단, 두 검사가 **독립**일 때만이다.
+같은 사람에게 같은 원인으로 거짓 양성이 나는 검사라면 반복해도 정보가 늘지 않는다.
+실제 병원이 확진에 원리가 다른 두 번째 검사를 쓰는 이유다.
+:::
+
+### A2. $2X$ 와 $X_1 + X_2$ 는 다르다
+
+공정한 주사위 하나의 눈을 $X$ 라 하자.
+
+(a) $\mathbb{E}[X]$ 와 $\mathrm{Var}(X)$ 를 구하라.
+(b) 주사위 하나를 던져 눈을 두 배 한 $2X$ 와, 주사위 둘을 던져 더한 $X_1 + X_2$ 의 평균과 분산을 각각 구하라.
+(c) 평균은 같은데 분산이 다른 이유를 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathbb{E}[X] = (1 + \cdots + 6)/6 = 3.5$ 이다.
+$\mathbb{E}[X^2] = (1 + 4 + 9 + 16 + 25 + 36)/6 = 91/6$ 이므로 $\mathrm{Var}(X) = 91/6 - 3.5^2 = 35/12 \approx 2.92$ 다.
+
+(b) 평균은 둘 다 7이다. 기댓값의 linearity에는 조건이 없다.
+
+- $\mathrm{Var}(2X) = 2^2\,\mathrm{Var}(X) = 35/3 \approx 11.67$
+- $\mathrm{Var}(X_1 + X_2) = \mathrm{Var}(X_1) + \mathrm{Var}(X_2) = 35/6 \approx 5.83$ (독립)
+
+(c) $2X$ 는 같은 주사위를 두 번 센 것이라, 높게 나오면 두 몫이 **함께** 높다.
+$X$ 와 $X$ 는 완벽하게 상관되어 있어서 covariance 항 $2\,\mathrm{Cov}(X, X) = 2\,\mathrm{Var}(X)$ 가 더해진다.
+반면 두 주사위는 한쪽이 높을 때 다른 쪽이 낮아 상쇄될 수 있다. 그래서 2부터 12까지 퍼진 $2X$(짝수만 나온다)보다 $X_1 + X_2$ 가 7 근처에 더 몰린다.
+
+같은 자료를 두 번 쓴 것을 독립 자료 두 개로 착각하면 불확실성을 과소평가하게 된다.
+데이터에 중복 행이 섞였을 때 신뢰구간이 지나치게 좁아지는 것이 이 실수다.
+:::
+
+### B1. 동전의 MLE와 MAP
+
+동전을 $n$ 번 던져 앞면이 $k$ 번 나왔다. 앞면 확률을 $\theta$ 라 하자.
+
+(a) log-likelihood $k\log\theta + (n-k)\log(1-\theta)$ 를 미분해 MLE $\hat\theta$ 를 구하라.
+(b) prior $\mathrm{Beta}(a, b)$ 를 쓰면 posterior는 $\mathrm{Beta}(a+k,\ b+n-k)$ 다(본문). posterior가 가장 큰 곳 $\hat\theta_{\text{MAP}}$ 을 구하라.
+(c) 3번 던져 3번 모두 앞면이면 MLE와 $\mathrm{Beta}(2, 2)$ prior의 MAP은 각각 얼마인가? 어느 쪽이 더 믿을 만한가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(b) $\log p(\theta\mid D) = (a+k-1)\log\theta + (b+n-k-1)\log(1-\theta) + \text{상수}$ 다. (a)와 같은 모양이고 지수만 다르다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 미분해서 0으로 놓는다.
+
+$$\frac{k}{\theta} - \frac{n-k}{1-\theta} = 0 \quad\Longrightarrow\quad k(1-\theta) = (n-k)\theta \quad\Longrightarrow\quad \hat\theta = \frac{k}{n}$$
+
+앞면 비율 그대로다. 2계 도함수 $-k/\theta^2 - (n-k)/(1-\theta)^2 < 0$ 이라 최대점이 맞다.
+
+(b) 힌트의 식은 (a)에서 $k$ 를 $k + a - 1$ 로, $n - k$ 를 $n - k + b - 1$ 로 바꾼 것이다. 그러므로
+
+$$\hat\theta_{\text{MAP}} = \frac{k + a - 1}{n + a + b - 2}$$
+
+prior $\mathrm{Beta}(a, b)$ 가 "앞면 $a-1$ 번, 뒷면 $b-1$ 번을 미리 본 것"이라는 본문의 해석이 식에 그대로 보인다.
+$a = b = 1$ (균등 prior)이면 MAP과 MLE가 같아진다. 미리 본 것이 없기 때문이다.
+
+(c) MLE는 $3/3 = 1$ — "이 동전은 **절대** 뒷면이 안 나온다"는 결론이다.
+MAP은 $(3 + 1)/(3 + 2) = 0.8$ 이다. prior가 앞면 한 번, 뒷면 한 번을 미리 본 것처럼 작용해 극단을 누그러뜨린다.
+
+세 번 만에 "확률 0"을 선언하는 MLE가 지나치다. 데이터가 적을 때 MLE는 쉽게 0이나 1 같은 극단으로 가고,
+이것이 [0.4](04_information_theory.qmd)에서 본 $\log 0 = -\infty$ 문제로 이어진다.
+언어모델이 한 번도 못 본 단어에 확률 0을 주지 않도록 셈에 1을 더하는 Laplace smoothing이 정확히 $\mathrm{Beta}(2,2)$ 같은 prior의 MAP이다.
+:::
+
+### B2. MSE는 평균을, MAE는 중앙값을 고른다
+
+숫자 $x_1, \dots, x_n$ 을 상수 $m$ 하나로 대표하려고 한다.
+
+(a) $\sum_i (x_i - m)^2$ 을 최소로 만드는 $m$ 이 평균 $\bar x$ 임을 보여라.
+(b) $\sum_i |x_i - m|$ 을 최소로 만드는 $m$ 이 중앙값임을 보여라.
+(c) 데이터 $\{1, 2, 3, 4, 100\}$ 에서 두 답은 각각 얼마인가? 본문의 표(가우스 → MSE, Laplace → MAE)와 연결해 설명하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(b) $|x_i - m|$ 을 $m$ 으로 미분하면 $x_i < m$ 이면 $+1$, $x_i > m$ 이면 $-1$ 이다.
+전체 기울기는 "$m$ 보다 작은 점의 개수 − $m$ 보다 큰 점의 개수"다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 미분하면 $-2\sum_i(x_i - m) = 0$, 즉 $m = \frac1n\sum_i x_i = \bar x$ 다. 2계 도함수가 $2n > 0$ 이라 최소점이다.
+
+(b) 힌트대로 기울기는 (작은 점의 개수) − (큰 점의 개수)다.
+$m$ 을 왼쪽 끝에서 오른쪽으로 옮기면 처음에는 큰 점이 많아 기울기가 음수(내려감)이고, 점을 하나씩 지날 때마다 기울기가 2씩 커진다.
+기울기가 음수에서 양수로 바뀌는 곳 — 양쪽에 점이 같은 수만큼 있는 곳 — 이 최소점이다. 그것이 중앙값이다.
+
+줄다리기에 비유하면, 각 점이 $m$ 을 자기 쪽으로 **같은 힘 1**로 당긴다. 멀리 있든 가까이 있든 힘이 같으므로 양쪽 인원수가 같은 곳에서 균형이 잡힌다.
+제곱 손실에서는 멀리 있는 점이 거리에 비례하는 힘으로 당긴다.
+
+(c) 평균은 $110/5 = 22$, 중앙값은 3이다.
+100 하나가 평균을 22까지 끌어갔지만, 중앙값은 "100이 3보다 크다"는 사실만 볼 뿐 얼마나 큰지는 보지 않는다.
+
+본문의 표로 읽으면, MSE는 잡음이 가우스라고 가정한다. 가우스는 꼬리가 얇아서 100 같은 값을 "거의 불가능한 사건"으로 보고, 그것을 설명하려고 답을 크게 옮긴다.
+Laplace는 꼬리가 두꺼워서 100 정도는 일어날 수 있는 일로 받아들인다. outlier가 많은 데이터에서 MAE가 버티는 이유다.
+:::
+
+### B3. 서로 닮은 모델을 평균 내면
+
+모델 $M$ 개의 예측 오차 $e_1, \dots, e_M$ 이 있다. 각각 분산이 $\sigma^2$ 이고, 서로 다른 두 모델의 오차 사이 상관계수가 모두 $\rho$ 다
+(즉 $\mathrm{Cov}(e_i, e_j) = \rho\sigma^2$, $i \ne j$).
+
+(a) 평균 오차 $\bar e = \frac1M\sum_i e_i$ 의 분산이 다음과 같음을 보여라.
+
+$$\mathrm{Var}(\bar e) = \rho\sigma^2 + \frac{1 - \rho}{M}\sigma^2$$
+
+(b) 모델을 무한히 많이 모으면 분산은 어디로 가는가? $\rho = 0$ 과 $\rho = 1$ 에서는?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+$\mathrm{Var}\big(\sum_i e_i\big) = \sum_i \mathrm{Var}(e_i) + \sum_{i \ne j}\mathrm{Cov}(e_i, e_j)$ 이다. $i \ne j$ 인 순서쌍은 $M(M-1)$ 개다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 힌트의 식에 값을 넣는다.
+
+$$\mathrm{Var}\Big(\sum_i e_i\Big) = M\sigma^2 + M(M-1)\rho\sigma^2$$
+
+$\bar e$ 는 이것을 $M$ 으로 나눈 것이므로 분산은 $M^2$ 으로 나뉜다.
+
+$$\mathrm{Var}(\bar e) = \frac{\sigma^2}{M} + \frac{M-1}{M}\rho\sigma^2 = \rho\sigma^2 + \frac{1-\rho}{M}\sigma^2$$
+
+(마지막 등호는 $\frac{M-1}{M}\rho = \rho - \frac{\rho}{M}$ 을 정리한 것이다.)
+
+(b) $M \to \infty$ 이면 두 번째 항만 사라지고 $\rho\sigma^2$ 이 남는다.
+
+- $\rho = 0$ (서로 독립): $\sigma^2/M \to 0$. 모델을 모을수록 오차가 끝없이 줄어든다.
+- $\rho = 1$ (모두 같은 모델): $\sigma^2$ 그대로. 같은 모델을 백 번 평균 내도 소용없다.
+
+**ensemble의 한계는 모델들이 공유하는 오차 $\rho\sigma^2$ 이다.** 본문의 심사위원 비유에서 "같은 편견"이 이 항이다.
+그래서 모델 수를 늘리는 것보다 $\rho$ 를 낮추는 것 — 서로 다르게 틀리는 모델을 만드는 것 — 이 더 중요하다.
+random forest가 나무마다 데이터뿐 아니라 쓸 특성까지 무작위로 고르는 이유가 이것이다([2.7](../02_classical_ml/07_ensembles.qmd)).
+
+```{python}
+#| label: ex-ensemble-var
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+sigma, rho, trials = 1.0, 0.3, 200_000
+
+for M in [1, 5, 10, 50]:
+    # 공유 성분 + 개별 성분으로 상관 ρ 인 오차를 만든다
+    shared = rng.normal(0, np.sqrt(rho) * sigma, size=(trials, 1))
+    own = rng.normal(0, np.sqrt(1 - rho) * sigma, size=(trials, M))
+    e_bar = (shared + own).mean(axis=1)
+    theory = rho * sigma**2 + (1 - rho) / M * sigma**2
+    print(f"M={M:>3}   시뮬레이션 {e_bar.var():.4f}   이론 {theory:.4f}")
+print(f"M→∞ 한계 ρσ² = {rho * sigma**2:.4f}")
+```
+:::
+
+### C1. 동전 posterior 읽기
+
+동전을 10번 던져 앞면이 7번 나왔다. prior는 $\mathrm{Beta}(2, 2)$ 다.
+
+(a) posterior 분포는? 그 평균, MAP, 그리고 MLE를 구하라.
+(b) posterior에서 가운데 95%를 담는 구간(credible interval)을 구하라.
+(c) "이 동전이 앞면 쪽으로 치우쳐 있다", 즉 $P(\theta > 0.5 \mid D)$ 는?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) posterior는 $\mathrm{Beta}(2 + 7,\ 2 + 3) = \mathrm{Beta}(9, 5)$ 다.
+
+- 평균 $9/14 \approx 0.643$
+- MAP $(9 - 1)/(9 + 5 - 2) = 8/12 \approx 0.667$
+- MLE $7/10 = 0.7$
+
+prior가 0.5 쪽으로 당긴 정도는 평균이 가장 크고, MAP이 그다음이며, MLE는 prior를 쓰지 않으니 전혀 당겨지지 않았다.
+
+(b) 약 $[0.386,\ 0.861]$ 이다. 손으로는 구하기 어렵고 아래 코드처럼 Beta 분포의 분위수 함수로 구한다.
+10번만 던졌으니 범위가 넓다 — 0.5도 구간 안에 들어 있다.
+
+(c) 약 $0.867$ 이다. "앞면 쪽으로 치우쳤을 확률이 87%"라고 직접 말할 수 있다는 것이 베이즈 방식의 장점이다.
+[0.3 통계](03_statistics.qmd)의 p-값은 이런 문장을 허락하지 않는다 — 그 차이를 다음 장에서 본다.
+
+```{python}
+#| label: ex-beta-posterior
+
+import numpy as np
+from scipy.stats import beta
+
+a, b = 2 + 7, 2 + 3
+lo, hi = beta.ppf([0.025, 0.975], a, b)
+print(f"posterior Beta({a}, {b})")
+print(f"평균 {a / (a + b):.3f}   MAP {(a - 1) / (a + b - 2):.3f}   MLE {7 / 10:.3f}")
+print(f"95% credible interval [{lo:.3f}, {hi:.3f}]")
+print(f"P(θ > 0.5 | D) = {1 - beta.cdf(0.5, a, b):.3f}")
+```
+:::
+
+### C2. 여론조사의 표본 크기
+
+찬반 여론조사에서 참 찬성률이 $p = 0.5$ 근처라고 하자. 응답 하나는 분산 $p(1-p) = 0.25$ 인 베르누이 변수다.
+
+(a) $n = 1{,}000$ 명이면 표본 찬성률의 표준편차는? CLT로 95% 오차 범위(±1.96 표준편차)를 구하라.
+(b) 오차 범위를 ±1%p로 줄이려면 몇 명이 필요한가?
+(c) CLT 대신 본문의 Chebyshev 부등식으로 "오차가 1%p를 넘을 확률이 5% 이하"를 보장하려면 몇 명이 필요한가? 왜 차이가 나는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 표본평균의 표준편차는 $\sqrt{0.25/1000} \approx 0.0158$ 이다. 95% 오차 범위는 $1.96 \times 0.0158 \approx 0.031$, 즉 **±3.1%p** 다.
+뉴스에서 "1,000명, 오차 범위 ±3.1%p"가 이 계산이다.
+
+(b) $1.96\sqrt{0.25/n} = 0.01$ 을 풀면 $n = (1.96/0.01)^2 \times 0.25 \approx 9{,}604$ 명이다.
+오차를 3분의 1로 줄이는 데 사람이 약 9.6배 필요하다. $1/\sqrt n$ 이다.
+
+(c) Chebyshev: $\dfrac{0.25}{n \times 0.01^2} \le 0.05$ 에서 $n \ge 50{,}000$ 명이다. CLT의 다섯 배가 넘는다.
+
+Chebyshev는 **분포의 모양을 전혀 쓰지 않는** 부등식이라, 가장 고약한 분포에서도 성립해야 한다. 그래서 보수적이다.
+CLT는 "표본평균이 정규분포에 가깝다"는 추가 정보를 쓰기 때문에 훨씬 날카로운 답을 준다.
+대신 $n$ 이 충분히 크고 분포의 꼬리가 너무 두껍지 않다는 조건이 붙는다(위의 "CLT가 통하지 않는 경우" 상자).
+
+아래 코드는 $n = 1{,}000$ 짜리 여론조사를 1만 번 시뮬레이션해서, ±3.1%p 안에 참값이 들어오는 비율이 정말 95% 근처인지 확인한다.
+
+```{python}
+#| label: ex-poll
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+p, n, polls = 0.5, 1000, 10_000
+
+estimates = rng.binomial(n, p, size=polls) / n
+margin = 1.96 * np.sqrt(p * (1 - p) / n)
+covered = np.mean(np.abs(estimates - p) <= margin)
+
+print(f"오차 범위 ±{margin * 100:.1f}%p")
+print(f"참값이 범위 안에 든 비율 = {covered:.3f}")
+print(f"±1%p 에 필요한 n:  CLT {(1.96 / 0.01) ** 2 * 0.25:,.0f}명   Chebyshev {0.25 / (0.01**2 * 0.05):,.0f}명")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 | 이어지는 곳 |
