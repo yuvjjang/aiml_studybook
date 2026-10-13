@@ -1298,6 +1298,291 @@ $m=n=256$ 일 때 SVD 저장이 원본보다 이득인 $k$ 의 상한을 먼저 
 그리고 왜 `(4,1)` 일 때만 문제가 생겼는지 규칙 1번으로 설명해 보라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 같은 벡터, 다른 자
+
+(a) $\mathbf{x} = (3, -4, 0)$ 의 L1 norm, L2 norm, L∞ norm을 구하라.
+(b) $\mathbf{u} = (1, 2, 2)$, $\mathbf{v} = (2, 1, -2)$ 의 내적을 구하라. 두 벡터 사이의 각도는?
+(c) $\mathbf{a} = (1, 2)$, $\mathbf{b} = (2, 3)$ 이다. $\mathbf{b}$ 를 10배 한 $10\mathbf{b}$ 와 $\mathbf{a}$ 의 내적과 cosine similarity는 각각 어떻게 변하는가? 임베딩끼리 "같은 뜻인가"를 잴 때 내적보다 cosine similarity를 쓰는 이유를 이 결과로 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) L1은 절댓값의 합 $3 + 4 + 0 = 7$, L2는 $\sqrt{9 + 16} = 5$, L∞는 가장 큰 절댓값 $4$ 다.
+택시 거리(7) ≥ 직선 거리(5) ≥ 가장 튀는 성분(4) 순서는 어떤 벡터에서나 성립한다.
+
+(b) $1\cdot2 + 2\cdot1 + 2\cdot(-2) = 0$ 이다. 내적이 0이면 $\cos\theta = 0$ 이므로 두 벡터는 **수직**(90°)이다.
+영화 취향으로 말하면, 공통으로 좋아하는 장르와 엇갈리는 장르가 정확히 상쇄되어 "비슷하지도 반대도 아닌" 관계다.
+
+(c) $\mathbf{a}\cdot\mathbf{b} = 2 + 6 = 8$ 이고, $\mathbf{a}\cdot 10\mathbf{b} = 80$ 으로 10배가 된다.
+cosine similarity는 길이로 나누므로 $8/(\sqrt5\sqrt{13}) \approx 0.992$ 그대로다.
+
+내적은 "방향이 얼마나 같은가"에 "얼마나 긴가"를 곱한 값이라, 길이만 다른 벡터에도 다른 점수를 준다.
+임베딩의 길이는 단어의 빈도나 문장 길이 같은, 뜻과 무관한 이유로 달라지는 경우가 많다.
+그래서 뜻이 같은지를 볼 때는 길이를 나눠 없앤 cosine similarity가 표준이다.
+:::
+
+### A2. determinant와 eigenvalue로 변환 읽기
+
+다음 세 행렬이 평면에 하는 일을 determinant와 eigenvalue로 설명하라.
+
+$$A = \begin{pmatrix} 2 & 0 \\ 0 & 0.5 \end{pmatrix}, \qquad
+R = \begin{pmatrix} 0 & -1 \\ 1 & 0 \end{pmatrix}, \qquad
+S = \begin{pmatrix} 1 & 2 \\ 2 & 4 \end{pmatrix}$$
+
+(a) $\det A$ 는? "determinant가 1이면 아무것도 바뀌지 않는다"는 말은 맞는가?
+(b) $\det R$ 은? $R$ 에는 실수 eigenvector가 없다. 왜 그런가?
+(c) $\det S$ 는? $S$ 를 곱하면 평면이 어떻게 되고, 무엇을 되찾을 수 없게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\det A = 2 \times 0.5 = 1$ 이다. 하지만 $A$ 는 가로로 2배 늘리고 세로로 절반 누른다.
+eigenvalue 2와 0.5가 각 축의 배율이고, 둘의 곱이 넓이 배율 1이다.
+**넓이는 그대로지만 모양은 바뀐다.** 정사각형이 같은 넓이의 납작한 직사각형이 된다.
+determinant는 넓이 하나만 보는 숫자라서 모양 변화는 알려주지 않는다.
+
+(b) $\det R = 0\cdot0 - (-1)\cdot1 = 1$ 이다. $R$ 은 평면을 90° 돌린다.
+넓이도 방향(앞뒤)도 그대로이지만, **모든 화살표의 방향이 바뀐다.**
+"방향은 그대로이고 길이만 변하는 화살표"가 eigenvector인데, 90° 회전에서는 그런 화살표가 하나도 없다.
+식으로 보면 $\det(R - \lambda I) = \lambda^2 + 1 = 0$ 의 해가 $\lambda = \pm i$ 로 복소수다.
+
+(c) $\det S = 4 - 4 = 0$ 이다. 두 번째 열 $(2, 4)$ 가 첫 번째 열 $(1, 2)$ 의 2배라,
+$S$ 를 곱한 결과는 언제나 직선 $y = 2x$ 위에 놓인다. 평면 전체가 **한 직선으로 납작하게 눌린다.**
+예를 들어 $(2, 0)$ 과 $(0, 1)$ 은 둘 다 $(2, 4)$ 로 간다. 결과만 보고는 원래 어느 점이었는지 알 수 없으므로 역행렬이 없다.
+"키(cm)"와 "키(inch)"를 둘 다 특성으로 넣은 데이터 행렬이 정확히 이 모양이다.
+:::
+
+### B1. eigenvalue를 손으로 구하고 거듭제곱하기
+
+$A = \begin{pmatrix} 2 & 1 \\ 1 & 2 \end{pmatrix}$ 이다.
+
+(a) $\det(A - \lambda I) = 0$ 을 풀어 eigenvalue를 구하고, 각각의 eigenvector를 구하라.
+(b) $\mathbf{x} = (1, 0)$ 을 eigenvector의 합으로 나타내고, 이것을 이용해 $A^{10}\mathbf{x}$ 를 계산하라.
+(c) $A^{k}\mathbf{x}$ 의 **방향**은 $k$ 가 커지면 어디로 향하는가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a) $(2-\lambda)^2 - 1 = 0$ 이다. (b) 두 eigenvector를 $\mathbf{v}_1, \mathbf{v}_2$ 라 하면
+$\mathbf{x} = c_1\mathbf{v}_1 + c_2\mathbf{v}_2$ 이고, $A^{10}\mathbf{x} = c_1\lambda_1^{10}\mathbf{v}_1 + c_2\lambda_2^{10}\mathbf{v}_2$ 다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $(2-\lambda)^2 = 1$ 이므로 $2 - \lambda = \pm 1$, 즉 $\lambda_1 = 3$, $\lambda_2 = 1$ 이다.
+
+- $\lambda_1 = 3$: $(A - 3I)\mathbf{v} = \begin{pmatrix} -1 & 1 \\ 1 & -1 \end{pmatrix}\mathbf{v} = 0$ 에서 $\mathbf{v}_1 = (1, 1)$.
+- $\lambda_2 = 1$: $(A - I)\mathbf{v} = \begin{pmatrix} 1 & 1 \\ 1 & 1 \end{pmatrix}\mathbf{v} = 0$ 에서 $\mathbf{v}_2 = (1, -1)$.
+
+$\mathbf{v}_1 \cdot \mathbf{v}_2 = 0$ 이다. symmetric matrix라 eigenvector가 서로 수직이다(B2에서 증명한다).
+
+(b) $(1, 0) = \tfrac12(1, 1) + \tfrac12(1, -1)$ 이므로
+
+$$A^{10}\mathbf{x} = \tfrac12\cdot 3^{10}(1, 1) + \tfrac12\cdot 1^{10}(1, -1)
+= \left(\frac{59049 + 1}{2},\ \frac{59049 - 1}{2}\right) = (29525,\ 29524)$$
+
+행렬을 열 번 곱하는 대신 숫자 3과 1을 열 번 곱했다.
+
+(c) $3^k$ 은 폭발하고 $1^k$ 은 그대로이므로, $k$ 가 커질수록 $\mathbf{v}_1$ 성분이 압도한다.
+방향은 $(1, 1)$ 쪽으로 빨려 들어간다 — $(29525, 29524)$ 는 이미 거의 $(1, 1)$ 방향이다.
+
+아무 벡터에서 시작해 같은 행렬을 계속 곱하면 **가장 큰 eigenvalue의 eigenvector 방향**만 남는다.
+이것이 가장 큰 eigenvector를 찾는 power iteration이고, 웹 페이지 순위를 매기는 PageRank가 이 방법으로 계산된다.
+RNN에서 gradient가 한 방향으로 폭발하는 것도 같은 현상이다.
+:::
+
+### B2. symmetric matrix의 eigenvector는 왜 수직인가
+
+$A = A^\top$ 이고, $A\mathbf{v}_1 = \lambda_1\mathbf{v}_1$, $A\mathbf{v}_2 = \lambda_2\mathbf{v}_2$, $\lambda_1 \ne \lambda_2$ 일 때
+$\mathbf{v}_1 \cdot \mathbf{v}_2 = 0$ 임을 보여라.
+
+이어서, 모든 $\mathbf{x} \ne 0$ 에 대해 $\mathbf{x}^\top A\mathbf{x} > 0$ 인 positive definite 행렬의 eigenvalue가 모두 양수임을 보이고,
+데이터 행렬 $X$ 로 만든 $X^\top X$ 에 대해서는 $\mathbf{x}^\top X^\top X\mathbf{x} \ge 0$ 이 항상 성립함을 보여라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+$(A\mathbf{v}_1)\cdot\mathbf{v}_2$ 를 두 가지 방법으로 계산하라.
+한 번은 $A\mathbf{v}_1 = \lambda_1\mathbf{v}_1$ 을 쓰고, 한 번은 $A$ 를 오른쪽으로 넘겨 $\mathbf{v}_1\cdot(A^\top\mathbf{v}_2)$ 로 쓴다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+**수직.** 내적에서 행렬은 transpose가 되어 반대편으로 넘어간다: $(A\mathbf{v}_1)\cdot\mathbf{v}_2 = \mathbf{v}_1\cdot(A^\top\mathbf{v}_2)$.
+$A^\top = A$ 이므로 같은 값을 두 가지로 계산할 수 있다.
+
+$$\lambda_1(\mathbf{v}_1\cdot\mathbf{v}_2) = (A\mathbf{v}_1)\cdot\mathbf{v}_2 = \mathbf{v}_1\cdot(A\mathbf{v}_2) = \lambda_2(\mathbf{v}_1\cdot\mathbf{v}_2)$$
+
+빼면 $(\lambda_1 - \lambda_2)(\mathbf{v}_1\cdot\mathbf{v}_2) = 0$ 이고, $\lambda_1 \ne \lambda_2$ 이므로 $\mathbf{v}_1\cdot\mathbf{v}_2 = 0$ 이다.
+symmetric이라는 조건은 "$A$ 를 왼쪽에 걸든 오른쪽에 걸든 같다"는 데 한 번 쓰였을 뿐이다.
+
+**positive definite이면 eigenvalue가 양수.** $A\mathbf{v} = \lambda\mathbf{v}$ 인 eigenvector를 $\mathbf{x}$ 자리에 넣는다.
+
+$$0 < \mathbf{v}^\top A\mathbf{v} = \mathbf{v}^\top(\lambda\mathbf{v}) = \lambda\|\mathbf{v}\|^2$$
+
+$\|\mathbf{v}\|^2 > 0$ 이므로 $\lambda > 0$ 이다.
+
+**$X^\top X$ 는 항상 0 이상.** 괄호를 다르게 묶으면 길이의 제곱이 된다.
+
+$$\mathbf{x}^\top X^\top X\mathbf{x} = (X\mathbf{x})^\top(X\mathbf{x}) = \|X\mathbf{x}\|^2 \ge 0$$
+
+그래서 covariance matrix의 eigenvalue는 음수가 될 수 없다(positive semidefinite).
+등호는 $X\mathbf{x} = 0$ 일 때인데, 데이터의 열들이 $\mathbf{x}$ 라는 조합으로 서로를 정확히 만들어 낼 때 — A2의 $S$ 같은 multicollinearity — 다.
+PCA가 분산을 "음수가 아닌 eigenvalue"로 읽을 수 있는 근거가 이 한 줄이다.
+:::
+
+### B3. SVD로 행렬의 norm 읽기
+
+$A = U\Sigma V^\top$ 일 때, 길이 1인 벡터 $\mathbf{x}$ 를 넣어서 나오는 $\|A\mathbf{x}\|$ 가
+가장 클 때 $\sigma_{\max}$, 가장 작을 때 $\sigma_{\min}$ 임을 보여라 ($A$ 는 $n\times n$ 정사각행렬).
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+orthogonal matrix는 길이를 바꾸지 않는다: $\|U\mathbf{y}\| = \|\mathbf{y}\|$.
+$\mathbf{y} = V^\top\mathbf{x}$ 로 두면 $\|\mathbf{y}\| = 1$ 이고, $\|A\mathbf{x}\| = \|\Sigma\mathbf{y}\|$ 가 된다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+먼저 orthogonal matrix가 길이를 보존한다는 것을 확인한다. $U^\top U = I$ 이므로
+
+$$\|U\mathbf{y}\|^2 = \mathbf{y}^\top U^\top U\mathbf{y} = \mathbf{y}^\top\mathbf{y} = \|\mathbf{y}\|^2$$
+
+회전은 길이를 바꾸지 않는다는 당연한 사실의 식이다.
+
+$\mathbf{y} = V^\top\mathbf{x}$ 로 두면 같은 이유로 $\|\mathbf{y}\| = \|\mathbf{x}\| = 1$ 이고,
+
+$$\|A\mathbf{x}\|^2 = \|U\Sigma V^\top\mathbf{x}\|^2 = \|\Sigma\mathbf{y}\|^2 = \sum_i \sigma_i^2 y_i^2$$
+
+이것은 $y_i^2$ 들을 가중치로 한 $\sigma_i^2$ 의 가중평균이다($\sum y_i^2 = 1$).
+가중평균은 가장 큰 값과 가장 작은 값 사이에 있으므로
+
+$$\sigma_{\min}^2 \le \|A\mathbf{x}\|^2 \le \sigma_{\max}^2$$
+
+이고, $\mathbf{y}$ 가 해당 축 하나에 1을 몰아줄 때(곧 $\mathbf{x}$ 가 $\mathbf{v}_{\max}$ 또는 $\mathbf{v}_{\min}$ 일 때) 등호가 된다.
+
+돌리고 → 축마다 늘리고 → 다시 돌리는 세 동작 중 길이를 바꾸는 것은 가운데 하나뿐이니, 늘리는 배율의 최대와 최소가 곧 답이다.
+본문의 condition number $\sigma_{\max}/\sigma_{\min}$ 은 "가장 많이 늘리는 방향과 가장 적게 늘리는 방향의 배율 비"이고,
+G0.0.2의 원이 타원이 될 때 긴 축과 짧은 축의 길이가 정확히 이 두 값이다.
+:::
+
+### C1. 흔들리는 저울 직접 흔들어 보기
+
+$$B = \begin{pmatrix} 1 & 1 \\ 1 & 1.0001 \end{pmatrix}, \qquad \mathbf{b} = (2,\ 2.0001)$$
+
+(a) $B\mathbf{x} = \mathbf{b}$ 의 해를 구하라.
+(b) $\mathbf{b}$ 의 두 번째 성분을 $2.0002$ 로 0.0001만 바꾸면 해는 무엇이 되는가?
+(c) $\mathbf{b}$ 의 상대 변화와 $\mathbf{x}$ 의 상대 변화를 구해 그 비를 계산하고, $\kappa(B)$ 와 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathbf{x} = (1, 1)$ 이다. 첫 식 $x_1 + x_2 = 2$ 와 둘째 식 $x_1 + 1.0001x_2 = 2.0001$ 을 빼면 $0.0001x_2 = 0.0001$.
+
+(b) 같은 방법으로 $0.0001x_2 = 0.0002$, 즉 $x_2 = 2$, $x_1 = 0$ 이다. 해가 $(1, 1)$ 에서 $(0, 2)$ 로 바뀐다.
+입력은 다섯째 자리에서 움직였는데 답은 첫째 자리부터 달라졌다.
+
+(c) 상대 변화는 각각
+
+$$\frac{\|\delta\mathbf{b}\|}{\|\mathbf{b}\|} = \frac{0.0001}{2.828} \approx 3.5\times10^{-5}, \qquad
+\frac{\|\delta\mathbf{x}\|}{\|\mathbf{x}\|} = \frac{\|(-1, 1)\|}{\|(1, 1)\|} = 1$$
+
+이라 증폭 비율이 약 $2.8\times10^4$ 이다.
+$B$ 의 singular value는 약 $2.0$ 과 $5.0\times10^{-5}$ 이므로 $\kappa(B) \approx 4.0\times10^4$ 이다.
+본문의 부등식대로 실제 증폭(2.8만 배)이 상한(4만 배)을 넘지 않고, 상당히 가깝다.
+
+두 식이 거의 같은 직선이라, 교점이 직선의 미세한 흔들림에 크게 미끄러진 것이다.
+두 특성이 거의 같은 회귀(multicollinearity)에서 계수가 요동치는 장면이 정확히 이것이다.
+
+```{python}
+#| label: ex-condition
+
+import numpy as np
+
+B = np.array([[1.0, 1.0], [1.0, 1.0001]])
+b = np.array([2.0, 2.0001])
+b2 = np.array([2.0, 2.0002])
+
+x, x2 = np.linalg.solve(B, b), np.linalg.solve(B, b2)
+rel_b = np.linalg.norm(b2 - b) / np.linalg.norm(b)
+rel_x = np.linalg.norm(x2 - x) / np.linalg.norm(x)
+
+print(f"x  = {x.round(6)}     x' = {x2.round(6)}")
+s = np.linalg.svd(B, compute_uv=False)
+print(f"singular value = {s[0]:.4f}, {s[1]:.2e}")
+print(f"실제 증폭 = {rel_x / rel_b:,.0f}배     κ(B) = {np.linalg.cond(B):,.0f}")
+```
+:::
+
+### C2. broadcasting으로 거리 행렬 만들기
+
+(a) 다음 연산 결과의 shape를 예측하라. 오류가 나면 이유를 적어라.
+
+| A | B |
+|---|---|
+| `(8, 1, 6)` | `(7, 1)` |
+| `(3,)` | `(3, 1)` |
+| `(2, 3)` | `(2,)` |
+
+(b) 점 $n$ 개가 $d$ 차원에 있는 행렬 `X` (shape `(n, d)`)가 있다. 모든 쌍의 거리 제곱 $\|\mathbf{x}_i - \mathbf{x}_j\|^2$ 을 담은 `(n, n)` 행렬을 두 가지로 만든다.
+
+- 방법 1: `((X[:, None, :] - X[None, :, :]) ** 2).sum(-1)`
+- 방법 2: $\|\mathbf{x}_i - \mathbf{x}_j\|^2 = \|\mathbf{x}_i\|^2 + \|\mathbf{x}_j\|^2 - 2\,\mathbf{x}_i\cdot\mathbf{x}_j$ 를 써서 `X @ X.T` 로 계산
+
+방법 1의 중간 배열은 shape가 무엇인가? $n = 10{,}000$, $d = 512$, float32(원소당 4바이트)일 때 두 방법의 가장 큰 중간 배열은 각각 몇 바이트인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 본문의 세 줄 규칙대로 앞에 1을 채운 뒤 축마다 맞춘다.
+
+- `(8, 1, 6)` 과 `(7, 1)` → `(1, 7, 1)` 로 채워서 축마다 `8/1`, `1/7`, `6/1` → 결과 **`(8, 7, 6)`**.
+- `(3,)` 과 `(3, 1)` → `(1, 3)` 과 `(3, 1)` → **`(3, 3)`**. 본문의 손실 버그와 같은 모양으로, 쌍별 표가 만들어진다.
+- `(2, 3)` 과 `(2,)` → `(1, 2)` 로 채우면 마지막 축이 3 vs 2라 **오류**다. 행마다 더하려 했다면 `(2, 1)` 로 바꿔야 한다.
+
+(b) `X[:, None, :]` 는 `(n, 1, d)`, `X[None, :, :]` 는 `(1, n, d)` 이므로 차는 **`(n, n, d)`** 다.
+$10^4 \times 10^4 \times 512 \times 4$ 바이트 $\approx$ **205 GB** 로, 보통 컴퓨터의 메모리에 들어가지 않는다.
+
+방법 2의 가장 큰 배열은 `X @ X.T` 의 `(n, n)` 하나로, $10^8 \times 4$ 바이트 $=$ **400 MB** 다.
+$d$ 축을 행렬 곱셈 안에서 바로 합쳐 버려 `(n, n, d)` 를 만들 일이 없다. 512배 차이다.
+
+방법 2의 식은 $\|\mathbf{a} - \mathbf{b}\|^2 = (\mathbf{a}-\mathbf{b})\cdot(\mathbf{a}-\mathbf{b})$ 를 전개한 것이다.
+대신 거의 같은 두 점에서는 큰 수끼리 빼느라 자릿수가 날아갈 수 있다([0.5 cancellation](05_numerical_computing.qmd)).
+그래서 아주 작은 음수가 나오면 0으로 잘라 쓴다.
+
+```{python}
+#| label: ex-pairwise
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(300, 16))
+
+D1 = ((X[:, None, :] - X[None, :, :]) ** 2).sum(-1)
+sq = (X ** 2).sum(1)
+D2 = np.maximum(sq[:, None] + sq[None, :] - 2 * X @ X.T, 0)
+
+print(f"두 방법의 최대 차이 = {np.abs(D1 - D2).max():.1e}")
+print(f"방법 1 중간 배열 {X[:, None, :].shape} - {X[None, :, :].shape} → {(X[:, None, :] - X[None, :, :]).shape}")
+```
+:::
+
 ## 요약
 
 | 개념 | 수식 | 기하학적 의미 | 이 책에서 다시 나오는 곳 |
