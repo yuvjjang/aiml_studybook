@@ -1282,6 +1282,306 @@ $f(x)=e^x$ 를 $x=0$ 에서 1차·2차로 근사하고, 오차가 1%를 넘는 $
 Lagrange 나머지항이 예측한 값과 비교해 보라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 그래픽과 코드를 만지며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 어느 쪽이 가장 가파른가
+
+$f(x, y) = x^2 + 3y^2$ 이고, 지금 점 $(1, 1)$ 에 서 있다.
+
+(a) 이 점에서 gradient $\nabla f$ 를 구하라.
+(b) 동쪽 $\mathbf{u} = (1, 0)$ 과 북동쪽 $\mathbf{u} = (1, 1)/\sqrt2$ 으로 갈 때의 기울기(directional derivative)를 각각 구하라.
+(c) 기울기가 가장 큰 방향과 그때의 기울기는? 기울기가 0인 방향은?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\nabla f = (2x, 6y) = (2, 6)$ 이다.
+
+(b) directional derivative는 gradient와 방향의 내적이다.
+동쪽은 $(2, 6)\cdot(1, 0) = 2$, 북동쪽은 $(2 + 6)/\sqrt2 \approx 5.66$ 이다.
+
+(c) 가장 가파른 방향은 gradient 자신의 방향 $(2, 6)/\sqrt{40}$ 이고, 그 기울기는 $\|\nabla f\| = \sqrt{40} \approx 6.32$ 다.
+(b)의 두 값이 모두 이보다 작다는 것을 확인하라. $\cos\theta \le 1$ 이기 때문이다.
+
+기울기가 0인 방향은 gradient에 수직인 $(-6, 2)/\sqrt{40}$ (또는 그 반대)이다.
+이 방향이 지나는 점의 **등고선**을 따라가는 방향이다 — 등고선 위에서는 높이가 변하지 않으니 기울기가 0이다.
+
+$y$ 쪽 계수 3 때문에 gradient가 $y$ 축 쪽으로 크게 기운다.
+가장 가파른 방향이 원점(골짜기 바닥)을 똑바로 가리키지 않는다는 점에 주목하자 — 협곡에서 gradient descent가 지그재그하는 이유가 여기서 시작된다.
+:::
+
+### A2. Hessian으로 critical point 판정하기
+
+다음 함수는 모두 원점에서 gradient가 0이다. 원점이 최소점·최대점·saddle point 중 무엇인지 Hessian으로 판정하라.
+
+$$f_1 = x^2 + 2y^2, \qquad f_2 = x^2 - y^2, \qquad f_3 = x^2 + y^4, \qquad f_4 = x^2 - y^4$$
+
+$f_3$ 과 $f_4$ 에서 무슨 일이 생기는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+- $f_1$: $H = \mathrm{diag}(2, 4)$. eigenvalue가 모두 양수 → **최소점**. 어느 방향으로도 위로 휜 그릇이다.
+- $f_2$: $H = \mathrm{diag}(2, -2)$. 부호가 섞임 → **saddle point**. $x$ 방향으로는 위로, $y$ 방향으로는 아래로 휜 말안장이다.
+- $f_3$, $f_4$: 둘 다 원점에서 $H = \mathrm{diag}(2, 0)$ 이다. $y^4$ 의 2계 도함수 $12y^2$ 이 원점에서 0이기 때문이다.
+
+$f_3$ 은 실제로 최소점이고($y^4 \ge 0$), $f_4$ 는 saddle point다($y$ 축을 따라 $-y^4 < 0$).
+**Hessian이 같은데 답이 다르다.** eigenvalue에 0이 있으면 2차 근사가 그 방향의 모양을 알려주지 못하고,
+3차·4차 항이 결정한다. Hessian 판정은 eigenvalue가 전부 0이 아닐 때만 쓸 수 있다.
+
+딥러닝의 손실 지형에는 eigenvalue가 0에 가까운 납작한 방향이 아주 많다.
+"Hessian으로 판정한다"는 말이 실무에서 생각보다 약한 이유다.
+:::
+
+### B1. learning rate 상한 $2/\lambda_{\max}$ 유도
+
+본문은 이차함수에서 gradient descent가 수렴할 조건이 $\eta < 2/\lambda_{\max}$ 라고만 말했다. 유도해 보자.
+
+(a) 1차원 $f(\theta) = \tfrac12\lambda\theta^2$ ($\lambda > 0$) 에서 gradient descent 한 걸음이 $\theta_{t+1} = (1 - \eta\lambda)\theta_t$ 임을 보이고, 수렴 조건을 구하라.
+(b) $f(\boldsymbol\theta) = \tfrac12\boldsymbol\theta^\top H\boldsymbol\theta$ ($H$ 는 symmetric, eigenvalue 모두 양수)로 넓혀라.
+(c) 모든 방향이 같은 속도로 줄어드는 가장 좋은 $\eta$ 는 무엇이고, 그때 한 걸음마다 오차가 몇 배가 되는가? condition number $\kappa = \lambda_{\max}/\lambda_{\min}$ 로 답하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(b) $H = Q\Lambda Q^\top$ 로 분해하고 $\mathbf{z} = Q^\top\boldsymbol\theta$ 라는 새 좌표로 옮기면, 각 좌표가 서로 섞이지 않는 1차원 문제 $n$ 개가 된다.
+(c) 가장 느린 방향의 배율 $|1 - \eta\lambda_{\min}|$ 과 가장 위험한 방향의 배율 $|1 - \eta\lambda_{\max}|$ 이 같아지는 $\eta$ 를 찾는다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $f'(\theta) = \lambda\theta$ 이므로 $\theta_{t+1} = \theta_t - \eta\lambda\theta_t = (1 - \eta\lambda)\theta_t$ 다.
+$t$ 걸음 뒤에는 $\theta_t = (1 - \eta\lambda)^t\theta_0$ 이므로 0으로 가려면 $|1 - \eta\lambda| < 1$, 즉
+
+$$0 < \eta < \frac{2}{\lambda}$$
+
+- $\eta < 1/\lambda$: 배율이 0과 1 사이 — 한쪽에서 천천히 다가간다.
+- $\eta = 1/\lambda$: 배율 0 — 한 걸음에 바닥에 도착한다.
+- $1/\lambda < \eta < 2/\lambda$: 배율이 −1과 0 사이 — 바닥을 넘어갔다 돌아오기를 반복하며 줄어든다.
+- $\eta > 2/\lambda$: 넘어갈 때마다 더 멀리 튄다 — 발산한다.
+
+G0.1.2의 세 가지 운명이 이 네 줄이다.
+
+(b) $\nabla f = H\boldsymbol\theta$ 이므로 $\boldsymbol\theta_{t+1} = (I - \eta H)\boldsymbol\theta_t$ 다. 양쪽에 $Q^\top$ 을 곱하면
+
+$$\mathbf{z}_{t+1} = (I - \eta\Lambda)\mathbf{z}_t \quad\Longleftrightarrow\quad z_{i,t+1} = (1 - \eta\lambda_i)\,z_{i,t}$$
+
+eigenvector 방향마다 (a)의 1차원 문제가 따로 돌아간다. 모두 수렴하려면 모든 $i$ 에서 $\eta < 2/\lambda_i$ 이어야 하고,
+가장 빡빡한 것은 $\lambda$ 가 가장 큰 방향이므로 $\eta < 2/\lambda_{\max}$ 다.
+**가장 가파른 방향이 learning rate의 상한을 정한다.**
+
+(c) 그런데 상한 근처의 $\eta$ 에서 가장 완만한 방향은 $1 - \eta\lambda_{\min} \approx 1 - 2/\kappa$ 배씩, 아주 느리게 줄어든다.
+두 극단의 배율 크기를 같게 맞추면
+
+$$1 - \eta\lambda_{\min} = \eta\lambda_{\max} - 1 \quad\Longrightarrow\quad \eta^\star = \frac{2}{\lambda_{\max} + \lambda_{\min}}$$
+
+이고, 그때의 배율은
+
+$$1 - \frac{2\lambda_{\min}}{\lambda_{\max} + \lambda_{\min}} = \frac{\kappa - 1}{\kappa + 1}$$
+
+이다. $\kappa = 1$ (둥근 그릇)이면 0으로 한 걸음에 끝나고, $\kappa$ 가 크면 1에 가까워져 수렴이 느려진다.
+$\kappa = 20$ 이면 $19/21 \approx 0.905$ 로, 오차를 $e$ 분의 1로 줄이는 데 약 10걸음이 든다.
+대략 $\kappa/2$ 걸음이다. **스텝 수가 condition number에 비례한다**는 본문의 말이 이것이다. C1에서 숫자로 확인한다.
+:::
+
+### B2. 작은 신경망의 역전파를 손으로
+
+입력 $x$ 하나, 은닉 유닛 하나, 출력 하나짜리 신경망이다.
+
+$$h = \sigma(w_1 x), \qquad \hat y = w_2 h, \qquad L = \tfrac12(\hat y - y)^2$$
+
+$\sigma(z) = 1/(1 + e^{-z})$ 는 sigmoid다.
+
+(a) chain rule로 $\partial L/\partial w_2$ 와 $\partial L/\partial w_1$ 을 식으로 구하라.
+(b) $x = 1$, $w_1 = 0.5$, $w_2 = 2$, $y = 1$ 일 때 두 값을 숫자로 구하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+뒤에서부터 간다. 먼저 $\partial L/\partial\hat y = \hat y - y$ 를 구해 두고, 거기에 각 단계의 기울기를 곱해 나간다.
+$\sigma'(z) = \sigma(z)(1 - \sigma(z))$ 다([0.4 연습 문제 B1](04_information_theory.qmd)에서 유도했다).
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 출력에서의 오차를 $r = \hat y - y = \partial L/\partial\hat y$ 라 두자.
+
+$$\frac{\partial L}{\partial w_2} = \frac{\partial L}{\partial\hat y}\cdot\frac{\partial\hat y}{\partial w_2} = r\,h$$
+
+$$\frac{\partial L}{\partial w_1} = \frac{\partial L}{\partial\hat y}\cdot\frac{\partial\hat y}{\partial h}\cdot\frac{\partial h}{\partial w_1}
+= r\cdot w_2\cdot h(1 - h)\,x$$
+
+두 식에 $r$ 이 공통으로 들어 있다. 역전파는 이 공통 부분을 한 번만 계산해 뒤에서 앞으로 넘겨주는 방식이다.
+$w_1$ 의 gradient에는 층을 하나 더 지나며 $w_2$ 와 $h(1-h)$ 가 곱해졌다 — 본문의 "곱의 사슬"이 한 칸 늘어난 것이다.
+
+(b) $h = \sigma(0.5) \approx 0.6225$, $\hat y = 2 \times 0.6225 = 1.2449$, $r = 0.2449$ 이다.
+
+$$\frac{\partial L}{\partial w_2} = 0.2449 \times 0.6225 \approx 0.1525, \qquad
+\frac{\partial L}{\partial w_1} = 0.2449 \times 2 \times 0.2350 \times 1 \approx 0.1151$$
+
+아래 코드는 $w$ 를 양쪽으로 아주 조금 움직여 기울기를 재는 수치미분으로 같은 값을 확인한다.
+
+```{python}
+#| label: ex-backprop
+
+import numpy as np
+
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+x, y = 1.0, 1.0
+
+def loss(w1, w2):
+    return 0.5 * (w2 * sigmoid(w1 * x) - y) ** 2
+
+w1, w2 = 0.5, 2.0
+h = sigmoid(w1 * x); r = w2 * h - y
+grad_w2 = r * h
+grad_w1 = r * w2 * h * (1 - h) * x
+
+eps = 1e-6
+num_w2 = (loss(w1, w2 + eps) - loss(w1, w2 - eps)) / (2 * eps)
+num_w1 = (loss(w1 + eps, w2) - loss(w1 - eps, w2)) / (2 * eps)
+print(f"∂L/∂w2  손으로 {grad_w2:.6f}   수치미분 {num_w2:.6f}")
+print(f"∂L/∂w1  손으로 {grad_w1:.6f}   수치미분 {num_w1:.6f}")
+```
+:::
+
+### B3. convex 함수에서 local minimum은 global minimum
+
+(a) convex의 정의 $f(\lambda\mathbf{a} + (1-\lambda)\mathbf{b}) \le \lambda f(\mathbf{a}) + (1-\lambda)f(\mathbf{b})$ 만 써서,
+convex 함수의 local minimum은 global minimum임을 보여라.
+(b) 선형회귀의 손실 $L(\boldsymbol\theta) = \tfrac12\|X\boldsymbol\theta - \mathbf{y}\|^2$ 이 convex임을 Hessian으로 보여라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a) 귀류법을 쓴다. local minimum $\mathbf{a}$ 보다 낮은 점 $\mathbf{b}$ 가 어딘가 있다고 가정하고, $\mathbf{a}$ 에서 $\mathbf{b}$ 쪽으로 아주 조금만 움직인 점을 본다.
+(b) [0.0 연습 문제 B2](00_linear_algebra.qmd)의 마지막 결과를 쓴다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathbf{a}$ 가 local minimum인데 $f(\mathbf{b}) < f(\mathbf{a})$ 인 점 $\mathbf{b}$ 가 있다고 하자.
+선분 위의 점 $\mathbf{a} + t(\mathbf{b} - \mathbf{a}) = (1-t)\mathbf{a} + t\mathbf{b}$ ($0 < t \le 1$) 에서 convex의 정의를 쓰면
+
+$$f\big((1-t)\mathbf{a} + t\mathbf{b}\big) \le (1-t)f(\mathbf{a}) + t f(\mathbf{b}) < (1-t)f(\mathbf{a}) + t f(\mathbf{a}) = f(\mathbf{a})$$
+
+$t$ 를 아무리 작게 잡아도 성립하므로, $\mathbf{a}$ 바로 옆에 $\mathbf{a}$ 보다 낮은 점이 항상 있다.
+"주변에서 가장 낮다"는 local minimum의 정의와 모순이다. 그러므로 $\mathbf{a}$ 보다 낮은 점은 어디에도 없다.
+
+그릇으로 말하면, 바닥보다 낮은 곳이 멀리 있다면 그쪽으로 가는 경사가 바닥 바로 옆에서부터 시작되어야 한다는 뜻이다.
+그릇 모양에는 "넘어야 할 언덕"이 없다.
+
+(b) $L = \tfrac12(X\boldsymbol\theta - \mathbf{y})^\top(X\boldsymbol\theta - \mathbf{y})$ 를 미분하면
+
+$$\nabla L = X^\top(X\boldsymbol\theta - \mathbf{y}), \qquad H = X^\top X$$
+
+$H$ 가 $\boldsymbol\theta$ 와 무관한 상수 행렬이고, 0.0에서 보인 대로 $\mathbf{v}^\top X^\top X\mathbf{v} = \|X\mathbf{v}\|^2 \ge 0$ 이다.
+Hessian이 어디서나 positive semidefinite이므로 $L$ 은 convex다.
+그래서 선형회귀는 어디서 출발한 gradient descent든 같은 답(normal equation의 해)에 도착한다.
+:::
+
+### C1. 협곡에서 gradient descent와 Newton's method
+
+$f(x, y) = \tfrac12(x^2 + 20y^2)$ 를 $(10, 1)$ 에서 출발해 최소화한다. $\|\boldsymbol\theta\| < 10^{-6}$ 이 될 때까지 걸음 수를 센다.
+
+(a) $\eta = 1/\lambda_{\max} = 1/20$ 일 때와 B1의 최적값 $\eta^\star = 2/21$ 일 때 각각 몇 걸음이 필요한지 예측하고 확인하라.
+(b) Newton's method $\boldsymbol\theta \leftarrow \boldsymbol\theta - H^{-1}\nabla f$ 는 몇 걸음이 필요한가? 왜 그런가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$H = \mathrm{diag}(1, 20)$ 이라 $\kappa = 20$ 이다.
+
+(a) $\eta = 1/20$ 이면 $y$ 방향 배율은 $1 - 20/20 = 0$ 으로 한 걸음에 끝나지만, $x$ 방향 배율은 $1 - 1/20 = 0.95$ 다.
+$10 \times 0.95^t < 10^{-6}$ 을 풀면 $t > \ln(10^{-7})/\ln 0.95 \approx 314.2$, 즉 315 걸음이다.
+
+$\eta^\star = 2/21$ 이면 두 방향 배율이 모두 $19/21 \approx 0.905$ 다.
+$\|\boldsymbol\theta_0\| \approx 10.05$ 이므로 $t > \ln(10^{-6}/10.05)/\ln(19/21) \approx 161.1$, 즉 162 걸음이다.
+가파른 방향을 일부러 덜 정확하게 다루는 대신 완만한 방향을 빨리 줄여서, 전체 걸음이 절반으로 준다.
+
+(b) **한 걸음**이다. $\nabla f = H\boldsymbol\theta$ 이므로 $\boldsymbol\theta - H^{-1}H\boldsymbol\theta = 0$ 이다.
+Newton's method는 2차 Taylor 근사의 최소점으로 바로 뛰는데, 이차함수는 2차 근사가 함수 자신이라 근사가 곧 정답이다.
+$H^{-1}$ 이 방향마다 곡률로 나눠 주어 협곡을 둥근 그릇으로 펴 놓는 셈이다.
+그 대가는 $H$ 를 만들고 푸는 비용이다 — 파라미터가 $n$ 개면 $n\times n$ 행렬이 필요해서, 딥러닝이 2차 방법을 쓰지 않는다.
+
+```{python}
+#| label: ex-gd-newton
+
+import numpy as np
+
+H = np.diag([1.0, 20.0])
+theta0 = np.array([10.0, 1.0])
+
+def run(step):
+    th, n = theta0.copy(), 0
+    while np.linalg.norm(th) >= 1e-6:
+        th = step(th); n += 1
+    return n
+
+print(f"GD  η = 1/20  : {run(lambda th: th - (1/20) * H @ th):>4} 걸음")
+print(f"GD  η = 2/21  : {run(lambda th: th - (2/21) * H @ th):>4} 걸음")
+print(f"Newton        : {run(lambda th: th - np.linalg.solve(H, H @ th)):>4} 걸음")
+```
+:::
+
+### C2. sigmoid를 쌓으면 gradient가 얼마나 줄어드는가
+
+(a) $\sigma'(z) = \sigma(z)(1 - \sigma(z))$ 의 최댓값은 얼마이고, 어디서 나오는가?
+(b) 가중치가 모두 1인 sigmoid 층을 10개 쌓은 $f(x) = \sigma(\sigma(\cdots\sigma(x)))$ 에서 $f'(x)$ 는 최대 얼마인가?
+(c) 각 층을 residual 형태 $h \leftarrow h + \sigma(h)$ 로 바꾸면 한 층의 미분은 어느 범위에 있는가? 10층을 지난 gradient는 어떻게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\sigma(1 - \sigma)$ 는 $\sigma$ 에 대한 이차식이고 $\sigma = 1/2$ 에서 최대 $1/4$ 이다. $\sigma(z) = 1/2$ 은 $z = 0$ 일 때다.
+즉 sigmoid의 기울기는 **어디서도 0.25를 넘지 못한다.**
+
+(b) chain rule로 층마다 기울기가 곱해지므로 $f'(x) \le 0.25^{10} \approx 9.5\times10^{-7}$ 이다.
+10층만 지나도 gradient가 백만 분의 1로 줄어든다. 첫 층은 사실상 학습되지 않는다.
+실제로는 두 번째 층부터 입력이 $\sigma$ 의 출력(0~1 사이 양수)이라 $z = 0$ 에 있을 수 없어서, 이 상한보다도 작다.
+
+(c) 한 층의 미분은 $1 + \sigma'(h)$ 이고, $0 < \sigma' \le 0.25$ 이므로 $1$ 과 $1.25$ 사이다.
+곱해지는 항이 전부 1 이상이라 10층을 지나도 gradient는 줄지 않는다.
+본문의 "곱해지는 항에 1이 더해져 있어서 gradient가 완전히 죽지 않는다"가 이것이다.
+(반대로 커질 수는 있다. 실제 residual network가 normalization을 함께 쓰는 이유다.)
+
+```{python}
+#| label: ex-sigmoid-chain
+
+import numpy as np
+
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+dsig = lambda z: sigmoid(z) * (1 - sigmoid(z))
+
+def chain_grad(x, layers, residual):
+    """층을 지나며 국소 기울기를 곱한다 (chain rule)."""
+    h, g = x, 1.0
+    for _ in range(layers):
+        if residual:
+            g *= 1 + dsig(h); h = h + sigmoid(h)
+        else:
+            g *= dsig(h); h = sigmoid(h)
+    return g
+
+print(f"σ' 의 최댓값          = {dsig(0.0):.4f}")
+print(f"plain    10층, x=0    → f'(x) = {chain_grad(0.0, 10, False):.2e}   (상한 0.25¹⁰ = {0.25**10:.2e})")
+print(f"residual 10층, x=0    → f'(x) = {chain_grad(0.0, 10, True):.3f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 수식 | 핵심 | 이어지는 곳 |
