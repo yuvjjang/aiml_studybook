@@ -577,6 +577,225 @@ $\|\hat\beta\| \lesssim \|y\|/\sigma_{\min}$ 이 예측하는 대로인가?
 왜 맞지 않는지 설명하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. learning curve 진단
+
+세 팀이 보고한 오차율이다. 사람 전문가의 오차율(noise 하한의 어림)도 함께 적었다. 각 팀의 문제를 진단하고 다음 할 일을 하나씩 정하라.
+
+| 팀 | 훈련 오차 | 검증 오차 | 사람 전문가 |
+|---|---|---|---|
+| A | 30% | 32% | 5% |
+| B | 2% | 25% | 5% |
+| C | 8% | 9% | 8% |
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+- **A — high bias.** 훈련과 검증이 붙어 있고 둘 다 사람보다 훨씬 나쁘다. 모델이 문제를 담을 능력이 없다. 더 큰 모델, 더 좋은 특성, regularization 완화가 처방이다. **데이터를 더 모으는 것은 소용없다.**
+- **B — high variance.** 훈련 오차가 사람보다도 낮다는 것은 noise까지 외웠다는 뜻이다. 데이터 추가, regularization 강화, 모델 단순화가 처방이다.
+- **C — noise 하한에 도달.** 훈련·검증 모두 사람 수준이다. 모델을 바꿔서 더 나아지기는 어렵다. 더 가려면 label 품질을 높이거나 사람도 못 보던 새 정보(특성)를 넣어야 한다.
+
+사람 전문가 오차가 없었다면 A와 C를 구별하기 어렵다. 본문 체크리스트의 1번 "noise 하한을 먼저 가늠한다"가 필요한 이유다.
+:::
+
+### A2. 이 손잡이는 bias와 variance를 어떻게 움직이는가
+
+다음 조작이 bias와 variance를 각각 늘리는지(↑) 줄이는지(↓) 적어라.
+
+1. kNN에서 $k$ 를 키운다
+2. decision tree의 최대 깊이를 키운다
+3. Ridge의 $\lambda$ 를 키운다
+4. 같은 모델에 훈련 데이터를 두 배로 늘린다
+5. 모델 여러 개를 서로 다른 bootstrap 표본으로 학습해 평균 낸다(bagging)
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+| 조작 | bias | variance | 이유 |
+|---|---|---|---|
+| kNN $k$ ↑ | ↑ | ↓ | 더 먼 이웃까지 평균 내어 매끄러워진다(B2에서 정량화) |
+| tree 깊이 ↑ | ↓ | ↑ | 더 잘게 나눠 훈련 점에 더 잘 맞춘다 |
+| Ridge $\lambda$ ↑ | ↑ | ↓ | 계수를 0 쪽으로 누른다(B1의 shrinkage) |
+| 데이터 2배 | 거의 그대로 | ↓ | 모델의 표현 능력은 그대로, 추정만 안정된다 |
+| bagging | 거의 그대로 | ↓ | 평균을 내면 흔들림이 준다([0.2 연습 문제 B3](../00_foundations/02_probability.qmd)) |
+
+데이터 추가와 bagging은 bias를 거의 건드리지 않는다. A1의 A팀처럼 bias가 문제일 때 이 둘이 효과가 없는 이유다.
+:::
+
+### B1. 일부러 bias를 넣으면 더 좋아질 수 있다
+
+평균 $\mu$, 분산 $\sigma^2$ 인 분포에서 $n$ 개를 뽑아 $\mu$ 를 추정한다. 표본평균 $\bar X$ 대신 $c\bar X$ ($0 \le c \le 1$)를 쓴다.
+
+(a) $c\bar X$ 의 bias, variance, 그리고 MSE $= \mathbb{E}[(c\bar X - \mu)^2]$ 를 구하라.
+(b) MSE를 최소로 하는 $c^\star$ 를 구하라.
+(c) $\mu = 1$, $\sigma = 2$, $n = 4$ 이면 $c^\star$ 와 그때의 MSE는? 표본평균($c = 1$)과 비교하라. 이 방법을 실제로 쓸 때의 걸림돌은?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathbb{E}[c\bar X] = c\mu$ 이므로 bias는 $(c - 1)\mu$, variance는 $c^2\sigma^2/n$ 이다. 본문의 분해(noise 항은 없다)대로
+
+$$\text{MSE}(c) = (1 - c)^2\mu^2 + c^2\frac{\sigma^2}{n}$$
+
+(b) $c$ 로 미분해 0으로 놓으면 $-2(1 - c)\mu^2 + 2c\,\sigma^2/n = 0$, 즉
+
+$$c^\star = \frac{\mu^2}{\mu^2 + \sigma^2/n}$$
+
+신호($\mu^2$)에 비해 잡음($\sigma^2/n$)이 클수록 더 많이 줄인다.
+
+(c) $\sigma^2/n = 1$ 이므로 $c^\star = 1/(1 + 1) = 0.5$ 다. MSE는 $0.25 + 0.25 = 0.5$ 로, 표본평균의 $\sigma^2/n = 1$ 의 **절반**이다.
+bias를 0.5만큼 일부러 넣은 대가로 variance를 4분의 1로 줄였다.
+
+걸림돌은 $c^\star$ 가 **모르는 $\mu$ 에 의존**한다는 것이다. 그래서 실제로는 $c$ 를 cross-validation으로 고르거나(Ridge의 $\lambda$ 를 고르는 것과 같다),
+여러 평균을 동시에 추정할 때 데이터에서 $c$ 를 추정하는 James–Stein 같은 방법을 쓴다. [2.3 regularization](03_regularization.qmd)의 출발점이 이 계산이다.
+:::
+
+### B2. kNN의 최적 $k$ 는 $n^{4/5}$ 에 비례한다
+
+1차원에서 점 $n$ 개가 $[0, 1]$ 에 고르게 놓여 있고 $y_i = f(x_i) + \varepsilon_i$, $\mathrm{Var}(\varepsilon) = \sigma^2$ 이다.
+kNN은 $x_0$ 에서 가장 가까운 $k$ 개의 $y$ 를 평균 낸다. 그 $k$ 개는 대략 $[x_0 - h, x_0 + h]$ 에 고르게 퍼져 있고 $h = k/(2n)$ 이다.
+
+(a) 예측의 variance가 $\sigma^2/k$ 임을 보여라.
+(b) $f(x_0 + d) \approx f(x_0) + f'(x_0)d + \tfrac12 f''(x_0)d^2$ 로 근사해 bias $\approx f''(x_0)\,k^2/(24n^2)$ 임을 보여라.
+(c) MSE를 최소로 하는 $k$ 가 $n^{4/5}$ 에 비례함을 보여라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(b) 이웃들의 $d$ 는 $[-h, h]$ 에 고르게 퍼져 있으므로 $d$ 의 평균은 0, $d^2$ 의 평균은 $h^2/3$ 이다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 서로 독립인 잡음 $k$ 개의 평균이므로 분산은 $\sigma^2/k$ 다. 이웃의 $f$ 값은 정해져 있어 흔들리지 않는다.
+
+(b) 예측의 기댓값은 이웃들의 $f$ 값 평균이다. Taylor 근사를 넣고 평균 내면 1차 항은 $d$ 의 평균이 0이라 사라지고
+
+$$\text{bias} \approx \frac12 f''(x_0)\cdot\frac{h^2}{3} = \frac{f''(x_0)}{6}\cdot\frac{k^2}{4n^2} = \frac{f''(x_0)\,k^2}{24n^2}$$
+
+함수가 휜 정도($f''$)와 이웃 범위의 제곱($k^2$)에 비례한다. 직선이면($f'' = 0$) 아무리 넓게 평균 내도 bias가 없다.
+
+(c) $\text{MSE}(k) \approx \dfrac{f''^2 k^4}{576 n^4} + \dfrac{\sigma^2}{k}$ 를 $k$ 로 미분해 0으로 놓으면
+
+$$\frac{4 f''^2 k^3}{576 n^4} = \frac{\sigma^2}{k^2} \quad\Longrightarrow\quad k^\star = \left(\frac{144\,\sigma^2 n^4}{f''^2}\right)^{1/5} \propto n^{4/5}$$
+
+데이터가 늘면 $k$ 도 늘려야 하지만 데이터보다 느리게 늘린다. 이웃의 **비율** $k/n \propto n^{-1/5}$ 은 줄어든다 — 데이터가 많을수록 더 좁은 동네만 보면서도 충분히 많은 이웃을 모을 수 있기 때문이다.
+그때의 MSE는 $n^{-4/5}$ 로 줄어서, 모수 모델의 $1/n$ 보다 느리다. 함수 모양을 가정하지 않는 대가다.
+:::
+
+### B3. 선형회귀의 훈련 오차는 얼마나 낙관적인가
+
+$n$ 개의 점, $p$ 개의 특성으로 선형회귀를 한다. 입력 $X$ 는 고정이고 $y = X\beta + \varepsilon$, $\varepsilon$ 은 독립이며 분산 $\sigma^2$ 이다.
+예측은 $\hat y = Hy$, $H = X(X^\top X)^{-1}X^\top$ 이다.
+
+(a) $H$ 의 trace(대각합)가 $p$ 임을 보여라.
+(b) 훈련 오차의 기댓값 $\frac1n\mathbb{E}\|y - \hat y\|^2$ 이 $\sigma^2(1 - p/n)$ 임을 보여라.
+(c) 같은 $X$ 에서 새 잡음으로 다시 뽑은 $y'$ 에 대한 오차 $\frac1n\mathbb{E}\|y' - \hat y\|^2$ 은 $\sigma^2(1 + p/n)$ 이다. 두 값의 차이는 무엇을 뜻하는가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a) $\mathrm{tr}(AB) = \mathrm{tr}(BA)$ 를 쓴다. (b) $y - \hat y = (I - H)\varepsilon$ 이고($HX = X$ 이므로 신호는 지워진다), $I - H$ 는 symmetric이면서 $(I - H)^2 = I - H$ 다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathrm{tr}\big(X(X^\top X)^{-1}X^\top\big) = \mathrm{tr}\big((X^\top X)^{-1}X^\top X\big) = \mathrm{tr}(I_p) = p$.
+
+(b) 힌트대로 잔차는 $(I - H)\varepsilon$ 이므로
+
+$$\mathbb{E}\|(I - H)\varepsilon\|^2 = \mathbb{E}\big[\varepsilon^\top(I - H)\varepsilon\big] = \sigma^2\,\mathrm{tr}(I - H) = \sigma^2(n - p)$$
+
+(가운데 등호는 $\mathbb{E}[\varepsilon^\top A\varepsilon] = \sigma^2\,\mathrm{tr}(A)$ 를 썼다.) $n$ 으로 나누면 $\sigma^2(1 - p/n)$ 이다.
+
+(c) 훈련 오차는 진짜 잡음 수준 $\sigma^2$ 보다 $p/n$ 비율만큼 **낮고**, 새 잡음에 대한 오차는 그만큼 **높다.** 둘의 차이 $2\sigma^2 p/n$ 이 훈련 오차의 낙관이다.
+특성 $p$ 개가 잡음 중 $p$ 차원 분량을 "맞춰 버렸기" 때문이다. $p = n$ 이면 훈련 오차가 0이 된다 — 본문 double descent의 $p = n$ 지점이다.
+
+이 차이를 훈련 오차에 더해 주면 검증 데이터 없이도 generalization 오차를 어림할 수 있다. 이것이 Mallows의 $C_p$ 와 AIC가 "훈련 오차 + 복잡도 벌점" 모양인 이유이고, $\mathrm{tr}(H)$ 를 모델의 **자유도**라 부르는 근거다.
+:::
+
+### C1. 훈련 오차의 낙관을 시뮬레이션으로
+
+B3를 $n = 50$, $p = 10$, $\sigma = 1$ 로 확인하라. 같은 $X$ 에서 잡음만 2,000번 새로 뽑아 훈련 오차와 새 잡음에 대한 오차의 평균을 구한다.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+이론값은 훈련 $1 - 10/50 = 0.8$, 새 잡음 $1 + 10/50 = 1.2$ 이고, 시뮬레이션도 약 0.80과 1.20이 나온다.
+참 잡음 수준(1.0)을 사이에 두고 양쪽으로 똑같이 벌어진다.
+
+```{python}
+#| label: ex-optimism-ols
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, p, sigma, reps = 50, 10, 1.0, 2000
+X = rng.normal(size=(n, p))
+beta = rng.normal(size=p)
+
+train_err, new_err = [], []
+for _ in range(reps):
+    y = X @ beta + rng.normal(0, sigma, n)
+    y_hat = X @ np.linalg.lstsq(X, y, rcond=None)[0]
+    y_new = X @ beta + rng.normal(0, sigma, n)          # 같은 X, 새 잡음
+    train_err.append(np.mean((y - y_hat) ** 2))
+    new_err.append(np.mean((y_new - y_hat) ** 2))
+
+print(f"훈련 오차     {np.mean(train_err):.3f}   (이론 {sigma**2 * (1 - p / n):.3f})")
+print(f"새 잡음 오차  {np.mean(new_err):.3f}   (이론 {sigma**2 * (1 + p / n):.3f})")
+```
+:::
+
+### C2. kNN의 bias와 variance를 직접 재기
+
+B2의 상황을 $f(x) = \sin(2\pi x)$, $n = 200$, $\sigma = 0.3$, $x_0 = 0.25$ 로 시뮬레이션한다.
+
+(a) B2의 공식으로 최적 $k$ 를 어림하라. ($x_0 = 0.25$ 에서 $f'' = -4\pi^2 \approx -39.5$)
+(b) 여러 $k$ 에서 bias², variance, 합을 재어 최적 $k$ 를 찾아라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $k^\star = (144 \times 0.09 \times 200^4 / 39.5^2)^{1/5} \approx 27$ 이다.
+
+(b) variance는 $\sigma^2/k$ 를 거의 그대로 따라가고, bias²는 $k$ 가 작을 때는 0에 가깝다가 $k = 41$ 근처부터 빠르게 커진다.
+합은 $k$ 가 20~30 근처일 때 가장 작아, 공식의 어림과 맞는다.
+$k = 41$ 의 bias²는 공식 $\big(39.5 \times 41^2/(24 \times 200^2)\big)^2 \approx 0.0048$ 과 거의 같고, $k = 81$ 에서는 Taylor 근사가 맞지 않을 만큼 범위가 넓어져 공식과 조금 어긋난다.
+
+```{python}
+#| label: ex-knn-bv
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+f = lambda x: np.sin(2 * np.pi * x)
+n, sigma, reps, x0 = 200, 0.3, 2000, 0.25
+xs = (np.arange(n) + 0.5) / n
+order = np.argsort(np.abs(xs - x0))                    # x0 에서 가까운 순서
+
+print(f"{'k':>4} {'bias²':>9} {'variance':>9} {'합':>9} {'σ²/k':>9}")
+for k in [1, 5, 11, 21, 27, 35, 41, 81]:
+    idx = order[:k]
+    preds = np.array([np.mean(f(xs[idx]) + rng.normal(0, sigma, k)) for _ in range(reps)])
+    b2, var = (preds.mean() - f(x0)) ** 2, preds.var()
+    print(f"{k:>4} {b2:>9.5f} {var:>9.5f} {b2 + var:>9.5f} {sigma**2 / k:>9.5f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 수식·정의 | 실무적 함의 |
