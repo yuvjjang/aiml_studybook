@@ -439,6 +439,104 @@ self-attention은 데이터에 대해 거의 아무것도 가정하지 않는다
 $n \gg d_h$ 인 경우 실제 rank를 재고, 그것이 표현력에 무엇을 뜻하는지 적어 보라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. causal mask의 모양과 낭비
+
+(a) 길이 4의 causal mask를 적어라(볼 수 있으면 1, 없으면 0). 볼 수 있는 칸은 몇 개인가? 길이 $n$ 이면?
+(b) 전체 $n\times n$ 점수를 계산한 뒤 mask로 지우는 구현은 연산의 몇 %를 버리는가($n$ 이 클 때)?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 아래 삼각(대각선 포함)이 1이다.
+
+$$\begin{pmatrix}1&0&0&0\\1&1&0&0\\1&1&1&0\\1&1&1&1\end{pmatrix}$$
+
+10칸, 일반적으로 $n(n+1)/2$ 칸.
+
+(b) $n(n+1)/2$ 를 $n^2$ 으로 나누면 $n$ 이 클 때 절반에 가까워진다. 거의 **50%**를 계산해 놓고 버린다. FlashAttention 같은 구현은 위 삼각 block을 아예 건너뛰어 이 절반을 아낀다([5.7](07_efficient_attention.qmd)).
+:::
+
+### A2. mask를 −∞가 아니라 0으로 넣으면
+
+query 하나의 점수가 $(2, 1, 3)$ 이고 세 번째 token은 미래라 보면 안 된다.
+
+(a) 세 번째 점수를 $-\infty$ 로 바꿔 softmax한 가중치는?
+(b) 실수로 세 번째 점수를 0으로 바꿨다면 가중치는? 미래 token이 얼마나 새는가?
+(c) 왜 이 실수는 학습 loss로는 잘 드러나지 않는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathrm{softmax}(2, 1) = (0.731,\ 0.269)$, 세 번째는 0.
+
+(b) $\mathrm{softmax}(2, 1, 0) = (0.665,\ 0.245,\ 0.090)$. 미래 token이 **9%** 섞인다. 점수 0은 "관심 없음"이 아니라 "보통 정도의 관심"이다.
+
+(c) 미래를 조금이라도 보면 다음 token 맞히기가 쉬워져 학습 loss는 오히려 **좋아진다.** 생성할 때는 미래가 없으니 그 이득이 사라져 성능이 무너진다. 본문의 "mask는 −∞로"가 이 9%를 막는 것이고, "직접 해보기" ②처럼 검증 코드로 확인해야 하는 이유다.
+:::
+
+### B1. causal mask가 학습을 병렬로 만든다
+
+길이 $n$ 문장의 모든 위치에서 "다음 token 맞히기" loss를 계산하려 한다.
+
+(a) causal mask를 쓴 self-attention 층의 위치 $t$ 출력이 $x_1, \dots, x_t$ 에만 의존함을 보여라(층을 여러 개 쌓아도).
+(b) 이 성질 때문에 forward 한 번으로 loss $n$ 개를 동시에 얻을 수 있음을 설명하라. RNN과 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 한 층에서 위치 $t$ 의 출력은 $\sum_j\alpha_{tj}v_j$ 이고 $j > t$ 인 가중치는 정확히 0이다. 그러니 $x_{\le t}$ 로 만든 $v_j$ 만 쓴다. FFN과 LayerNorm은 위치마다 따로 작용하므로 의존성을 넓히지 않는다. 층을 쌓아도 각 층이 같은 성질을 지키므로 귀납적으로 성립한다.
+
+(b) 위치 $t$ 의 출력이 "미래를 보지 않고 만든 $x_{t+1}$ 의 예측"이므로, 정답 $x_{t+1}$ 과 비교한 loss가 생성할 때와 같은 조건의 loss다. 모든 $t$ 를 한 번의 행렬 연산으로 계산할 수 있다(teacher forcing).
+RNN도 teacher forcing을 하지만 $h_t$ 가 $h_{t-1}$ 을 기다려야 해서 $n$ 단계를 순서대로 돌아야 한다. Transformer는 같은 일을 시간축으로 병렬화한다. 본문의 "왜 순환을 버릴 수 있었나"의 핵심이다.
+:::
+
+### C1. 새어 나가는 확률을 세기
+
+길이 8 sequence에서 점수가 표준정규 무작위일 때, 위치마다 미래 칸을 (a) $-\infty$ 로, (b) 0으로 막았을 때 미래 칸에 가는 가중치의 평균을 구하라. 위치에 따라 어떻게 달라지는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a)는 언제나 정확히 0이다. (b)는 앞쪽 위치일수록 크다. 첫 위치는 자기 자신 하나와 미래 7칸이 경쟁하므로 대부분의 가중치가 미래로 새고, 마지막 위치는 미래가 없어 0이다. 평균적으로 상당한 몫이 샌다.
+"0으로 막기"는 앞쪽 token을 가장 크게 망가뜨린다. 문장 첫머리의 예측이 사실상 미래를 보고 하는 셈이다.
+
+```{python}
+#| label: ex-mask-leak
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, trials = 8, 20_000
+S = rng.normal(size=(trials, n, n))
+future = np.triu(np.ones((n, n), bool), k=1)
+
+def softmax(z):
+    e = np.exp(z - z.max(-1, keepdims=True))
+    return e / e.sum(-1, keepdims=True)
+
+P_inf = softmax(np.where(future, -np.inf, S))
+P_zero = softmax(np.where(future, 0.0, S))
+
+leak_inf = (P_inf * future).sum(-1).mean(0)
+leak_zero = (P_zero * future).sum(-1).mean(0)
+print("위치         :", np.arange(1, n + 1))
+print("−∞ 로 막기   :", leak_inf.round(3))
+print("0 으로 막기  :", leak_zero.round(3))
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 | 이어지는 곳 |
