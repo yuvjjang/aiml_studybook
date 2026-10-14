@@ -674,6 +674,234 @@ $p_i$ 가 0/1에 가까워질 때 $X^\top S X$ 의 condition number를 재라.
 IRLS가 몇 번째 반복에서 불안정해지는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. odds ratio는 확률을 몇 배로 만드는가
+
+이탈 예측 모델에서 "고객센터 불만 접수 횟수"의 계수가 $\beta = 0.7$ 이다($e^{0.7} \approx 2.01$).
+
+(a) 불만이 한 번 늘 때, 이탈 확률이 원래 10%, 50%, 90%인 고객의 이탈 확률은 각각 얼마가 되는가?
+(b) "불만이 한 번 늘면 이탈 확률이 두 배"라는 보고는 맞는가? 확률이 몇 %p 늘어나는지는 어느 고객에서 가장 큰가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) odds를 $e^{0.7}$ 배 한 뒤 확률로 되돌린다($p = o/(1 + o)$).
+
+| 원래 확률 | 원래 odds | 새 odds | 새 확률 | 증가 |
+|---|---|---|---|---|
+| 10% | 0.111 | 0.224 | 18.3% | +8.3%p |
+| 50% | 1 | 2.01 | 66.8% | +16.8%p |
+| 90% | 9 | 18.1 | 94.8% | +4.8%p |
+
+(b) 틀렸다. 두 배가 되는 것은 **odds**이고 확률이 아니다. 90% 고객의 확률을 두 배로 하면 180%가 되어 말이 안 된다.
+확률의 증가폭은 50% 근처에서 가장 크다. sigmoid의 기울기 $p(1 - p)$ 가 $p = 0.5$ 에서 최대이기 때문이다.
+그래서 "이 요인의 효과"를 확률 단위로 말하려면 **어떤 고객에 대해서인지**를 함께 말해야 한다. 이미 거의 확실히 떠날 고객이나 거의 확실히 남을 고객에게는 같은 요인도 확률을 조금밖에 움직이지 못한다.
+:::
+
+### A2. softmax와 temperature
+
+logit이 $\mathbf z = (2, 1, 0)$ 인 세 클래스 분류기다.
+
+(a) softmax 확률을 구하라.
+(b) 모든 logit에 100을 더하면 확률은 어떻게 되는가?
+(c) temperature $T$ 로 나눈 $\mathrm{softmax}(\mathbf z/T)$ 를 $T = 0.5$ 와 $T = 2$ 에서 구하라. $T \to 0$ 과 $T \to \infty$ 에서는 각각 어떤 분포가 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $e^2, e^1, e^0 = 7.39, 2.72, 1$ 이고 합이 11.11이므로 $(0.665,\ 0.245,\ 0.090)$ 이다.
+
+(b) 그대로다. 분자와 분모에 똑같이 $e^{100}$ 이 곱해져 지워진다. softmax는 logit의 **차이**만 본다([0.5 연습 문제 B3](../00_foundations/05_numerical_computing.qmd)).
+
+(c) $T = 0.5$ 면 logit이 $(4, 2, 0)$ 이 되어 $(0.867,\ 0.117,\ 0.016)$ 으로 1등 쪽으로 쏠린다.
+$T = 2$ 면 $(1, 0.5, 0)$ 이 되어 $(0.506,\ 0.307,\ 0.186)$ 으로 평평해진다.
+
+$T \to 0$ 이면 차이가 무한히 커져 가장 큰 logit에 확률 1이 몰린다(argmax). $T \to \infty$ 면 차이가 0으로 줄어 균등분포 $(1/3, 1/3, 1/3)$ 가 된다.
+temperature는 순위를 바꾸지 않고 **확신의 정도**만 조절한다. 본문 그림에서 $T$ 를 낮추면 경계만 얇게 남는 것이 이것이다.
+:::
+
+### B1. Newton's method는 반복되는 weighted least squares다
+
+본문의 Newton 스텝은 다음과 같았다($S = \mathrm{diag}(p_i(1 - p_i))$).
+
+$$\boldsymbol\beta^{(t+1)} = \boldsymbol\beta^{(t)} + (X^\top SX)^{-1}X^\top(\mathbf y - \mathbf p)$$
+
+(a) 이 식이 다음과 같음을 보여라.
+
+$$\boldsymbol\beta^{(t+1)} = (X^\top SX)^{-1}X^\top S\,\mathbf z, \qquad \mathbf z = X\boldsymbol\beta^{(t)} + S^{-1}(\mathbf y - \mathbf p)$$
+
+(b) 이것은 "가중치 $S$, 타깃 $\mathbf z$ 인 weighted least squares"의 해다. 가중치 $p_i(1 - p_i)$ 가 큰 점과 작은 점은 각각 어떤 점인가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a) $\boldsymbol\beta^{(t)} = (X^\top SX)^{-1}X^\top SX\,\boldsymbol\beta^{(t)}$ 로 쓰고 두 항을 하나의 $(X^\top SX)^{-1}X^\top$ 아래로 묶는다.
+weighted least squares $\min_\beta\sum_i s_i(z_i - \mathbf x_i^\top\beta)^2$ 의 해가 $(X^\top SX)^{-1}X^\top S\mathbf z$ 라는 것은 [2.2](02_linear_regression.qmd)의 normal equation에서 각 행에 $\sqrt{s_i}$ 를 곱한 것이다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 힌트대로 묶으면
+
+$$\boldsymbol\beta^{(t+1)} = (X^\top SX)^{-1}\big[X^\top SX\boldsymbol\beta^{(t)} + X^\top(\mathbf y - \mathbf p)\big]
+= (X^\top SX)^{-1}X^\top S\big[X\boldsymbol\beta^{(t)} + S^{-1}(\mathbf y - \mathbf p)\big]$$
+
+대괄호가 $\mathbf z$ 다. ($S^{-1}$ 은 대각행렬의 역이라 각 원소를 $1/(p_i(1 - p_i))$ 로 나누는 것뿐이다.)
+
+(b) $\mathbf z$ 는 "현재 log-odds에, 현재 residual을 log-odds 단위로 환산해 더한 값"이다. 매 반복마다 이 가짜 타깃에 직선을 다시 맞춘다.
+가중치 $p_i(1 - p_i)$ 는 $p_i = 0.5$ 근처, 즉 **모델이 아직 헷갈리는 점**에서 크고, $p_i$ 가 0이나 1에 가까운 **이미 확신하는 점**에서 작다.
+경계 근처의 점이 경계 위치를 정한다는 직관이 가중치로 들어간 것이다. [2.5 SVM](05_svm_kernels.qmd)은 이 생각을 극단으로 밀어, 경계 근처의 점(support vector) **만** 쓴다.
+:::
+
+### B2. 완벽하게 나뉘는 데이터에는 최적해가 없다
+
+모든 점에서 $y_i \in \{-1, +1\}$ 이고 어떤 $\mathbf w$ 가 $y_i\,\mathbf w^\top\mathbf x_i > 0$ 을 만족한다(complete separation). 손실은 $L(\boldsymbol\beta) = \sum_i\log\big(1 + e^{-y_i\boldsymbol\beta^\top\mathbf x_i}\big)$ 이다($y \in \{0, 1\}$ 로 쓴 binary cross-entropy와 같은 식).
+
+(a) $\boldsymbol\beta = c\,\mathbf w$ ($c > 0$)로 두면 $c$ 가 커질수록 $L$ 이 줄어들어 0으로 감을 보여라.
+(b) 그래서 $L$ 을 최소로 만드는 유한한 $\boldsymbol\beta$ 가 없음을 설명하라. L2 regularization $\lambda\|\boldsymbol\beta\|^2$ 을 더하면 왜 해결되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $m_i = y_i\mathbf w^\top\mathbf x_i > 0$ 이라 하면 $L(c\mathbf w) = \sum_i\log(1 + e^{-c\,m_i})$ 다.
+각 항은 $c$ 에 대해 감소하고($m_i > 0$ 이므로 $e^{-cm_i}$ 가 줄어든다), $c \to \infty$ 에서 $\log 1 = 0$ 으로 간다.
+
+(b) $L \ge 0$ 이고 $L$ 은 0에 한없이 다가가지만, 유한한 $\boldsymbol\beta$ 에서는 항상 $L > 0$ 이다(각 항이 양수다). 그러므로 최솟값이 **어떤 점에서도 달성되지 않는다.**
+gradient descent는 계수 크기를 끝없이 키우고, sigmoid는 계단이 되어 간다. 본문 그림의 주황 곡선이다.
+
+L2 항을 더하면 $c \to \infty$ 에서 $\lambda c^2\|\mathbf w\|^2 \to \infty$ 라 목적함수가 다시 커진다.
+로그 손실은 아무리 줄어도 0 아래로 못 가는데, 벌점은 끝없이 커지므로 그 사이 어딘가에서 균형이 생긴다.
+게다가 $\lambda\|\boldsymbol\beta\|^2$ 은 strictly convex라 목적함수 전체가 strictly convex가 되어 **최솟값이 유일하게** 존재한다.
+:::
+
+### B3. LDA의 경계는 왜 선형인가
+
+두 클래스가 $\mathbf x \mid y{=}k \sim \mathcal N(\boldsymbol\mu_k, \Sigma)$ (covariance가 같다), 사전 확률이 $\pi_0, \pi_1$ 이다.
+
+(a) 베이즈 정리로 $\log\dfrac{p(y{=}1\mid\mathbf x)}{p(y{=}0\mid\mathbf x)}$ 를 계산해 $\mathbf w^\top\mathbf x + b$ 꼴임을 보이고, $\mathbf w$ 와 $b$ 를 구하라.
+(b) 두 클래스의 covariance가 다르면($\Sigma_0 \ne \Sigma_1$) 경계는 어떤 모양이 되는가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+$\log\mathcal N(\mathbf x;\boldsymbol\mu,\Sigma) = -\tfrac12(\mathbf x - \boldsymbol\mu)^\top\Sigma^{-1}(\mathbf x - \boldsymbol\mu) + \text{상수}$ 이고, 상수는 $\Sigma$ 가 같으면 두 클래스에서 같다.
+이차식을 펼치면 $\mathbf x^\top\Sigma^{-1}\mathbf x$ 항이 두 클래스에 똑같이 나온다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) log-odds는 $\log\dfrac{\pi_1\mathcal N(\mathbf x;\boldsymbol\mu_1,\Sigma)}{\pi_0\mathcal N(\mathbf x;\boldsymbol\mu_0,\Sigma)}$ 다. 이차식을 펼치면
+
+$$-\tfrac12(\mathbf x - \boldsymbol\mu_k)^\top\Sigma^{-1}(\mathbf x - \boldsymbol\mu_k) = -\tfrac12\mathbf x^\top\Sigma^{-1}\mathbf x + \boldsymbol\mu_k^\top\Sigma^{-1}\mathbf x - \tfrac12\boldsymbol\mu_k^\top\Sigma^{-1}\boldsymbol\mu_k$$
+
+첫 항은 $k$ 와 무관해 두 클래스를 빼면 지워진다. 남는 것은
+
+$$\log\frac{p(y{=}1\mid\mathbf x)}{p(y{=}0\mid\mathbf x)} = \underbrace{(\boldsymbol\mu_1 - \boldsymbol\mu_0)^\top\Sigma^{-1}}_{\mathbf w^\top}\mathbf x\ \underbrace{-\ \tfrac12\boldsymbol\mu_1^\top\Sigma^{-1}\boldsymbol\mu_1 + \tfrac12\boldsymbol\mu_0^\top\Sigma^{-1}\boldsymbol\mu_0 + \log\frac{\pi_1}{\pi_0}}_{b}$$
+
+즉 $\mathbf w = \Sigma^{-1}(\boldsymbol\mu_1 - \boldsymbol\mu_0)$ 다. log-odds가 $\mathbf x$ 의 1차식이므로 posterior가 정확히 logistic regression의 모양이다.
+$\mathbf w$ 가 그냥 평균의 차이 $\boldsymbol\mu_1 - \boldsymbol\mu_0$ 가 아니라 $\Sigma^{-1}$ 이 곱해진 것은, 특성끼리 상관되어 있으면 겹치는 정보를 빼고 각자의 고유한 기여만 세기 때문이다.
+
+(b) $\Sigma$ 가 다르면 $\mathbf x^\top\Sigma_k^{-1}\mathbf x$ 항이 지워지지 않고 $-\tfrac12\mathbf x^\top(\Sigma_1^{-1} - \Sigma_0^{-1})\mathbf x$ 가 남는다. 경계가 이차곡선(타원·쌍곡선)이 된다 — QDA(quadratic discriminant analysis)다.
+logistic regression에 $x_1^2$, $x_2^2$, $x_1x_2$ 를 특성으로 넣으면 같은 모양의 경계를 표현할 수 있다.
+:::
+
+### C1. IRLS는 몇 번 만에 수렴하는가
+
+특성 2개, 점 500개의 이진 분류 데이터에 logistic regression을 맞춘다.
+
+(a) B1의 IRLS를 구현해 반복마다 계수 변화량 $\|\boldsymbol\beta^{(t+1)} - \boldsymbol\beta^{(t)}\|$ 을 출력하라.
+(b) gradient descent($\eta = 0.5$)로 같은 해의 $10^{-6}$ 이내까지 가려면 몇 걸음이 필요한가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 변화량이 대략 $1.3 \to 0.58 \to 0.18 \to 0.014 \to 8\times10^{-5} \to 2\times10^{-9}$ 처럼 줄어 **여섯 번** 만에 반올림 오차 수준이 된다.
+해 근처에서는 변화량이 매번 대략 **제곱**으로 준다($0.014 \to 8\times10^{-5} \to 2\times10^{-9}$) — Newton's method의 quadratic convergence다. 맞는 자릿수가 반복마다 두 배가 된다.
+
+(b) 약 580걸음이다. Hessian을 쓰는 한 번의 계산이 비싸도(특성 $p$ 개면 $p\times p$ 행렬을 풀어야 한다), 특성이 적은 고전 통계 패키지가 logistic regression을 IRLS로 푸는 이유다.
+
+```{python}
+#| label: ex-irls
+
+import numpy as np
+
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+rng = np.random.default_rng(0)
+n = 500
+mu0, mu1 = np.array([0.0, 0.0]), np.array([1.5, 1.0])
+Sigma = np.array([[1.0, 0.5], [0.5, 1.0]])
+y = rng.random(n) < 0.5
+X_raw = np.where(y[:, None], mu1, mu0) + rng.normal(size=(n, 2)) @ np.linalg.cholesky(Sigma).T
+X = np.column_stack([np.ones(n), X_raw])
+y = y.astype(float)
+
+b = np.zeros(3)
+for t in range(1, 8):
+    p = sigmoid(X @ b)
+    S = p * (1 - p)
+    step = np.linalg.solve(X.T @ (S[:, None] * X), X.T @ (y - p))
+    b += step
+    print(f"IRLS {t}회   변화량 {np.linalg.norm(step):.2e}")
+b_irls = b.copy()
+
+b, eta = np.zeros(3), 0.5
+for t in range(1, 10**5):
+    b -= eta * X.T @ (sigmoid(X @ b) - y) / n
+    if np.linalg.norm(b - b_irls) < 1e-6:
+        break
+print(f"gradient descent: {t}걸음")
+```
+:::
+
+### C2. LDA 공식과 logistic regression 비교
+
+C1의 데이터는 B3의 가정(같은 covariance의 두 정규분포)을 정확히 따른다.
+
+(a) 참 파라미터로 B3의 $\mathbf w = \Sigma^{-1}(\boldsymbol\mu_1 - \boldsymbol\mu_0)$ 를 계산하라.
+(b) 데이터에서 평균·공통 covariance를 추정해 B3 공식에 넣은 LDA 계수와, C1에서 IRLS로 구한 logistic 계수를 참값과 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\Sigma^{-1} = \dfrac{1}{0.75}\begin{pmatrix} 1 & -0.5 \\ -0.5 & 1\end{pmatrix}$, $\boldsymbol\mu_1 - \boldsymbol\mu_0 = (1.5, 1)$ 이므로 $\mathbf w = (1.33,\ 0.33)$ 이다.
+두 번째 특성의 평균 차이(1)가 작지 않은데도 계수가 작은 것은, 그 차이의 상당 부분이 첫 번째 특성과의 상관으로 이미 설명되기 때문이다.
+
+(b) 두 방법의 답이 서로 비슷하다. 같은 모양의 모델(선형 log-odds)을 서로 다른 방법으로 추정한 것이기 때문이다. 참값과의 차이(특히 작은 두 번째 계수)는 표본 500개로 추정한 오차이고, 표본을 늘리면 둘 다 참값으로 다가간다.
+LDA는 분포 가정을 써서 평균과 covariance만 추정하고, logistic regression은 가정 없이 경계만 직접 맞춘다.
+가정이 맞는 이 데이터에서는 LDA가 조금 더 효율적일 수 있지만, 분포가 정규에서 벗어나면(예: 꼬리가 두꺼우면) logistic이 더 robust하다는 본문의 표가 그 차이다.
+
+```{python}
+#| label: ex-lda-vs-logistic
+
+Si = np.linalg.inv(Sigma)
+w_true = Si @ (mu1 - mu0)
+b_true = -0.5 * (mu1 @ Si @ mu1 - mu0 @ Si @ mu0)          # π0 = π1
+
+yb = y.astype(bool)
+m0, m1 = X_raw[~yb].mean(0), X_raw[yb].mean(0)
+S_pool = ((X_raw[~yb] - m0).T @ (X_raw[~yb] - m0) + (X_raw[yb] - m1).T @ (X_raw[yb] - m1)) / (n - 2)
+Sp = np.linalg.inv(S_pool)
+w_lda = Sp @ (m1 - m0)
+b_lda = -0.5 * (m1 @ Sp @ m1 - m0 @ Sp @ m0) + np.log(yb.mean() / (1 - yb.mean()))
+
+for name, bias, w in [("참값", b_true, w_true), ("LDA", b_lda, w_lda), ("logistic (IRLS)", b_irls[0], b_irls[1:])]:
+    print(f"{name:<16} b {bias:+.3f}   w ({w[0]:.3f}, {w[1]:.3f})")
+```
+:::
+
 ## 요약
 
 | 개념 | 식 | 핵심 |
