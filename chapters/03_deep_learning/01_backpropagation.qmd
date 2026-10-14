@@ -741,6 +741,186 @@ V자 곡선의 바닥 위치와 높이가 달라지는가? truncation error(Tayl
 $\prod \sigma'$ 가 $\prod(1+\sigma')$ 로 바뀌는 효과가 보이는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 분배기·교환기·라우터로 손 미분
+
+$$s = x\cdot y + \max(x, z), \qquad f = s^2$$
+
+(a) $x = 2$, $y = -2$, $z = 1$ 에서 forward pass로 $f$ 를 구하고, backward pass로 $\partial f/\partial x$, $\partial f/\partial y$, $\partial f/\partial z$ 를 구하라. $x$ 는 두 곳에서 쓰인다는 점에 주의하라.
+(b) $z = 3$ 으로 바꾸면 세 gradient는 어떻게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) forward: $xy = -4$, $\max(2, 1) = 2$ (이긴 쪽은 $x$), $s = -2$, $f = 4$.
+backward: $\partial f/\partial s = 2s = -4$. 덧셈 node(분배기)가 $-4$ 를 두 갈래에 그대로 보낸다.
+
+- 곱셈 갈래(교환기): $x$ 쪽으로 $-4 \times y = 8$, $y$ 쪽으로 $-4 \times x = -8$.
+- max 갈래(라우터): 이긴 $x$ 쪽으로 $-4$, $z$ 쪽으로 0.
+
+$x$ 는 두 갈래에서 받으므로 **합한다**: $\partial f/\partial x = 8 + (-4) = 4$. $\partial f/\partial y = -8$, $\partial f/\partial z = 0$.
+
+검산: $z < x$ 근처에서 $f = (xy + x)^2$ 이므로 $\partial f/\partial x = 2(xy + x)(y + 1) = 2(-2)(-1) = 4$ ✓.
+
+(b) $\max(2, 3) = 3$ 으로 이긴 쪽이 $z$ 가 된다. $s = -1$, $\partial f/\partial s = -2$.
+곱셈 갈래에서 $x$ 쪽 $-2 \times (-2) = 4$, $y$ 쪽 $-2 \times 2 = -4$. max 갈래는 이제 $z$ 로만 가서 $\partial f/\partial z = -2$, $x$ 쪽은 0.
+결과: $\partial f/\partial x = 4$, $\partial f/\partial y = -4$, $\partial f/\partial z = -2$.
+max의 승자가 바뀌면 gradient가 흐르는 길 자체가 바뀐다. ReLU($\max(0, z)$)가 꺼진 unit에 gradient가 전혀 가지 않는 것이 이 라우터 규칙이다.
+:::
+
+### A2. forward-mode와 reverse-mode 고르기
+
+함수 $f: \mathbb R^n \to \mathbb R^m$ 의 Jacobian 전체가 필요하다. forward-mode는 입력 방향 하나당 한 번, reverse-mode는 출력 하나당 한 번 그래프를 훑는다.
+
+다음 경우에 어느 쪽이 유리한가?
+
+1. 파라미터 10억 개 신경망의 손실 gradient ($n = 10^9$, $m = 1$)
+2. 물리 시뮬레이터에서 설계 변수 1개를 바꿀 때 측정값 1,000개가 어떻게 변하는지 ($n = 1$, $m = 1{,}000$)
+3. $\mathbb R^{100} \to \mathbb R^{100}$ 함수의 Jacobian 전체
+4. 같은 신경망에서 **샘플별** 손실 1,024개 각각의 gradient(batch 크기 1,024)
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. **reverse-mode.** 한 번이면 끝난다. forward-mode는 10억 번이다. 딥러닝의 모든 경우다.
+2. **forward-mode.** 입력 방향 하나로 한 번에 출력 1,000개의 민감도가 나온다. reverse-mode는 1,000번 훑어야 한다.
+3. **비슷하다.** 둘 다 100번이다. 다만 reverse-mode는 forward pass의 중간값을 저장해야 해서 메모리를 더 쓰므로, 비용이 같으면 forward-mode가 나을 때가 많다.
+4. **reverse-mode를 출력 개수만큼.** 출력이 1,024개라 1,024번 훑어야 한다. 보통의 학습은 이 1,024개를 **평균 낸 하나의 손실**의 gradient만 필요해서 한 번으로 끝난다. 샘플별 gradient가 필요한 경우(예: differential privacy의 샘플별 clipping)가 비싼 이유다.
+
+비용의 비대칭 $n/m$ 하나로 정해진다. "질문이 몇 개이고 답이 몇 개인가"를 먼저 세면 된다.
+:::
+
+### B1. 층별 Jacobian으로 vanishing gradient 상한 구하기
+
+층 하나가 $\mathbf h_\ell = \sigma(W_\ell\mathbf h_{\ell-1})$ 이다($\sigma$ 는 원소별 activation).
+
+(a) 이 층의 Jacobian $\partial\mathbf h_\ell/\partial\mathbf h_{\ell-1}$ 을 적어라.
+(b) [0.0 연습 문제 B3](../00_foundations/00_linear_algebra.qmd)의 "행렬이 벡터를 늘리는 최대 배율은 $\sigma_{\max}$"를 써서 다음 상한을 보여라. ($\|W\|$ 는 $W$ 의 가장 큰 singular value)
+
+$$\Big\|\frac{\partial L}{\partial\mathbf h_0}\Big\| \le \Big\|\frac{\partial L}{\partial\mathbf h_L}\Big\|\prod_{\ell=1}^{L}\Big(\max|\sigma'|\cdot\|W_\ell\|\Big)$$
+
+(c) sigmoid라면 gradient가 층마다 줄어들지 않으려면 $\|W_\ell\|$ 이 최소 얼마여야 하는가? 그렇게 큰 가중치는 어떤 부작용을 낳는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathbf z = W_\ell\mathbf h_{\ell-1}$ 이라 두면 chain rule로 $\dfrac{\partial\mathbf h_\ell}{\partial\mathbf h_{\ell-1}} = \mathrm{diag}\big(\sigma'(\mathbf z)\big)\,W_\ell$ 이다. 행렬을 곱한 뒤 원소마다 $\sigma'$ 를 곱한다.
+
+(b) backward pass는 이 Jacobian의 전치를 차례로 곱한다. 한 단계에서 벡터 크기는 $W_\ell^\top$ 에 의해 최대 $\|W_\ell\|$ 배, $\mathrm{diag}(\sigma')$ 에 의해 최대 $\max|\sigma'|$ 배 커지므로 그 곱 이하다.
+$L$ 단계를 곱하면 상한이 나온다.
+
+(c) sigmoid는 $\max\sigma' = 0.25$ 이므로 $0.25\,\|W_\ell\| \ge 1$, 즉 $\|W_\ell\| \ge 4$ 가 필요하다(상한이 1 이상이어야 줄지 않을 **가능성**이라도 생긴다).
+그런데 가중치가 크면 $\mathbf z$ 도 커져서 $\sigma$ 가 0이나 1에 붙는 saturation 영역에 들어가고, 거기서 $\sigma'$ 는 0.25보다 훨씬 작다. 가중치를 키워서 얻은 배율을 $\sigma'$ 가 다시 잃는다.
+sigmoid 깊은 망은 이 양쪽 사이에 끼어 빠져나올 수 없었다. ReLU는 $\sigma' = 1$ 이라 $\|W\| \approx 1$ 근처만 유지하면 되고, 그것을 맞추는 것이 [3.7 initialization](07_initialization.qmd)이다.
+:::
+
+### B2. 수치 미분의 최적 step 크기
+
+$f$ 를 계산할 때마다 상대오차 $u$ (float64에서 약 $1.1\times10^{-16}$)가 섞인다고 하자.
+
+(a) Taylor 전개로 forward difference $\dfrac{f(x+\epsilon) - f(x)}{\epsilon}$ 의 truncation error가 약 $\dfrac{\epsilon}{2}|f''|$, central difference $\dfrac{f(x+\epsilon) - f(x-\epsilon)}{2\epsilon}$ 의 truncation error가 약 $\dfrac{\epsilon^2}{6}|f'''|$ 임을 보여라.
+(b) rounding error는 forward가 약 $2u|f|/\epsilon$, central이 약 $u|f|/\epsilon$ 이다. 두 오차의 합을 최소로 하는 $\epsilon$ 을 각각 구하라.
+(c) $f = e^x$, $x = 1$ 에서 두 최적 $\epsilon$ 의 크기를 어림하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $f(x \pm \epsilon) = f \pm \epsilon f' + \tfrac{\epsilon^2}{2}f'' \pm \tfrac{\epsilon^3}{6}f''' + \cdots$ 이다.
+forward: $\dfrac{f(x+\epsilon) - f}{\epsilon} = f' + \tfrac{\epsilon}{2}f'' + \cdots$ 로 오차가 $\tfrac{\epsilon}{2}f''$.
+central: 빼면 짝수 차수 항이 지워져 $\dfrac{2\epsilon f' + \tfrac{\epsilon^3}{3}f'''}{2\epsilon} = f' + \tfrac{\epsilon^2}{6}f'''$ 로 오차가 $\tfrac{\epsilon^2}{6}f'''$.
+central이 한 차수 더 정확한 것은 대칭으로 흔들어 2차 항이 상쇄되기 때문이다.
+
+(b) forward: $\tfrac{\epsilon}{2}|f''| + \tfrac{2u|f|}{\epsilon}$ 을 미분해 0으로 놓으면 $\epsilon^2 = 4u|f|/|f''|$, 즉 $\epsilon^\star = 2\sqrt{u|f|/|f''|}$.
+central: $\tfrac{\epsilon^2}{6}|f'''| + \tfrac{u|f|}{\epsilon}$ 에서 $\tfrac{\epsilon}{3}|f'''| = \tfrac{u|f|}{\epsilon^2}$, 즉 $\epsilon^\star = (3u|f|/|f'''|)^{1/3}$.
+
+(c) $e^x$ 는 모든 도함수가 같으므로 비율이 1이다. forward $\epsilon^\star = 2\sqrt u \approx 2\times10^{-8}$, central $\epsilon^\star = (3u)^{1/3} \approx 7\times10^{-6}$.
+본문의 경험칙 "$\epsilon \approx 10^{-5}$"이 central difference의 최적점 근처다. 최적점에서의 오차는 forward가 약 $\sqrt u \approx 10^{-8}$, central이 약 $u^{2/3} \approx 10^{-11}$ 수준으로, central이 천 배 정확하다.
+:::
+
+### B3. checkpoint를 몇 개 둘 것인가
+
+$L$ 층 망에서 $k$ 층마다 activation을 하나씩 저장한다(저장점 $L/k$ 개). backward pass 때 한 구간에 들어가면 그 구간의 $k$ 층을 다시 forward해서 activation을 복원하고, 그 구간이 끝나면 버린다.
+
+(a) 동시에 들고 있어야 하는 activation 수가 약 $L/k + k$ 임을 설명하라.
+(b) 이를 최소로 하는 $k$ 와 그때의 메모리를 구하라.
+(c) 추가 연산은 얼마인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 저장점 $L/k$ 개는 backward pass 내내 들고 있어야 한다. 그리고 현재 처리 중인 구간 하나의 activation $k$ 개를 복원해 들고 있다. 합하면 $L/k + k$ 다.
+
+(b) $L/k + k$ 를 $k$ 로 미분해 0으로 놓으면 $k^2 = L$, $k = \sqrt L$. 메모리는 $2\sqrt L$ 이다.
+$L = 100$ 이면 저장 없이 전부 들고 있는 100개 대신 20개로 충분하다.
+(산술평균 ≥ 기하평균으로 보면, 곱이 $L$ 로 고정된 두 수 $L/k$ 와 $k$ 의 합은 둘이 같을 때 가장 작다.)
+
+(c) 각 구간을 backward 전에 한 번씩 다시 forward하므로 forward pass를 **한 번 더** 하는 것과 같다. backward가 forward의 약 2배이므로 전체 학습 비용은 forward 1 + backward 2 = 3에서 4로, 약 1.33배가 된다.
+본문의 "약 1.3배"가 이 계산이다. 메모리를 $O(L)$ 에서 $O(\sqrt L)$ 로 줄이는 대가로 연산 33%를 낸다.
+:::
+
+### C1. V자 곡선의 바닥 찾기
+
+$f = e^x$, $x = 1$ 에서 $\epsilon$ 을 $10^{-14}$ 부터 $10^{-1}$ 까지 바꿔 가며 forward·central difference의 오차를 재고, 오차가 가장 작은 $\epsilon$ 을 B2의 예측과 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+forward difference는 $\epsilon \approx 10^{-8}$ 에서 오차 약 $7\times10^{-9}$, central difference는 $\epsilon \approx 5\times10^{-6}$ 에서 오차 약 $4\times10^{-12}$ 로 가장 작다. B2의 예측($2\times10^{-8}$, $7\times10^{-6}$)과 같은 자릿수다.
+그보다 작은 $\epsilon$ 에서는 rounding error가, 큰 $\epsilon$ 에서는 truncation error가 지배해 V자가 된다.
+
+```{python}
+#| label: ex-fd-optimum
+
+import numpy as np
+
+x, f, true = 1.0, np.exp, np.e
+eps = np.logspace(-14, -1, 131)
+fwd = np.abs((f(x + eps) - f(x)) / eps - true)
+ctr = np.abs((f(x + eps) - f(x - eps)) / (2 * eps) - true)
+u = np.finfo(float).eps / 2
+
+print(f"forward  최적 ε = {eps[fwd.argmin()]:.1e}   오차 {fwd.min():.1e}   (예측 2√u = {2 * np.sqrt(u):.1e})")
+print(f"central  최적 ε = {eps[ctr.argmin()]:.1e}   오차 {ctr.min():.1e}   (예측 (3u)^(1/3) = {(3 * u) ** (1 / 3):.1e})")
+```
+:::
+
+### C2. checkpoint 간격과 메모리·재계산
+
+$L = 100$ 층 망에서 checkpoint 간격 $k$ 를 1부터 100까지 바꿔 가며 B3의 메모리($L/k + k$)와 추가 forward 비율을 표로 만들어라. 정수 $k$ 중 최적은 무엇인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$k = 10$ 에서 메모리 20으로 가장 작다($\sqrt{100} = 10$). $k = 1$ (모든 층 저장)과 $k = 100$ (입력만 저장, 사실상 매번 처음부터 재계산하지만 구간 하나에 100개를 들고 있다)은 둘 다 101로 가장 나쁘다.
+$k$ 가 $\sqrt L$ 근처에서 조금 벗어나도 메모리는 크게 나빠지지 않는다($k = 5$ 나 20이면 25). 곡선의 바닥이 평평해서, 실무에서는 층 구조(블록 경계)에 맞춰 대충 $\sqrt L$ 근처로 잡는다.
+
+```{python}
+#| label: ex-checkpoint
+
+import numpy as np
+
+L = 100
+print(f"{'k':>4} {'저장점':>6} {'구간 activation':>14} {'메모리':>6} {'추가 forward':>12}")
+for k in [1, 2, 5, 10, 20, 50, 100]:
+    mem = L / k + k
+    extra = 0 if k == 1 else 1.0          # k=1 은 전부 저장해 재계산 없음
+    print(f"{k:>4} {L / k:>6.0f} {k:>14} {mem:>6.0f} {extra:>11.0%}")
+best = min(range(1, L + 1), key=lambda k: L / k + k)
+print(f"최적 k = {best}   메모리 {L / best + best:.0f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
