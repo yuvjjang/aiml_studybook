@@ -752,6 +752,182 @@ $\epsilon$을 0으로 줄이면 어떻게 되는가?
 하나를 빼면 발산이 멈추는가? 세 조합을 모두 시험하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 갱신 한 번씩 손으로
+
+$\gamma = 0.9$, $\alpha = 0.1$ 이다.
+
+(a) 현재 $V(s) = 2$ 이고, 보상 $r = 1$ 을 받고 $V(s') = 3$ 인 상태로 갔다. TD error와 TD(0) 갱신 후의 $V(s)$ 는?
+(b) 같은 상태에서 끝까지 가 본 실제 return이 $G = 5$ 였다면 MC 갱신 후의 $V(s)$ 는?
+(c) 다음 상태의 Q값이 $Q(s', \cdot) = (1, 4, 2)$ 이고, ε-greedy가 탐색으로 첫 번째 행동을 골랐다. 보상 $r = 1$ 일 때 SARSA와 Q-learning의 목표값은 각각?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\delta = 1 + 0.9\times3 - 2 = 1.7$, $V(s) \leftarrow 2 + 0.1\times1.7 = 2.17$. 예상보다 좋았으니 올린다.
+
+(b) $V(s) \leftarrow 2 + 0.1(5 - 2) = 2.3$.
+
+(c) SARSA는 실제로 고른 행동을 쓰므로 $1 + 0.9\times1 = 1.9$, Q-learning은 최선을 쓰므로 $1 + 0.9\times4 = 4.6$.
+탐색으로 나쁜 행동을 골랐을 때 SARSA는 "내가 앞으로도 가끔 이렇게 실수할 것"을 가치에 반영하고, Q-learning은 "앞으로는 최선만 할 것"이라 가정한다. 본문 cliff walking에서 두 algorithm이 다른 길을 택한 이유가 이 2.7의 차이다.
+:::
+
+### A2. on-policy인가 off-policy인가
+
+다음 방법이 학습하는 가치가 "지금 데이터를 모으는 policy"의 것인지(on-policy), 다른 policy의 것인지(off-policy) 판단하라.
+
+1. ε-greedy로 움직이며 MC로 Q를 추정
+2. SARSA
+3. Q-learning
+4. 과거에 다른 policy로 모아 둔 transition을 replay buffer에서 꺼내 Q-learning 갱신 (DQN)
+5. 사람이 둔 바둑 기보로 "사람의 수"의 가치를 TD로 학습
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. **on-policy.** ε-greedy policy 자신의 가치를 잰다.
+2. **on-policy.** 다음 행동 $a'$ 도 같은 policy에서 뽑는다.
+3. **off-policy.** 데이터는 ε-greedy가 모으지만 목표의 $\max$ 는 greedy policy의 가치다.
+4. **off-policy.** 데이터를 모은 policy는 과거의 것이고 학습 대상은 현재의 greedy다. 본문의 deadly triad 세 조건(함수 근사, bootstrap, off-policy)을 모두 갖춘 구성이라 DQN에 안정화 장치가 필요하다([10.3](03_deep_rl.qmd)).
+5. **on-policy**(사람 policy의 평가). 데이터를 모은 것도, 평가하는 것도 사람의 수다. 그런데 이 가치로 "사람보다 나은 수"를 찾으려 하면 off-policy 문제가 된다.
+:::
+
+### B1. 표본평균은 learning rate가 $1/n$ 인 MC다
+
+어떤 상태에서 return $G_1, G_2, \dots$ 를 독립적으로 관측한다(평균 $\mu$, 분산 $\sigma^2$).
+
+(a) 표본평균 $V_n = \frac1n\sum_{i\le n}G_i$ 가 $V_n = V_{n-1} + \frac1n(G_n - V_{n-1})$ 로 갱신됨을 보여라.
+(b) 상수 learning rate $V_n = V_{n-1} + \alpha(G_n - V_{n-1})$ 는 과거 return에 어떤 가중치를 주는가?
+(c) 상수 $\alpha$ 로 오래 돌리면 $V_n$ 의 분산이 $\dfrac{\alpha}{2-\alpha}\sigma^2$ 로 수렴함을 보여라. 표본평균과 비교해 무엇을 뜻하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $nV_n = (n-1)V_{n-1} + G_n$ 을 $n$ 으로 나누고 정리하면 $V_n = V_{n-1} + \frac1n(G_n - V_{n-1})$.
+
+(b) 펼치면 $V_n = (1-\alpha)^nV_0 + \alpha\sum_{k=0}^{n-1}(1-\alpha)^kG_{n-k}$. 최근 return일수록 크게, 지수적으로 잊는다([3.4 연습 문제 B2](../03_deep_learning/04_optimizers.qmd)의 이동평균).
+
+(c) $V_n$ 의 분산을 $W$ 라 하면 정상 상태에서 $W = (1-\alpha)^2W + \alpha^2\sigma^2$, 따라서 $W = \dfrac{\alpha^2\sigma^2}{1 - (1-\alpha)^2} = \dfrac{\alpha}{2-\alpha}\sigma^2$.
+표본평균의 분산 $\sigma^2/n$ 은 0으로 가지만 상수 $\alpha$ 는 **바닥에 머문다.** 본문 G10.2.1의 "표본평균 MC가 TD보다 낮은 오차에 도달했다"는 MC가 강해서라기보다 $1/n$ 이라는 learning rate schedule을 공짜로 썼기 때문이다. 공정한 비교는 같은 schedule끼리다.
+:::
+
+### B2. TD는 평균적으로 DP를 한다
+
+TD(0) 갱신 $V(s) \leftarrow V(s) + \alpha[r + \gamma V(s') - V(s)]$ 에서 $s$ 가 주어졌을 때 $r, s'$ 는 policy와 환경에 따라 무작위다.
+
+(a) 갱신량의 기댓값이 $\alpha\big[(T^\pi V)(s) - V(s)\big]$ 임을 보여라($T^\pi$ 는 [10.1](01_dynamic_programming.qmd)의 policy evaluation operator).
+(b) 이것으로 "TD는 Bellman backup을 표본 하나로 근사한 것"이라는 본문의 말을 설명하라. TD의 목표값에 bias가 있다는 것은 무슨 뜻인가?
+(c) 표 형태 TD가 $V^\pi$ 로 수렴하려면 learning rate에 어떤 조건이 필요한가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathbb E[r + \gamma V(s')\mid s] = \sum_a\pi(a\mid s)\big[R(s,a) + \gamma\sum_{s'}P(s'\mid s,a)V(s')\big] = (T^\pi V)(s)$. $V(s)$ 는 상수이므로 기대 갱신량은 $\alpha[(T^\pi V)(s) - V(s)]$.
+
+(b) 평균적으로는 "$V$ 를 $T^\pi V$ 쪽으로 $\alpha$ 만큼 옮기는" DP 한 걸음이다. 한 번의 갱신은 그 평균 주위에서 흔들린다.
+bias는 목표값 $r + \gamma V(s')$ 의 기댓값이 참 가치 $V^\pi(s)$ 가 아니라 $T^\pi V(s)$ 라는 뜻이다. 현재 $V$ 가 틀리면 목표도 틀린다. 그 틀린 목표를 향해 가다 보면 $V = T^\pi V$ 인 고정점, 즉 $V^\pi$ 에서만 bias가 사라진다.
+
+(c) 확률적 근사의 표준 조건 $\sum_t\alpha_t = \infty$ (끝없이 움직일 수 있을 만큼 크게), $\sum_t\alpha_t^2 < \infty$ (잡음이 결국 가라앉을 만큼 작게)다. $\alpha_t = 1/t$ 가 두 조건을 만족하고, 상수 $\alpha$ 는 둘째 조건을 어겨 B1(c)의 바닥이 남는다.
+:::
+
+### B3. importance sampling 분산은 길이에 대해 지수적이다
+
+행동이 두 개다. target policy $\pi$ 는 언제나 행동 1을, behavior policy $b$ 는 둘을 반반 고른다. 길이 $L$ 인 episode의 return은 항상 1이라 하자(참값 $V^\pi = 1$).
+
+(a) 한 step의 비율 $\rho = \pi(a)/b(a)$ 의 분포와 $\mathbb E_b[\rho]$, $\mathbb E_b[\rho^2]$ 을 구하라.
+(b) $L$ step 곱 $\rho_{1:L}$ 의 평균과 분산을 구하라. $L = 12$ 면 표준편차는?
+(c) 0이 아닌 가중치를 받는 episode의 비율은? 표본 2만 개 중 실제로 쓰이는 것은 몇 개인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 행동 1이면 $\rho = 1/0.5 = 2$, 행동 2면 $0/0.5 = 0$ (반반). $\mathbb E[\rho] = 1$, $\mathbb E[\rho^2] = 2$.
+
+(b) step마다 독립이므로 $\mathbb E[\rho_{1:L}] = 1$, $\mathbb E[\rho_{1:L}^2] = 2^L$, 분산 $2^L - 1$. $L = 12$ 면 분산 4,095, 표준편차 약 **64**다. unbiased이지만 한 표본의 흔들림이 참값의 64배다.
+
+(c) 모든 step에서 행동 1이 나와야 가중치가 0이 아니고(그때 가중치는 $2^L$), 그 확률은 $2^{-L}$ 이다. $L = 12$ 면 2만 개 중 평균 **5개**만 살아남아 각각 4,096의 가중치로 평균을 떠받친다.
+본문의 "유효 표본 20,000 → 8"과 같은 현상이다. 다른 사람의 여행 기록으로 내 여행을 추정하려는데, 내가 갔을 법한 기록이 거의 없어서 몇 안 되는 기록에 모든 것을 거는 셈이다.
+:::
+
+### C1. 상수 learning rate의 바닥 확인
+
+$G \sim \mathcal N(1, 1)$ 을 2,000개씩 관측하는 실험을 2,000번 반복해, 표본평균($1/n$), $\alpha = 0.1$, $\alpha = 0.01$ 의 최종 RMSE를 B1(c)의 예측 $\sqrt{\alpha/(2-\alpha)}$ 와 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+표본평균의 RMSE는 $1/\sqrt{2000} \approx 0.022$ 로 계속 줄어든다. $\alpha = 0.1$ 은 0.229, $\alpha = 0.01$ 은 0.071로 예측과 소수점 셋째 자리까지 맞는 바닥에 머문다.
+$\alpha$ 를 작게 하면 바닥은 낮아지지만 처음에 참값으로 다가가는 속도가 느려진다. 표본평균은 처음엔 크게, 나중엔 작게 움직여 두 가지를 다 얻는다.
+
+```{python}
+#| label: ex-const-alpha
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+runs, N = 2000, 2000
+G = rng.normal(1.0, 1.0, (runs, N))
+
+V_mean, V_a1, V_a2 = np.zeros(runs), np.zeros(runs), np.zeros(runs)
+for n in range(N):
+    V_mean += (G[:, n] - V_mean) / (n + 1)        # α = 1/n
+    V_a1 += 0.1 * (G[:, n] - V_a1)
+    V_a2 += 0.01 * (G[:, n] - V_a2)
+
+rmse = lambda V: np.sqrt(np.mean((V - 1.0) ** 2))
+print(f"표본평균 (1/n)   RMSE {rmse(V_mean):.4f}   (1/√N = {1 / np.sqrt(N):.4f})")
+print(f"α = 0.1         RMSE {rmse(V_a1):.4f}   (√(α/(2−α)) = {np.sqrt(0.1 / 1.9):.4f})")
+print(f"α = 0.01        RMSE {rmse(V_a2):.4f}   (√(α/(2−α)) = {np.sqrt(0.01 / 1.99):.4f})")
+```
+:::
+
+### C2. Expected SARSA는 목표값의 흔들림을 없앤다
+
+A1(c)의 상황($Q(s', \cdot) = (1, 4, 2)$, $\varepsilon = 0.3$, 행동 3개, $r = 1$, $\gamma = 0.9$)에서
+
+(a) ε-greedy의 행동 확률을 구하라.
+(b) SARSA 목표값 $r + \gamma Q(s', a')$ 의 평균과 분산을 구하라.
+(c) Expected SARSA는 $a'$ 를 뽑지 않고 $r + \gamma\sum_{a'}\pi(a'\mid s')Q(s', a')$ 를 쓴다. 이 목표값의 평균과 분산은? 시뮬레이션으로 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) greedy 행동(Q=4)이 $1 - \varepsilon + \varepsilon/3 = 0.8$, 나머지가 각각 0.1.
+
+(b) $Q(s', a')$ 의 평균은 $0.1\times1 + 0.8\times4 + 0.1\times2 = 3.5$, 분산은 $0.1(2.5)^2 + 0.8(0.5)^2 + 0.1(1.5)^2 = 1.05$. 목표값 평균은 $1 + 0.9\times3.5 = 4.15$, 분산은 $0.81\times1.05 \approx 0.85$.
+
+(c) 평균은 같은 4.15, 분산은 **0**이다(이 transition에서). 다음 행동을 뽑는 무작위성을 기댓값으로 미리 없앴다.
+같은 on-policy 가치를 추정하면서 잡음 한 가닥을 제거한 것이고, 그래서 Expected SARSA는 더 큰 learning rate를 견딘다. $\pi$ 를 greedy로 바꾸면 Q-learning이 되므로, Q-learning은 Expected SARSA의 off-policy 특수형이기도 하다.
+
+```{python}
+#| label: ex-expected-sarsa
+
+Q_next = np.array([1.0, 4.0, 2.0])
+eps, r, g = 0.3, 1.0, 0.9
+pi = np.full(3, eps / 3)
+pi[Q_next.argmax()] += 1 - eps
+
+a_next = rng.choice(3, size=100_000, p=pi)
+sarsa = r + g * Q_next[a_next]
+expected = r + g * pi @ Q_next
+
+print(f"행동 확률 {pi}")
+print(f"SARSA           목표 평균 {sarsa.mean():.3f}   분산 {sarsa.var():.3f}")
+print(f"Expected SARSA  목표 = {expected:.3f}   분산 0")
+```
+:::
+
 ## 요약
 
 | 개념 | 수치·핵심 | |
