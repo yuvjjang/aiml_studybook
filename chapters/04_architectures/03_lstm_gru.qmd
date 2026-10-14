@@ -678,6 +678,94 @@ G4.3.2는 hidden 크기를 맞췄으므로 LSTM이 parameter를 4/3배 더 쓴�
 늘려 parameter를 맞추고 다시 돌려라. 거리 19의 순위가 바뀌는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. gate의 값어치
+
+입력 64차원, hidden 128차원이다.
+
+(a) vanilla RNN, GRU, LSTM 층의 parameter 수를 구하라. (각 gate·후보마다 $[h_{t-1}, x_t]$ 를 받는 weight와 bias가 하나씩 있다. RNN은 1벌, GRU는 3벌, LSTM은 4벌이다.)
+(b) 같은 parameter 예산이면 RNN의 hidden을 얼마나 키울 수 있는가? 그래도 RNN이 LSTM을 따라잡지 못하는 이유는?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 한 벌은 $128\times(128 + 64) + 128 = 24{,}704$. RNN 24,704, GRU 74,112, LSTM 98,816.
+
+(b) $h(h + 64) + h \approx 98{,}816$ 을 풀면 $h \approx 280$ 정도까지 키울 수 있다.
+하지만 [4.2](02_rnn.qmd)의 문제는 용량이 아니라 **같은 행렬의 거듭제곱**이었다. hidden을 키워도 $\prod\mathrm{diag}(1-h^2)W^\top$ 구조는 그대로라 먼 거리의 gradient는 여전히 사라진다. LSTM이 parameter 4배로 사는 것은 용량이 아니라 덧셈 경로다.
+:::
+
+### A2. forget gate가 정하는 기억의 길이
+
+forget gate가 시점마다 같은 값 $f$ 를 낸다고 하자.
+
+(a) $f = 0.9$ 면 50시점 뒤 cell state에 처음 정보가 얼마나 남는가? $f = 0.99$ 면?
+(b) 정보가 절반으로 줄어드는 반감기를 $f = \sigma(1) \approx 0.73$, $0.9$, $0.99$ 에서 구하라.
+(c) $f = 0.99$ 를 내려면 forget gate의 bias가 얼마여야 하는가? (입력 기여는 0으로 본다.)
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $0.9^{50} \approx 0.005$, $0.99^{50} \approx 0.61$.
+
+(b) $\ln2/\ln(1/f)$: $f = 0.73$ 이면 **2.2**시점, 0.9면 6.6, 0.99면 **69**시점. ([10.0 연습 문제 B2](../10_rl/00_mdp.qmd)의 반감기 계산과 같다.)
+
+(c) $\sigma(b) = 0.99$ 에서 $b = \ln(0.99/0.01) \approx 4.6$.
+흔히 쓰는 forget bias 초기값 1은 반감기 2시점짜리 기억으로 시작한다는 뜻이다. 먼 거리 의존이 중요한 과제라면 더 크게 잡거나, 학습이 그쪽으로 bias를 키워야 한다. 본문 G4.3.1의 "$b_f$ 를 키우면 gradient가 더 멀리 간다"가 이 반감기다.
+:::
+
+### B1. LSTM과 GRU의 덧셈 경로
+
+(a) gate 값들이 $h_{t-1}$ 에 의존하는 효과를 무시할 때, LSTM에서 $\dfrac{\partial c_t}{\partial c_{t-1}} = \mathrm{diag}(f_t)$ 임을 보이고 $\dfrac{\partial c_T}{\partial c_k}$ 를 적어라.
+(b) GRU는 $h_t = (1 - z_t)\odot h_{t-1} + z_t\odot\tilde h_t$ 다. 같은 근사에서 $\partial h_t/\partial h_{t-1}$ 에 덧셈 경로가 있음을 보여라. LSTM의 무엇에 해당하는가?
+(c) 이 경로가 vanilla RNN의 $\mathrm{diag}(1 - h^2)W^\top$ 와 다른 점 두 가지는?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $c_t = f_t\odot c_{t-1} + i_t\odot g_t$ 에서 $c_{t-1}$ 이 들어간 항은 첫 항뿐이고, 원소별 곱이라 Jacobian은 대각행렬 $\mathrm{diag}(f_t)$ 다. 거슬러 가면 $\dfrac{\partial c_T}{\partial c_k} = \mathrm{diag}\Big(\prod_{t=k+1}^{T}f_t\Big)$.
+
+(b) $\partial h_t/\partial h_{t-1} = \mathrm{diag}(1 - z_t) + (\tilde h_t \text{ 를 거치는 항})$. 첫 항이 덧셈 경로이고, $1 - z_t$ 가 LSTM의 forget gate $f_t$ 역할을 한다. GRU는 "얼마나 남길지"와 "얼마나 새로 쓸지"를 하나의 $z$ 로 묶어($1 - z$ 와 $z$) gate 하나를 아낀 구조다.
+
+(c) ① **행렬 곱이 아니라 원소별 곱**이라 방향이 섞이지 않는다 — 각 원소가 자기 gate만큼만 줄어든다. ② 그 배율이 **고정된 weight가 아니라 입력에 따라 바뀌는 gate**다. 기억할 때 열고 잊을 때 닫는 것을 학습한다. 본문 key-concept의 두 항목이다.
+:::
+
+### C1. forget bias와 60시점 기억
+
+forget gate 값이 $f_t = \sigma(b_f + \epsilon_t)$ ($\epsilon_t \sim \mathcal N(0, 1)$, 입력에 따른 흔들림)일 때, 60시점의 곱 $\prod f_t$ 를 $b_f = 0, 1, 3, 5$ 에서 5,000번 재어 중앙값과 시점당 평균 배율을 구하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$b_f = 0$ 이면 60시점 곱이 $10^{-21}$, $b_f = 1$ 이면 $10^{-11}$ 로 사실상 0이다. $b_f = 3$ 에서 약 0.01, $b_f = 5$ 에서 약 0.5다.
+시점당 평균 배율은 $\sigma(b_f)$ 보다 조금 **작다**($b_f = 3$ 에서 $\sigma(3) = 0.95$ 인데 실측 0.93). sigmoid가 오목한 구간이라 흔들림이 평균 배율을 깎는다(Jensen). 그래서 먼 기억을 원하면 bias를 생각보다 더 크게 잡아야 한다.
+
+```{python}
+#| label: ex-forget-bias
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+sigmoid = lambda z: 1 / (1 + np.exp(-z))
+for bf in [0, 1, 3, 5]:
+    f = sigmoid(bf + rng.normal(0, 1, (5000, 60)))
+    log_prod = np.log(f).sum(1)
+    print(f"b_f={bf}   σ(b_f)={sigmoid(bf):.3f}   60시점 곱 중앙값 {np.exp(np.median(log_prod)):.2e}   "
+          f"시점당 평균 배율 {np.exp(log_prod.mean() / 60):.3f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
