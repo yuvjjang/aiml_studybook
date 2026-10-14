@@ -729,6 +729,111 @@ PCA 전에 standardization이 필요한 이유를 [1.3](../01_data_science/03_pr
 cluster 사이 거리와 cluster 크기가 얼마나 달라지는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 성분을 몇 개 남길까
+
+특성 5개짜리 데이터의 covariance eigenvalue가 $(5,\ 3,\ 1,\ 0.5,\ 0.5)$ 다.
+
+(a) 첫 두 성분의 explained variance 비율은?
+(b) 분산의 90% 이상을 남기려면 성분이 몇 개 필요한가?
+(c) 성분 2개만 남겼을 때 평균 reconstruction error(점 하나당 제곱오차)는?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 전체 10 중 8이므로 **80%**.
+
+(b) 3개면 $9/10 = 90\%$ 로 딱 맞는다. **3개**.
+
+(c) 버린 eigenvalue의 합 $1 + 0.5 + 0.5 = 2$ 다. 본문의 "보존 + 오차 = 전체"에서 오차가 버린 방향의 분산 합이기 때문이다. C1에서 숫자로 확인한다.
+:::
+
+### A2. 단위를 바꾸면 주성분이 바뀐다
+
+키(cm, 분산 100)와 몸무게(kg, 분산 4)의 상관계수가 0.6이다.
+
+(a) 원래 단위의 covariance 행렬을 적어라. 첫 주성분은 대략 어느 방향인가?
+(b) 두 특성을 standardization한 뒤의 covariance(곧 상관 행렬)와 그 eigenvalue·eigenvector는?
+(c) 둘 중 어느 쪽이 "정답"인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 공분산은 $0.6\times10\times2 = 12$ 이므로 $\begin{pmatrix} 100 & 12 \\ 12 & 4\end{pmatrix}$. 키의 분산이 압도적이라 첫 주성분이 거의 **키 축**이다. 몸무게 정보는 둘째 성분으로 밀려난다.
+
+(b) $\begin{pmatrix} 1 & 0.6 \\ 0.6 & 1\end{pmatrix}$, eigenvalue $1.6$, $0.4$, eigenvector $(1, 1)/\sqrt2$ 와 $(1, -1)/\sqrt2$ 다. 첫 주성분은 "키와 몸무게가 함께 큰 정도"(체격), 둘째는 "키에 비해 무거운 정도"(체형)다.
+
+(c) 정답은 없다. PCA는 "분산이 큰 방향"을 찾는데, 단위가 다르면 분산의 크기 자체가 단위의 선택이다. 단위가 다른 특성은 standardization하는 것이 기본값이고, 같은 단위(예: 픽셀 밝기)면 원래 scale을 쓰는 것이 보통이다. 본문의 "scale에 민감하다" 함정이다.
+:::
+
+### B1. 2×2 PCA를 손으로
+
+중심화된 데이터의 covariance가 $\Sigma = \begin{pmatrix} 3 & 1 \\ 1 & 3\end{pmatrix}$ 이다.
+
+(a) eigenvalue와 eigenvector를 구하라.
+(b) 첫 주성분 하나로 줄이면 분산의 몇 %가 남는가? reconstruction error는?
+(c) 단위벡터 $\mathbf w = (1, 0)$ 방향으로 projection하면 분산은? 본문의 Rayleigh quotient 논증으로 이 값이 4를 넘을 수 없는 이유를 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) [0.0 연습 문제 B1](../00_foundations/00_linear_algebra.qmd)의 $\begin{pmatrix}2&1\\1&2\end{pmatrix}$ 에 단위행렬을 더한 것이라 eigenvector가 같고 eigenvalue가 1씩 크다: $\lambda = 4$ ($\mathbf v_1 = (1,1)/\sqrt2$), $\lambda = 2$ ($\mathbf v_2 = (1,-1)/\sqrt2$).
+
+(b) $4/6 \approx 67\%$. reconstruction error는 버린 eigenvalue 2.
+
+(c) $\mathbf w^\top\Sigma\mathbf w = 3$. $\mathbf w = (1, 0) = (\mathbf v_1 + \mathbf v_2)/\sqrt2$ 이므로 $c_1^2 = c_2^2 = 1/2$ 이고, 분산은 $\tfrac12\times4 + \tfrac12\times2 = 3$ 이다. eigenvalue의 가중평균이라 최댓값 4를 넘을 수 없고, $\mathbf w$ 가 $\mathbf v_1$ 과 일치할 때만 4가 된다.
+:::
+
+### C1. 버린 eigenvalue와 SVD의 정밀도
+
+5개 방향의 표준편차가 $(3,\ 1,\ 0.3,\ 10^{-5},\ 10^{-9})$ 인 데이터 1,000개를 무작위로 회전해 만든다.
+
+(a) 성분 $k = 1, 2, 3$ 을 남겼을 때 평균 reconstruction error가 버린 eigenvalue 합과 같은지 확인하라.
+(b) covariance 행렬 $X^\top X/n$ 의 eigenvalue와 SVD로 구한 $\sigma_j^2/n$ 을 비교하라. 가장 작은 방향에서 무슨 일이 생기는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 세 경우 모두 소수점 끝까지 같다.
+
+(b) 큰 방향들은 두 방법이 같다. 가장 작은 방향(참값 약 $10^{-18}$)에서 covariance 방법은 $-2\times10^{-16}$ 같은 **음수**를 낸다 — 분산이 음수일 수는 없으니 완전히 틀렸다. SVD는 $10^{-18}$ 근처를 정확히 낸다.
+$X^\top X$ 를 만드는 순간 값의 크기가 제곱되어 $10^{-18}$ 이 float64의 상대 정밀도($10^{-16}$) 아래로 묻힌다. [0.0의 condition number](../00_foundations/00_linear_algebra.qmd)가 제곱되는 바로 그 현상이고, 본문의 "covariance를 만들지 말고 SVD를 직접 쓰라"의 이유다.
+
+```{python}
+#| label: ex-pca-svd
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n = 1000
+Q, _ = np.linalg.qr(rng.normal(size=(5, 5)))                # 무작위 회전
+X = rng.normal(size=(n, 5)) * np.array([3, 1, 0.3, 1e-5, 1e-9]) @ Q.T
+X -= X.mean(0)
+
+ev_cov = np.sort(np.linalg.eigvalsh(X.T @ X / n))[::-1]
+U, S, Vt = np.linalg.svd(X, full_matrices=False)
+ev_svd = S**2 / n
+
+for k in [1, 2, 3]:
+    W = Vt[:k].T
+    err = np.mean(((X - X @ W @ W.T) ** 2).sum(1))
+    print(f"k={k}   reconstruction error {err:.6e}   버린 eigenvalue 합 {ev_svd[k:].sum():.6e}")
+print("covariance 방법 eigenvalue:", np.array2string(ev_cov, precision=3))
+print("SVD 방법       eigenvalue:", np.array2string(ev_svd, precision=3))
+```
+:::
+
 ## 요약
 
 | 방법 | 보존하는 것 | 선형? | 새 점 | 용도 |
