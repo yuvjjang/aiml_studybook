@@ -815,6 +815,91 @@ for s in ["**encoder**: Conformer — convolution(국소)과 attention(전역)�
 왜 CTC 출력이 뾰족해지는가? 그것이 streaming에 무슨 뜻인가.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. collapse 규칙
+
+CTC는 frame별 출력(blank는 `-`)에서 ① 연속된 같은 글자를 하나로 합치고 ② blank를 지운다. 다음 경로를 collapse하라.
+
+1. `aa-b`
+2. `a-ab`
+3. `-a-`
+4. `hhe-ll-lo`
+5. `hhel-lo`
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. `ab` 2. `aab` 3. `a` 4. `hello` 5. `helo`
+
+4와 5의 차이가 핵심이다. "hello"의 `ll` 처럼 같은 글자가 연속으로 나와야 하면 그 사이에 blank가 **반드시** 있어야 한다. blank가 없으면 ①에서 하나로 합쳐진다. blank는 "아무 소리 없음"과 "같은 글자의 경계" 두 역할을 한다.
+:::
+
+### A2. alignment 경로의 수
+
+label `ab` ($L = 2$)를 $T = 3$ frame에 맞추는 경로를 모두 적어라. ($T$ 를 늘리면 경로 수가 어떻게 되는가는 C1에서 센다.)
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+`aab`, `abb`, `ab-`, `a-b`, `-ab` — **5개**. 각 경로가 collapse하면 `ab` 가 된다.
+CTC loss는 이 경로들의 확률을 모두 더한 것이다. $T$ 가 길어지면 경로 수가 폭발적으로 늘어 일일이 셀 수 없으므로, 본문의 forward algorithm(동적계획법)이 합을 $O(TL)$ 로 계산한다.
+:::
+
+### B1. 가장 확률 높은 경로 ≠ 가장 확률 높은 label
+
+frame 2개에서 모델의 출력이 매 frame $P(a) = 0.4$, $P(-) = 0.6$ 이다(서로 독립).
+
+(a) greedy decoding(frame마다 가장 큰 것)의 경로와 label, 그 경로의 확률은?
+(b) label `a` 의 확률(collapse해서 `a` 가 되는 경로들의 합)은? 빈 label의 확률은?
+(c) 어느 label이 더 확률이 높은가? greedy가 왜 틀렸는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) `--` → 빈 label, 확률 $0.6^2 = 0.36$.
+
+(b) `a` 가 되는 경로는 `a-`, `-a`, `aa` 셋이다: $0.4\times0.6 + 0.6\times0.4 + 0.4^2 = 0.64$. 빈 label은 `--` 하나뿐이라 0.36.
+
+(c) label `a` 가 0.64로 더 높다. greedy는 **경로 하나**의 확률을 최대화하는데, label의 확률은 **경로들의 합**이다. `a` 는 확률을 여러 경로에 나눠 갖고 있어 각 경로는 작아 보이지만 합치면 크다. prefix beam search가 같은 label로 collapse되는 경로들의 확률을 합치며 탐색하는 이유다(본문 G8.4.5).
+:::
+
+### C1. 경로 수를 세어 보기
+
+label `ab` 와 `aa` 를 $T = 2, \dots, 8$ frame에 맞추는 경로를 모두 나열해 세어라. 반복 글자가 없는 label의 경로 수는 $\binom{T + L}{2L}$ 이라는 공식과 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+`ab` 는 공식과 모든 $T$ 에서 맞는다($T = 3$ 이면 $\binom{5}{4} = 5$ 로 A2와 같다). `aa` 는 더 적다 — 두 `a` 사이에 blank가 반드시 들어가야 해서 가능한 경로가 줄어든다. $T = 2$ 에서는 `a-a` 를 놓을 자리가 없어 **0개**다. 반복 글자가 있는 label은 최소 frame 수가 $L$ 이 아니라 $L + (\text{반복 횟수})$ 다.
+
+```{python}
+#| label: ex-ctc-paths
+
+from itertools import product, groupby
+from math import comb
+
+def collapse(path):
+    return "".join(ch for ch, _ in groupby(path) if ch != "-")
+
+for T in range(2, 9):
+    counts = {}
+    for label in ["ab", "aa"]:
+        counts[label] = sum(collapse(p) == label for p in product("ab-", repeat=T))
+    print(f"T={T}   'ab' {counts['ab']:>4} (공식 C(T+2,4) = {comb(T + 2, 4):>4})   'aa' {counts['aa']:>4}")
+```
+:::
+
 ## 요약
 
 | 개념 | 수식·수치 | 핵심 |
