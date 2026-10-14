@@ -470,6 +470,97 @@ loss가 어디서 멈추는가? attention만으로 무엇을 못 하는지 key-v
 줄이지 않고 비교한 실험이 왜 불공정한지 수치로 보여라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 7B 모델의 parameter는 어디에 있는가
+
+LLaMA-7B는 $d = 4096$, 층 32개, SwiGLU FFN의 중간 폭 $d_{ff} = 11008$, 어휘 32,000개다. attention은 $4d^2$, SwiGLU FFN은 행렬 3개라 $3d\,d_{ff}$, RMSNorm은 층마다 $2d$ 이고 bias는 없다. 입력 embedding과 출력 head는 따로(묶지 않음) 있다.
+
+(a) 층 하나의 attention과 FFN parameter를 구하라. 비율은?
+(b) 전체 parameter를 구하라. embedding이 차지하는 비율은?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) attention $4\times4096^2 \approx 67.1$M, FFN $3\times4096\times11008 \approx 135.3$M. FFN이 attention의 약 2배로, 층 parameter의 3분의 2다.
+
+(b) 층 하나 약 202.4M, 32층이면 약 6.48B. embedding 둘 $2\times32000\times4096 \approx 262$M를 더하면 약 **6.74B**. embedding은 4% 정도다.
+GPT-2 small(약 124M)에서는 embedding이 30%였다. 모델이 커질수록 parameter 대부분이 층의 행렬로 가고, 어휘 크기의 비중은 줄어든다.
+:::
+
+### A2. SwiGLU의 8/3 규칙
+
+(a) 일반 FFN(행렬 2개, $d_{ff} = 4d$)과 parameter 수를 같게 하려면 SwiGLU(행렬 3개)의 $d_{ff}$ 는 얼마여야 하는가?
+(b) $d = 4096$ 이면 그 값은? LLaMA가 11008을 쓴 이유를 추측하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $2d\times4d = 3d\,d_{ff}$ 에서 $d_{ff} = 8d/3$.
+
+(b) $8\times4096/3 \approx 10923$. 11008은 그보다 조금 큰 **256의 배수**($43\times256$)다. GPU 행렬 연산이 특정 크기의 배수에서 가장 효율적이라 반올림한 것이다. 본문 "직접 해보기" ③의 공정 비교가 이 8/3이다.
+:::
+
+### B1. residual stream: 읽고 더하기
+
+pre-LN block은 $\mathbf x \leftarrow \mathbf x + \mathrm{Attn}(\mathrm{LN}(\mathbf x))$, $\mathbf x \leftarrow \mathbf x + \mathrm{FFN}(\mathrm{LN}(\mathbf x))$ 다.
+
+(a) $L$ 개 block을 지난 뒤 $\mathbf x_L = \mathbf x_0 + \sum(\text{각 sublayer의 출력})$ 임을 보여라.
+(b) 출력 head가 $\mathbf x_L$ 만 읽는다면, 3번째 block의 attention 출력은 어떤 경로로 최종 출력에 닿는가?
+(c) 이 구조에서 $\partial\mathbf x_L/\partial\mathbf x_0$ 에 항상 남는 항은 무엇인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 매 sublayer가 자기 출력을 $\mathbf x$ 에 **더하기만** 하므로 펼치면 처음 값과 모든 출력의 합이다. 이 합의 통로를 residual stream이라 부른다.
+
+(b) 두 경로가 있다. 직접 경로 — 그 출력이 합에 그대로 남아 $\mathbf x_L$ 의 일부가 된다. 간접 경로 — 뒤쪽 block들이 LN을 거쳐 그 값을 읽고 새 출력에 반영한다. 직접 경로가 있으므로 어떤 block의 기여도 사라지지 않고 끝까지 간다.
+
+(c) 항등행렬 $I$. [3.1](../03_deep_learning/01_backpropagation.qmd)과 [3.7](../03_deep_learning/07_initialization.qmd)의 "residual은 gradient 고속도로"가 Transformer 전체에 걸쳐 있다. 그래서 수십~수백 층을 쌓아도 학습이 된다.
+:::
+
+### C1. config로 parameter 세기
+
+$d$, 층 수, $d_{ff}$, 어휘, 문맥 길이, FFN 종류(GELU 2행렬·bias 있음 / SwiGLU 3행렬·bias 없음), embedding 묶음 여부를 받아 parameter를 세는 함수를 만들어 GPT-2 small(약 124M)과 LLaMA-7B(약 6.74B)를 재현하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+GPT-2 small: $d = 768$, 12층, $d_{ff} = 3072$, 어휘 50,257, 위치 embedding 1,024, bias와 LayerNorm($\gamma, \beta$) 있음, embedding 묶음 → **124,439,808**.
+LLaMA-7B: 위 A1의 값 → **6,738,415,616**. 둘 다 공개된 값과 정확히 맞는다.
+
+```{python}
+#| label: ex-param-count
+
+def count_params(d, n_layer, d_ff, vocab, n_ctx=0, swiglu=False, bias=True, tied=True):
+    attn = 4 * d * d + (4 * d if bias else 0)
+    if swiglu:
+        ffn = 3 * d * d_ff
+    else:
+        ffn = 2 * d * d_ff + ((d_ff + d) if bias else 0)
+    norms = 2 * (2 * d if bias else d)                  # LayerNorm(γ,β) 또는 RMSNorm(γ)
+    layer = attn + ffn + norms
+    embed = vocab * d * (1 if tied else 2) + n_ctx * d
+    final_norm = 2 * d if bias else d
+    return n_layer * layer + embed + final_norm
+
+gpt2 = count_params(768, 12, 3072, 50257, n_ctx=1024)
+llama = count_params(4096, 32, 11008, 32000, swiglu=True, bias=False, tied=False)
+print(f"GPT-2 small  {gpt2:>15,}")
+print(f"LLaMA-7B     {llama:>15,}")
+```
+:::
+
 ## 요약
 
 | 부품 | 하는 일 | parameter | 핵심 |
