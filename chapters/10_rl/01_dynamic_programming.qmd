@@ -527,6 +527,216 @@ $\gamma$에 수렴하는가?
 $d=8$이면 표를 메모리에 올릴 수 있는가? 그래서 무엇이 필요한가.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. value iteration을 손으로 세 번
+
+일렬로 놓인 칸 1, 2, 3이 있고 3은 목표(terminal, 가치 0)다. 행동은 왼쪽·오른쪽 두 가지이고 결정론적이다(벽에 부딪히면 제자리).
+2에서 오른쪽으로 가 3에 들어가면 보상 +10, 그 밖의 모든 이동은 보상 −1이다. $\gamma = 0.9$, 처음 $V = 0$.
+
+(a) synchronous value iteration을 세 번 하며 $V(1)$, $V(2)$ 를 적어라.
+(b) in-place로 2 → 1 순서로 갱신하면 몇 번 만에 수렴하는가? 1 → 2 순서라면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a)
+
+| 반복 | $V(1)$ | $V(2)$ |
+|---|---|---|
+| 0 | 0 | 0 |
+| 1 | $\max(-1 + 0.9\cdot0,\ -1 + 0.9\cdot0) = -1$ | $\max(10,\ -1 + 0.9\cdot0) = 10$ |
+| 2 | $-1 + 0.9 \times 10 = 8$ | 10 |
+| 3 | 8 | 10 |
+
+두 번째 반복에서 수렴한다. 목표의 보상이 한 번에 한 칸씩 뒤로 전해진다.
+
+(b) 2 → 1 순서: 첫 sweep에서 $V(2) = 10$ 을 먼저 구하고 바로 그 값으로 $V(1) = -1 + 9 = 8$ 이 된다. **한 번**에 수렴한다.
+1 → 2 순서: $V(1)$ 을 계산할 때 $V(2)$ 가 아직 0이라 $-1$, 그 뒤 $V(2) = 10$. synchronous와 같이 두 번 걸린다.
+목표에서 가까운 순서로 갱신하면 소식이 한 바퀴에 끝까지 전해진다. 본문 G10.1.4의 "목표에 가까운 순 0.56배"가 이것이다.
+:::
+
+### A2. 참인가 거짓인가
+
+1. value iteration 중간의 $V_k$ 는 그 시점의 greedy policy $\pi_k$ 의 가치 $V^{\pi_k}$ 와 같다.
+2. policy iteration은 유한 번의 반복 안에 반드시 끝난다(상태·행동이 유한할 때).
+3. $\gamma = 1$ 이어도 $T^*$ 는 언제나 contraction이다.
+4. in-place 갱신은 수렴하는 고정점(답)을 바꾼다.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. **거짓.** $V_k$ 는 어떤 policy의 가치도 아닐 수 있는 중간 추정치다. 본문 G10.1.2에서 policy는 이미 최적인데 가치는 아직 수렴 중이었던 것이 그 예다.
+2. **참.** policy의 개수가 유한하고($|\mathcal A|^{|\mathcal S|}$), 매 반복 가치가 엄격히 좋아지거나(B3) 멈추므로 같은 policy를 두 번 거치지 않는다.
+3. **거짓.** 계수가 $\gamma = 1$ 이면 "차이가 줄지 않을" 수 있다. terminal 상태로 반드시 도달하는(proper) policy만 생각하는 등의 추가 조건이 있어야 수렴을 보장한다. 본문 실험에서 terminal 덕분에 수렴률이 $\gamma$ 보다 빨랐던 것도 같은 이야기다.
+4. **거짓.** 순서는 도달 속도만 바꾼다. fixed point $V^*$ 는 유일하다.
+:::
+
+### B1. $T^*$ 가 contraction인 이유
+
+(a) 두 함수 $f, g$ 에 대해 $\big|\max_a f(a) - \max_a g(a)\big| \le \max_a|f(a) - g(a)|$ 임을 보여라.
+(b) (a)를 써서 $\|T^*V_1 - T^*V_2\|_\infty \le \gamma\|V_1 - V_2\|_\infty$ 를 증명하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a) $\max_a f(a) = f(a^*)$ 라 하면 $\max f - \max g \le f(a^*) - g(a^*)$ 다. 반대 방향도 같은 방법으로.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 힌트대로 $\max f - \max g \le f(a^*) - g(a^*) \le \max_a|f - g|$. $g$ 의 최대점으로 같은 논리를 쓰면 $\max g - \max f \le \max_a|f - g|$. 둘을 합치면 절댓값 부등식이다.
+
+(b) 상태 $s$ 하나에서 $f(a) = R(s,a) + \gamma\sum_{s'}P(s'\mid s,a)V_1(s')$, $g$ 는 $V_2$ 로 같은 것을 두면 (a)에 의해
+
+$$|(T^*V_1)(s) - (T^*V_2)(s)| \le \max_a\gamma\Big|\sum_{s'}P(s'\mid s,a)\big(V_1(s') - V_2(s')\big)\Big| \le \gamma\|V_1 - V_2\|_\infty$$
+
+마지막은 "확률로 가중평균한 값은 최댓값을 넘지 못한다"는 사실이다. 모든 $s$ 에서 성립하므로 최댓값에서도 성립한다.
+보상 $R$ 은 양쪽에 똑같이 들어가 빼면 지워진다. contraction의 원천은 오직 $\gamma$ 와 "평균은 최대를 넘지 않는다"는 두 가지다.
+:::
+
+### B2. 언제 멈춰도 되는가
+
+contraction에서 다음 두 가지를 유도하라.
+
+(a) $\|V_k - V^*\|_\infty \le \gamma^k\|V_0 - V^*\|_\infty$.
+(b) $\|V_{k+1} - V_k\|_\infty < \epsilon$ 이면 $\|V_{k+1} - V^*\|_\infty \le \dfrac{\gamma\epsilon}{1-\gamma}$.
+(c) $\gamma = 0.99$ 에서 (b)의 보장이 $\epsilon$ 의 몇 배인가? 이것이 무엇을 뜻하는가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(b) 삼각부등식 $\|V_{k+1} - V^*\| \le \|V_{k+1} - V_{k+2}\| + \|V_{k+2} - V_{k+3}\| + \cdots$ 를 쓰고, 각 차이가 앞 차이의 $\gamma$ 배 이하임을 이용한다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $V^* = T^*V^*$ 이므로 $\|V_k - V^*\| = \|T^*V_{k-1} - T^*V^*\| \le \gamma\|V_{k-1} - V^*\|$. $k$ 번 반복하면 된다.
+
+(b) $\|V_{j+1} - V_j\| \le \gamma^{j-k}\|V_{k+1} - V_k\|$ 이므로
+
+$$\|V_{k+1} - V^*\| \le \sum_{j\ge k+1}\|V_{j+1} - V_j\| \le \epsilon(\gamma + \gamma^2 + \cdots) = \frac{\gamma\epsilon}{1-\gamma}$$
+
+(c) $0.99/0.01 = 99$ 배다. 이웃한 두 반복의 차이가 $10^{-3}$ 이어도 참값과는 최대 0.1 차이 날 수 있다.
+$\gamma$ 가 1에 가까우면 "반복 사이 변화가 작다"가 "답에 가깝다"를 거의 보장하지 못한다. 수렴이 느려서, 매 걸음은 작지만 남은 거리가 멀 수 있기 때문이다. 본문 G10.1.2의 "이론 상한이 실제의 11배 보수적"은 이 상한이 최악 경우 기준이라는 뜻이다.
+:::
+
+### B3. policy improvement theorem
+
+모든 상태에서 $Q^\pi(s, \pi'(s)) \ge V^\pi(s)$ 이면 모든 상태에서 $V^{\pi'}(s) \ge V^\pi(s)$ 임을 보여라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+$V^\pi(s) \le Q^\pi(s, \pi'(s)) = \mathbb E\big[R_t + \gamma V^\pi(s_{t+1})\mid s_t = s,\ a_t = \pi'(s)\big]$ 의 $V^\pi(s_{t+1})$ 에 같은 부등식을 다시 쓴다. 이것을 끝없이 펼친다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+힌트대로 펼치면
+
+$$V^\pi(s) \le \mathbb E_{\pi'}[R_t + \gamma V^\pi(s_{t+1})] \le \mathbb E_{\pi'}[R_t + \gamma R_{t+1} + \gamma^2V^\pi(s_{t+2})] \le \cdots \le \mathbb E_{\pi'}\Big[\sum_k\gamma^kR_{t+k}\Big] = V^{\pi'}(s)$$
+
+각 단계에서 "한 step만 $\pi'$ 로 바꾸고 나머지는 $\pi$ 로" 한 것보다, "두 step을 $\pi'$ 로" 한 것이 좋거나 같다. 끝까지 바꾸면 $\pi'$ 의 가치가 된다.
+
+greedy policy는 정의상 $Q^\pi(s, \pi'(s)) = \max_aQ^\pi(s, a) \ge V^\pi(s)$ 이므로 조건을 만족한다. 그래서 "평가 → greedy 개선"을 반복하면 가치가 내려가지 않는다. 등호가 모든 상태에서 성립하면 $V^\pi$ 가 Bellman optimality equation을 만족하므로 이미 최적이다.
+:::
+
+### C1. 오차 상한을 무작위 MDP로 확인하기
+
+상태 20개, 행동 4개인 무작위 MDP($\gamma = 0.9$)에서 value iteration을 돌린다.
+
+(a) 모든 $k$ 에서 B2(a)의 상한이 지켜지는지 확인하라.
+(b) 이웃 반복의 차이가 처음 $10^{-3}$ 아래로 내려간 시점에서 실제 오차와 B2(b)의 상한 $\gamma\epsilon/(1-\gamma) = 0.009$ 를 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 모든 반복에서 상한이 지켜진다.
+
+(b) 70번째 반복에서 멈추고, 그때 실제 오차는 약 0.0089로 상한 0.009에 **거의 닿는다.** 이 MDP에서는 B2(b)의 상한이 꽤 빡빡하다. 본문 G10.1.1의 "contraction 비율 최댓값이 정확히 $\gamma$"와 같은 현상이다.
+
+```{python}
+#| label: ex-vi-bound
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+S, A, g = 20, 4, 0.9
+P = rng.random((S, A, S)); P /= P.sum(2, keepdims=True)
+R = rng.normal(size=(S, A))
+T = lambda V: (R + g * P @ V).max(1)            # Bellman optimality operator
+
+V_star = np.zeros(S)
+for _ in range(2000):
+    V_star = T(V_star)
+
+V = np.zeros(S)
+e0 = np.abs(V - V_star).max()
+bound_ok, stop = True, None
+for k in range(1, 200):
+    V_new = T(V)
+    err = np.abs(V_new - V_star).max()
+    bound_ok &= err <= g**k * e0 + 1e-12
+    if stop is None and np.abs(V_new - V).max() < 1e-3:
+        stop = (k, err)
+    V = V_new
+
+print(f"모든 k 에서 ‖V_k − V*‖ ≤ γ^k ‖V_0 − V*‖ : {bound_ok}")
+print(f"멈춘 시점 k = {stop[0]}   실제 오차 {stop[1]:.4f}   상한 γε/(1−γ) = {g * 1e-3 / (1 - g):.4f}")
+```
+:::
+
+### C2. policy iteration은 왜 그렇게 빨리 끝나는가
+
+C1의 MDP에서 $\gamma = 0.9,\ 0.99,\ 0.999$ 일 때 value iteration(같은 정밀도까지)과 policy iteration(평가는 연립방정식으로 정확히)의 반복 수를 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+value iteration은 160, 1,900, 21,000번 남짓으로 $1/(1-\gamma)$ 에 비례해 늘어난다. policy iteration은 세 경우 모두 **3번**이다.
+
+value iteration은 가치를 정밀하게 맞추는 데 반복을 쓰는데, $\gamma$ 가 1에 가까우면 그 수렴이 느리다(B2). policy iteration은 매번 가치를 정확히 구하고(비싼 한 번), policy라는 **이산적인** 대상만 바꾼다. policy의 순위만 맞으면 되므로 몇 번이면 끝난다.
+대가는 한 번의 평가가 $O(S^3)$ 이라는 것이다. 상태가 많으면 정확한 평가 대신 몇 번의 sweep으로 근사하는데, 그것이 본문 G10.1.3의 GPI이고 "평가를 얼마나 할 것인가"의 균형이다.
+
+```{python}
+#| label: ex-vi-vs-pi
+
+for g in [0.9, 0.99, 0.999]:
+    T = lambda V: (R + g * P @ V).max(1)
+    V, vi_iters = np.zeros(S), 0
+    while True:
+        V_new = T(V); vi_iters += 1
+        if np.abs(V_new - V).max() < 1e-6 * (1 - g) / (2 * g):   # 같은 최종 정밀도
+            break
+        V = V_new
+
+    pi, pi_iters = np.zeros(S, int), 0
+    while True:
+        pi_iters += 1
+        idx = np.arange(S)
+        V_pi = np.linalg.solve(np.eye(S) - g * P[idx, pi], R[idx, pi])   # 정확한 평가
+        new_pi = (R + g * P @ V_pi).argmax(1)                           # greedy 개선
+        if np.all(new_pi == pi):
+            break
+        pi = new_pi
+    print(f"γ={g:<6} value iteration {vi_iters:>6}번   policy iteration {pi_iters}번")
+```
+:::
+
 ## 요약
 
 | 개념 | 수치·핵심 | |
