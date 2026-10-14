@@ -438,6 +438,96 @@ $k=1$ 과 $k=2$ 의 FLOPs·성능·routing 안정성을 비교하라.
 왜 대부분 $k=2$ 를 쓰는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 전체 parameter와 활성 parameter
+
+$d = 4096$, 층 32개인 모델에서 FFN을 SwiGLU expert 8개(각 $d_{ff} = 14336$, 행렬 3개)로 바꾸고 token마다 top-2를 쓴다.
+
+(a) expert 하나의 parameter, 층 하나의 expert 전체, token 하나가 실제로 쓰는 양은?
+(b) 32층 전체로 보면 FFN parameter 총량과 token당 활성량은? 어느 쪽이 메모리를, 어느 쪽이 연산량을 정하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) expert 하나 $3\times4096\times14336 \approx 176$M, 층당 8개 1.41B, token당 2개 352M.
+
+(b) 총량 약 **45B**, 활성 약 **11B**. 여기에 attention과 embedding을 더한 것이 "총 47B, 활성 13B"라는 공개 수치다.
+**메모리는 총량이**, token당 연산은 **활성량이** 정한다. 본문의 "parameter 수만으로 비교하지 말 것"이 이 두 숫자다 — 13B dense 모델 정도의 계산으로 47B를 메모리에 올려 둔 셈이다.
+:::
+
+### A2. expert capacity
+
+batch에 token이 4,096개, expert 8개, top-2, capacity factor 1.25다.
+
+(a) expert 하나가 받을 수 있는 최대 token 수는?
+(b) router가 한 expert에 1,500개를 보내려 하면 무슨 일이 생기는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 배정 총량은 $4096\times2 = 8192$ 이고 균등하면 expert당 1,024개다. capacity는 그 1.25배인 **1,280**개.
+
+(b) 넘친 220개는 그 expert에서 처리되지 못하고 버려진다(token drop — 그 층의 FFN을 건너뛰고 residual만 통과). 그래서 load balancing이 중요하고, capacity factor를 키우면 drop은 줄지만 빈 자리를 위해 메모리와 연산을 더 잡아 둬야 한다(본문 "직접 해보기" ②).
+:::
+
+### B1. load balancing loss의 최솟값
+
+expert $N$ 개에 대해 $f_i$ 는 실제 배정 비율, $P_i$ 는 router 확률의 평균이다($\sum f_i = \sum P_i = 1$). auxiliary loss는 $\mathcal L = N\sum_if_iP_i$ 다.
+
+(a) $f = P$ 라고 두면 $\mathcal L = N\sum_iP_i^2 \ge 1$ 이고, 등호가 $P_i = 1/N$ 일 때임을 보여라.
+(b) 한 expert에만 몰리면($f_1 = P_1 = 1$) $\mathcal L$ 은?
+(c) $f$ 는 미분할 수 없는데(argmax로 센 비율), 이 loss는 어떻게 학습에 쓰이는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) Cauchy–Schwarz로 $1 = (\sum P_i)^2 \le N\sum P_i^2$. 등호는 모든 $P_i$ 가 같을 때다. 또는 분산으로 $\sum P_i^2 = N\cdot\overline{P^2} \ge N\bar P^2 = 1/N$.
+
+(b) $\mathcal L = N\times1\times1 = N$. 균등할 때의 $N$ 배다.
+
+(c) $f_i$ 는 상수처럼 취급하고 $P_i$ 쪽으로만 gradient가 흐른다. 많이 배정된 expert(큰 $f_i$)일수록 그 expert의 router 확률 $P_i$ 를 낮추는 gradient가 크다. "사람이 몰린 창구의 안내 표지판을 작게 만드는" 식으로 배정을 고르게 한다.
+:::
+
+### C1. 쏠림에 따른 balancing loss
+
+router logit에 expert마다 다른 치우침(세기 $\beta$)을 더해 token 4,096개를 top-1로 배정한다. $\beta = 0, 0.5, 1, 2, 3$ 에서 $f$, $P$ 와 $N\sum f_iP_i$ 를 구하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$\beta = 0$ 이면 loss가 1 근처로 최소이고, 쏠림이 커질수록 커져 $\beta = 3$ 에서 한두 expert가 대부분을 받으며 loss가 $N$ 쪽으로 다가간다.
+$f$ (실제 배정)가 $P$ (확률 평균)보다 더 극단적으로 쏠리는 것도 보인다. argmax가 작은 확률 차이를 0/1로 키우기 때문이다.
+
+```{python}
+#| label: ex-moe-balance
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+N, T = 8, 4096
+skew = np.linspace(-1, 1, N)                              # expert 마다 다른 치우침 방향
+
+for beta in [0, 0.5, 1, 2, 3]:
+    logits = rng.normal(size=(T, N)) + beta * skew
+    P_tok = np.exp(logits - logits.max(1, keepdims=True))
+    P_tok /= P_tok.sum(1, keepdims=True)
+    f = np.bincount(logits.argmax(1), minlength=N) / T     # 실제 배정 비율 (top-1)
+    P = P_tok.mean(0)                                      # router 확률 평균
+    print(f"β={beta:<3}  f={np.round(f, 2)}  P={np.round(P, 2)}  loss N·Σ f·P = {N * (f * P).sum():.2f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
