@@ -644,6 +644,104 @@ norm clipping과 원소별 값 clipping 중 어느 쪽이 방향을 지키는가
 자기 출력을 되먹이는 자유 생성으로 몇 step 뒤부터 오차가 눈에 띄게 누적되는지 재라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. weight sharing이 아끼는 것
+
+입력 64차원, hidden state 128차원인 RNN 층이 있다.
+
+(a) parameter 수($W_{hh}$, $W_{xh}$, bias)는? 길이 50과 길이 500 sequence에서 달라지는가?
+(b) 길이 50 sequence를 한 줄로 펴서 같은 크기(128)의 hidden 층에 넣는 MLP의 첫 층 weight 수는?
+(c) BPTT의 메모리는 길이에 따라 어떻게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $128^2 + 64\times128 + 128 = 24{,}704$. 길이와 무관하다.
+
+(b) $50\times64\times128 = 409{,}600$ 으로 약 17배. 길이 500이면 170배다.
+
+(c) 펼친 $T$ 개 시점의 hidden state를 모두 저장해야 backward를 할 수 있으므로 **길이에 비례**한다. parameter는 공유되지만 activation은 공유되지 않는다 — [3.1](../03_deep_learning/01_backpropagation.qmd)의 "activation 메모리는 깊이에 비례"가 시간축에서 그대로 나타난다. 긴 sequence를 몇 구간으로 잘라 그 안에서만 backpropagation하는 truncated BPTT가 그 대응이다.
+:::
+
+### A2. 거듭제곱의 감각
+
+(a) 시점당 gradient 배율이 0.9이면 50시점 뒤에는 몇 배인가? 1.1이면?
+(b) 시점당 배율이 0.99면 몇 시점 뒤에 1% 아래로 떨어지는가?
+(c) 본문은 "$\sigma = 1$ 로 맞춰도 vanishing이 일어난다"고 했다. 이유를 한 줄로 말하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $0.9^{50} \approx 0.005$, $1.1^{50} \approx 117$.
+
+(b) $0.99^t < 0.01$ 에서 $t > \ln0.01/\ln0.99 \approx 459$. 거의 1인 배율도 수백 시점이면 신호를 지운다.
+
+(c) tanh의 도함수 $1 - h^2$ 이 1 이하라서, 행렬이 길이를 그대로 보존해도 activation을 지날 때마다 조금씩 깎인다. C1에서 이 효과가 생각보다 크다는 것을 본다.
+:::
+
+### B1. gradient 상한
+
+$h_t = \tanh(W h_{t-1} + U x_t)$ 이다.
+
+(a) $\dfrac{\partial h_t}{\partial h_{t-1}} = \mathrm{diag}(1 - h_t^2)\,W$ 임을 보이고, 그 크기(가장 큰 singular value)가 $\|W\|$ 이하임을 보여라.
+(b) $\Big\|\dfrac{\partial h_t}{\partial h_k}\Big\| \le \|W\|^{t-k}$ 를 보여라. $\|W\| < 1$ 이면 무엇이 보장되는가?
+(c) $\|W\| > 1$ 이면 exploding이 보장되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) chain rule로 $\tanh'(z) = 1 - \tanh^2(z)$ 를 대각에 놓은 행렬과 $W$ 의 곱이다. 대각 원소가 $[0, 1]$ 이라 길이를 늘리지 않으므로, 곱의 크기는 $\|W\|$ 이하다([3.1 연습 문제 B1](../03_deep_learning/01_backpropagation.qmd)과 같은 계산).
+
+(b) $t - k$ 개의 Jacobian을 곱하므로 각 크기의 곱 이하다. $\|W\| < 1$ 이면 **지수적 vanishing이 반드시 일어난다.** 그 사이에 무엇이 있든 상한이 $\|W\|^{t-k} \to 0$ 이다.
+
+(c) 아니다. 상한이 클 뿐 실제 값은 tanh의 감쇠($1 - h^2$)에 크게 깎일 수 있다. 특히 $W$ 가 크면 $h$ 가 ±1에 붙어(saturation) $1 - h^2 \approx 0$ 이 되어 오히려 더 강하게 vanishing한다.
+vanishing은 충분조건이 있지만 exploding은 그렇지 않다. tanh RNN에서 vanishing이 훨씬 흔한 이유다.
+:::
+
+### C1. 스칼라 RNN으로 vanishing 재기
+
+1차원 RNN $h_t = \tanh(w\,h_{t-1} + x_t)$ ($x_t \sim \mathcal N(0, 0.5^2)$)에서 50시점을 거슬러 간 gradient $\partial h_{50}/\partial h_0 = \prod_t w(1 - h_t^2)$ 를 $w = 0.9,\ 1,\ 1.1,\ 2$ 에 대해 2,000번 재라. 선형 RNN(tanh 없음)의 $w^{50}$ 과 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+선형이면 $w = 1.1$ 은 117배, $w = 2$ 는 $10^{15}$ 배로 폭발한다. tanh가 있으면 **모든 $w$ 에서** gradient가 $10^{-10}$ 이하로 사라진다.
+$w = 2$ 가 가장 심하게 사라진다($10^{-34}$). 큰 $w$ 가 $h$ 를 ±1로 밀어붙여 $1 - h^2$ 를 0 근처로 만들기 때문이다(B1(c)).
+시점당 평균 배율($\log$ 평균의 지수)은 $w = 1$ 에서도 약 0.64다. 잡음 입력이 $h$ 를 0에서 계속 밀어내 tanh의 기울기가 1보다 작은 곳에 머물게 한다. 본문의 "activation이 이미 감쇠 요인"이 이 0.64다.
+이 감쇠를 피하려면 상태를 activation 없이 **더해서** 넘기는 길이 필요하다 — 다음 장 LSTM의 cell state다.
+
+```{python}
+#| label: ex-rnn-vanish
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+T = 50
+for w in [0.9, 1.0, 1.1, 2.0]:
+    log_g = []
+    for _ in range(2000):
+        h, lg = 0.0, 0.0
+        for x in rng.normal(0, 0.5, T):
+            h = np.tanh(w * h + x)
+            lg += np.log(abs(w * (1 - h * h)))        # 시점마다 곱해지는 배율
+        log_g.append(lg)
+    log_g = np.array(log_g)
+    print(f"w={w}   선형 w^50 = {w**T:9.2e}   tanh: 중앙값 {np.exp(np.median(log_g)):9.2e}   "
+          f"시점당 평균 배율 {np.exp(log_g.mean() / T):.3f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
