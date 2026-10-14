@@ -406,6 +406,108 @@ head 32개, 차원 128, 길이 4096일 때 MHA·GQA(8 group)·MQA의
 KV cache 크기를 각각 계산하라. 몇 배 차이인가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. head를 늘려도 parameter는 그대로
+
+$d_{\text{model}} = 512$ 다.
+
+(a) head가 8개면 head 하나의 차원은? $W_Q, W_K, W_V, W_O$ 의 parameter 합은(bias 제외)?
+(b) head를 16개로 바꾸면 (a)의 두 값은 어떻게 되는가?
+(c) 각 head의 점수는 $\sqrt{d_{\text{model}}}$ 과 $\sqrt{d_h}$ 중 무엇으로 나누는가? 왜?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $d_h = 512/8 = 64$. 네 행렬 모두 $512\times512$ 라 합 $4\times512^2 = 1{,}048{,}576$.
+
+(b) $d_h = 32$ 로 줄고, parameter 합은 **그대로**다. head 수는 같은 행렬을 몇 조각으로 나누어 쓰느냐일 뿐이다.
+
+(c) $\sqrt{d_h}$. 점수는 head 안에서 $d_h$ 차원 벡터끼리의 내적이라 분산이 $d_h$ 에 비례한다([5.0](00_attention_mechanism.qmd)). $\sqrt{d_{\text{model}}}$ 로 나누면 점수가 너무 작아져 softmax가 거의 균등해진다.
+:::
+
+### A2. head 하나와 여러 개의 차이
+
+$d_{\text{model}} = 512$ 에서 head 1개(차원 512)와 head 8개(차원 64)를 비교한다.
+
+(a) query 하나가 만드는 attention 분포는 각각 몇 개인가?
+(b) "주어 찾기"와 "직전 단어 보기"를 동시에 해야 하는 token에게 어느 쪽이 유리한가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) head 1개면 분포 1개, 8개면 분포 8개다.
+
+(b) head 8개가 유리하다. 분포 하나는 한 번의 softmax라, 두 곳을 동시에 보려면 가중치를 나눠야 하고 둘 다 흐려진다. head가 여럿이면 한 head는 주어에, 다른 head는 직전 단어에 날카롭게 집중할 수 있다. 본문 G5.2.2의 head별 패턴이 그 분업이다.
+:::
+
+### B1. concat 뒤의 $W_O$ 는 head별 projection의 합이다
+
+head $i$ 의 출력이 $\mathrm{head}_i \in \mathbb R^{n\times d_h}$ 이고, MHA 출력은 $\mathrm{concat}(\mathrm{head}_1, \dots, \mathrm{head}_h)\,W_O$ 다.
+
+(a) $W_O$ ($hd_h \times d$)를 위에서부터 $d_h$ 행씩 잘라 $W_O^{(1)}, \dots, W_O^{(h)}$ 로 두면 $\mathrm{concat}(\cdot)\,W_O = \sum_i\mathrm{head}_i\,W_O^{(i)}$ 임을 보여라.
+(b) 이 식이 "head들은 residual stream에 각자 독립적으로 더한다"는 해석과 어떻게 이어지는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 행렬 곱 $[A_1, A_2, \dots]\begin{pmatrix}B_1\\B_2\\\vdots\end{pmatrix} = \sum_iA_iB_i$ (block 행렬 곱)이다. 이어 붙인 열 block과 잘라 놓은 행 block이 짝지어 곱해진다.
+
+(b) 각 head가 자기 몫 $\mathrm{head}_iW_O^{(i)}$ 를 만들어 **더한다.** head끼리 곱해지거나 섞이지 않는다. 그래서 head 하나를 0으로 만들면 그 head의 몫만 빠지고("직접 해보기" ②), head의 기여를 따로 분석할 수 있다. [12.1 mechanistic interpretability](../12_trust/01_mechanistic.qmd)가 head를 회로의 부품으로 다루는 근거다.
+:::
+
+### C1. block 분해를 숫자로 확인하기
+
+$n = 5$, $d = 16$, head 4개로 무작위 MHA를 만들어
+
+(a) concat 후 $W_O$ 를 곱한 것과 head별 $\sum_i\mathrm{head}_iW_O^{(i)}$ 가 같은지 확인하라.
+(b) head 하나의 출력 $\mathrm{head}_iW_O^{(i)}$ 의 rank는 최대 얼마인가? 전체 출력의 rank와 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 차이가 $10^{-16}$ 수준으로 같다.
+
+(b) $\mathrm{head}_iW_O^{(i)}$ 는 $d_h = 4$ 차원을 거치므로 rank가 최대 4다. 네 head의 합은 rank 5(= $n$)까지 채운다. head 하나는 좁은 통로라 표현할 수 있는 방향이 제한되고, 여럿이 더해져야 전체 공간을 쓴다.
+
+```{python}
+#| label: ex-mha-blocks
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, d, h = 5, 16, 4
+dh = d // h
+X = rng.normal(size=(n, d))
+Wq, Wk, Wv, Wo = (rng.normal(size=(d, d)) / np.sqrt(d) for _ in range(4))
+
+def softmax(z):
+    e = np.exp(z - z.max(-1, keepdims=True))
+    return e / e.sum(-1, keepdims=True)
+
+heads = []
+for i in range(h):
+    sl = slice(i * dh, (i + 1) * dh)
+    Q, K, V = X @ Wq[:, sl], X @ Wk[:, sl], X @ Wv[:, sl]
+    heads.append(softmax(Q @ K.T / np.sqrt(dh)) @ V)
+
+out_concat = np.concatenate(heads, axis=1) @ Wo
+parts = [heads[i] @ Wo[i * dh:(i + 1) * dh] for i in range(h)]
+print(f"concat·W_O 와 Σ head_i W_O^(i) 의 차이 {np.abs(out_concat - sum(parts)).max():.1e}")
+print(f"head 별 몫의 rank {[np.linalg.matrix_rank(p) for p in parts]}   전체 출력 rank {np.linalg.matrix_rank(out_concat)}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 | 이어지는 곳 |
