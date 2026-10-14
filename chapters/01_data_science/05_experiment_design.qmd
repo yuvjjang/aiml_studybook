@@ -734,6 +734,265 @@ ICC가 0.05이고 cluster가 200명이면 DE ≈ `{python} f"{de_200:.0f}"` — 
 $\sigma^2 = p(1-p)$ 를 써서 계산하고 시뮬레이션으로 확인하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 가지 않은 길까지 보이는 표
+
+신기능이 사용자 네 명의 주간 사용 시간(분)에 주는 효과를 생각한다. 현실에서는 볼 수 없지만, 여기서는 두 potential outcome을 모두 안다고 하자.
+
+| 사용자 | $Y(0)$ (기존) | $Y(1)$ (신기능) |
+|---|---|---|
+| A | 10 | 12 |
+| B | 20 | 21 |
+| C | 30 | 34 |
+| D | 40 | 41 |
+
+(a) 사용자별 인과효과 $\tau_i$ 와 ATE를 구하라.
+(b) 신기능을 **원하는 사람만** 켜게 했더니 원래 많이 쓰던 C와 D가 켰다. 관측된 두 군의 평균 차이는?
+(c) (b)의 차이를 "켠 사람들의 실제 효과"와 "애초에 두 군이 달랐던 정도"로 쪼개라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\tau = (2, 1, 4, 1)$ 이고 ATE는 평균 $8/4 = 2$ 분이다.
+
+(b) 켠 군(C, D)에서는 $Y(1)$ 만 보이므로 평균 $(34 + 41)/2 = 37.5$, 끈 군(A, B)에서는 $Y(0)$ 만 보이므로 평균 $(10 + 20)/2 = 15$ 다.
+차이는 **22.5분**으로, 참 ATE의 11배다.
+
+(c) 관측 차이에 $\mathbb{E}[Y(0)\mid T=1]$ 을 빼고 더하면
+
+$$\underbrace{37.5 - 15}_{22.5} = \underbrace{\big(37.5 - 35\big)}_{\text{켠 사람들의 효과 } 2.5} + \underbrace{\big(35 - 15\big)}_{\text{selection bias } 20}$$
+
+$35$ 는 C, D가 신기능을 **켜지 않았다면** 보였을 평균이다. 켠 사람들의 실제 효과(2.5분)는 작고,
+차이의 대부분은 "원래 많이 쓰던 사람이 켰다"는 선택에서 왔다. 이 항이 confounding이다.
+
+동전으로 두 명씩 나누면 가능한 배정 6가지가 모두 같은 확률로 일어나고, 그 6가지의 관측 차이를 평균 내면 정확히 2가 된다.
+randomization이 selection bias 항을 평균적으로 0으로 만든다는 본문의 식이 이 작은 표에서도 성립한다.
+:::
+
+### A2. SRM 검정
+
+50:50으로 설계한 실험의 배정 결과다. 각각 SRM인지 판정하라.
+
+(a) 총 100,000명 중 처치군 50,500명
+(b) 총 10,000명 중 처치군 5,050명
+
+두 경우 모두 처치군 비율이 50.5%다. 판정이 다르다면 왜 그런가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+설계대로라면 처치군 인원은 이항분포 $\mathrm{Bin}(n, 0.5)$ 를 따르고, 평균 $n/2$, 표준편차 $\sqrt{n/4}$ 다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 표준편차는 $\sqrt{100{,}000/4} \approx 158$ 이므로 $z = 500/158 \approx 3.16$, two-sided p-값은 약 $0.0016$ 이다. **SRM이다.** 이 실험의 결과는 해석하지 말고 배정 장치부터 점검해야 한다.
+
+(b) 표준편차는 $\sqrt{10{,}000/4} = 50$ 이므로 $z = 50/50 = 1.0$, p-값은 약 $0.32$ 다. SRM으로 잡히지 않는다.
+
+같은 0.5%p 쏠림이지만, 기대값과의 차이는 $n$ 에 비례하고 표준편차는 $\sqrt n$ 에 비례하므로 $z$ 가 $\sqrt n$ 에 비례해 커진다.
+표본이 10배면 $z$ 는 $\sqrt{10} \approx 3.16$ 배다.
+(b)는 "SRM이 없다"가 아니라 "이 크기로는 0.5%p 쏠림을 구별할 수 없다"는 뜻이다. 본문의 경고대로 작은 실험은 실제 불균형이 있어도 통과할 수 있다.
+:::
+
+### B1. 두 번 들여다보면 false positive는 몇 %인가
+
+효과가 없는 실험($H_0$ 참)에서 관측값 $X_1, X_2, \dots$ 는 서로 독립이고 평균 0, 분산 1이다.
+$n$ 개까지의 검정 통계량은 $Z_n = S_n/\sqrt n$ ($S_n = X_1 + \dots + X_n$)이다.
+
+(a) $k < n$ 일 때 $\mathrm{Corr}(Z_k, Z_n) = \sqrt{k/n}$ 임을 보여라.
+(b) 표본이 절반 찼을 때 한 번, 다 찼을 때 한 번 보고, 둘 중 한 번이라도 $|Z| > 1.96$ 이면 "유의"라고 선언한다. false positive 비율이 5%보다 큰 이유를 (a)로 설명하라.
+(c) 실제 비율을 시뮬레이션으로 구하라. 다섯 번 고르게 들여다보면? 다섯 번 볼 때 false positive를 5%로 맞추려면 기준을 1.96 대신 얼마로 올려야 하는가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a) $S_n = S_k + (X_{k+1} + \dots + X_n)$ 으로 쪼개면 뒤쪽 합은 $S_k$ 와 독립이다. 그래서 $\mathrm{Cov}(S_k, S_n) = \mathrm{Var}(S_k) = k$ 다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 힌트대로 $\mathrm{Cov}(S_k, S_n) = k$ 이고 $\mathrm{Var}(S_k) = k$, $\mathrm{Var}(S_n) = n$ 이다. 상관계수는
+
+$$\mathrm{Corr}(Z_k, Z_n) = \frac{k}{\sqrt{k}\sqrt{n}} = \sqrt{\frac{k}{n}}$$
+
+(b) 절반에서 본 값과 끝에서 본 값의 상관은 $\sqrt{1/2} \approx 0.71$ 이다. 두 값이 완전히 같지(상관 1) 않으므로,
+처음에는 1.96을 넘지 않았다가 끝에서 넘는 경우와 그 반대 경우가 **모두** 기각으로 세어진다.
+기각 영역이 "둘 중 하나"로 넓어졌으니 5%보다 커질 수밖에 없다.
+반대로 완전히 독립(상관 0)이었다면 $1 - 0.95^2 = 9.75\%$ 였을 것이다. 상관 0.71이라 그 사이 어딘가다.
+
+(c) 두 번 보면 약 **8.3%**, 다섯 번 보면 약 **14%** 다.
+다섯 번 모두에 같은 기준을 쓰면서 전체를 5%로 맞추려면 기준이 약 **2.41**로 올라가야 한다. 이것이 본문의 Pocock 경계다.
+Bonferroni($0.05/5$, 기준 약 2.58)보다 덜 엄격한 것은, 들여다본 값들이 서로 강하게 상관되어 있다는 사실을 반영했기 때문이다.
+
+```{python}
+#| label: ex-peeking-looks
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+trials = 200_000
+
+def peek_z(looks):
+    """확인 시점마다 같은 양의 데이터가 쌓인다고 보고, 시점별 Z = S_k/√k 를 만든다."""
+    S = np.cumsum(rng.normal(size=(trials, looks)), axis=1)
+    return S / np.sqrt(np.arange(1, looks + 1))
+
+Z2, Z = peek_z(2), peek_z(5)
+print(f"두 번 확인 (절반·끝)   false positive {np.mean((np.abs(Z2) > 1.96).any(1)):.3f}")
+print(f"다섯 번 확인           false positive {np.mean((np.abs(Z) > 1.96).any(1)):.3f}")
+for c in [2.30, 2.41, 2.58]:
+    print(f"  기준 {c:.2f} 로 다섯 번   false positive {np.mean((np.abs(Z) > c).any(1)):.3f}")
+```
+:::
+
+### B2. CUPED는 왜 bias를 만들지 않는가
+
+CUPED 추정량은 두 군의 조정된 평균 차이다.
+
+$$\hat\Delta_{\text{CUPED}} = \big(\bar Y_T - \bar Y_C\big) - \theta\big(\bar X_T - \bar X_C\big)$$
+
+($\bar X$ 를 빼는 항은 두 군에 똑같이 들어가 차이에서 지워진다.)
+
+(a) $X$ 가 실험 **전**에 정해진 값이고 배정이 무작위면, $\mathbb{E}[\hat\Delta_{\text{CUPED}}] = \text{ATE}$ 임을 보여라. $\theta$ 가 어떤 값이든 성립하는가?
+(b) $X$ 를 실험 **중**에 잰 값(예: 실험 기간의 방문 횟수)으로 잘못 고르면 어떻게 되는가? 처치가 $X$ 를 평균 $\delta_X$ 만큼 올린다고 하자.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 기댓값의 linearity로 두 항을 따로 본다. 첫 항은 randomization 때문에 $\mathbb{E}[\bar Y_T - \bar Y_C] = \text{ATE}$ 다.
+둘째 항에서 $X$ 는 배정 전에 정해졌으므로 처치의 영향을 받지 않고, 무작위로 나눈 두 군의 $X$ 평균은 기댓값이 같다: $\mathbb{E}[\bar X_T - \bar X_C] = 0$.
+따라서
+
+$$\mathbb{E}[\hat\Delta_{\text{CUPED}}] = \text{ATE} - \theta\cdot 0 = \text{ATE}$$
+
+$\theta$ 가 무엇이든 0에 곱해지므로 **어떤 $\theta$ 에서도 unbiased** 다. 본문의 "θ를 잘못 추정해도 bias는 없다"가 이것이다.
+$\theta$ 는 분산이 얼마나 줄어드는지만 정하고, 최적값 $\mathrm{Cov}(Y, X)/\mathrm{Var}(X)$ 에서 분산이 $1 - \rho^2$ 배가 된다.
+
+(b) 이번에는 처치가 $X$ 도 바꾸므로 $\mathbb{E}[\bar X_T - \bar X_C] = \delta_X$ 다. 그러면
+
+$$\mathbb{E}[\hat\Delta_{\text{CUPED}}] = \text{ATE} - \theta\,\delta_X$$
+
+로 $\theta\delta_X$ 만큼 bias가 생긴다. 신기능이 방문을 늘리고, 방문이 늘어서 사용 시간도 늘었다면,
+그 경로로 생긴 효과를 "사전 차이"인 것처럼 빼 버리는 것이다. 효과가 실제보다 작게, 심하면 반대 부호로 나온다.
+본문이 말한 "mediator를 통제하면 안 된다"의 한 사례이고 [1.6](06_causal_inference.qmd)에서 일반화된다.
+:::
+
+### B3. design effect $1 + (m-1)\,\text{ICC}$ 유도
+
+cluster(예: 매장) 하나에 사람이 $m$ 명 있다. 각 사람의 결과는 분산이 $\sigma^2$ 이고, **같은 cluster 안의** 두 사람의 상관계수가 ICC $= \rho$ 다. 다른 cluster의 사람끼리는 독립이다.
+
+(a) cluster 하나의 평균 $\bar Y_c = \frac1m\sum_{j=1}^m Y_j$ 의 분산을 구하라.
+(b) 사람 $N = km$ 명을 cluster $k$ 개로 배정할 때 전체 평균의 분산이, 사람을 하나씩 독립으로 배정할 때의 $\sigma^2/N$ 보다 몇 배인지 구하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a)는 [0.2 연습 문제 B3](../00_foundations/02_probability.qmd)(서로 닮은 모델을 평균 내면)과 같은 계산이다. "모델"을 "같은 매장의 손님"으로 바꿔 읽으면 된다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 0.2의 결과에 $M = m$ 을 넣으면
+
+$$\mathrm{Var}(\bar Y_c) = \rho\sigma^2 + \frac{1-\rho}{m}\sigma^2 = \frac{\sigma^2}{m}\big(1 + (m-1)\rho\big)$$
+
+(b) 전체 평균은 서로 독립인 cluster 평균 $k$ 개의 평균이므로 분산이 $k$ 로 나뉜다.
+
+$$\mathrm{Var}(\bar Y) = \frac{\sigma^2}{km}\big(1 + (m-1)\rho\big) = \frac{\sigma^2}{N}\cdot\underbrace{\big(1 + (m-1)\rho\big)}_{\text{DE}}$$
+
+같은 $N$ 명인데 분산이 DE배다. 즉 cluster 배정에서 **실제로 쓸모 있는 표본 수는 $N/\text{DE}$** 이다.
+
+$\rho = 0$ 이면 DE = 1로 손해가 없다. $\rho = 1$ (같은 매장 손님이 모두 똑같이 행동)이면 DE = $m$ 이라, 사람 $N$ 명이 사실상 cluster $k$ 개뿐인 것과 같다.
+ICC가 0.05처럼 작아 보여도 $m$ 이 크면 $(m-1)\rho$ 가 커진다. 본문의 "학생 1,000명이 아니라 반 30개"가 이 식이다.
+:::
+
+### C1. 동전 배정을 직접 돌려 보기
+
+A1의 네 사람을 동전 던지기로 두 명씩 나누는 실험을 많이 반복한다.
+
+(a) 관측 차이(처치군 평균 − 대조군 평균)의 평균과 표준편차를 구하라.
+(b) 같은 네 사람에 CUPED를 쓴다. 사전 기간 사용 시간 $X$ 가 $Y(0)$ 과 같다고 하고($X = (10, 20, 30, 40)$), $\theta = 1$ 로 조정한 차이의 평균과 표준편차를 구하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 평균은 ATE인 2다 — 동전 배정은 unbiased다. 하지만 6가지 배정에 따라 관측 차이가 $-18.5$ 부터 $22.5$ 까지 크게 흔들린다(표준편차 약 13).
+사람 간 기본 사용량 차이(10~40분)가 효과(1~4분)보다 훨씬 크기 때문이다.
+
+(b) $Y - X$ 는 각자의 효과 $\tau_i$ 를 처치군에서만 남기고 기본 사용량을 지운다. 조정한 차이의 평균은 여전히 2이고, 표준편차는 약 0.7로 **18분의 1**로 준다.
+$X$ 와 $Y$ 의 상관이 거의 1이라 $1 - \rho^2$ 가 거의 0인 극단적인 경우다. 실제 서비스에서 사전·사후 지표의 상관이 0.6~0.9라는 본문의 말대로라면 분산이 36~81% 줄어든다.
+
+```{python}
+#| label: ex-po-cuped
+
+import numpy as np
+from itertools import combinations
+
+Y0 = np.array([10, 20, 30, 40.0])
+Y1 = np.array([12, 21, 34, 41.0])
+X = Y0.copy()                                   # 사전 기간 값
+
+raw, cuped = [], []
+for treat in combinations(range(4), 2):         # 가능한 배정 6가지 (모두 같은 확률)
+    T = np.zeros(4, bool); T[list(treat)] = True
+    Y = np.where(T, Y1, Y0)
+    raw.append(Y[T].mean() - Y[~T].mean())
+    cuped.append((Y - X)[T].mean() - (Y - X)[~T].mean())
+
+for name, d in [("단순 차이", raw), ("CUPED θ=1", cuped)]:
+    print(f"{name:<10} 배정별 {np.round(d, 1)}   평균 {np.mean(d):.2f}   표준편차 {np.std(d):.2f}")
+```
+:::
+
+### C2. 매장 단위 실험의 실제 표본 수
+
+매장 100곳, 매장당 손님 200명, 총 20,000명으로 실험한다. 매장 단위로 배정하고 ICC = 0.05다.
+
+(a) design effect와 유효 표본 수를 구하라.
+(b) 사람 단위로 배정할 수 있었다면 잡을 수 있었을 MDE에 비해, 매장 단위 배정의 MDE는 몇 배인가?
+(c) 매장 수는 그대로 두고 매장당 손님을 400명으로 늘리면 유효 표본 수는 어떻게 되는가? 손님 대신 매장을 200곳으로 늘리면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\text{DE} = 1 + 199 \times 0.05 = 10.95$ 이고 유효 표본 수는 $20{,}000/10.95 \approx 1{,}826$ 명이다.
+
+(b) MDE는 $\sigma/\sqrt n$ 에 비례하므로 $\sqrt{\text{DE}} \approx 3.3$ 배다. 사람 단위로 1%p를 잡을 수 있었다면 매장 단위로는 3.3%p보다 작은 효과는 놓친다.
+
+(c) 매장당 400명이면 $\text{DE} = 1 + 399 \times 0.05 = 20.95$, 유효 표본은 $40{,}000/20.95 \approx 1{,}909$ 명이다. 손님을 두 배로 모았는데 **5%** 늘었을 뿐이다.
+매장을 200곳으로 늘리면 DE는 10.95 그대로이고 유효 표본은 $40{,}000/10.95 \approx 3{,}653$ 명으로 **두 배**가 된다.
+
+$m \to \infty$ 이면 유효 표본은 $km/(1 + (m-1)\rho) \to k/\rho$ 로 막힌다. 매장 100곳, ICC 0.05면 손님을 아무리 모아도 2,000명 남짓이 한계다.
+**cluster 실험의 power는 cluster 수가 정한다.** 같은 매장 손님은 서로 닮아서, 한 매장에서 더 듣는 것은 같은 이야기를 반복해 듣는 것과 비슷하다.
+
+```{python}
+#| label: ex-design-effect
+
+def effective_n(k, m, icc):
+    de = 1 + (m - 1) * icc
+    return k * m / de, de
+
+for k, m in [(100, 200), (100, 400), (200, 200), (100, 10**6)]:
+    n_eff, de = effective_n(k, m, 0.05)
+    print(f"매장 {k:>3}곳 × 손님 {m:>7,}명   DE {de:>9.2f}   유효 표본 {n_eff:>7,.0f}명   MDE 배율 {de ** 0.5:.1f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
