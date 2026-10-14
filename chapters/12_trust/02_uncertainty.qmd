@@ -748,6 +748,210 @@ aleatoric과 epistemic이 실제로 갈라지는지 확인하라.
 분포가 이동하면 보장이 깨지는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. ECE를 손으로
+
+예측 100개를 confidence로 세 구간에 나눴다.
+
+| 구간 | 개수 | 평균 confidence | 실제 정확도 |
+|---|---|---|---|
+| 높음 | 50 | 0.95 | 0.80 |
+| 중간 | 30 | 0.75 | 0.70 |
+| 낮음 | 20 | 0.55 | 0.60 |
+
+(a) ECE를 구하라.
+(b) 이 모델은 과신(overconfident)인가 과소신(underconfident)인가? 구간마다 답하라.
+(c) ECE가 0이면 그 모델은 쓸 만한 모델인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $0.5\times|0.80 - 0.95| + 0.3\times|0.70 - 0.75| + 0.2\times|0.60 - 0.55| = 0.075 + 0.015 + 0.010 = 0.10$.
+
+(b) 높음·중간 구간은 confidence가 정확도보다 커서 **과신**, 낮음 구간은 정확도가 더 높아 **과소신**이다. ECE는 절댓값을 더하므로 둘을 구별하지 않는다. 방향은 reliability diagram을 봐야 안다.
+
+(c) 아니다. 모든 예측에 "정확도 평균값"(예: 0.66)을 confidence로 주는 모델은 구간이 하나뿐이라 ECE가 0이지만 아무것도 구별하지 못한다. calibration은 "말한 확률이 정직한가"이고, 그 확률이 **쓸모 있는가**(sharpness, 정확도)는 별개의 축이다. 본문의 "정확도와 calibration은 직교한다"가 이것이다.
+:::
+
+### A2. temperature를 바꾸면
+
+(a) logit $(3, 1, 0)$ 의 softmax를 $T = 1$ 과 $T = 2$ 에서 구하라. 예측 class는 바뀌는가?
+(b) 이진 분류에서 logit $z = 4$ 의 확률은? $T = 2$ 면?
+(c) 본문 실험의 최적 $T^* = 7.9$ 는 무엇을 뜻하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $T = 1$: $(0.844,\ 0.114,\ 0.042)$. $T = 2$: $(0.629,\ 0.231,\ 0.140)$. 1등은 그대로이고 확신만 줄었다. temperature는 순서를 바꾸지 않는다([2.4 연습 문제 A2](../02_classical_ml/04_logistic_regression.qmd)).
+
+(b) $\sigma(4) \approx 0.982$, $\sigma(2) \approx 0.881$.
+
+(c) 모델의 logit이 "정직한 크기"의 약 8배로 부풀려져 있었다는 뜻이다. 학습이 맞힌 예측의 logit을 계속 키운 결과다(본문 G12.2.1). 8로 나누면 정직한 크기로 돌아온다.
+:::
+
+### B1. temperature scaling의 최적점은 하나뿐이다
+
+validation set $\{(\mathbf z_i, y_i)\}$ 에서 $\beta = 1/T$ 에 대한 NLL은 $L(\beta) = \sum_i\big[-\beta z_{i,y_i} + \log\sum_k e^{\beta z_{ik}}\big]$ 다.
+
+(a) $L(\beta)$ 가 convex임을 보여라.
+(b) $L'(\beta) = 0$ 의 조건을 적고, 그것을 "calibration의 한 형태"로 해석하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a) $\log\sum_k e^{\beta z_k}$ 를 $\beta$ 로 두 번 미분하면 "softmax 분포 아래에서 $z_k$ 의 분산"이 된다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 첫째 항은 $\beta$ 에 대해 1차라 2계 도함수가 0이다. 둘째 항을 미분하면 $\sum_kp_kz_k = \mathbb E_p[z]$ ($p = \mathrm{softmax}(\beta\mathbf z)$), 한 번 더 미분하면 $\mathbb E_p[z^2] - \mathbb E_p[z]^2 = \mathrm{Var}_p(z) \ge 0$. 합이 convex이므로 최소점이 하나다. 그래서 1차원 탐색(grid나 Newton)이면 충분하다.
+
+(b) $L'(\beta) = \sum_i\big(\mathbb E_{p_i}[z_i] - z_{i,y_i}\big) = 0$, 즉
+
+$$\frac1n\sum_i z_{i,y_i} = \frac1n\sum_i\mathbb E_{p_i}[z_i]$$
+
+"정답 class의 logit 평균"이 "모델이 기대한 logit 평균"과 같아야 한다. 모델이 자기 예측대로 세상이 돌아간다고 가정했을 때의 평균과 실제 평균이 일치한다는 뜻이고, 과신이면 모델이 기대한 쪽이 커서 $\beta$ 를 줄여(T를 키워) 맞춘다.
+parameter가 하나뿐이라 맞출 수 있는 조건도 하나뿐이다. 그래서 class마다, 입력 영역마다 다르게 틀린 calibration은 고치지 못한다.
+:::
+
+### B2. conformal coverage의 증명
+
+calibration score $s_1, \dots, s_n$ 과 새 표본의 score $s_{n+1}$ 이 exchangeable하고(같은 주머니에서 나왔고) 동점이 없다고 하자. $k = \lceil(n+1)(1-\alpha)\rceil$, $\hat q = s_{(k)}$ ($n$ 개 중 $k$ 번째로 작은 값)이다.
+
+(a) $s_{n+1}$ 이 $n+1$ 개 중 몇 번째인지(순위)가 $1, \dots, n+1$ 에서 균등함을 설명하라.
+(b) $P(s_{n+1} \le \hat q) = k/(n+1)$ 임을 보이고, 이것이 $1 - \alpha$ 이상 $1 - \alpha + 1/(n+1)$ 미만임을 보여라.
+(c) "coverage 90% 보장"은 calibration set 하나를 고정했을 때도 성립하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) exchangeable하면 $n+1$ 개 값의 어떤 순서도 같은 확률이다. 그러니 새 값이 그중 몇 번째일지는 $n+1$ 가지가 모두 같은 확률 $1/(n+1)$ 이다.
+
+(b) $s_{n+1} \le s_{(k)}$ 는 새 값의 순위가 $k$ 이하라는 뜻이므로 확률이 $k/(n+1)$ 다.
+$k \ge (n+1)(1-\alpha)$ 이므로 $k/(n+1) \ge 1-\alpha$. 올림은 1보다 작게 늘리므로 $k < (n+1)(1-\alpha) + 1$, 즉 $k/(n+1) < 1 - \alpha + 1/(n+1)$.
+모델이 얼마나 나쁘든 이 계산에는 아무 영향이 없다. 본문의 "보장의 출처는 모델 품질이 아니라 절차"가 이것이다.
+
+(c) 아니다. 확률은 calibration set을 뽑는 무작위성까지 포함한 평균이다. 운 나쁜 calibration set 하나를 쓰면 그 위에서의 coverage는 90% 아래일 수 있다. C2에서 보듯 calibration 실행의 절반 가까이가 90% 아래로 나온다 — 다만 평균은 정확히 맞는다.
+[0.3 연습 문제 A1](../00_foundations/03_statistics.qmd)의 confidence interval 해석("그물이 물고기를 잡을 확률은 그물을 던지는 절차에 붙어 있다")과 같은 구조다.
+:::
+
+### B3. 두 uncertainty 분해는 분산의 법칙이다
+
+ensemble의 구성원 $\theta$ 를 무작위로 하나 고르고(균등), 그 구성원이 예측한 분포에서 $y$ 를 뽑는다고 보자.
+
+(a) law of total variance $\mathrm{Var}(y) = \mathbb E_\theta[\mathrm{Var}(y\mid\theta)] + \mathrm{Var}_\theta(\mathbb E[y\mid\theta])$ 를 증명하라.
+(b) 본문의 aleatoric·epistemic 분해가 이 식의 두 항임을 보여라.
+(c) 구성원들이 모두 같은 방향으로 틀리면 epistemic 항은 어떻게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathrm{Var}(y) = \mathbb E[y^2] - \mathbb E[y]^2$ 에서 $\mathbb E[y^2] = \mathbb E_\theta\big[\mathrm{Var}(y\mid\theta) + \mathbb E[y\mid\theta]^2\big]$ 를 넣고, $\mathbb E[y] = \mathbb E_\theta[\mathbb E[y\mid\theta]]$ 를 쓰면
+
+$$\mathrm{Var}(y) = \mathbb E_\theta[\mathrm{Var}(y\mid\theta)] + \underbrace{\mathbb E_\theta\big[\mathbb E[y\mid\theta]^2\big] - \mathbb E_\theta\big[\mathbb E[y\mid\theta]\big]^2}_{\mathrm{Var}_\theta(\mathbb E[y\mid\theta])}$$
+
+(b) 구성원 $i$ 의 예측이 $\mathcal N(\mu_i, \sigma_i^2)$ 이면 $\mathrm{Var}(y\mid\theta_i) = \sigma_i^2$, $\mathbb E[y\mid\theta_i] = \mu_i$ 다. 균등 평균을 취하면 첫 항이 $\frac1N\sum\sigma_i^2$ (aleatoric), 둘째 항이 $\frac1N\sum(\mu_i - \bar\mu)^2$ (epistemic)로 본문의 식과 같다.
+
+(c) 모든 $\mu_i$ 가 같은 틀린 값이면 둘째 항은 **0**이다. 전문가들이 같은 교재로 배워 같은 실수를 하면, 의견이 일치하니 "확실하다"고 보인다. 본문의 "extrapolation 영역에서 E/A가 0.23으로 재현 실패"가 이 경우다. epistemic 항은 "모른다"가 아니라 "의견이 갈린다"를 잰다.
+:::
+
+### C1. 일부러 과신하게 만든 모델을 temperature로 고치기
+
+정직한 logit $\mathbf t$ 를 만들고 그 확률로 label을 뽑은 뒤, 모델이 $3\mathbf t$ 를 출력한다고 하자(3배 과신). 5개 class, validation과 test 각 2만 개.
+
+(a) validation NLL로 $T$ 를 찾아라. 몇이 나와야 하는가?
+(b) temperature scaling 전후의 test ECE와 정확도를 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 정확히 **3.0**이 나온다. 과신 배율을 그대로 찾아낸다. B1의 convex 최적점이 정직한 크기와 일치한다.
+
+(b) ECE는 약 0.26에서 0.004로 줄고 정확도는 소수점 끝까지 같다. 순서를 바꾸지 않는 변환이라 맞힌 것과 틀린 것은 그대로이고, 말하는 확신만 정직해진다.
+현실의 과신은 이렇게 깨끗한 "전체 배율"이 아니라서 본문 실험처럼 ECE가 0까지 내려가지는 않는다. 그래도 대부분이 이 한 가지 성분이다.
+
+```{python}
+#| label: ex-temp-scaling
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+K = 5
+softmax = lambda z: (e := np.exp(z - z.max(1, keepdims=True))) / e.sum(1, keepdims=True)
+
+def make(n):
+    honest = rng.normal(0, 1.5, (n, K))
+    p = softmax(honest)
+    y = (rng.random((n, 1)) > p.cumsum(1)).sum(1)          # 정직한 확률로 label 뽑기
+    return 3 * honest, y                                    # 모델은 3배 과신
+
+def ece(p, y, M=15):
+    conf, correct = p.max(1), p.argmax(1) == y
+    total = 0.0
+    for lo in np.linspace(0, 1, M + 1)[:-1]:
+        m = (conf > lo) & (conf <= lo + 1 / M)
+        if m.any():
+            total += m.mean() * abs(correct[m].mean() - conf[m].mean())
+    return total
+
+zv, yv = make(20_000)
+zt, yt = make(20_000)
+nll = lambda z, y, T: -np.mean(np.log(softmax(z / T)[np.arange(len(y)), y]))
+Ts = np.linspace(0.5, 6, 111)
+T_best = Ts[np.argmin([nll(zv, yv, T) for T in Ts])]
+
+for name, T in [("calibration 전", 1.0), (f"T = {T_best:.2f}", T_best)]:
+    p = softmax(zt / T)
+    print(f"{name:<14} ECE {ece(p, yt):.4f}   정확도 {(p.argmax(1) == yt).mean():.4f}")
+```
+:::
+
+### C2. conformal 보장을 1,000번 확인하기
+
+C1의 temperature 보정된 모델로 $\alpha = 0.1$ conformal 집합을 만든다. calibration set 크기 $n = 100$ 과 $1{,}000$ 에서 calibration set을 1,000번 새로 뽑아
+
+(a) coverage의 평균을 B2의 $k/(n+1)$ 과 비교하라.
+(b) coverage가 90% 아래로 나온 실행의 비율과 coverage의 표준편차를 구하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 평균 coverage가 $n = 100$ 에서 약 0.900 ($k/(n+1) = 91/101 \approx 0.901$), $n = 1000$ 에서 약 0.900 ($901/1001$)으로 맞는다.
+
+(b) 실행의 **절반 가까이**가 90% 아래다. 보장은 평균에 대한 것이기 때문이다(B2(c)). 다만 흔들림의 폭은 $n$ 이 클수록 줄어 표준편차가 0.029에서 0.011로 준다. calibration set을 크게 잡으면 "이번 실행"의 coverage도 90%에 가깝게 붙는다.
+실무에서 calibration set을 수백 개 이상 두는 이유가 이 표준편차다.
+
+```{python}
+#| label: ex-conformal-coverage
+
+alpha = 0.1
+for n_cal in [100, 1000]:
+    k = int(np.ceil((n_cal + 1) * (1 - alpha)))
+    cov = []
+    for _ in range(1000):
+        zc, yc = make(n_cal)
+        zn, yn = make(2000)
+        scores = np.sort(1 - softmax(zc / T_best)[np.arange(n_cal), yc])
+        q = scores[k - 1]                                       # k 번째로 작은 점수
+        cov.append((1 - softmax(zn / T_best)[np.arange(2000), yn] <= q).mean())
+    cov = np.array(cov)
+    print(f"n={n_cal:>4}  k={k}   평균 coverage {cov.mean():.4f} (k/(n+1) = {k / (n_cal + 1):.4f})   "
+          f"표준편차 {cov.std():.4f}   90% 미만 실행 {np.mean(cov < 0.9):.1%}")
+```
+:::
+
 ## 요약
 
 | 개념 | 수치·핵심 | |
