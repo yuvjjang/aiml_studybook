@@ -931,6 +931,199 @@ condition number $\kappa$ 인 이차함수에서 최적 momentum은 $\left(\frac
 분모가 작아 갱신이 폭주하는 것이 보이는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. momentum의 속도가 차오르는 시간
+
+momentum $v_t = \mu v_{t-1} + g_t$ ($v_0 = 0$)에서
+
+(a) gradient가 매 step $g = 1$ 로 일정하면 $v_t$ 는 얼마인가? $t \to \infty$ 의 값의 95%에 도달하는 데 $\mu = 0.9$ 와 $0.99$ 에서 각각 몇 step이 걸리는가?
+(b) gradient가 $+1, -1, +1, -1, \dots$ 로 번갈아 바뀌면 $v_t$ 의 크기는 결국 얼마가 되는가($\mu = 0.9$)? (a)의 정상값과 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $v_t = 1 + \mu + \cdots + \mu^{t-1} = \dfrac{1 - \mu^t}{1 - \mu}$ 이고, 정상값은 $1/(1 - \mu)$ 다(본문의 "유효 learning rate가 $1/(1-\mu)$ 배").
+95%가 되려면 $\mu^t \le 0.05$, 즉 $t \ge \ln 0.05/\ln\mu$ 다. $\mu = 0.9$ 면 **약 29 step**, $\mu = 0.99$ 면 **약 300 step** 이다.
+$\mu$ 를 0.99로 올리면 최고 속도는 10배가 되지만, 그 속도에 도달하는 데도 10배 오래 걸린다. 무거운 공일수록 가속에 시간이 걸린다.
+
+(b) 정상 상태에서 $v$ 가 크기 $a$ 를 유지하며 부호만 번갈아 바뀐다고 하자. 직전 step에서 $g = -1$ 이었다면 $v_{t-1} = -a$ 이고, 이번 $g_t = +1$ 이므로 $v_t = \mu(-a) + 1 = 1 - \mu a$ 다.
+이것이 $+a$ 와 같아야 하므로 $a = 1 - \mu a$, 즉 $a = 1/(1 + \mu) \approx 0.53$ 이다.
+같은 방향일 때(10)의 약 19분의 1이다. 일관된 방향은 10배로 키우고, 진동하는 방향은 오히려 절반 가까이로 줄인다 — 본문의 "협곡의 길이 방향으로는 가속하고 폭 방향으로는 진동을 죽인다"가 이 두 숫자다.
+:::
+
+### A2. 7B 모델을 학습시키려면 메모리가 얼마나 필요한가
+
+파라미터 70억 개 모델을 mixed precision(계산은 fp16/bf16, 원본은 fp32)과 AdamW로 학습한다. parameter 하나당 다음을 들고 있다.
+
+| 항목 | 정밀도 |
+|---|---|
+| 계산용 weight | 2 byte |
+| gradient | 2 byte |
+| fp32 원본 weight (master copy) | 4 byte |
+| AdamW의 $m$, $v$ | 4 byte씩 |
+
+(a) parameter당 몇 byte이고, 전체 몇 GB인가? (activation은 제외)
+(b) 80 GB GPU 한 장에 들어가는가? 이 상태(optimizer state 포함)를 여러 GPU에 나눠 담는다면 최소 몇 장이 필요한가?
+(c) 같은 모델을 **추론**만 할 때는 몇 GB인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $2 + 2 + 4 + 4 + 4 = 16$ byte. $7\times10^9 \times 16 = 112$ GB다. 그중 optimizer 관련(원본 + $m$ + $v$)이 12 byte로 75%를 차지한다.
+
+(b) 들어가지 않는다. 112 GB를 나누면 최소 **2장**이고, 실제로는 activation과 작업 공간 때문에 더 필요하다.
+optimizer state를 GPU마다 나눠 갖게 하는 것이 ZeRO 같은 기법이다([11.2 distributed training](../11_systems/02_distributed_training.qmd)).
+
+(c) 계산용 weight만 있으면 되므로 $7\times10^9 \times 2 = 14$ GB다. 학습의 8분의 1이다.
+"학습에는 추론의 수 배 메모리가 든다"는 말의 대부분이 optimizer state에서 온다. 본문의 Lion·8bit-Adam·Adafactor가 노리는 곳이 정확히 여기다.
+:::
+
+### B1. Adam은 loss의 크기에 무관하다
+
+(a) loss를 $c$ 배($c > 0$) 하면 SGD의 step은 어떻게 되는가? Adam의 step은? ($\epsilon$ 은 무시한다.)
+(b) gradient가 매 step 같은 값 $g$ (부호와 크기 고정)이면 bias correction을 거친 Adam의 step이 $-\eta\,\mathrm{sign}(g)$ 임을 보여라.
+(c) (b)는 Adam이 어떤 optimizer와 닮았다는 뜻인가? 이 성질이 condition number 문제에 어떤 도움이 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) gradient가 $c$ 배가 되므로 SGD step도 $c$ 배다. learning rate를 다시 맞춰야 한다.
+Adam에서는 $m$ 이 $c$ 배, $v$ 가 $c^2$ 배가 되어 $\hat m/\sqrt{\hat v}$ 는 그대로다. **step이 변하지 않는다.**
+loss의 단위(예: 평균 대신 합을 쓰는 것)를 바꿔도 learning rate를 다시 찾을 필요가 없다.
+
+(b) 본문의 bias correction 유도대로 $\hat m_t = g$, $\hat v_t = g^2$ 이므로 $\hat m/\sqrt{\hat v} = g/|g| = \mathrm{sign}(g)$ 다.
+
+(c) gradient의 크기를 버리고 부호만 쓰는 **sign descent**와 닮았다. 본문 계보의 Lion이 이것을 대놓고 쓴다.
+협곡의 벽 방향(gradient가 큰 방향)이든 바닥 방향(작은 방향)이든 **같은 보폭 $\eta$** 로 걷게 되어, curvature 차이에서 오는 condition number 문제를 상당 부분 우회한다.
+대신 최소점 근처에서도 보폭이 $\eta$ 로 줄지 않으므로, 정확히 수렴하려면 learning rate를 schedule로 줄여야 한다(C1).
+:::
+
+### B2. 이동평균은 얼마나 먼 과거까지 기억하는가
+
+$v_t = \beta v_{t-1} + (1 - \beta)x_t$ 는 과거 값에 지수적으로 줄어드는 가중치를 준다.
+
+(a) $k$ step 전 값 $x_{t-k}$ 의 가중치가 $(1-\beta)\beta^k$ 임을 보이고, 가중치가 절반으로 줄어드는 반감기 $k_{1/2}$ 를 구하라.
+(b) $\beta = 0.9,\ 0.95,\ 0.99,\ 0.999$ 의 반감기를 구하라.
+(c) 대형 언어모델 학습에서 Adam의 $\beta_2$ 를 기본값 0.999 대신 0.95로 쓰는 이유를 반감기로 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 점화식을 펼치면 $v_t = (1-\beta)\sum_{k\ge0}\beta^k x_{t-k}$ 이다(본문 bias correction 유도와 같다). 가중치가 절반이 되는 $k$ 는 $\beta^k = 1/2$, 즉 $k_{1/2} = \ln 2/\ln(1/\beta) \approx 0.69/(1 - \beta)$.
+
+(b) 0.9: 약 6.6 step, 0.95: 약 13.5 step, 0.99: 약 69 step, 0.999: 약 693 step.
+
+(c) $\beta_2 = 0.999$ 면 $v$ 가 수백 step 전의 gradient 크기까지 기억한다. 학습 중 어떤 층의 gradient가 갑자기 커지면(loss spike의 시작), $v$ 는 오래된 작은 값에 묶여 천천히 따라오고, 그동안 분모가 작아 $g/\sqrt v$ 가 크게 튄다.
+$\beta_2 = 0.95$ 면 반감기가 13 step이라 $v$ 가 금방 새 크기를 반영해 step을 줄인다. "최근 gradient 크기"를 더 최근으로 정의하는 셈이다.
+대가는 $v$ 추정이 더 시끄럽다는 것이고, 그래서 이 선택은 정답이 아니라 안정성 쪽으로 기운 실무 관례다.
+:::
+
+### B3. linear scaling rule의 근거
+
+batch 크기 $B$, learning rate $\eta$ 로 SGD $K$ step을 하는 것과, batch $KB$, learning rate $K\eta$ 로 1 step을 하는 것을 비교한다.
+mini-batch gradient는 참 gradient $g$ 에 분산 $\sigma^2/B$ 인 잡음이 섞인 것이고, $K$ step 동안 $g$ 는 거의 변하지 않는다고 가정한다.
+
+(a) 두 방식의 parameter 이동량의 **평균**이 같음을 보여라.
+(b) 이동량의 **분산**도 같음을 보여라.
+(c) 가정 "$K$ step 동안 $g$ 가 거의 변하지 않는다"가 깨지는 상황은 언제인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 작은 batch $K$ step의 총 이동은 $-\eta\sum_{i=1}^K\hat g_i$ 이고 평균은 $-K\eta g$ 다. 큰 batch 1 step은 $-K\eta\,\hat g_{KB}$ 이고 평균도 $-K\eta g$ 다.
+
+(b) 작은 batch 쪽: 잡음 $K$ 개가 독립이므로 $\eta^2 \cdot K \cdot \sigma^2/B$.
+큰 batch 쪽: $(K\eta)^2 \cdot \sigma^2/(KB) = K\eta^2\sigma^2/B$. 같다.
+평균과 분산이 모두 같으므로, 가정이 성립하는 한 두 방식은 통계적으로 구별되지 않는다. learning rate를 batch에 **비례**해서 키우면 된다는 규칙이 여기서 나온다.
+
+(c) learning rate가 커서 $K$ step 동안 parameter가 많이 움직이면 $g$ 도 변한다(지형이 휘어 있으므로). 특히 학습 초반에는 gradient가 빠르게 변해 가정이 깨진다 — 큰 batch에서 warmup이 더 중요한 이유다.
+또 $K\eta$ 가 [0.1 연습 문제 B1](../00_foundations/01_calculus_optimization.qmd)의 안정성 상한 $2/\lambda_{\max}$ 를 넘으면 발산한다. 그래서 batch를 무한히 키울 수는 없다.
+Adam은 gradient를 크기로 나누므로 잡음이 줄어도 step 크기가 같은 비율로 커지지 않아, $\sqrt B$ 규칙이 더 맞는 경우가 많다.
+:::
+
+### C1. learning rate가 loss의 바닥을 정한다
+
+1차원 이차함수 $L = \tfrac12\lambda\theta^2$ 에서, gradient에 분산 $s^2/B$ 인 잡음이 섞인 SGD를 오래 돌린다.
+
+(a) 정상 상태에서 $\theta$ 의 분산이 $\dfrac{\eta s^2}{B\lambda(2 - \eta\lambda)}$ 임을 보여라. ($\theta_{t+1} = (1 - \eta\lambda)\theta_t - \eta\xi_t$ 의 양변 분산을 같게 놓는다.)
+(b) $\lambda = s = 1$ 에서 $(\eta, B) = (0.1, 1), (0.05, 1), (0.01, 1), (0.04, 4), (0.01, 4)$ 의 정상 loss를 이론과 시뮬레이션으로 비교하라.
+(c) 학습 후반에 learning rate를 줄이는 schedule이 왜 필요한지, 그리고 B3의 linear scaling rule이 무엇을 보존하는지 결과로 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 정상 상태에서 $\mathrm{Var}(\theta) = (1 - \eta\lambda)^2\mathrm{Var}(\theta) + \eta^2 s^2/B$ 이므로
+
+$$\mathrm{Var}(\theta) = \frac{\eta^2 s^2/B}{1 - (1-\eta\lambda)^2} = \frac{\eta s^2}{B\lambda(2 - \eta\lambda)}$$
+
+정상 loss는 $\tfrac12\lambda\,\mathrm{Var}(\theta)$ 다.
+
+(b) 시뮬레이션이 이론값과 몇 % 안에서 맞는다. $\eta$ 를 10배 줄이면 바닥이 약 10배 낮아진다.
+
+(c) 최소점 바로 옆에서도 잡음 때문에 parameter가 $\eta$ 에 비례하는 범위에서 계속 흔들린다. 보폭이 크면 바닥 근처를 크게 맴돌 뿐 바닥에 닿지 못한다.
+그래서 처음에는 크게 걸어 빨리 다가가고, 나중에는 learning rate를 줄여 흔들림을 줄인다. cosine·WSD schedule의 끝부분 decay가 하는 일이 이것이다.
+
+$(\eta, B) = (0.01, 1)$ 과 $(0.04, 4)$ 의 바닥이 거의 같다. 바닥이 $\eta/B$ 로 정해지기 때문이고, linear scaling rule은 이 비율을 보존한다. $(0.01, 4)$ 는 비율이 4분의 1이라 바닥도 4분의 1이다.
+
+```{python}
+#| label: ex-sgd-floor
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+lam, s = 1.0, 1.0
+
+def stationary_loss(eta, B, steps=200_000, burn=20_000):
+    noise = rng.normal(0, s / np.sqrt(B), steps)
+    th, hist = 1.0, np.empty(steps)
+    for t in range(steps):
+        th -= eta * (lam * th + noise[t])
+        hist[t] = th
+    return np.mean(0.5 * lam * hist[burn:] ** 2)
+
+print(f"{'η':>5} {'B':>3} {'η/B':>7} {'시뮬레이션':>10} {'이론':>10}")
+for eta, B in [(0.1, 1), (0.05, 1), (0.01, 1), (0.04, 4), (0.01, 4)]:
+    theory = 0.5 * lam * eta * s**2 / (B * lam * (2 - eta * lam))
+    print(f"{eta:>5} {B:>3} {eta / B:>7.4f} {stationary_loss(eta, B):>10.5f} {theory:>10.5f}")
+```
+:::
+
+### C2. 반감기 표와 bias correction의 길이
+
+B2의 반감기와, bias correction이 실질적으로 필요한 기간(보정 계수 $1/(1 - \beta^t)$ 가 1.01 아래로 내려가는 $t$)을 $\beta = 0.9,\ 0.95,\ 0.99,\ 0.999$ 에서 계산해 표로 만들어라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$\beta = 0.9$ ($\beta_1$ 의 기본값)는 약 44 step, $\beta = 0.999$ ($\beta_2$ 의 기본값)는 약 4,600 step 동안 보정이 1% 넘게 작용한다.
+$v$ 쪽 보정이 훨씬 오래 걸리므로, 본문에서 보정 없는 초반 step이 과대해진 원인이 $v$ 의 치우침이었다는 설명과 맞는다.
+$\beta_2 = 0.95$ 로 바꾸면 보정 기간도 약 90 step으로 줄어든다.
+
+```{python}
+#| label: ex-ema-memory
+
+import numpy as np
+
+print(f"{'β':>6} {'평균 기억 길이 1/(1-β)':>20} {'반감기':>8} {'보정 >1% 인 기간':>16}")
+for beta in [0.9, 0.95, 0.99, 0.999]:
+    half = np.log(2) / np.log(1 / beta)
+    t = np.arange(1, 100_000)
+    needed = t[1 / (1 - beta ** t) < 1.01][0]
+    print(f"{beta:>6} {1 / (1 - beta):>20.0f} {half:>8.1f} {needed:>16,}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
