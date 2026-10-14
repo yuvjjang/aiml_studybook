@@ -747,6 +747,220 @@ $1/\sqrt B$ 로 커지는가? GroupNorm으로 바꾸면?
 어느 쪽이 먼저 발산하는가? 층 수를 늘리면 차이가 커지는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. LayerNorm과 RMSNorm을 손으로
+
+벡터 $\mathbf z = (2, 4, 6, 8)$ 에 $\gamma = 1$, $\beta = 0$, $\epsilon = 0$ 으로 normalization을 한다.
+
+(a) LayerNorm 출력을 구하라. (분산은 $d$ 로 나눈다.)
+(b) RMSNorm 출력을 구하라.
+(c) 두 출력 벡터의 cosine similarity를 구하고, 본문의 공식 $1/\sqrt{1 + \mu^2/\sigma^2}$ 와 비교하라. 이 벡터에 RMSNorm을 써도 괜찮은가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mu = 5$, $\sigma^2 = (9 + 1 + 1 + 9)/4 = 5$ 이므로 $\hat{\mathbf z} = (-3, -1, 1, 3)/\sqrt5 \approx (-1.342,\ -0.447,\ 0.447,\ 1.342)$.
+
+(b) RMS $= \sqrt{(4 + 16 + 36 + 64)/4} = \sqrt{30} \approx 5.477$ 이므로 $(0.365,\ 0.730,\ 1.095,\ 1.461)$.
+
+(c) LayerNorm 출력은 합이 0인 대칭 벡터이고 RMSNorm 출력은 모두 양수다. cosine similarity는 약 **0.408**로, 공식 $1/\sqrt{1 + 25/5} = 1/\sqrt6 \approx 0.408$ 과 정확히 같다.
+평균(5)이 표준편차($\sqrt5 \approx 2.24$)의 두 배가 넘는 벡터라, 평균을 빼지 않으면 방향이 크게 틀어진다.
+이런 activation에는 RMSNorm이 부적합하다. 본문의 "RMSNorm은 평균이 원래 작아서 통한다"의 반례다.
+:::
+
+### A2. 무엇을 몇 번 평균 내는가
+
+CNN activation tensor의 shape가 $(N, C, H, W) = (8, 64, 32, 32)$ 다. 각 normalization에서
+
+(a) 평균·분산 쌍을 **몇 개** 계산하는가?
+(b) 평균·분산 하나를 **몇 개의 값**으로 계산하는가?
+
+BatchNorm, LayerNorm($C, H, W$ 전체), InstanceNorm, GroupNorm($G = 8$)에 대해 표로 답하라. batch 크기가 2로 줄면 어느 쪽이 영향을 받는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+| 이름 | 통계 개수 | 통계 하나당 값의 수 |
+|---|---|---|
+| BatchNorm | $C = 64$ | $N \cdot H \cdot W = 8{,}192$ |
+| LayerNorm | $N = 8$ | $C \cdot H \cdot W = 65{,}536$ |
+| InstanceNorm | $N \cdot C = 512$ | $H \cdot W = 1{,}024$ |
+| GroupNorm | $N \cdot G = 64$ | $(C/G)\cdot H \cdot W = 8{,}192$ |
+
+batch가 2로 줄면 BatchNorm만 영향을 받는다. 통계 하나당 값이 $2 \times 1{,}024 = 2{,}048$ 개로 줄어든다(여전히 적지 않아 보이지만, 같은 이미지 안의 픽셀끼리는 서로 비슷해서 실질적인 정보는 "이미지 2장" 분량에 가깝다).
+나머지 셋은 샘플 하나 안에서만 계산하므로 batch 크기와 무관하다. GroupNorm이 BatchNorm과 같은 8,192개를 batch 없이 얻는다는 점이 흥미롭다 — 작은 batch에서 쓰이는 이유다.
+:::
+
+### B1. LayerNorm의 Jacobian
+
+$\hat{\mathbf z} = (\mathbf z - \mu\mathbf 1)/\sigma$ ($d$ 차원, $\mu = \frac1d\sum z_i$, $\sigma^2 = \frac1d\sum(z_i - \mu)^2$, $\epsilon = 0$)이다.
+
+(a) 다음을 보여라.
+
+$$\frac{\partial\hat{\mathbf z}}{\partial\mathbf z} = \frac1\sigma\Big(I - \frac1d\mathbf 1\mathbf 1^\top - \frac1d\hat{\mathbf z}\hat{\mathbf z}^\top\Big)$$
+
+(b) 이 Jacobian에 $\mathbf 1$ 과 $\mathbf z$ 를 곱하면 0이 됨을 보이고, 그 뜻을 설명하라.
+(c) backward pass에서 들어온 gradient $\mathbf g$ 를 $\mathbf z$ 쪽으로 넘기는 식을 적어라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+$\partial\mu/\partial z_j = 1/d$, $\partial\sigma/\partial z_j = \hat z_j/d$ 다(뒤의 것은 $\sigma^2$ 을 미분한 뒤 $2\sigma$ 로 나누면 나온다).
+몫의 미분: $\partial\hat z_i/\partial z_j = \big[(\delta_{ij} - 1/d)\sigma - (z_i - \mu)\,\hat z_j/d\big]/\sigma^2$.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 힌트의 식에서 $(z_i - \mu)/\sigma = \hat z_i$ 로 바꾸면
+
+$$\frac{\partial\hat z_i}{\partial z_j} = \frac1\sigma\Big(\delta_{ij} - \frac1d - \frac{\hat z_i\hat z_j}{d}\Big)$$
+
+이고, 행렬로 쓴 것이 주어진 식이다.
+
+(b) $\hat{\mathbf z}$ 의 합은 0, 제곱합은 $d$ 다. $J\mathbf 1 = \frac1\sigma\big(\mathbf 1 - \mathbf 1 - \hat{\mathbf z}(\hat{\mathbf z}^\top\mathbf 1)/d\big) = 0$.
+$\mathbf z = \sigma\hat{\mathbf z} + \mu\mathbf 1$ 이므로 $J\mathbf z = \frac1\sigma\big(\sigma\hat{\mathbf z} - \sigma\hat{\mathbf z}(\hat{\mathbf z}^\top\hat{\mathbf z})/d\big) = \hat{\mathbf z} - \hat{\mathbf z} = 0$.
+입력에 상수를 **더하는** 방향($\mathbf 1$)과 입력을 **늘리는** 방향($\mathbf z$)으로 조금 움직여도 출력이 변하지 않는다는 뜻이다. LayerNorm이 "평균과 크기를 지운다"는 것의 미분 버전이고, 본문 scale invariance의 출발점이다.
+
+(c) $J$ 는 symmetric이라 $\dfrac{\partial L}{\partial\mathbf z} = J\mathbf g = \dfrac1\sigma\Big(\mathbf g - \overline{\mathbf g}\,\mathbf 1 - \overline{\mathbf g\odot\hat{\mathbf z}}\,\hat{\mathbf z}\Big)$ ($\overline{\cdot}$ 은 성분 평균).
+들어온 gradient에서 평균 성분과 $\hat{\mathbf z}$ 방향 성분을 빼고 $\sigma$ 로 나눈다. 평균 항이 없는 RMSNorm은 가운데 항이 빠져 더 단순하다 — 본문의 "backpropagation이 단순"이 이것이다.
+:::
+
+### B2. pre-LN의 residual stream은 왜 $\sqrt L$ 로 자라는가
+
+pre-LN에서 $\mathbf x_\ell = \mathbf x_{\ell-1} + F_\ell(\mathrm{LN}(\mathbf x_{\ell-1}))$ 다. 각 sublayer 출력 $F_\ell$ 은 입력이 normalize되어 있으므로 크기가 대략 일정하다고 보고, 성분마다 평균 0·분산 $s^2$ 이며 서로 무관하다고 가정한다. $\mathbf x_0$ 의 성분 분산은 1이다.
+
+(a) $L$ 층 뒤 residual stream의 성분 분산과 표준편차를 구하라.
+(b) $\ell$ 번째 block이 더한 값이 그 시점 residual stream의 크기에 비해 얼마나 큰지(비율)를 구하라.
+(c) 이 결과로 "pre-LN은 깊은 층의 기여가 묻힌다"는 본문의 설명을 정량화하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 서로 무관한 값의 분산은 더해지므로 $1 + Ls^2$ 이고, 표준편차는 $\sqrt{1 + Ls^2} \approx s\sqrt L$ 이다. 본문의 실측 $0.64\sqrt L$ 은 $s \approx 0.64$ 에 해당한다(tanh sublayer의 출력 크기).
+
+(b) $\ell$ 번째 block의 기여는 크기 $s$, 그 시점 stream은 $s\sqrt\ell$ 정도이므로 비율은 약 $1/\sqrt\ell$ 이다.
+
+(c) 1번째 block은 stream을 거의 통째로 바꾸지만, 64번째 block은 $1/8$, 1,024번째 block은 $1/32$ 만큼만 방향을 바꾼다. 깊어질수록 각 층이 "목소리를 내기" 어려워진다.
+post-LN은 매 block 끝에 크기를 1로 되돌려 모든 block이 비슷한 비중을 갖지만, 대신 gradient 고속도로가 끊긴다.
+DeepNorm 같은 절충안이 residual 가지에 깊이에 따른 배율을 곱하는 이유가 이 $1/\sqrt\ell$ 이다.
+:::
+
+### B3. normalization 뒤의 weight는 gradient descent로 자라기만 한다
+
+$L(c\mathbf W) = L(\mathbf W)$ (모든 $c > 0$)인 scale invariant loss를 생각한다.
+
+(a) 양변을 $c$ 로 미분해 $c = 1$ 을 넣어 $\langle\nabla L(\mathbf W),\ \mathbf W\rangle = 0$ 임을 보여라. 기하적으로 무슨 뜻인가?
+(b) weight decay 없는 gradient descent $\mathbf W \leftarrow \mathbf W - \eta\nabla L$ 에서 $\|\mathbf W\|$ 가 절대 줄지 않음을 보여라.
+(c) (b)와 본문의 "effective learning rate $\propto 1/\|\mathbf W\|^2$"를 합치면 무슨 일이 일어나는가? weight decay를 넣으면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\dfrac{d}{dc}L(c\mathbf W) = \langle\nabla L(c\mathbf W),\ \mathbf W\rangle$ 이고 좌변 $L(\mathbf W)$ 는 $c$ 와 무관하니 0이다. $c = 1$ 을 넣으면 된다.
+gradient가 **weight 벡터와 수직**이다. weight의 "크기 방향"으로는 loss가 변하지 않으니 gradient가 그 방향 성분을 가질 이유가 없다. B1(b)의 $J\mathbf z = 0$ 과 같은 이야기다.
+
+(b) 피타고라스 정리로
+
+$$\|\mathbf W - \eta\nabla L\|^2 = \|\mathbf W\|^2 - 2\eta\underbrace{\langle\mathbf W, \nabla L\rangle}_{0} + \eta^2\|\nabla L\|^2 \ge \|\mathbf W\|^2$$
+
+수직인 방향으로 한 걸음 가면 원점에서 반드시 멀어진다. 원 위에서 접선 방향으로 걸으면 원 밖으로 나가는 것과 같다.
+
+(c) $\|\mathbf W\|$ 가 계속 자라고, 그에 따라 effective learning rate가 $1/\|\mathbf W\|^2$ 로 계속 줄어든다. 학습이 저절로 느려지는 일종의 자동 learning rate decay다.
+weight decay는 반대로 $\|\mathbf W\|$ 를 줄이는 힘이다. 두 힘이 균형을 이루는 곳에서 $\|\mathbf W\|$, 따라서 effective learning rate가 일정하게 유지된다.
+본문 callout의 "normalization 앞의 weight decay는 regularization이 아니라 learning rate 조절"이 이 균형이다.
+:::
+
+### C1. scale invariance를 직접 확인하기
+
+입력 4차원 → 선형층 $W$ (3×4) → LayerNorm → 고정된 출력 벡터 $\mathbf v$ 로 만든 작은 회귀 모델에서
+
+(a) 수치미분으로 gradient를 구해 $\langle\nabla L, W\rangle \approx 0$ 인지 확인하라.
+(b) learning rate 0.5로 gradient descent를 200 step 하면서 $\|W\|$ 가 단조 증가하는지 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\langle\nabla L, W\rangle$ 이 $10^{-10}$ 수준으로, gradient 크기(약 2)에 비해 사실상 0이다.
+
+(b) $\|W\|$ 가 약 2.1에서 5.9로 한 번도 줄지 않고 자란다. 초반에 빨리 자라고(gradient가 클 때) 점점 느려진다(gradient가 작아지고, B3(c)대로 effective learning rate도 줄어서).
+
+```{python}
+#| label: ex-scale-invariance
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(64, 4))
+y = rng.normal(size=64)
+v = rng.normal(size=3)
+
+def loss(W):
+    Z = X @ W.T
+    Zh = (Z - Z.mean(1, keepdims=True)) / np.sqrt(Z.var(1, keepdims=True) + 1e-12)   # LayerNorm
+    return np.mean((Zh @ v - y) ** 2)
+
+def grad(W, e=1e-6):
+    G = np.zeros_like(W)
+    for idx in np.ndindex(W.shape):
+        E = np.zeros_like(W); E[idx] = e
+        G[idx] = (loss(W + E) - loss(W - E)) / (2 * e)
+    return G
+
+W = rng.normal(size=(3, 4))
+g = grad(W)
+print(f"<∇L, W> = {np.sum(g * W):.1e}   (‖∇L‖ = {np.linalg.norm(g):.2f}, ‖W‖ = {np.linalg.norm(W):.2f})")
+
+norms = [np.linalg.norm(W)]
+for _ in range(200):
+    W = W - 0.5 * grad(W)
+    norms.append(np.linalg.norm(W))
+print(f"‖W‖: 0 step {norms[0]:.2f} → 50 step {norms[50]:.2f} → 200 step {norms[-1]:.2f}")
+print(f"한 번이라도 줄었는가: {np.any(np.diff(norms) < -1e-9)}")
+```
+:::
+
+### C2. batch 2의 BatchNorm은 정보를 지운다
+
+BatchNorm을 batch 크기 2로 학습한다고 하자($\epsilon = 0$).
+
+(a) 한 channel의 값이 두 샘플에서 $a$, $b$ ($a \ne b$)일 때 normalize된 값은 무엇인가? $a$, $b$ 의 값과 관계가 있는가?
+(b) batch 크기 2, 4, 32에서 normalize된 값의 분포와 batch 평균 추정의 표준편차를 시뮬레이션으로 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 평균 $(a + b)/2$, 표준편차 $|a - b|/2$ 이므로 normalize된 값은 큰 쪽이 $+1$, 작은 쪽이 $-1$ 이다. **입력이 무엇이든** 언제나 $\pm1$ 이다.
+이 channel이 전하는 정보는 "두 샘플 중 어느 쪽이 더 큰가" 1비트뿐이고, 얼마나 큰지는 사라진다. 다른 샘플과 짝이 무엇이냐에 따라 같은 이미지의 출력이 뒤집히기도 한다.
+
+(b) batch 2에서는 normalize된 값의 절댓값이 정확히 1 하나뿐이다. batch 4부터는 연속적인 값이 나온다.
+batch 평균의 표준편차는 $1/\sqrt B$ 를 따라 0.71, 0.5, 0.18로 준다. batch가 작을수록 "반 평균"이 몇 명의 점수에 휘둘린다는 본문의 설명이 이 숫자다.
+
+```{python}
+#| label: ex-bn-tiny-batch
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+for B in [2, 4, 32]:
+    x = rng.normal(size=(10_000, B))                   # 한 channel, batch 1만 개
+    z = (x - x.mean(1, keepdims=True)) / x.std(1, keepdims=True)
+    distinct = np.unique(np.round(np.abs(z[:, 0]), 6)).size
+    print(f"B={B:>2}   |정규화 값|의 서로 다른 개수 {distinct:>5}   batch 평균의 표준편차 {x.mean(1).std():.3f} (1/√B = {1 / np.sqrt(B):.3f})")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
