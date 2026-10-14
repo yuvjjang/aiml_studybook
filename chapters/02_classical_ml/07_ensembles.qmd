@@ -619,6 +619,119 @@ OOB가 비관적인 것이 보이는가?
 성능이 같은가? 어느 쪽이 더 오래 걸리는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 모델을 늘릴까, 다르게 만들까
+
+트리 하나의 예측 분산이 $\sigma^2 = 1$ 이다.
+
+(a) 서로 상관 $\rho = 0.3$ 인 트리 10개를 평균 내면 분산은? 무한히 많이 평균 내면?
+(b) 트리 수는 10개 그대로 두고 random forest로 상관을 $\rho = 0.1$ 로 낮추면?
+(c) (a)에서 트리를 1,000개로 늘리는 것과 (b) 중 어느 쪽이 나은가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 본문 식 $\rho\sigma^2 + (1-\rho)\sigma^2/M$ 에 넣으면 $0.3 + 0.07 = 0.37$. 무한히 많으면 $0.3$.
+
+(b) $0.1 + 0.09 = 0.19$.
+
+(c) 1,000개로 늘려도 0.3 아래로는 못 간다. 10개로 상관을 낮춘 (b)가 0.19로 훨씬 낫다.
+**모델 수보다 서로 다름이 중요하다.** 다만 상관을 낮추려고 `max_features` 를 너무 줄이면 개별 트리의 $\sigma^2$ 과 bias가 커지므로 절충점이 있다(본문 G2.7.1의 특성 두 개짜리 데이터가 그 예).
+:::
+
+### A2. bootstrap 표본에 들어가는 비율
+
+(a) $n = 10$ 개에서 복원추출로 10개를 뽑을 때, 특정 샘플이 한 번도 안 뽑힐 확률은? 극한값 $e^{-1}$ 과 비교하라.
+(b) 트리 100개로 bagging하면, 샘플 하나가 OOB인 트리는 평균 몇 개인가?
+(c) AdaBoost에서 weak learner의 가중 오차가 $\varepsilon = 0.3$ 이면 발언권 $\alpha = \tfrac12\ln\frac{1-\varepsilon}{\varepsilon}$ 는? $\varepsilon = 0.5$ 면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $0.9^{10} \approx 0.349$. 극한 0.368과 이미 가깝다. 포함될 확률은 약 65%.
+
+(b) 트리마다 약 36.8% 확률로 OOB이므로 평균 약 **37개**. 샘플마다 37개 트리의 예측을 모아 OOB 추정을 한다.
+
+(c) $\tfrac12\ln(0.7/0.3) \approx 0.42$. $\varepsilon = 0.5$ 면 $\ln1 = 0$ — 동전 던지기 수준의 학습기는 **발언권이 없다.** $\varepsilon > 0.5$ 면 $\alpha < 0$ 이 되어 그 학습기의 답을 뒤집어 쓴다.
+:::
+
+### B1. gradient boosting은 residual을 맞춘다
+
+gradient boosting은 매 라운드 현재 예측 $F(x_i)$ 에서 손실의 음의 gradient $-\partial\ell(y_i, F)/\partial F$ 를 새 트리가 맞추도록 학습한다.
+
+(a) 제곱손실 $\ell = \tfrac12(y - F)^2$ 이면 음의 gradient가 residual $y - F$ 임을 보여라.
+(b) 절대손실 $\ell = |y - F|$ 이면? 이 경우 outlier 하나가 학습에 주는 영향은 어떻게 다른가?
+(c) logistic 손실 $\ell = -[y\log p + (1-y)\log(1-p)]$, $p = \sigma(F)$ 이면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\partial\ell/\partial F = -(y - F)$ 이므로 음의 gradient는 $y - F$. "지금까지 틀린 만큼"을 다음 트리가 맞춘다 — 본문의 조각가 비유.
+
+(b) $-\partial|y - F|/\partial F = \mathrm{sign}(y - F)$. 틀린 **방향**만 알려 주고 크기는 버린다.
+제곱손실에서는 residual 100인 outlier가 다음 트리를 크게 끌고 가지만, 절대손실에서는 그 점도 다른 점과 같은 크기(±1)의 신호만 준다. [0.2 연습 문제 B2](../00_foundations/02_probability.qmd)의 "평균 대 중앙값"과 같은 이야기다.
+
+(c) [0.4 연습 문제 B1](../00_foundations/04_information_theory.qmd)의 결과대로 $\partial\ell/\partial F = p - y$ 이므로 음의 gradient는 $y - p$. 확률 공간의 residual이다.
+세 경우 모두 "예측과 정답의 차이"라는 같은 모양이고, 손실을 바꾸면 그 차이를 재는 방식만 바뀐다. 그래서 하나의 gradient boosting 구현이 회귀·분류·순위 학습을 모두 다룬다.
+:::
+
+### C1. stump로 gradient boosting 직접 구현하기
+
+$y = \sin x + $ 잡음인 점 200개에 깊이 1 트리(stump)로 제곱손실 gradient boosting을 300라운드 한다. learning rate $\eta = 1$ 과 $\eta = 0.1$ 에서 라운드 1, 10, 50, 300의 훈련 MSE와 참 함수 대비 시험 MSE를 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$\eta = 1$ 은 빠르게 내려가 50라운드쯤 시험 MSE가 가장 낮고, 그 뒤로는 잡음을 맞추며 다시 오른다(overfitting).
+$\eta = 0.1$ 은 처음엔 느리지만 300라운드에서 시험 MSE가 $\eta = 1$ 의 최저점보다도 낮다.
+작은 learning rate(shrinkage)는 각 트리가 residual을 10%만 고치게 해서, 하나의 트리가 잡음에 과하게 반응하는 것을 막는다. 대가는 라운드 수다. 실무 GBDT가 learning rate 0.05~0.1에 수백~수천 개 트리를 쓰는 이유다.
+
+```{python}
+#| label: ex-gbdt-stumps
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n = 200
+x = np.sort(rng.uniform(0, 6, n))
+y = np.sin(x) + rng.normal(0, 0.3, n)
+xt = np.linspace(0, 6, 500)
+
+def fit_stump(x, r):
+    """제곱오차가 가장 작은 threshold 하나와 양쪽 평균."""
+    best = None
+    for t in (x[:-1] + x[1:]) / 2:
+        L = x < t
+        cl, cr = r[L].mean(), r[~L].mean()
+        sse = ((r[L] - cl) ** 2).sum() + ((r[~L] - cr) ** 2).sum()
+        if best is None or sse < best[0]:
+            best = (sse, t, cl, cr)
+    return best[1:]
+
+for eta in [1.0, 0.1]:
+    F, Ft = np.zeros(n), np.zeros(xt.size)
+    row = []
+    for m in range(1, 301):
+        t, cl, cr = fit_stump(x, y - F)                 # residual 을 맞춘다
+        F += eta * np.where(x < t, cl, cr)
+        Ft += eta * np.where(xt < t, cl, cr)
+        if m in (1, 10, 50, 300):
+            row.append(f"{m}라운드 훈련 {np.mean((y - F) ** 2):.3f}/시험 {np.mean((np.sin(xt) - Ft) ** 2):.3f}")
+    print(f"η={eta}:  " + "   ".join(row))
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
