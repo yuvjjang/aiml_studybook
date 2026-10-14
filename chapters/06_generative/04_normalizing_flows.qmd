@@ -609,6 +609,200 @@ ring 데이터를 다시 학습시켜라. 다리 위 질량이 0에 가까워지
 같은 parameter 수에서 깊이와 너비 중 어느 쪽이 NLL을 더 줄이는지 비교하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 1차원 change of variables
+
+$z \sim \mathcal N(0, 1)$ 이고 flow가 $z = f(x) = 2x + 1$ 이다.
+
+(a) change of variables 공식으로 $p_x(0)$ 을 구하라.
+(b) $x$ 는 어떤 분포를 따르는가? 그 분포의 density로 (a)를 확인하라.
+(c) $z = \log x$ ($x > 0$)이면 $p_x(x)$ 는 무엇인가? 이 분포의 이름은?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $p_x(0) = p_z(f(0))\,|f'(0)| = \mathcal N(1;\ 0, 1) \times 2 \approx 0.242 \times 2 = 0.484$.
+
+(b) $x = (z - 1)/2$ 이므로 $x \sim \mathcal N(-0.5,\ 0.25)$ 다. 그 density의 $x = 0$ 값도 약 0.484로 같다.
+$f$ 가 공간을 2배로 늘리므로($x$ 가 0.5 움직이면 $z$ 는 1 움직인다) $x$ 쪽 density는 2배 진하다. 본문의 "반죽을 늘리면 얇아진다"를 거꾸로 본 것이다.
+
+(c) $p_x(x) = \mathcal N(\log x;\ 0, 1)\cdot\dfrac{1}{x}$ — **log-normal** 분포다. [3.3](../03_deep_learning/03_losses.qmd)에서 배송시간 잡음으로 쓴 그 분포다.
+$1/x$ 인자가 "작은 $x$ 근처에서는 $\log$ 가 공간을 크게 늘리므로 density가 진해진다"를 반영한다.
+:::
+
+### A2. coupling layer 한 층을 손으로
+
+4차원 입력 $x = (1, 2, 3, 4)$ 에서 앞 두 성분 $x_a = (1, 2)$ 는 그대로 두고, 뒤 두 성분을 $y_b = x_b \odot e^{s(x_a)} + t(x_a)$ 로 바꾼다. 신경망이 $s(x_a) = (0.5,\ -0.2)$, $t(x_a) = (1,\ 0)$ 을 냈다.
+
+(a) 출력 $y$ 와 $\log|\det J|$ 를 구하라.
+(b) $y$ 에서 $x$ 를 되찾는 계산을 적어라.
+(c) flow는 왜 latent를 데이터보다 낮은 차원으로 만들 수 없는가? VAE와 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $y_a = (1, 2)$, $y_b = (3e^{0.5} + 1,\ 4e^{-0.2} + 0) \approx (5.95,\ 3.27)$. $\log|\det J| = 0.5 + (-0.2) = 0.3$.
+3번 좌표는 $e^{0.5} \approx 1.65$ 배로 늘고 4번 좌표는 $e^{-0.2} \approx 0.82$ 배로 줄어, 전체 부피는 $e^{0.3} \approx 1.35$ 배다.
+
+(b) $y_a = x_a$ 이므로 $s(y_a)$, $t(y_a)$ 를 똑같이 다시 계산할 수 있다. $x_b = (y_b - t)\odot e^{-s} = (4.95e^{-0.5},\ 3.27e^{0.2}) = (3, 4)$.
+신경망 $s, t$ 는 거꾸로 돌릴 필요가 없다 — 같은 방향으로 한 번 더 돌릴 뿐이다.
+
+(c) 역함수가 있으려면 서로 다른 $x$ 가 서로 다른 $z$ 로 가야 한다(일대일). 차원을 줄이면 반드시 여러 $x$ 가 같은 $z$ 로 접혀 정보가 사라지고, 되돌릴 수 없다.
+Jacobian도 정사각행렬이어야 determinant가 정의된다. VAE는 decoder가 $z \to x$ 로 차원을 늘리는 것을 허용하는 대신 likelihood를 lower bound로만 얻는다. flow는 같은 차원을 고집하는 대가로 정확한 likelihood를 얻는다.
+:::
+
+### B1. change of variables를 누적분포함수로 유도하기
+
+$z = f(x)$ 이고 $f$ 는 미분 가능한 증가함수다.
+
+(a) $P(X \le x) = P(Z \le f(x))$ 임을 이용해 $p_x(x) = p_z(f(x))\,f'(x)$ 를 유도하라.
+(b) $f$ 가 감소함수면 어떻게 되는가? 두 경우를 합쳐 절댓값이 붙는 이유를 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $f$ 가 증가하면 $X \le x \iff f(X) \le f(x) \iff Z \le f(x)$ 이므로 두 확률이 같다: $F_X(x) = F_Z(f(x))$. 양변을 $x$ 로 미분하면 chain rule로
+
+$$p_x(x) = p_z(f(x))\,f'(x)$$
+
+(b) 감소하면 부등호가 뒤집혀 $X \le x \iff Z \ge f(x)$, 즉 $F_X(x) = 1 - F_Z(f(x))$ 다. 미분하면 $p_x(x) = -p_z(f(x))f'(x)$ 이고, $f' < 0$ 이므로 양수다.
+두 경우 모두 $p_z(f(x))\,|f'(x)|$ 로 쓸 수 있다. density는 음수일 수 없고, 방향(늘이는지 뒤집는지)과 상관없이 **늘어난 정도**만 중요하다. 다차원에서는 $|f'|$ 이 $|\det J|$ 가 되고, 부호(공간을 뒤집는가)는 [0.0](../00_foundations/00_linear_algebra.qmd)의 "determinant가 음수면 거울에 비친 것"에 해당한다.
+:::
+
+### B2. 선형 flow는 Gaussian 적합과 같다
+
+flow를 선형 변환 하나 $z = A(x - \mathbf b)$ ($A$ 는 역행렬이 있는 $d\times d$ 행렬)로, base를 $\mathcal N(0, I)$ 로 둔다.
+
+(a) $\log p_x(x)$ 를 적어라. 이 모델이 표현하는 $x$ 의 분포는 무엇인가?
+(b) 데이터 $\{x_i\}$ 에 maximum likelihood로 맞추면 $\mathbf b$ 와 $A^\top A$ 는 무엇이 되는가? ($\Sigma^{-1} = A^\top A$ 로 두면 Gaussian MLE와 같은 문제가 된다.)
+(c) 이 결과로 "normalizing flow는 Gaussian 적합의 비선형 일반화"라는 말을 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\log p_x(x) = -\tfrac12\|A(x - \mathbf b)\|^2 - \tfrac d2\log2\pi + \log|\det A|$.
+$\|A(x - \mathbf b)\|^2 = (x - \mathbf b)^\top A^\top A(x - \mathbf b)$ 이고 $\log|\det A| = \tfrac12\log\det(A^\top A)$ 이므로, 이것은 평균 $\mathbf b$, covariance $(A^\top A)^{-1}$ 인 다변량 정규분포의 log density 그 자체다.
+
+(b) 다변량 정규분포의 MLE는 [0.2](../00_foundations/02_probability.qmd)대로 표본평균과 표본 covariance($n$ 으로 나눈 것)다. 그러므로 $\mathbf b = \bar x$, $A^\top A = \hat\Sigma^{-1}$. 예를 들어 $A = L^{-1}$ ($\hat\Sigma = LL^\top$ 의 Cholesky 분해)이 한 답이다.
+이때 $z = L^{-1}(x - \bar x)$ 는 평균 0, covariance $I$ — 데이터를 **whitening**한 것이다.
+
+(c) 선형 flow는 데이터를 "평균 빼고, 상관을 풀고, 크기를 맞춰" 표준정규로 보낸다. 데이터가 정규분포면 이것으로 충분하다.
+coupling layer는 같은 일을 **위치마다 다르게**($s, t$ 가 입력에 의존) 한다. 휘어진 two moons도 조각마다 다르게 펴서 정규분포로 보낸다. 본문 G6.4.3에서 학습된 $z$ 가 "평균 0, 표준편차 1, 상관 0"에 가까웠던 것은 flow가 비선형 whitening을 배웠다는 뜻이다. C2에서 선형의 경우를 숫자로 본다.
+:::
+
+### B3. flow의 density는 어디서나 0보다 크다 — 정량적으로
+
+RealNVP의 각 층에서 $s$ 가 tanh로 묶여 성분마다 $|s| \le S$ 이고, 한 층이 $d/2$ 개 좌표를 바꾼다. $L$ 층을 쌓았다.
+
+(a) $\log|\det J| \ge -L\,\tfrac d2\,S$ 임을 보여라.
+(b) 입력이 반지름 $R$ 안에 있을 때 $\|f(x)\| \le M$ 이라 하면, $p(x)$ 에 대한 양의 하한을 적어라.
+(c) $d = 2$, $L = 8$, $S = 2$ 이면 부피 항이 density를 최대 몇 배까지 줄일 수 있는가? 이것이 본문 ring 실험의 "원점에 참값의 $10^{\cdots}$ 배"와 어떻게 연결되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 한 층의 $\log|\det J| = \sum s$ 는 $d/2$ 개 항의 합이고 각 항이 $-S$ 이상이므로 $-\tfrac d2 S$ 이상이다. $L$ 층을 더하면 $-L\tfrac d2 S$ 이상이다.
+
+(b) $\log p(x) = \log\mathcal N(f(x);\ 0, I) + \log|\det J| \ge -\tfrac{M^2}{2} - \tfrac d2\log2\pi - L\tfrac d2 S$. 지수를 취하면
+
+$$p(x) \ge (2\pi)^{-d/2}\,e^{-M^2/2}\,e^{-LdS/2} > 0$$
+
+본문의 "모든 유한한 $x$ 에서 $p(x) > 0$"의 정량적 버전이다.
+
+(c) $e^{-8 \cdot 1 \cdot 2} = e^{-16} \approx 1.1\times10^{-7}$ 배까지다. 부피 항만으로는 density를 이보다 더 깎을 수 없다.
+ring 한가운데처럼 "데이터가 절대 없어야 하는 곳"의 참 density는 $e^{-\text{수백}}$ 수준인데, flow가 깎을 수 있는 폭은 층 수 × 차원 × $S$ 로 정해진 유한한 양이다. 그래서 수십 자릿수 과잉이 남는다.
+층을 늘리면 하한이 내려가지만 선형으로만 내려가고, 본문 실험처럼 학습이 그 여유를 다 쓴다는 보장도 없다.
+:::
+
+### C1. 비선형 change of variables를 표본으로 확인하기
+
+$z \sim \mathcal N(0, 1)$, $z = f(x) = x + 0.5\tanh x$ 다. ($f'(x) = 1 + 0.5\,\mathrm{sech}^2x > 0$ 이라 invertible이다.)
+
+(a) $z$ 를 20만 개 뽑아 Newton 방법으로 $x = f^{-1}(z)$ 를 구하라.
+(b) $x$ 의 histogram과 공식 $p_z(f(x))\,f'(x)$ 를 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) Newton 반복 50번이면 $|f(x) - z|$ 가 $10^{-16}$ 수준이 된다. 닫힌 형태의 역함수가 없어도 수치적으로 정확히 되돌릴 수 있다.
+
+(b) histogram과 공식이 구간마다 약 0.01 이내로 맞는다(최댓값 0.59 대비). 원점 근처에서 $f' = 1.5$ 로 공간이 늘어나므로 $x$ 쪽 density가 표준정규보다 진하고, 꼬리에서는 $f' \to 1$ 이라 표준정규와 같아진다.
+
+```{python}
+#| label: ex-cov-1d
+
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(0)
+f = lambda x: x + 0.5 * np.tanh(x)
+df = lambda x: 1 + 0.5 / np.cosh(x) ** 2
+
+z = rng.normal(size=200_000)
+x = z.copy()
+for _ in range(50):                                   # Newton 으로 f(x) = z 풀기
+    x -= (f(x) - z) / df(x)
+print(f"역변환 오차 max|f(x) − z| = {np.abs(f(x) - z).max():.1e}")
+
+edges = np.linspace(-3, 3, 31)
+hist, _ = np.histogram(x, edges, density=True)
+c = (edges[:-1] + edges[1:]) / 2
+formula = stats.norm.pdf(f(c)) * df(c)
+print(f"histogram vs 공식 최대 차이 {np.abs(hist - formula).max():.4f}   (density 최댓값 {formula.max():.3f})")
+for xi in [0.0, 1.0, 2.5]:
+    print(f"  x={xi}:  p_z(f(x))·f'(x) = {stats.norm.pdf(f(xi)) * df(xi):.4f}   (표준정규라면 {stats.norm.pdf(xi):.4f})")
+```
+:::
+
+### C2. 선형 flow로 Gaussian 맞추기
+
+평균 $(1, -2)$, covariance $\begin{pmatrix} 2 & 1.2 \\ 1.2 & 1 \end{pmatrix}$ 인 데이터 5,000개에 B2의 선형 flow를 MLE로 맞춘다.
+
+(a) $A = L^{-1}$ ($\hat\Sigma = LL^\top$) 로 둔 flow의 평균 NLL을 change of variables 공식으로 계산하고, 다변량 정규분포의 NLL과 비교하라.
+(b) 변환된 $z$ 의 평균과 covariance를 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 두 NLL이 소수점 끝자리까지 같다(약 2.549). 선형 flow와 Gaussian 적합은 같은 모델이다.
+
+(b) $z$ 의 평균은 $10^{-15}$, covariance는 단위행렬이다. 데이터가 정확히 표준정규로 "normalize"되었다. 본문의 RealNVP는 이것을 비선형으로 하는 것이고, 데이터가 정규분포가 아니면 선형 flow로는 $z$ 가 표준정규가 되지 않는다.
+
+```{python}
+#| label: ex-linear-flow
+
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(0)
+X = rng.multivariate_normal([1, -2], [[2, 1.2], [1.2, 1]], 5000)
+
+mu = X.mean(0)
+S = np.cov(X.T, bias=True)                          # MLE covariance (n 으로 나눔)
+A = np.linalg.inv(np.linalg.cholesky(S))            # z = A (x − μ)
+
+Z = (X - mu) @ A.T
+log_det = np.log(abs(np.linalg.det(A)))
+nll_flow = -np.mean(stats.multivariate_normal(np.zeros(2), np.eye(2)).logpdf(Z) + log_det)
+nll_gauss = -np.mean(stats.multivariate_normal(mu, S).logpdf(X))
+
+print(f"선형 flow NLL  {nll_flow:.6f}")
+print(f"Gaussian NLL   {nll_gauss:.6f}")
+print(f"z 평균 {Z.mean(0).round(12)}   z covariance\n{np.cov(Z.T, bias=True).round(6)}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
