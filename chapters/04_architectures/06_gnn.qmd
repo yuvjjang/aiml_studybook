@@ -796,6 +796,114 @@ Transformer를 "complete graph GNN"으로 읽으면 여러 설계가 한 줄로 
 다시 비교하라. 이웃을 골라야 하는 데이터에서는 GATv2가 GCN을 이기는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. GCN의 정규화 행렬을 손으로
+
+node 세 개가 1–2–3 으로 이어진 경로 graph다.
+
+(a) $A + I$ 와 각 node의 degree를 적고, $\hat A = D^{-1/2}(A + I)D^{-1/2}$ 를 구하라.
+(b) node 1에만 특성 1이 있고 나머지는 0인 $\mathbf x = (1, 0, 0)$ 에 $\hat A$ 를 한 번, 두 번 곱하라. 정보가 어디까지 퍼지는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $A + I = \begin{pmatrix}1&1&0\\1&1&1\\0&1&1\end{pmatrix}$, degree $(2, 3, 2)$. $\hat A_{ij} = (A+I)_{ij}/\sqrt{d_id_j}$ 이므로
+
+$$\hat A = \begin{pmatrix} 1/2 & 1/\sqrt6 & 0 \\ 1/\sqrt6 & 1/3 & 1/\sqrt6 \\ 0 & 1/\sqrt6 & 1/2 \end{pmatrix} \approx \begin{pmatrix} 0.5 & 0.408 & 0 \\ 0.408 & 0.333 & 0.408 \\ 0 & 0.408 & 0.5 \end{pmatrix}$$
+
+(b) 한 번: $(0.5,\ 0.408,\ 0)$ — 이웃 node 2까지만 닿는다. 두 번: $\hat A(0.5, 0.408, 0) = (0.417,\ 0.340,\ 0.167)$ — node 3까지 닿는다. 층 $l$ 개가 $l$-hop까지 본다는 본문 G4.6.1의 receptive field다.
+$1/\sqrt{d_id_j}$ 정규화는 이웃이 많은 node(허브)가 한 번에 너무 큰 목소리를 내지 않게 한다.
+:::
+
+### A2. 층을 많이 쌓으면
+
+(a) GCN을 64층 쌓으면 receptive field는? 작은 graph라면 무슨 일이 생기는가?
+(b) "over-smoothing"을 소문에 비유해 설명하라.
+(c) CNN에서는 깊이가 도움이 되었는데 GCN에서는 왜 대개 2~3층이 최선인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 64-hop이다. 지름이 64보다 작은 graph라면 모든 node가 graph 전체를 본다.
+
+(b) 모두가 이웃의 이야기를 평균 내어 자기 생각으로 삼기를 반복하면, 결국 마을 전체가 같은 이야기를 하게 된다. 처음에 서로 달랐던 정보(누가 어느 집단인지)가 평균에 녹아 사라진다.
+
+(c) CNN 층은 평균만 내는 것이 아니라 kernel마다 다른 가중치로 서로 다른 패턴(edge, 질감)을 뽑아 정보를 늘리고, residual·normalization이 신호를 보존한다. GCN의 $\hat A$ 는 고정된 **평균 filter**라 곱할수록 정보를 줄이기만 한다(C1). 그래서 깊게 쌓으려면 residual, attention(GAT), 층마다 다른 aggregation 같은 장치가 필요하다.
+:::
+
+### B1. GCN 층은 permutation equivariant다
+
+$P$ 가 permutation 행렬이면 $PP^\top = I$ 다. node 번호를 바꾸면 $A \to PAP^\top$, $X \to PX$ 가 된다.
+
+(a) degree 행렬이 $D \to PDP^\top$ 로 바뀜을 보이고, $\hat A \to P\hat AP^\top$ 임을 보여라.
+(b) GCN 층 $\sigma(\hat AXW)$ 가 $P\,\sigma(\hat AXW)$ 로 바뀜을 보여라.
+(c) node 표현을 모두 **더해** graph 하나의 표현을 만들면 그 결과는 번호 매기기에 불변임을 보여라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) degree는 $A + I$ 의 행 합이다. 행과 열을 같은 방식으로 섞으면 각 node의 행 합은 그 node를 따라 이동한다. 대각행렬을 같은 방식으로 섞은 것이 $PDP^\top$ 다. 대각행렬의 거듭제곱($D^{-1/2}$)도 같은 방식으로 섞이므로 $\hat A \to PD^{-1/2}P^\top PAP^\top PD^{-1/2}P^\top = P\hat AP^\top$ 다(가운데의 $P^\top P = I$ 가 지워진다).
+
+(b) $P\hat AP^\top PXW = P\hat AXW$. 원소별 activation $\sigma$ 는 행 순서를 바꾸는 것과 순서를 바꿔도 되므로 $\sigma(P\cdot) = P\sigma(\cdot)$.
+
+(c) $\mathbf 1^\top PH = (P^\top\mathbf 1)^\top H = \mathbf 1^\top H$. permutation은 1벡터를 그대로 둔다. 합 대신 평균이나 최댓값도 같은 이유로 불변이다.
+[5.0 연습 문제 B2](../05_transformer/00_attention_mechanism.qmd)의 attention equivariance와 같은 계산이다 — 본문의 "self-attention은 complete graph 위의 GNN"의 한 측면이다.
+:::
+
+### C1. over-smoothing을 숫자로 보기
+
+community 두 개(각 30 node)인 SBM graph에서, community에 따라 첫 특성이 조금 다른 특성 행렬 $X$ 를 만들고 $\hat A^kX$ 를 $k = 0, 1, \dots, 64$ 에 대해 계산한다. (dominant eigenvector가 $\sqrt d$ 방향이라 각 node를 $\sqrt{d_i}$ 로 나눠 비교한다.)
+
+(a) "community 안의 흩어짐"과 "두 community 평균의 차이"를 "모든 node가 공유하는 성분"의 크기로 나눈 값을 $k$ 에 따라 구하라.
+(b) $\hat A$ 의 두 번째로 큰 eigenvalue와 비교해, 두 번째 값이 어떤 속도로 줄어드는지 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) community 안의 흩어짐은 $k = 2$ 에서 이미 10분의 1로 준다 — 이웃 평균이 잡음을 지운다(좋은 효과). 두 community의 차이는 더 천천히 줄지만 $k = 16$ 에서 0.017, $k = 64$ 에서 사실상 0이 된다. 모든 node가 같은 표현이 된다(over-smoothing).
+그 사이($k = 2 \sim 4$)가 잡음은 지우고 구분은 남는 지점이다. GCN이 2~3층에서 가장 잘 되는 이유다.
+
+(b) $\hat A$ 의 가장 큰 eigenvalue는 1(모든 node가 공유하는 성분)이고, 두 번째는 약 0.84다. 두 번째 eigenvector가 community를 가르는 방향이라, community 차이는 매 층 약 0.84배씩 공유 성분에 비해 줄어든다. $0.84^{16} \approx 0.06$, $0.84^{64} \approx 10^{-5}$ 이다.
+community 안의 잡음은 더 작은 eigenvalue 방향에 있어 훨씬 빨리 사라진다. [0.0 연습 문제 B1](../00_foundations/00_linear_algebra.qmd)의 "거듭제곱하면 가장 큰 eigenvector만 남는다"가 graph 위에서 일어나는 것이다.
+
+```{python}
+#| label: ex-oversmoothing
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n = 60
+c = np.repeat([0, 1], 30)
+A = (rng.random((n, n)) < np.where(c[:, None] == c[None, :], 0.3, 0.03)).astype(float)
+A = np.triu(A, 1); A = A + A.T
+At = A + np.eye(n)
+d = At.sum(1)
+A_hat = At / np.sqrt(np.outer(d, d))
+
+X = rng.normal(size=(n, 16)) + 1.0
+X[:, 0] += np.where(c == 0, 0.5, -0.5)                  # community 신호는 첫 특성에만
+
+print(f"Â 의 큰 eigenvalue 3개: {np.sort(np.linalg.eigvalsh(A_hat))[-3:].round(3)}")
+for k in [0, 1, 2, 4, 8, 16, 32, 64]:
+    H = np.linalg.matrix_power(A_hat, k) @ X / np.sqrt(d)[:, None]
+    common = np.linalg.norm(H.mean(0))
+    within = np.sqrt(np.mean([((H[c == j] - H[c == j].mean(0)) ** 2).sum(1).mean() for j in (0, 1)]))
+    between = np.linalg.norm(H[c == 0].mean(0) - H[c == 1].mean(0))
+    print(f"k={k:>2}   안쪽 흩어짐 {within / common:.4f}   community 차이 {between / common:.4f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
