@@ -955,6 +955,99 @@ whitening($X \to X\Sigma^{-1/2}$ — 모든 방향의 분산을 1로 맞추기)�
 비율은? 이것이 [6.6](06_score_sde.qmd)의 다리다.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. bottleneck이 무엇을 강제하는가
+
+(a) 입력 784차원을 latent 32차원으로 줄였다가 복원하는 autoencoder의 압축률은?
+(b) latent를 1,024차원(입력보다 크게)으로 두고 아무 제약 없이 학습하면 무엇을 배울 위험이 있는가? 본문의 실험 결과는 그 위험이 늘 현실이 된다고 말하는가?
+(c) sparse autoencoder는 차원 대신 무엇을 줄이는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $784/32 = 24.5$ 배.
+
+(b) 입력을 그대로 베끼는 identity function을 배울 위험이 있다. 복원 오차는 0이 되지만 쓸모 있는 표현은 없다.
+본문 G6.1.2는 데이터가 저차원 manifold 위에 있고 학습이 유한하면 identity로 바로 가지는 않는다는 것을 보였다 — 위험은 실재하지만 자동으로 일어나지는 않는다.
+
+(c) **동시에 켜지는 unit의 개수**를 줄인다. 차원은 커도 입력 하나마다 몇 개만 활성화되게 해서, 각 unit이 특정한 패턴 하나를 맡게 한다. [12.1 mechanistic interpretability](../12_trust/01_mechanistic.qmd)가 이 성질을 쓴다.
+:::
+
+### A2. VQ-VAE의 압축량
+
+256×256 RGB 이미지(픽셀당 8비트)를 32×32 격자의 discrete code로 바꾸고, codebook 크기는 512다.
+
+(a) code 하나는 몇 비트인가? 이미지 하나의 code 전체는?
+(b) 원본 대비 압축률은?
+(c) 이 code 위에 Transformer를 올려 이미지를 생성할 때, sequence 길이는 원본 픽셀 수에 비해 얼마나 짧은가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\log_2 512 = 9$ 비트. $32\times32\times9 = 9{,}216$ 비트(약 1.1 KB).
+
+(b) 원본 $256\times256\times3\times8 = 1{,}572{,}864$ 비트에 비해 약 **171배**.
+
+(c) $256\times256\times3 = 196{,}608$ 개 대신 1,024개 token — 약 192배 짧다. attention 비용이 길이의 제곱이므로 계산은 수만 배 줄어든다. 이미지를 "단어"로 바꾸는 것이 VQ-VAE의 가장 큰 쓸모다([6.7](07_latent_diffusion.qmd)의 latent 공간과 같은 동기).
+:::
+
+### B1. denoising autoencoder의 최적 출력
+
+데이터 $x \sim \mathcal N(\mu, s^2)$ 에 noise를 더한 $\tilde x = x + \sigma\varepsilon$ 을 받아 $x$ 를 복원한다(제곱오차).
+
+(a) 최적 복원은 $\mathbb E[x\mid\tilde x]$ 다. 이 값이 $\dfrac{s^2\tilde x + \sigma^2\mu}{s^2 + \sigma^2}$ 임을 보여라.
+(b) $\sigma \to 0$ 과 $\sigma \to \infty$ 에서 복원은 무엇이 되는가?
+(c) 본문의 "denoising과 score function" 관계 $\mathbb E[x\mid\tilde x] = \tilde x + \sigma^2\nabla\log p(\tilde x)$ 로 (a)를 다시 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $x$ 와 $\tilde x$ 는 결합정규분포이고, 정규분포의 조건부 평균은 선형이다. $\mathrm{Cov}(x, \tilde x) = s^2$, $\mathrm{Var}(\tilde x) = s^2 + \sigma^2$ 이므로
+
+$$\mathbb E[x\mid\tilde x] = \mu + \frac{s^2}{s^2 + \sigma^2}(\tilde x - \mu) = \frac{s^2\tilde x + \sigma^2\mu}{s^2 + \sigma^2}$$
+
+(b) $\sigma \to 0$: $\tilde x$ 그대로(noise가 없으니 고칠 것이 없다). $\sigma \to \infty$: $\mu$ (관측을 믿을 수 없으니 평균으로 답한다). 그 사이에서는 관측과 평균을 각자의 확신만큼 섞는다 — [2.1 연습 문제 B1](../02_classical_ml/01_bias_variance.qmd)의 shrinkage다.
+
+(c) $\tilde x \sim \mathcal N(\mu, s^2 + \sigma^2)$ 이므로 $\nabla\log p(\tilde x) = -(\tilde x - \mu)/(s^2 + \sigma^2)$. 대입하면 $\tilde x - \dfrac{\sigma^2(\tilde x - \mu)}{s^2 + \sigma^2}$ 로 (a)와 같다. denoising을 배우는 것이 score를 배우는 것이라는 [6.6](06_score_sde.qmd)의 핵심이 이 한 줄이다.
+:::
+
+### C1. denoiser를 회귀로 학습해 보기
+
+$x \sim \mathcal N(2, 1)$, $\sigma = 0.5$ 로 쌍 $(\tilde x, x)$ 를 10만 개 만들고, $\tilde x$ 로 $x$ 를 예측하는 직선을 least squares로 맞춰라. 기울기와 절편이 B1(a)의 $s^2/(s^2 + \sigma^2) = 0.8$, $\sigma^2\mu/(s^2 + \sigma^2) = 0.4$ 와 맞는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+기울기 약 0.80, 절편 약 0.40이 나온다. 데이터가 정규분포라 최적 denoiser가 직선이고, 제곱오차 회귀가 그것을 그대로 찾는다. 데이터 분포가 복잡해지면 최적 denoiser도 비선형이 되고, 그것을 신경망으로 배우는 것이 denoising autoencoder다.
+
+```{python}
+#| label: ex-dae-linear
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+mu, s, sigma, n = 2.0, 1.0, 0.5, 100_000
+x = rng.normal(mu, s, n)
+x_noisy = x + sigma * rng.normal(size=n)
+
+A = np.column_stack([x_noisy, np.ones(n)])
+slope, intercept = np.linalg.lstsq(A, x, rcond=None)[0]
+print(f"학습된 denoiser: x̂ = {slope:.3f}·x̃ + {intercept:.3f}")
+print(f"이론:            x̂ = {s**2 / (s**2 + sigma**2):.3f}·x̃ + {sigma**2 * mu / (s**2 + sigma**2):.3f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
