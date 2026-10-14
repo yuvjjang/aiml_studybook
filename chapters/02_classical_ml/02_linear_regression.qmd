@@ -716,6 +716,255 @@ $x_j$ 를 나머지 특성으로 회귀해 $R_j^2$ 를 구하고 $1/(1-R_j^2)$ �
 robust(HC) standard error를 비교하라. 계수 자체는 여전히 unbiased인가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 네 점에 직선 맞추기
+
+점 $(1, 1)$, $(2, 2)$, $(3, 2)$, $(4, 4)$ 에 직선 $\hat y = \beta_0 + \beta_1 x$ 를 least squares로 맞춘다.
+
+(a) 기울기 $\beta_1 = \dfrac{\sum(x_i - \bar x)(y_i - \bar y)}{\sum(x_i - \bar x)^2}$ 와 절편 $\beta_0 = \bar y - \beta_1\bar x$ 를 구하라. (공식은 B1에서 유도한다.)
+(b) residual 네 개를 구하고, $\sum r_i = 0$ 과 $\sum x_i r_i = 0$ 을 확인하라. 본문의 어떤 성질인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\bar x = 2.5$, $\bar y = 2.25$ 다. 편차는 $x$: $(-1.5, -0.5, 0.5, 1.5)$, $y$: $(-1.25, -0.25, -0.25, 1.75)$ 이다.
+
+$$\sum(x_i - \bar x)(y_i - \bar y) = 1.875 + 0.125 - 0.125 + 2.625 = 4.5, \qquad \sum(x_i - \bar x)^2 = 5$$
+
+$\beta_1 = 4.5/5 = 0.9$, $\beta_0 = 2.25 - 0.9 \times 2.5 = 0$ 이다.
+
+(b) 예측값은 $(0.9, 1.8, 2.7, 3.6)$, residual은 $(0.1, 0.2, -0.7, 0.4)$ 다.
+$\sum r_i = 0$ 이고 $\sum x_i r_i = 0.1 + 0.4 - 2.1 + 1.6 = 0$ 이다.
+
+이것이 normal equation $X^\top\mathbf r = 0$ 이다. $X$ 의 두 열(1로 채운 절편 열, $x$ 열)과 residual이 각각 수직이다.
+절편 열과의 수직이 "residual의 합이 0", $x$ 열과의 수직이 "residual과 $x$ 가 무상관"이라는 뜻이다.
+:::
+
+### A2. 어느 것이 "선형" 모델인가
+
+다음 중 normal equation으로 바로 풀 수 있는 모델을 고르라. 변환하면 풀 수 있는 것도 표시하라.
+
+1. $y = \beta_0 + \beta_1 x + \beta_2 x^2$
+2. $y = \beta_0 + \beta_1\sin x + \beta_2\cos x$
+3. $y = \beta_0\,e^{\beta_1 x}$
+4. $y = \beta_0 + \beta_1 x_1 + \beta_2 x_1 x_2$
+5. $y = \dfrac{1}{1 + e^{-(\beta_0 + \beta_1 x)}}$
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+본문의 기준은 "**파라미터에 대해** 선형인가"다.
+
+1. **선형.** $x^2$ 은 그냥 새 특성 하나다(basis expansion).
+2. **선형.** $\sin x$, $\cos x$ 를 특성으로 둔 것이다.
+3. **그대로는 비선형**($\beta_1$ 이 지수 안에 있다). 양변에 로그를 취하면 $\log y = \log\beta_0 + \beta_1 x$ 로 선형이 된다. 단, 이것은 "잡음이 곱해진다"는 가정을 하는 셈이라, 원래 식에 잡음이 더해진다고 볼 때와 답이 다르다.
+4. **선형.** $x_1 x_2$ (interaction term)도 새 특성 하나다.
+5. **비선형.** logistic 함수 안에 파라미터가 있다. normal equation이 없어서 반복법으로 푼다 — 다음 다음 장 [2.4 logistic regression](04_logistic_regression.qmd)의 주제다.
+:::
+
+### B1. 단순회귀의 기울기는 covariance ÷ variance
+
+$X = [\mathbf 1, \mathbf x]$ 로 두고 normal equation $X^\top X\boldsymbol\beta = X^\top\mathbf y$ 를 직접 풀어라.
+
+(a) $X^\top X$ 와 $X^\top\mathbf y$ 를 $n$, $\sum x_i$, $\sum x_i^2$, $\sum y_i$, $\sum x_i y_i$ 로 적어라.
+(b) 첫 번째 식에서 $\beta_0 = \bar y - \beta_1\bar x$ 를, 두 번째 식에서 $\beta_1 = \dfrac{\mathrm{Cov}(x, y)}{\mathrm{Var}(x)}$ 를 얻어라.
+(c) 회귀직선이 항상 $(\bar x, \bar y)$ 를 지난다는 것과, $\beta_1 = r\,s_y/s_x$ ($r$ 은 상관계수)임을 보여라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a)
+
+$$X^\top X = \begin{pmatrix} n & \sum x_i \\ \sum x_i & \sum x_i^2 \end{pmatrix}, \qquad X^\top\mathbf y = \begin{pmatrix} \sum y_i \\ \sum x_i y_i \end{pmatrix}$$
+
+(b) 첫 번째 식 $n\beta_0 + \beta_1\sum x_i = \sum y_i$ 를 $n$ 으로 나누면 $\beta_0 + \beta_1\bar x = \bar y$, 즉 $\beta_0 = \bar y - \beta_1\bar x$.
+두 번째 식 $\beta_0\sum x_i + \beta_1\sum x_i^2 = \sum x_i y_i$ 에 이것을 넣으면
+
+$$\beta_1\Big(\sum x_i^2 - n\bar x^2\Big) = \sum x_i y_i - n\bar x\bar y$$
+
+양변의 괄호는 각각 $\sum(x_i - \bar x)^2$, $\sum(x_i - \bar x)(y_i - \bar y)$ 와 같으므로([0.2의 분산 공식](../00_foundations/02_probability.qmd)과 같은 전개) $n$ 으로 나누면
+
+$$\beta_1 = \frac{\mathrm{Cov}(x, y)}{\mathrm{Var}(x)}$$
+
+(c) $\beta_0 = \bar y - \beta_1\bar x$ 를 다시 쓰면 $\bar y = \beta_0 + \beta_1\bar x$ — 직선이 $(\bar x, \bar y)$ 를 지난다.
+상관계수 $r = \mathrm{Cov}(x, y)/(s_x s_y)$ 이므로 $\beta_1 = r s_x s_y / s_x^2 = r\,s_y/s_x$ 다.
+
+$|r| \le 1$ 이므로, $x$ 가 표준편차 하나만큼 움직일 때 예측된 $y$ 는 표준편차 $|r|$ 개만큼만 움직인다.
+부모 키가 아주 큰 집의 자녀 키는 평균 쪽으로 돌아오는 경향이 있다는 Galton의 관찰 — "평균으로의 회귀(regression)"라는 이름이 여기서 나왔다.
+:::
+
+### B2. 빠진 변수가 계수를 얼마나 오염시키는가
+
+참 모델이 $y = \beta_1 x_1 + \beta_2 x_2 + \varepsilon$ 인데 ($\varepsilon$ 은 $x_1$, $x_2$ 와 무관), $x_2$ 를 빠뜨리고 $y$ 를 $x_1$ 에만 회귀했다(모든 변수는 평균 0).
+
+(a) 단순회귀 기울기 $\hat\beta_1 = \mathrm{Cov}(x_1, y)/\mathrm{Var}(x_1)$ 이 다음으로 수렴함을 보여라.
+
+$$\hat\beta_1 \to \beta_1 + \beta_2\,\frac{\mathrm{Cov}(x_1, x_2)}{\mathrm{Var}(x_1)}$$
+
+(b) bias가 0이 되는 두 경우는?
+(c) 공부 시간($x_1$)이 시험 점수에 주는 효과를 추정하는데 원래 실력($x_2$)을 빠뜨렸다. 실력이 좋은 학생이 공부도 더 한다면 추정은 어느 쪽으로 틀리는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $y$ 를 대입하고 covariance의 linearity를 쓰면
+
+$$\mathrm{Cov}(x_1, y) = \beta_1\mathrm{Var}(x_1) + \beta_2\mathrm{Cov}(x_1, x_2) + \underbrace{\mathrm{Cov}(x_1, \varepsilon)}_{0}$$
+
+$\mathrm{Var}(x_1)$ 로 나누면 식이 나온다. 뒤의 비율 $\mathrm{Cov}(x_1, x_2)/\mathrm{Var}(x_1)$ 은 "$x_2$ 를 $x_1$ 에 회귀한 기울기"다.
+즉 bias $=$ (빠진 변수의 효과) × (빠진 변수가 남은 변수를 얼마나 따라 움직이는가).
+
+(b) $\beta_2 = 0$ (빠진 변수가 결과에 영향이 없다)이거나, $\mathrm{Cov}(x_1, x_2) = 0$ (빠진 변수가 남은 변수와 무관하다)일 때다.
+두 조건이 [1.6](../01_data_science/06_causal_inference.qmd)의 confounder 정의 — 원인과 결과 **양쪽에** 연결된 변수 — 를 뒤집은 것이다.
+
+(c) $\beta_2 > 0$ (실력이 점수를 올린다)이고 $\mathrm{Cov}(x_1, x_2) > 0$ (실력 있는 학생이 더 공부한다)이므로 bias가 양수다. 공부의 효과를 **과대추정**한다.
+실력이 만든 점수 차이까지 공부 시간의 몫으로 잡히기 때문이다. 본문의 "$\mathbb{E}[\varepsilon \mid X] = 0$ 이 깨지면 계수가 통째로 오염된다"가 구체적으로 이만큼이다.
+:::
+
+### B3. leverage: 어떤 점이 직선을 강하게 끌어당기는가
+
+hat matrix $H$ 의 대각 원소 $h_{ii}$ 를 leverage라 한다. $\hat y_i = \sum_j h_{ij}y_j$ 이므로 $h_{ii}$ 는 "$y_i$ 가 자기 예측값에 주는 영향"이다.
+
+(a) 단순회귀에서 다음을 보여라. ($S_{xx} = \sum_j(x_j - \bar x)^2$)
+
+$$h_{ii} = \frac1n + \frac{(x_i - \bar x)^2}{S_{xx}}$$
+
+(b) $\sum_i h_{ii}$ 는 얼마인가?
+(c) $x$ 값이 $1, 2, 3, 4, 20$ 인 다섯 점에서 $x = 20$ 인 점의 leverage를 구하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+(a) $x$ 를 평균 중심화한 $X = [\mathbf 1, \mathbf x - \bar x]$ 를 써도 column space가 같으므로 $H$ 는 그대로다. 이 $X$ 에서는 $X^\top X$ 가 대각행렬 $\mathrm{diag}(n, S_{xx})$ 가 된다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 힌트의 $X$ 에서 $(X^\top X)^{-1} = \mathrm{diag}(1/n,\ 1/S_{xx})$ 다. $H = X(X^\top X)^{-1}X^\top$ 의 $(i, i)$ 원소는 $X$ 의 $i$ 번째 행 $(1,\ x_i - \bar x)$ 로
+
+$$h_{ii} = \frac{1^2}{n} + \frac{(x_i - \bar x)^2}{S_{xx}}$$
+
+(b) $\sum_i h_{ii} = 1 + S_{xx}/S_{xx} = 2$ 로, 파라미터 수와 같다. 본문의 $\mathrm{tr}(H) = p$ 다.
+leverage의 평균은 $p/n$ 이고, 그 2~3배를 넘는 점을 "leverage가 높다"고 본다.
+
+(c) $\bar x = 6$, $S_{xx} = 25 + 16 + 9 + 4 + 196 = 250$ 이다.
+
+$$h = \frac15 + \frac{(20 - 6)^2}{250} = 0.2 + 0.784 = 0.984$$
+
+평균 leverage $2/5 = 0.4$ 의 두 배를 훌쩍 넘는다. $h \approx 1$ 이면 직선이 그 점을 거의 그대로 지나가야 한다 — 그 점의 $y$ 값 하나가 직선의 기울기를 사실상 혼자 정한다.
+시소 끝에 앉은 사람과 같다. $x$ 가 평균에서 멀수록 같은 무게(잔차)로도 큰 힘을 쓴다.
+leverage는 $x$ 만 보고 정해지므로, 그 점의 $y$ 가 이상한지와는 별개다. 둘이 겹칠 때(멀리 있으면서 $y$ 도 튀는 점) Cook's distance가 커진다.
+:::
+
+### C1. 특성 스케일이 다르면 gradient descent가 느려진다
+
+특성 두 개 중 하나는 표준편차가 1, 다른 하나는 100이다(예: 나이와 연봉 천 원 단위).
+손실 $J = \frac1n\|\mathbf y - X\boldsymbol\beta\|^2$ 을 gradient descent로 최소화한다.
+
+(a) $J$ 의 Hessian을 적고, [0.1 연습 문제 B1](../00_foundations/01_calculus_optimization.qmd)의 결과로 수렴에 필요한 걸음 수가 무엇에 비례하는지 말하라.
+(b) 원래 특성과 표준화한 특성(평균 0, 표준편차 1)에서 condition number와 수렴 걸음 수를 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) Hessian은 $\frac2n X^\top X$ 로 상수다(이차함수). 걸음 수는 그 condition number $\kappa$ 에 비례한다.
+특성의 표준편차가 1과 100이면 $X^\top X$ 의 대각 원소가 대략 1과 $10^4$ 이라 $\kappa \approx 10^4$ 이다.
+
+(b) 원래 특성에서는 $\kappa \approx 1.2\times10^4$ 이고, 상대오차 $10^{-6}$ 까지 약 8만 걸음이 걸린다.
+표준화하면 $\kappa \approx 1.1$ 로 거의 둥근 그릇이 되어 약 120걸음이면 된다. **700배** 차이다.
+
+closed form 해는 스케일과 무관하게 같은 답(단위만 바뀐)을 주지만, 반복법은 스케일에 크게 휘둘린다.
+신경망 입력을 표준화하고 층마다 [normalization](../03_deep_learning/05_normalization.qmd)을 넣는 이유가 이 condition number다.
+
+```{python}
+#| label: ex-scaling-gd
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n = 200
+X = np.column_stack([rng.normal(0, 1, n), rng.normal(0, 100, n)])
+y = 3 * X[:, 0] + 0.05 * X[:, 1] + rng.normal(0, 1, n)
+
+def gd_steps(X, y, tol=1e-6):
+    H = 2 * X.T @ X / len(y)
+    lam = np.linalg.eigvalsh(H)
+    eta = 1.9 / lam.max()                                  # 상한 2/λmax 바로 아래
+    b_star = np.linalg.lstsq(X, y, rcond=None)[0]
+    b = np.zeros(X.shape[1])
+    for t in range(1, 10**6):
+        b -= eta * 2 * X.T @ (X @ b - y) / len(y)
+        if np.linalg.norm(b - b_star) < tol * np.linalg.norm(b_star):
+            return t, lam.max() / lam.min()
+
+Xs = (X - X.mean(0)) / X.std(0)
+for name, A, t in [("원래 특성", X, y), ("표준화", Xs, y - y.mean())]:
+    steps, kappa = gd_steps(A, t)
+    print(f"{name:<8} κ = {kappa:>10,.1f}   걸음 수 = {steps:>7,}")
+```
+:::
+
+### C2. leave-one-out cross-validation을 한 번의 적합으로
+
+점 하나를 빼고 적합한 뒤 그 점을 예측하는 일을 $n$ 번 반복하는 것이 leave-one-out CV(LOOCV)다. 선형회귀에서는 다음 공식으로 $n$ 번 다시 적합하지 않고 바로 구할 수 있다.
+
+$$y_i - \hat y_{(-i)} = \frac{r_i}{1 - h_{ii}}$$
+
+($\hat y_{(-i)}$ 는 $i$ 번째 점을 빼고 적합한 모델의 예측, $r_i$ 는 전체로 적합한 residual.)
+
+(a) 점 30개로 이 공식을 직접 $n$ 번 다시 적합한 결과와 비교하라.
+(b) 공식의 모양으로, leverage가 높은 점에서 LOOCV 오차가 왜 크게 부풀려지는지 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 두 방법의 차이는 $10^{-14}$ 정도로, 반올림 오차 수준에서 같다. LOOCV MSE는 훈련 MSE보다 크다 — 훈련 오차가 낙관적이라는 [2.1 연습 문제 B3](01_bias_variance.qmd)의 결과와 같은 방향이다.
+
+(b) 분모 $1 - h_{ii}$ 가 작을수록 residual이 크게 부풀려진다.
+leverage가 높은 점은 직선을 자기 쪽으로 끌어당겨서 **자기 residual을 작게 만든다.** 그 점을 빼고 나면 직선이 원래 자리로 돌아가 오차가 드러난다.
+공식은 그 "자기가 끌어당긴 몫"을 정확히 되돌려 준다. $h_{ii} = 0.984$ 인 B3의 점이라면 residual이 60배 넘게 부풀려진다.
+
+```{python}
+#| label: ex-loocv
+
+import numpy as np
+
+rng = np.random.default_rng(1)
+n = 30
+x = rng.uniform(0, 10, n)
+y = 1 + 2 * x + rng.normal(0, 2, n)
+X = np.column_stack([np.ones(n), x])
+
+H = X @ np.linalg.inv(X.T @ X) @ X.T
+r = y - H @ y
+h = np.diag(H)
+shortcut = r / (1 - h)
+
+refit = []
+for i in range(n):                                      # 정말로 n 번 다시 적합
+    keep = np.arange(n) != i
+    b = np.linalg.lstsq(X[keep], y[keep], rcond=None)[0]
+    refit.append(y[i] - X[i] @ b)
+refit = np.array(refit)
+
+print(f"공식과 재적합의 최대 차이  {np.abs(shortcut - refit).max():.1e}")
+print(f"leverage 합 = {h.sum():.3f}   (파라미터 수 2)")
+print(f"훈련 MSE {np.mean(r**2):.3f}   LOOCV MSE {np.mean(refit**2):.3f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 식 | 핵심 |
