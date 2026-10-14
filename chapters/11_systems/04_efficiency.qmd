@@ -699,6 +699,99 @@ structured pruning과 unstructured pruning의 실제 속도 이득은?
 높은 temperature가 무엇을 더 전달하는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. int8 양자화를 손으로
+
+weight 네 개 $(0.1,\ -0.5,\ 2.0,\ 0.3)$ 를 symmetric absmax int8로 양자화한다: scale $s = \max|x|/127$, $q = \mathrm{round}(x/s)$, 복원 $\hat x = qs$.
+
+(a) scale과 정수 $q$, 복원값, 오차를 구하라.
+(b) 2.0이 20.0이었다면 0.1의 복원 오차는 어떻게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $s = 2/127 \approx 0.01575$. $q = (6,\ -32,\ 127,\ 19)$, 복원 $(0.0945,\ -0.5039,\ 2.0,\ 0.2992)$, 오차 $(0.0055,\ 0.0039,\ 0,\ 0.0008)$.
+
+(b) $s = 20/127 \approx 0.157$ 이 되어 0.1은 $\mathrm{round}(0.635) = 1$, 복원 0.157로 오차 0.057 — 10배 커진다. 0.3은 $\mathrm{round}(1.9) = 2$, 복원 0.315. 작은 값들이 몇 개 안 되는 격자점에 몰려 사실상 정보가 사라진다.
+값 하나(outlier)가 scale을 정하고, 그 scale이 나머지 모두의 정밀도를 정한다. 본문 G11.4.2의 "outlier 하나가 scale을 망친다"가 이 계산이다.
+:::
+
+### A2. pruning은 왜 늘 빨라지지 않는가
+
+7B 모델의 weight 50%를 개별적으로(unstructured) 0으로 만들었다.
+
+(a) dense 행렬 형식으로 저장하면 메모리와 연산은 줄어드는가?
+(b) 실제로 줄이려면 무엇이 필요한가? 2:4 structured sparsity는 무엇이 다른가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 줄지 않는다. 0도 숫자 하나로 저장되고, 일반 행렬 곱 하드웨어는 0을 곱하는 것도 똑같이 계산한다.
+
+(b) 0이 아닌 값과 그 위치만 저장하는 sparse 형식과 그것을 빠르게 계산하는 kernel이 필요하다. 그런데 위치 정보가 추가로 들고, 0이 불규칙하게 흩어져 있으면 GPU가 메모리를 연속으로 읽지 못해 50% 정도로는 오히려 느릴 때가 많다.
+2:4 structured sparsity는 "연속 4개 중 정확히 2개가 0"이라는 규칙을 강제해, 하드웨어가 이 모양을 직접 지원(NVIDIA Ampere 이후)하므로 실제로 약 2배 빨라진다. 규칙을 받아들이는 대가로 정확도를 조금 잃는다.
+:::
+
+### B1. 양자화 오차와 scale
+
+간격 $\Delta$ 인 균등 양자화의 오차가 $[-\Delta/2, \Delta/2]$ 에 고르게 퍼진다고 하자.
+
+(a) 오차의 평균제곱이 $\Delta^2/12$ 임을 보이고([8.0 연습 문제 B1](../08_audio/00_sound_and_sampling.qmd)과 같다), $b$ 비트 symmetric absmax에서 $\Delta = 2\max|x|/(2^b - 1) \approx \max|x|/2^{b-1}$ 임을 이용해 오차가 $\max|x|$ 에 비례함을 보여라.
+(b) 이 결과로, channel마다 scale을 따로 두는 per-channel 양자화가 왜 per-tensor보다 정확한지 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathbb E[e^2] = \Delta^2/12 \approx \dfrac{\max|x|^2}{12\cdot4^{b-1}}$. RMS 오차가 $\max|x|$ 에 비례하고, 비트 하나마다 절반이 된다.
+
+(b) per-tensor는 행렬 전체에서 가장 큰 값 하나가 $\Delta$ 를 정한다. 값이 작은 channel들도 그 큰 $\Delta$ 를 써야 해서 상대 오차가 크다. per-channel은 channel마다 자기 최댓값으로 $\Delta$ 를 정해, 각 channel이 자기 크기에 맞는 격자를 쓴다. scale 값을 channel 수만큼 더 저장하는 비용은 weight 수에 비해 아주 작다.
+LLM의 activation처럼 특정 channel에만 outlier가 몰리는 경우, 그 channel을 따로 다루는 것(SmoothQuant, LLM.int8)이 이 원리의 응용이다.
+:::
+
+### C1. distillation loss에 $T^2$ 를 곱하는 이유
+
+teacher와 student의 logit이 있을 때 distillation은 $\mathrm{KL}(\mathrm{softmax}(\mathbf z_t/T)\,\|\,\mathrm{softmax}(\mathbf z_s/T))$ 를 줄인다.
+
+(a) student logit에 대한 이 loss의 gradient가 $\frac1T(\mathbf p_s - \mathbf p_t)$ 임을 보이고([0.4](../00_foundations/04_information_theory.qmd)의 $q - y$ 와 같은 꼴), logit 차이가 작을 때 그 크기가 $1/T^2$ 에 비례함을 수치로 확인하라.
+(b) 그래서 hard label loss와 섞을 때 soft loss에 $T^2$ 를 곱하는 이유는?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) soft target $\mathbf p_t$ 는 상수이고 student 쪽은 logit을 $T$ 로 나눈 softmax-cross-entropy라, chain rule로 $\frac1T(\mathbf p_s - \mathbf p_t)$. 그리고 logit 차이가 작으면 $\mathbf p_s - \mathbf p_t \approx J\,(\mathbf z_s - \mathbf z_t)/T$ (softmax Jacobian, 균등에 가까우면 대략 상수)라 전체가 $1/T^2$ 에 비례한다. 아래 코드에서 $T$ 를 2배 할 때마다 gradient가 약 4분의 1이 된다.
+
+(b) $T$ 를 키우면 soft loss의 gradient가 $1/T^2$ 로 작아져, hard label loss에 비해 존재감이 사라진다. $T^2$ 를 곱하면 $T$ 를 바꿔도 두 loss의 상대적 무게가 유지된다(Hinton et al.). $T$ 를 "얼마나 부드럽게 볼지"만 바꾸는 손잡이로 쓰려면 이 보정이 필요하다.
+
+```{python}
+#| label: ex-distill-t2
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+K = 10
+z_t = rng.normal(size=K)
+z_s = z_t + 0.3 * rng.normal(size=K)                     # teacher 와 조금 다른 student
+
+softmax = lambda z: (e := np.exp(z - z.max())) / e.sum()
+
+for T in [1, 2, 4, 8]:
+    p_t, p_s = softmax(z_t / T), softmax(z_s / T)
+    grad = (p_s - p_t) / T                               # ∂KL/∂z_s
+    print(f"T={T}   ‖grad‖ = {np.linalg.norm(grad):.5f}   T²·‖grad‖ = {T**2 * np.linalg.norm(grad):.5f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 수치·핵심 | |
