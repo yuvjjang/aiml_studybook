@@ -410,6 +410,105 @@ $q, k$ 여러 쌍)을 그려라. `attention.apply_rope(..., base=500000)` 으로
 가까운 거리의 구별력이 사라지는가? 저주파(뒤쪽 쌍)만 지우면 무엇을 잃는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. sinusoidal encoding의 시계 바늘
+
+$d = 512$, base 10,000인 sinusoidal encoding에서 차원 쌍 $i$ ($i = 0, \dots, 255$)의 각속도는 $\omega_i = 10000^{-2i/d}$ 다.
+
+(a) 첫 쌍과 마지막 쌍의 주기(한 바퀴 도는 데 필요한 위치 수 $2\pi/\omega_i$)는?
+(b) 시계의 초침·분침·시침에 비유해 이 여러 주기가 왜 필요한지 설명하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 첫 쌍은 $\omega_0 = 1$ 이라 주기 $2\pi \approx 6.3$ 위치. 마지막 쌍은 $\omega_{255} = 10000^{-510/512} \approx 1.04\times10^{-4}$ 라 주기 약 **60,600** 위치.
+
+(b) 초침(빠른 쌍)은 가까운 위치를 촘촘히 구별하지만 몇 칸만 지나면 같은 값으로 돌아온다. 시침(느린 쌍)은 먼 위치를 구별하지만 가까운 위치 차이는 거의 보이지 않는다. 여러 속도의 바늘을 함께 보면 가까운 차이와 먼 차이를 모두 구별할 수 있다.
+:::
+
+### A2. ALiBi의 거리 벌점
+
+ALiBi는 점수에 $-m\,|i - j|$ 를 더한다. 어떤 head의 기울기가 $m = 1/2$ 다.
+
+(a) 거리 10인 token의 점수는 거리 0에 비해 얼마나 깎이는가? 다른 조건이 같다면 attention 가중치는 몇 배가 되는가?
+(b) 기울기가 $1/256$ 인 head에서는?
+(c) head마다 기울기를 다르게 두는 이유는?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $-5$ 만큼 깎이고 가중치는 $e^{-5} \approx 0.0067$ 배다. 이 head는 사실상 가까운 몇 token만 본다.
+
+(b) $-10/256 \approx -0.04$, 가중치 0.96배로 거의 깎이지 않는다. 먼 곳까지 본다.
+
+(c) 기울기마다 "얼마나 멀리 볼지"가 정해진다. 여러 기울기를 head에 나눠 주면 가까운 문맥을 보는 head와 먼 문맥을 보는 head가 함께 생긴다 — A1의 여러 속도 바늘과 같은 발상을 점수 쪽에서 한 것이다.
+:::
+
+### B1. RoPE는 상대 위치만 본다
+
+2차원 쌍 하나에서 위치 $m$ 의 회전을 $R_m = \begin{pmatrix}\cos m\theta & -\sin m\theta\\ \sin m\theta & \cos m\theta\end{pmatrix}$ 라 하자.
+
+(a) $R_m^\top R_n = R_{n-m}$ 임을 보여라.
+(b) 이것으로 $\langle R_m\mathbf q,\ R_n\mathbf k\rangle = \langle\mathbf q,\ R_{n-m}\mathbf k\rangle$ 임을 보여라. 점수가 무엇에만 의존하는가?
+(c) 절대 위치 encoding(입력에 위치 벡터를 더하기)은 왜 이 성질을 갖지 못하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 회전 행렬의 전치는 반대 방향 회전이다: $R_m^\top = R_{-m}$. 회전을 이어 하면 각이 더해지므로 $R_{-m}R_n = R_{n-m}$.
+
+(b) $\langle R_m\mathbf q, R_n\mathbf k\rangle = \mathbf q^\top R_m^\top R_n\mathbf k = \mathbf q^\top R_{n-m}\mathbf k$. 점수가 **두 위치의 차이** $n - m$ 에만 의존한다. 문장 전체를 앞으로 100칸 밀어도 같은 쌍의 점수는 그대로다.
+
+(c) $(\mathbf x_m + \mathbf p_m)^\top W_Q^\top W_K(\mathbf x_n + \mathbf p_n)$ 을 펼치면 $\mathbf p_m^\top(\cdot)\mathbf p_n$, $\mathbf x_m^\top(\cdot)\mathbf p_n$ 같은 항이 생겨 각 위치의 절대값이 따로 들어간다. 학습이 상대 위치에 맞게 정리해 줄 수는 있어도 구조가 보장하지는 않는다. 학습 길이를 넘는 위치에서 무너지는 이유가 이것이다(본문의 "절대 위치의 두 가지 문제").
+:::
+
+### C1. sinusoidal encoding의 평행이동은 회전이다
+
+sinusoidal encoding에서 위치 $p$ 의 한 쌍 $(\sin p\omega,\ \cos p\omega)$ 를 $k$ 칸 옮긴 값은, $p$ 와 무관하고 $k$ 에만 의존하는 회전 행렬을 곱한 것과 같다.
+
+(a) 무작위 위치 $p$ 여러 개에서, 모든 쌍에 대해 $PE(p + k) = R(k)\,PE(p)$ 가 성립하는지 확인하라.
+(b) 이 성질이 원 논문이 "모델이 상대 위치를 배우기 쉬울 것"이라고 한 근거와 어떻게 이어지는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 모든 $p$ 와 쌍에서 차이가 $10^{-13}$ 수준(부동소수점 반올림 오차)이다. 쌍마다 각 $k\omega_i$ 만큼의 회전이 $p$ 와 상관없이 같다.
+
+(b) $k$ 칸 떨어진 관계가 "고정된 선형 변환 하나"로 표현되므로, 선형 층인 attention이 그 변환을 배우기 쉬울 것이라는 기대다. 다만 sinusoidal은 이것을 **입력에 더하는** 방식이라 B1(c)의 교차항이 생긴다. RoPE는 같은 회전을 query·key에 **곱해서** 점수 자체가 상대 위치만 보게 만든 것이다.
+
+```{python}
+#| label: ex-sinusoid-shift
+
+import numpy as np
+
+d, base, k = 64, 10000.0, 7
+omega = base ** (-np.arange(0, d, 2) / d)                  # 쌍마다 각속도
+
+def pe(p):
+    return np.stack([np.sin(p * omega), np.cos(p * omega)], axis=1)   # (d/2, 2)
+
+def shift(k):
+    """쌍마다 각 kω 만큼의 회전 (sin, cos) → (sin(a+b), cos(a+b))."""
+    c, s = np.cos(k * omega), np.sin(k * omega)
+    return np.stack([np.stack([c, s], 1), np.stack([-s, c], 1)], 1)   # (d/2, 2, 2)
+
+R = shift(k)
+errs = [np.abs(pe(p + k) - np.einsum("iab,ib->ia", R, pe(p))).max() for p in [0, 3, 50, 999, 12345]]
+print(f"k={k} 칸 이동을 p 와 무관한 회전으로 쓸 때 최대 오차: {max(errs):.1e}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 | 이어지는 곳 |
