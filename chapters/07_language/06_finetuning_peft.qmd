@@ -588,6 +588,99 @@ LoRA의 $\alpha$ 를 바꾸면 사실상 learning rate를 바꾸는 것이다.
 $\alpha/r$ 를 고정하고 $r$ 만 바꾼 실험과, $\alpha$ 를 고정한 실험을 비교하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. LoRA가 학습하는 parameter 수
+
+$d = 4096$ 인 층에서 $W_Q$, $W_V$ (각 $4096\times4096$)에만 rank $r = 8$ LoRA를 붙인다.
+
+(a) 한 행렬에 붙는 LoRA parameter($A$: $r\times d$, $B$: $d\times r$)는? 두 행렬이면?
+(b) 같은 두 행렬을 full fine-tuning할 때와 비교하면 몇 %인가?
+(c) 32층 모델 전체에서 LoRA parameter는 몇 개인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $2\times4096\times8 = 65{,}536$. 두 행렬이면 131,072.
+
+(b) full은 $2\times4096^2 \approx 3{,}355$만 개이므로 **0.39%**.
+
+(c) $131{,}072\times32 \approx 420$만 개. 7B 모델의 0.06%다. checkpoint 하나가 수십 MB라 과제마다 adapter를 따로 저장해도 부담이 없다.
+:::
+
+### A2. 메모리는 어디서 줄어드는가
+
+7B 모델을 학습한다. ([3.4 연습 문제 A2](../03_deep_learning/04_optimizers.qmd)의 parameter당 16 byte를 쓴다.)
+
+(a) full fine-tuning의 학습 메모리(activation 제외)는?
+(b) LoRA(원 weight는 fp16으로 고정, LoRA parameter 0.06%만 학습)는? 무엇이 줄어드는가?
+(c) QLoRA처럼 고정 weight를 4비트로 저장하면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $7\times10^9\times16 \approx 112$ GB.
+
+(b) 고정 weight 14 GB + LoRA 부분($4.2\times10^6\times16 \approx 0.07$ GB) ≈ **14 GB**. gradient, optimizer state, fp32 원본이 LoRA parameter에만 필요해서 사라진다.
+
+(c) 고정 weight가 3.5 GB로 줄어 약 **3.6 GB**. 소비자용 GPU 한 장에서 7B 모델을 fine-tuning할 수 있게 된 이유다. 대가는 4비트 양자화로 생기는 오차와 매 forward의 역양자화 비용이다([11.4](../11_systems/04_efficiency.qmd)).
+:::
+
+### B1. LoRA initialization과 첫 걸음
+
+LoRA는 $W = W_0 + \frac{\alpha}{r}BA$ 로 쓰고, $A$ 는 무작위, $B = 0$ 으로 시작한다. 층의 loss gradient를 $G = \partial L/\partial W$ 라 하자.
+
+(a) $\partial L/\partial B = \frac\alpha r\,GA^\top$, $\partial L/\partial A = \frac\alpha r\,B^\top G$ 임을 보여라.
+(b) 학습 첫 step에서 실제로 움직이는 것은 $A$ 와 $B$ 중 무엇인가? 왜 $B = 0$ 으로 시작하는가?
+(c) 첫 step 뒤의 $\Delta W$ 는 어떤 subspace에 놓이는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $W$ 가 $BA$ 를 통해 $B$, $A$ 에 의존하므로 chain rule로 $\partial L/\partial B = \frac\alpha r\,G\,A^\top$, $\partial L/\partial A = \frac\alpha r\,B^\top G$ ([3.1](../03_deep_learning/01_backpropagation.qmd)의 "교환기" 규칙: 곱셈의 gradient에는 상대편이 곱해진다).
+
+(b) $B = 0$ 이라 $\partial L/\partial A = 0$ — $A$ 는 첫 step에 움직이지 않고 $B$ 만 움직인다. $B = 0$ 으로 시작하면 처음에 $\Delta W = 0$ 이라 **학습 시작 시점의 모델이 pretraining 모델과 정확히 같다.** 무작위 $BA$ 로 시작하면 처음부터 모델을 망가뜨린다.
+
+(c) $\Delta W = \frac\alpha rB_1A$ 이고 $B_1 = -\eta\frac\alpha rGA^\top$ 이므로 $\Delta W \propto GA^\top A$. 즉 $G$ 를 $A$ 의 행이 펼치는 $r$ 차원 공간에 투영한 것이다. 무작위 $A$ 가 처음에 "어느 $r$ 개 방향으로 고칠지"를 정하고, 학습이 그 방향을 함께 조정한다.
+:::
+
+### C1. 갱신 행렬을 rank $r$ 로 근사하면
+
+참 갱신 $\Delta W$ 가 "rank 4 신호 + 작은 잡음"인 $256\times256$ 행렬이라 하자. SVD로 만든 최선의 rank-$r$ 근사($r = 1, 2, 4, 8, 16, 64$)의 상대 오차를 구하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$r = 4$ 에서 상대 오차가 잡음 수준까지 뚝 떨어지고, 그 이상 키워도 거의 줄지 않는다(남는 것은 잡음뿐). SVD의 상위 $r$ 개 성분이 Frobenius 오차를 최소로 하는 rank-$r$ 근사라는 사실(Eckart–Young)이 LoRA의 이론적 바탕이다. 본문 G7.6.1이 실제 갱신의 effective rank가 낮다는 것을 보였고, 그 경우 작은 $r$ 로 충분하다.
+
+```{python}
+#| label: ex-lowrank-update
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+d, true_rank = 256, 4
+signal = rng.normal(size=(d, true_rank)) @ rng.normal(size=(true_rank, d))
+dW = signal + 0.05 * np.linalg.norm(signal) / d * rng.normal(size=(d, d))
+
+U, S, Vt = np.linalg.svd(dW)
+for r in [1, 2, 4, 8, 16, 64]:
+    approx = (U[:, :r] * S[:r]) @ Vt[:r]
+    rel = np.linalg.norm(dW - approx) / np.linalg.norm(dW)
+    print(f"r={r:>2}   상대 오차 {rel:.4f}   LoRA parameter {2 * d * r:>6,}  (full {d * d:,})")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
