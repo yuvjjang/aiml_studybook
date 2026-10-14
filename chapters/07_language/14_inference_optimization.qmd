@@ -779,6 +779,104 @@ MHA(bf16)·GQA(bf16)·GQA(int8) 세 경우로 구하라. 8장 × 80 GB에서 가
 draft 비용이 클수록, draft가 길수록 필요한 acceptance rate가 어떻게 올라가는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. decode는 왜 memory-bound인가
+
+batch 1로 token 하나를 생성할 때, 모든 weight(fp16, 2 byte)를 한 번 읽고 weight마다 곱셈-덧셈 1번(2 FLOPs)을 한다.
+
+(a) arithmetic intensity(FLOPs ÷ 읽은 byte)는?
+(b) GPU가 312 TFLOP/s, 메모리 대역폭 2 TB/s면, 연산이 병목이 되려면 intensity가 얼마 이상이어야 하는가? batch를 몇으로 키워야 하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 2 FLOPs ÷ 2 byte = **1 FLOP/byte**.
+
+(b) $312/2 = 156$ FLOP/byte. batch $B$ 면 같은 weight를 한 번 읽어 $B$ 개 token에 쓰므로 intensity가 $B$ 배가 된다. batch가 약 156 이상이어야 연산이 병목이 된다. 그 아래에서는 GPU 연산기가 대부분 놀고 있다. continuous batching이 중요한 이유다(C1).
+:::
+
+### A2. 7B 모델의 생성 속도 상한
+
+7B 모델을 batch 1로 생성한다. 대역폭은 2 TB/s다.
+
+(a) fp16 weight(14 GB)를 매 token마다 읽는다면 token당 시간과 초당 token 수의 상한은?
+(b) int4로 양자화하면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $14\ \text{GB}/2\ \text{TB/s} = 7$ ms, 초당 약 **143** token.
+
+(b) 3.5 GB라 1.75 ms, 초당 약 **570** token. 연산은 그대로인데 읽는 양이 4분의 1이라 4배 빨라진다.
+memory-bound 구간에서는 양자화가 정확도를 조금 내주고 속도를 그대로 사는 거래다. 본문 "직접 해보기" ①의 "quantization이 병목을 옮긴다"가 이것이다.
+:::
+
+### B1. PagedAttention이 줄이는 낭비
+
+sequence마다 최대 길이 $L_{\max}$ 만큼 KV cache를 미리 잡아 두는 방식과, 크기 $B$ 인 block 단위로 필요할 때 잡는 방식을 비교한다.
+
+(a) 실제 길이가 $\ell$ 인 sequence에서 각 방식의 낭비(잡았지만 안 쓰는 칸)는?
+(b) $\ell$ 이 $1$~$L_{\max}$ 에 고르게 분포하면 평균 낭비는? $L_{\max} = 4096$, $B = 16$ 이면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 미리 잡기: $L_{\max} - \ell$. block 단위: 마지막 block의 빈칸 $\lceil\ell/B\rceil B - \ell$, 즉 $0$ 이상 $B - 1$ 이하.
+
+(b) 미리 잡기는 평균 약 $L_{\max}/2 = 2{,}048$ 칸, 잡은 것의 절반이 낭비다. block 단위는 평균 약 $(B-1)/2 = 7.5$ 칸이다.
+OS가 메모리를 page 단위로 관리해 단편화를 줄이는 것과 같은 발상이다. 낭비가 줄어든 만큼 같은 GPU에 더 많은 sequence를 동시에 올릴 수 있어 batch가 커지고, A1대로 처리량이 오른다.
+:::
+
+### C1. static batching 대 continuous batching
+
+요청 1,000개의 출력 길이가 평균 200인 기하분포를 따른다. batch 크기 32로
+
+(a) static batching(batch 안의 가장 긴 요청이 끝날 때까지 다음 batch를 못 받음)의 GPU slot 사용률(실제 생성 token ÷ 잡아 둔 slot×step)은?
+(b) continuous batching(끝난 slot에 바로 새 요청을 넣음)은?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+static batching의 사용률은 약 **24%** 다. 기하분포에서 32개 중 가장 긴 것은 평균의 4배쯤이고, 그동안 먼저 끝난 slot들이 놀기 때문이다. continuous batching은 약 **94%** 다(마지막에 요청이 바닥날 때만 빈다).
+같은 GPU로 거의 **4배** 처리량을 얻는다. 본문 G7.14.4의 실측과 같은 방향이다. 출력 길이의 분산이 클수록 차이가 커진다.
+
+```{python}
+#| label: ex-batching
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+lengths = rng.geometric(1 / 200, 1000)
+B = 32
+
+used = lengths.sum()
+static_slots = sum(B * lengths[i:i + B].max() for i in range(0, len(lengths), B))
+
+queue, slots, steps = list(lengths), [0] * B, 0
+while queue or any(slots):
+    for j in range(B):
+        if slots[j] == 0 and queue:
+            slots[j] = queue.pop(0)
+    slots = [max(s - 1, 0) for s in slots]
+    steps += 1
+
+print(f"생성 token 합 {used:,}")
+print(f"static     사용률 {used / static_slots:.1%}   (step {static_slots // B:,})")
+print(f"continuous 사용률 {used / (steps * B):.1%}   (step {steps:,})")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
