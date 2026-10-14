@@ -732,6 +732,115 @@ $O(n^2)$ 방식과 결과·속도를 비교하라.
 단순 CV와 nested CV의 차이가 어떻게 벌어지는가?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. confusion matrix 하나에서 지표 여섯 개
+
+표본 1,000개 중 양성이 50개다. 모델의 결과가 TP 40, FN 10, FP 60, TN 890이다.
+
+(a) accuracy, precision, recall, specificity, F1, MCC를 구하라.
+(b) "정확도 93%"라는 보고는 이 모델을 잘 설명하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a)
+
+- accuracy $= (40 + 890)/1000 = 0.93$
+- precision $= 40/100 = 0.40$
+- recall $= 40/50 = 0.80$
+- specificity $= 890/950 \approx 0.937$
+- F1 $= 2\times0.4\times0.8/1.2 \approx 0.533$
+- MCC $= \dfrac{40\times890 - 60\times10}{\sqrt{100\times50\times950\times900}} = \dfrac{35{,}000}{65{,}383} \approx 0.535$
+
+(b) 아니다. "전부 음성"이라고만 답해도 정확도 95%라서, 93%는 그보다 **낮다.** 이 모델의 진짜 모습은 "양성 80%를 잡는 대신, 양성이라고 한 것의 60%는 헛경보"다.
+어느 쪽이 좋은지는 놓친 양성과 헛경보의 비용에 달려 있다([2.0 연습 문제 B1](00_learning_problem.qmd)). 그 판단에 필요한 정보는 accuracy 한 숫자에 없다.
+:::
+
+### A2. 어떻게 나눌 것인가
+
+다음 상황에 맞는 cross-validation 전략을 고르고 이유를 적어라.
+
+1. 환자 200명에게서 CT 사진을 10장씩 찍은 데이터
+2. 지난 5년의 일별 주가로 다음 주 가격을 예측
+3. 사기 거래가 0.1%인 결제 데이터
+4. 하이퍼파라미터를 고르고, 그 모델의 성능을 논문에 보고해야 한다
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. **group K-fold** (환자 단위). 같은 환자의 사진이 양쪽에 들어가면 환자를 외워 점수가 부풀려진다.
+2. **시간 분할.** 미래로 과거를 예측하는 fold를 만들면 안 된다. 앞쪽으로 학습하고 뒤쪽으로 검증하는 rolling 방식을 쓴다.
+3. **stratified K-fold.** fold마다 사기 거래가 1~2개뿐이거나 0개인 일이 없도록 비율을 맞춘다.
+4. **nested CV.** 안쪽 CV로 하이퍼파라미터를 고르고, 바깥 CV로 "고르는 절차 전체"의 성능을 잰다. 고르는 데 쓴 점수를 그대로 보고하면 본문의 "모델을 고르는 행위 자체가 overfitting"이 된다.
+:::
+
+### B1. AUC를 순위쌍으로 세기
+
+양성 3개의 점수가 $(0.9,\ 0.6,\ 0.4)$, 음성 4개의 점수가 $(0.7,\ 0.3,\ 0.2,\ 0.1)$ 이다.
+
+(a) 양성·음성 쌍 12개 중 양성이 더 높은 쌍의 비율로 AUC를 구하라.
+(b) 모든 점수를 세제곱해도 AUC는 같은가? 모든 점수에 0.5를 곱하면?
+(c) 이 데이터에서 무작위 예측기의 ROC-AUC와 PR-AUC는 각각 얼마인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 0.9는 음성 4개 모두보다 높고, 0.6과 0.4는 각각 0.7을 제외한 3개보다 높다. $(4 + 3 + 3)/12 = 10/12 \approx 0.833$.
+
+(b) 둘 다 순서를 바꾸지 않는 변환이라 AUC는 **같다.** AUC는 순위만 본다. 반면 확률로 해석하는 지표(Brier score, log loss, calibration)는 모두 바뀐다.
+
+(c) 무작위 예측기의 ROC-AUC는 언제나 0.5다. PR-AUC는 양성 비율인 $3/7 \approx 0.43$ 이다. PR-AUC를 비교할 때 baseline이 데이터마다 다르다는 본문의 지적이 이것이다.
+:::
+
+### C1. AUC는 Mann-Whitney 통계량이다
+
+양성 200개(점수 $\mathcal N(1, 1)$), 음성 2,000개(점수 $\mathcal N(0, 1)$)에서
+
+(a) threshold를 훑어 ROC 곡선의 넓이(사다리꼴)로 AUC를 구하고, 모든 양성·음성 쌍의 비교 비율과 비교하라.
+(b) 점수에 단조 변환($e^{3s}$)을 해도 AUC가 그대로인지 확인하라.
+(c) 이론값 $P(X^+ > X^-) = \Phi(1/\sqrt2)$ 와 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+세 값이 모두 약 0.76으로 같다. 단조 변환 후에도 소수점 끝까지 같다. 두 정규분포의 차 $X^+ - X^-$ 는 $\mathcal N(1, 2)$ 이므로 $P(X^+ - X^- > 0) = \Phi(1/\sqrt2) \approx 0.760$ 이다.
+
+```{python}
+#| label: ex-auc-mw
+
+import numpy as np
+from scipy import stats
+
+rng = np.random.default_rng(0)
+pos, neg = rng.normal(1, 1, 200), rng.normal(0, 1, 2000)
+
+def auc_trapezoid(pos, neg):
+    s = np.r_[pos, neg]
+    y = np.r_[np.ones(pos.size), np.zeros(neg.size)]
+    order = np.argsort(-s)
+    tpr = np.r_[0, np.cumsum(y[order]) / pos.size]
+    fpr = np.r_[0, np.cumsum(1 - y[order]) / neg.size]
+    return np.trapezoid(tpr, fpr)
+
+pairs = (pos[:, None] > neg[None, :]).mean()                    # 모든 쌍 비교
+print(f"ROC 넓이          {auc_trapezoid(pos, neg):.4f}")
+print(f"쌍 비교 비율      {pairs:.4f}")
+print(f"exp(3s) 변환 후   {auc_trapezoid(np.exp(3 * pos), np.exp(3 * neg)):.4f}")
+print(f"이론 Φ(1/√2)      {stats.norm.cdf(1 / np.sqrt(2)):.4f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
