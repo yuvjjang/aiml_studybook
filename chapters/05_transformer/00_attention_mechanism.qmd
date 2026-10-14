@@ -492,6 +492,213 @@ additive attention($v^\top\tanh(W_q q + W_k k)$)을 구현해 같은 입력에 �
 결과가 얼마나 다른가? 계산 비용은?
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. attention 한 줄을 손으로
+
+$d_k = 2$ 이고 query 하나 $q = (1, 0)$, token 세 개의 key와 value가 다음과 같다.
+
+| token | key | value |
+|---|---|---|
+| 1 | $(1, 0)$ | $(1, 0)$ |
+| 2 | $(0, 1)$ | $(0, 2)$ |
+| 3 | $(1, 1)$ | $(3, 3)$ |
+
+(a) 점수 $q^\top k_j/\sqrt{d_k}$, softmax 가중치, 출력을 차례로 구하라.
+(b) token 3의 key가 token 1보다 "덜 비슷해 보이는데"(cosine similarity가 작은데) 왜 같은 가중치를 받는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 점수는 $(1, 0, 1)/\sqrt2 \approx (0.707,\ 0,\ 0.707)$. $e^{0.707} \approx 2.03$ 이므로 가중치는 $(2.03, 1, 2.03)/5.06 \approx (0.401,\ 0.198,\ 0.401)$.
+출력은 $0.401(1, 0) + 0.198(0, 2) + 0.401(3, 3) \approx (1.60,\ 1.60)$ 이다.
+점수가 0인 token 2도 0.2의 가중치를 받는다. softmax는 아무것도 완전히 버리지 않는다.
+
+(b) 내적은 $\|q\|\|k\|\cos\theta$ 다. token 3의 key는 각도가 45°라 cosine은 0.71로 작지만, 길이가 $\sqrt2$ 라 내적은 $1 \times \sqrt2 \times 0.71 = 1$ 로 token 1과 같다.
+dot-product attention에서는 **key의 길이도 점수에 들어간다.** 길이가 긴 key는 방향이 조금 어긋나도 주목받는다. 순수하게 방향만 보고 싶으면 q와 k를 정규화한다(QK-norm).
+:::
+
+### A2. attention 행렬의 메모리와 연산량
+
+$n = 8{,}192$ token, head 32개, $d_{\text{model}} = 4{,}096$ 인 층 하나를 fp16(2 byte)으로 계산한다.
+
+(a) attention 행렬($n\times n$, head마다 하나)을 모두 저장하면 몇 GB인가? batch가 8이면?
+(b) 본문의 $4nd^2$ (projection)와 $2n^2d$ (attention)를 계산하라. 어느 쪽이 큰가?
+(c) $n$ 을 두 배로 늘리면 (a)와 (b)의 각 항은 몇 배가 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $32 \times 8{,}192^2 \times 2$ byte $\approx 4.3$ GB. batch 8이면 약 **34 GB**로, 층 **하나**의 attention 행렬만으로 GPU 한 장의 상당 부분을 차지한다. 층이 수십 개다.
+
+(b) $4 \times 8{,}192 \times 4{,}096^2 \approx 5.5\times10^{11}$, $2 \times 8{,}192^2 \times 4{,}096 \approx 5.5\times10^{11}$. **정확히 같다.** $n = 2d$ 인 교차점이기 때문이다.
+
+(c) attention 행렬 메모리와 attention 연산은 $n^2$ 이라 4배, projection 연산은 $n$ 이라 2배다.
+이 길이를 넘어서면 attention이 비용을 지배한다. FlashAttention이 (a)의 행렬을 아예 만들지 않는 이유가 34 GB라는 숫자다([5.7](07_efficient_attention.qmd)).
+:::
+
+### B1. attention 출력의 점수에 대한 gradient
+
+query 하나의 출력은 $\mathbf o = \sum_j p_j\mathbf v_j$, $p_j = \mathrm{softmax}(\mathbf s)_j$ 다.
+
+(a) $\dfrac{\partial\mathbf o}{\partial s_j} = p_j(\mathbf v_j - \mathbf o)$ 임을 보여라.
+(b) 이 식으로, softmax가 한 token에 거의 1을 몰아준 상태(saturation)에서 모든 점수의 gradient가 0에 가까워짐을 보여라.
+(c) 식의 $(\mathbf v_j - \mathbf o)$ 를 말로 해석하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+softmax의 Jacobian은 $\partial p_i/\partial s_j = p_i(\delta_{ij} - p_j)$ 다([0.4](../00_foundations/04_information_theory.qmd)).
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\dfrac{\partial\mathbf o}{\partial s_j} = \sum_i\mathbf v_i\,p_i(\delta_{ij} - p_j) = p_j\mathbf v_j - p_j\sum_i p_i\mathbf v_i = p_j(\mathbf v_j - \mathbf o)$.
+
+(b) 한 token $k$ 에 $p_k \approx 1$ 이면 출력 $\mathbf o \approx \mathbf v_k$ 다.
+- $j = k$: $p_k(\mathbf v_k - \mathbf o) \approx 1 \cdot \mathbf 0$.
+- $j \ne k$: $p_j \approx 0$ 이라 0.
+
+모든 점수의 gradient가 사라진다. 점수를 어떻게 바꿔도 출력이 거의 안 변하는 상태다. 본문이 $\sqrt{d_k}$ 로 막는 "vanishing gradient"가 이것이다.
+
+(c) $\mathbf v_j - \mathbf o$ 는 "token $j$ 의 내용이 현재 출력과 얼마나 다른가"다. token $j$ 의 점수를 올리면 출력이 $\mathbf v_j$ 쪽으로 끌려가고, 끌려가는 양은 그 token의 현재 가중치 $p_j$ 에 비례한다.
+이미 출력과 같은 내용을 가진 token은 점수를 올려도 소용이 없고, 가중치가 0인 token은 점수를 조금 올려서는 출력에 닿지 못한다.
+:::
+
+### B2. attention은 순서를 모른다
+
+$\mathrm{Attn}(X) = \mathrm{softmax}\big(XW_Q(XW_K)^\top/\sqrt{d_k}\big)XW_V$ 이다. $P$ 는 token 순서를 섞는 permutation 행렬이다($PP^\top = I$).
+
+(a) $\mathrm{Attn}(PX) = P\,\mathrm{Attn}(X)$ 임을 보여라.
+(b) 이것이 "나는 고양이를 좋아한다"와 "고양이를 나는 좋아한다"에 대해 무엇을 뜻하는가?
+(c) 이 성질을 깨려면 무엇이 필요한가?
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+행렬의 행을 섞은 뒤 행마다 softmax를 하는 것은, softmax를 먼저 하고 행을 섞는 것과 같다: $\mathrm{softmax}(PAP^\top) = P\,\mathrm{softmax}(A)\,P^\top$.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $PX$ 를 넣으면 점수 행렬이 $PXW_Q(PXW_K)^\top = P(XW_QW_K^\top X^\top)P^\top = PAP^\top$ 가 된다. 힌트대로 softmax 후에도 $P\,\mathrm{softmax}(A)\,P^\top$ 이고, value는 $PXW_V$ 이므로
+
+$$P\,\mathrm{softmax}(A)\,P^\top P\,XW_V = P\,\mathrm{softmax}(A)\,XW_V = P\,\mathrm{Attn}(X)$$
+
+(b) 두 문장에서 각 token의 출력은 **완전히 같고**, 줄 서는 순서만 바뀐다. attention 혼자서는 "누가 먼저 나왔는가"를 구별하지 못한다. 단어 주머니(bag of words)처럼 본다.
+
+(c) 위치 정보를 입력에 넣어야 한다. token embedding에 위치 벡터를 더하거나(absolute), 점수 계산에 상대 위치를 반영한다(RoPE 등). [5.3 positional encoding](03_positional_encoding.qmd)의 주제이고, C1에서 숫자로 확인한다.
+:::
+
+### B3. softmax attention = Gaussian kernel regression
+
+query와 key가 모두 길이 1인 벡터라 하자.
+
+(a) $\|\mathbf q - \mathbf k\|^2 = 2 - 2\mathbf q^\top\mathbf k$ 임을 보여라.
+(b) 이것을 써서 $\mathrm{softmax}_j(\mathbf q^\top\mathbf k_j/\tau)$ 가 Gaussian kernel $\exp(-\|\mathbf q - \mathbf k_j\|^2/2h^2)$ 를 정규화한 가중치와 같음을 보이고, $h$ 와 $\tau$ 의 관계를 구하라.
+(c) $\tau \to 0$ 과 $\tau \to \infty$ 에서 attention은 각각 무엇이 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\|\mathbf q - \mathbf k\|^2 = \|\mathbf q\|^2 - 2\mathbf q^\top\mathbf k + \|\mathbf k\|^2 = 2 - 2\mathbf q^\top\mathbf k$.
+
+(b) $\mathbf q^\top\mathbf k_j = 1 - \tfrac12\|\mathbf q - \mathbf k_j\|^2$ 이므로
+
+$$\exp(\mathbf q^\top\mathbf k_j/\tau) = e^{1/\tau}\exp\!\Big(-\frac{\|\mathbf q - \mathbf k_j\|^2}{2\tau}\Big)$$
+
+앞의 $e^{1/\tau}$ 는 모든 $j$ 에 공통이라 정규화에서 지워진다. 남은 것은 $h^2 = \tau$ 인 Gaussian kernel이다.
+즉 softmax attention은 본문의 Nadaraya–Watson kernel regression과 **정확히** 같고, temperature $\tau$ 가 kernel의 폭 $h^2$ 이다. $\sqrt{d_k}$ 로 나누는 것은 폭을 정하는 일이기도 하다.
+
+(c) $\tau \to 0$ 이면 폭이 0이 되어 가장 가까운 key 하나에 가중치 1 — **딱딱한 dictionary 조회**(1-nearest neighbor)다.
+$\tau \to \infty$ 면 폭이 무한대가 되어 모든 가중치가 같아진다 — **value의 단순 평균**이다. 본문 "직접 해보기" ②의 query가 0인 경우와 같다.
+:::
+
+### C1. 순서를 섞어도 출력이 같다
+
+무작위 $X$ (token 6개, 8차원)와 무작위 $W_Q, W_K, W_V$ 로
+
+(a) $X$ 의 행을 섞었을 때 출력이 같은 방식으로 섞이기만 하는지 확인하라.
+(b) 각 token에 위치마다 다른 벡터(positional encoding)를 더한 뒤 같은 실험을 하면 어떻게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 섞은 입력의 출력과 원래 출력을 같은 방식으로 섞은 것의 차이가 $10^{-16}$ 수준으로 0이다. B2(a) 그대로다.
+
+(b) 위치 벡터를 먼저 더한 뒤 섞으면 token이 "자기 위치 벡터를 들고" 이동하지만, 섞은 뒤 더하면 새 자리의 위치 벡터를 받는다. 두 결과가 크게 달라진다. 이제 모델이 순서를 구별할 수 있다.
+
+```{python}
+#| label: ex-perm-equivariance
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, d = 6, 8
+X = rng.normal(size=(n, d))
+Wq, Wk, Wv = (rng.normal(size=(d, d)) / np.sqrt(d) for _ in range(3))
+
+def attn(X):
+    S = (X @ Wq) @ (X @ Wk).T / np.sqrt(d)
+    P = np.exp(S - S.max(1, keepdims=True))
+    return (P / P.sum(1, keepdims=True)) @ (X @ Wv)
+
+perm = rng.permutation(n)
+print(f"위치 정보 없음:  max|Attn(PX) − P·Attn(X)| = {np.abs(attn(X[perm]) - attn(X)[perm]).max():.1e}")
+
+pos = rng.normal(size=(n, d))                         # 자리마다 고정된 위치 벡터
+moved_with_pos = attn(X[perm] + pos)                  # 섞인 뒤 새 자리의 위치를 받음
+original = attn(X + pos)[perm]                        # 원래 자리의 위치를 들고 섞임
+print(f"위치 정보 있음:  max|차이| = {np.abs(moved_with_pos - original).max():.2f}")
+```
+:::
+
+### C2. attention으로 kernel regression 하기
+
+$y = \sin x + \text{잡음}$ 인 점 40개가 있다. query $x_q$ 와 key $x_j$ 의 점수를 $-(x_q - x_j)^2/2h^2$ 로 두고 value를 $y_j$ 로 두면, attention 출력이 B3의 kernel regression이다.
+
+$h = 0.05,\ 0.3,\ 1,\ 5$ 에서 참 함수 $\sin x$ 와의 RMSE와, query마다 가장 큰 가중치의 평균을 구하라. 최적의 $h$ 는 무엇이고, 양 끝은 어떻게 실패하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$h = 0.3$ 에서 RMSE가 가장 작다(약 0.15).
+$h = 0.05$ 면 가장 큰 가중치가 평균 0.75로 거의 이웃 하나만 본다 — 잡음까지 따라가는 1-nearest neighbor(B3의 $\tau \to 0$)라 RMSE가 커진다(high variance).
+$h = 5$ 면 가장 큰 가중치가 0.03으로 40개를 거의 고르게 평균 낸다 — $\sin$ 의 모양이 뭉개져 상수에 가까워진다(high bias).
+[2.1 연습 문제 B2](../02_classical_ml/01_bias_variance.qmd)의 kNN $k$ 와 같은 손잡이이고, attention에서는 $\sqrt{d_k}$ 와 학습된 $W_Q, W_K$ 의 크기가 이 폭을 정한다.
+
+```{python}
+#| label: ex-attn-kernel-reg
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+x = np.sort(rng.uniform(0, 6, 40))
+y = np.sin(x) + rng.normal(0, 0.3, 40)
+xq = np.linspace(0, 6, 200)
+
+for h in [0.05, 0.3, 1, 5]:
+    S = -(xq[:, None] - x[None, :]) ** 2 / (2 * h * h)        # attention 점수
+    P = np.exp(S - S.max(1, keepdims=True))
+    P /= P.sum(1, keepdims=True)                               # softmax
+    pred = P @ y                                               # value 의 가중합
+    rmse = np.sqrt(np.mean((pred - np.sin(xq)) ** 2))
+    print(f"h={h:<5} RMSE {rmse:.3f}   최대 가중치 평균 {P.max(1).mean():.3f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 수식 | 핵심 |
