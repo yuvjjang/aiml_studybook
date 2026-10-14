@@ -624,6 +624,187 @@ $\sqrt{2/n_{\text{out}}}$ · Xavier의 층별 $\|g\|$ 를 비교하라.
 $W_2$ 만 0으로 두면 무엇이 달라지는가? 이것이 ReZero와 GPT-2 방식의 차이다.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 표준편차를 숫자로 적기
+
+(a) 입력 784, 출력 512인 ReLU 층의 He, Xavier, LeCun initialization 표준편차를 구하라.
+(b) GPT 계열은 모든 선형층을 표준편차 0.02로 initialization한다. 입력 폭 $d$ 가 768, 4,096, 12,288인 ReLU 계열 층에서 He 표준편차와 비교하라. 0.02는 어느 폭에서 He와 가장 가까운가?
+(c) 이 비교가 muP 같은 "폭에 따라 initialization을 바꾸는 규칙"이 나온 이유를 어떻게 설명하는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) He $\sqrt{2/784} \approx 0.0505$, Xavier $\sqrt{2/(784 + 512)} \approx 0.0393$, LeCun $\sqrt{1/784} \approx 0.0357$.
+
+(b) He는 $d = 768$ 에서 0.051, 4,096에서 0.022, 12,288에서 0.013 이다. 0.02는 $d \approx 5{,}000$ 근처에서 He와 같다.
+768 폭에서는 He의 40%로 너무 작고, 12,288 폭에서는 1.6배로 너무 크다.
+
+(c) 상수 0.02는 특정 폭에서 잘 맞춰진 관례라, 모델 폭을 바꾸면 신호 분산이 층마다 조금씩 어긋난다. 본문이 본 대로 그 어긋남은 깊이만큼 거듭제곱된다.
+작은 모델에서 찾은 learning rate가 큰 모델에서 그대로 통하게 하려면, 폭에 따라 initialization과 learning rate를 함께 조정하는 규칙이 필요하다. 그것이 muP다.
+:::
+
+### A2. 층별 표준편차로 진단하기
+
+ReLU 40층 망에 무작위 입력을 넣고 층마다 activation 표준편차를 쟀다. 다음 관찰마다 무엇이 잘못됐는지 말하라.
+
+1. 층마다 표준편차가 약 0.71배씩 준다.
+2. 층마다 표준편차가 약 1.1배씩 는다.
+3. 모든 층에서 한 층 안의 unit들이 정확히 같은 값을 낸다.
+4. 표준편차는 1 근처로 유지되지만, 출력 쪽 gradient를 넣고 거슬러 오니 입력 쪽에서 gradient가 크게 줄어든다(층마다 너비가 크게 다르다).
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. $0.71 \approx 1/\sqrt2$ — ReLU의 계수 2를 빠뜨렸다. Xavier나 LeCun을 ReLU에 쓴 것이다. 40층이면 $2^{-20} \approx 10^{-6}$ 배로 사라진다.
+2. initialization이 He보다 1.1배 크다. $1.1^{40} \approx 45$ 배로 폭발한다. 본문의 "1.3배가 30층에서 천 배"보다 완만하지만 같은 문제다.
+3. 상수(또는 0) initialization이다. 대칭성이 깨지지 않아 너비가 의미 없다.
+4. forward 조건 $n_{\text{in}}\sigma_w^2 = 2$ 만 맞추고 backward 조건 $n_{\text{out}}\sigma_w^2 = 2$ 를 무시했다. 너비가 같으면 두 조건이 같지만, 다르면 갈라진다(B2).
+:::
+
+### B1. 분산 전파를 정확하게: 분산이 아니라 second moment
+
+$z_j = \sum_{i=1}^{n}W_{ji}h_i$ 에서 $W_{ji}$ 는 서로 독립이고 평균 0, 분산 $\sigma_w^2$ 이며 $h$ 와도 독립이다.
+
+(a) $\mathrm{Var}(z_j) = n\,\sigma_w^2\,\mathbb E[h^2]$ 임을 보여라. 왜 $\mathrm{Var}(h)$ 가 아니라 $\mathbb E[h^2]$ 인가?
+(b) ReLU 출력 $h = \max(0, z)$ 는 평균이 0이 아니다. $z \sim \mathcal N(0, s^2)$ 일 때 $\mathbb E[h]$ 와 $\mathbb E[h^2]$ 을 구하라.
+(c) (a), (b)로 층 사이의 점화식을 세우고, He initialization이 $\mathrm{Var}(z)$ 를 층마다 정확히 보존함을 보여라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 각 항 $W_{ji}h_i$ 는 평균이 $\mathbb E[W]\mathbb E[h] = 0$ 이고 서로 무관하므로 분산이 더해진다. 한 항의 분산은
+
+$$\mathrm{Var}(Wh) = \mathbb E[W^2h^2] - 0 = \mathbb E[W^2]\,\mathbb E[h^2] = \sigma_w^2\,\mathbb E[h^2]$$
+
+$W$ 의 평균이 0이라 $h$ 의 평균이 0이 아니어도 곱의 평균은 0이고, 분산에는 $h$ 의 **second moment**가 들어간다. 본문은 $h$ 의 평균이 0인 경우($\mathrm{Var}(h) = \mathbb E[h^2]$)로 적었다.
+
+(b) $\mathbb E[h] = \int_0^\infty z\,\phi_s(z)\,dz = s/\sqrt{2\pi} \approx 0.40s$. $\mathbb E[h^2] = s^2/2$ (본문의 대칭성 논증).
+평균이 0이 아니므로 $\mathrm{Var}(h) = s^2(1/2 - 1/2\pi) \approx 0.34s^2$ 으로 $\mathbb E[h^2]$ 보다 작다. 둘을 혼동하면 계수가 틀린다.
+
+(c) $\mathrm{Var}(z_{l+1}) = n\,\sigma_w^2\,\mathbb E[h_l^2] = n\,\sigma_w^2\cdot\tfrac12\mathrm{Var}(z_l)$ 이다. $\sigma_w^2 = 2/n$ (He)이면 $\mathrm{Var}(z_{l+1}) = \mathrm{Var}(z_l)$ 로 정확히 보존된다.
+보존되는 양은 pre-activation $z$ 의 분산이고, ReLU 출력 $h$ 의 분산은 매 층 $0.34\,\mathrm{Var}(z)$ 로 일정하게 유지될 뿐 1이 아니다. "무엇의 분산을 1로 맞추는가"를 정확히 해 두면 헷갈리지 않는다.
+:::
+
+### B2. backward pass의 분산 조건과 Xavier의 절충
+
+ReLU 층 $z = W h$ ($W$ 는 $n_{\text{out}}\times n_{\text{in}}$), $h' = \mathrm{ReLU}(z)$ 에서 backward pass는 $\partial L/\partial h = W^\top(\partial L/\partial z)$ 다.
+
+(a) gradient 성분들이 평균 0이고 서로 무관하다고 보고 $\mathrm{Var}(\partial L/\partial h) = n_{\text{out}}\,\sigma_w^2\,\mathrm{Var}(\partial L/\partial z)$ 임을 보여라.
+(b) ReLU를 거꾸로 지날 때 gradient의 second moment가 절반이 됨을 보이고, backward 분산을 보존하는 조건을 구하라.
+(c) forward 조건(B1)과 backward 조건을 동시에 만족할 수 없을 때, 두 조건의 $\sigma_w^2$ 를 "조화평균"으로 절충하면 Xavier의 분모 $n_{\text{in}} + n_{\text{out}}$ 이 나옴을 보여라(ReLU의 계수는 무시하고 tanh 기준).
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $(\partial L/\partial h)_i = \sum_{j=1}^{n_{\text{out}}}W_{ji}(\partial L/\partial z)_j$ 다. B1과 같은 논리로 항 $n_{\text{out}}$ 개의 분산이 더해진다. 이번에는 더하는 개수가 **출력 쪽 폭**이다.
+
+(b) ReLU의 미분은 $z > 0$ 이면 1, 아니면 0이고, $z$ 가 대칭이라 반반이다. $\partial L/\partial z = \mathbb 1[z > 0]\cdot\partial L/\partial h'$ 의 second moment는 $\tfrac12$ 배가 된다.
+층 하나를 거꾸로 지나면 $\tfrac12 n_{\text{out}}\sigma_w^2$ 배가 되므로 보존 조건은 $\sigma_w^2 = 2/n_{\text{out}}$ (fan-out 모드의 He)이다.
+
+(c) tanh 기준으로 forward는 $\sigma_w^2 = 1/n_{\text{in}}$, backward는 $1/n_{\text{out}}$ 을 원한다. 두 값의 조화평균은
+
+$$\frac{2}{\,n_{\text{in}} + n_{\text{out}}\,} = \frac{2}{\frac{1}{1/n_{\text{in}}} + \frac{1}{1/n_{\text{out}}}}$$
+
+이다. 둘 다 정확히는 만족하지 못하지만 둘 다 크게 어긋나지 않게 한 타협이다. 폭이 일정한 망($n_{\text{in}} = n_{\text{out}}$)에서는 두 조건이 같아 타협할 필요가 없다.
+:::
+
+### B3. residual stream 분산의 두 가지 성장
+
+$h_{l+1} = h_l + \alpha F(h_l)$ 이고 $F(h_l)$ 은 $h_l$ 과 무관하다(분산이 더해진다)고 가정한다.
+
+(a) normalization이 없어 $\mathrm{Var}(F(h_l)) = c\,\mathrm{Var}(h_l)$ 이면 $L$ 층 뒤 분산은 몇 배인가? $\alpha = 1$, $c = 1$, $L = 64$ 이면?
+(b) branch 앞에 normalization이 있어 $\mathrm{Var}(F(h_l)) = s^2$ (상수)이면?
+(c) 두 경우에 $\alpha = 1/\sqrt L$ 을 쓰면 $L \to \infty$ 에서 각각 어떻게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\mathrm{Var}(h_{l+1}) = (1 + \alpha^2c)\mathrm{Var}(h_l)$ 이므로 $(1 + \alpha^2c)^L$ 배, **지수적**이다. $\alpha = c = 1$, $L = 64$ 면 $2^{64} \approx 1.8\times10^{19}$ 배다. 본문 실험의 $\alpha = 1$ 행이 폭발한 이유다.
+
+(b) $\mathrm{Var}(h_L) = \mathrm{Var}(h_0) + L\alpha^2s^2$ 로 **선형**이다. [3.5 연습 문제 B2](05_normalization.qmd)의 pre-LN과 같다.
+
+(c) (a)는 $(1 + c/L)^L \to e^c$ 로 유한한 값에 수렴한다($c = 1$ 이면 약 2.7배). (b)는 $1 + s^2$ 로 깊이와 무관해진다.
+$1/\sqrt L$ scaling은 normalization이 있는 경우를 정확히 상쇄하고, 없는 경우는 폭발을 "e배 정도"로 길들인다. 본문 key-concept의 두 줄이 이 계산이다.
+GPT-2의 $1/\sqrt{2L}$ 은 block마다 branch가 둘(attention, FFN)이라 $2L$ 개를 더하기 때문이다.
+:::
+
+### C1. ReLU 출력의 moment 확인
+
+$z \sim \mathcal N(0, 1)$ 표본 100만 개로 B1(b)의 $\mathbb E[h]$, $\mathbb E[h^2]$, $\mathrm{Var}(h)$ 를 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$\mathbb E[h] \approx 0.399$ ($1/\sqrt{2\pi}$), $\mathbb E[h^2] \approx 0.5$, $\mathrm{Var}(h) \approx 0.34$ 가 나온다.
+He의 계수 2를 정하는 것은 0.5이고, 0.34로 계산하면 계수가 약 2.9가 되어 틀린 답이 나온다.
+
+```{python}
+#| label: ex-relu-moments
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+z = rng.normal(size=1_000_000)
+h = np.maximum(z, 0)
+print(f"E[h]   = {h.mean():.4f}   (이론 1/√(2π) = {1 / np.sqrt(2 * np.pi):.4f})")
+print(f"E[h²]  = {(h**2).mean():.4f}   (이론 0.5)")
+print(f"Var(h) = {h.var():.4f}   (이론 1/2 − 1/(2π) = {0.5 - 1 / (2 * np.pi):.4f})")
+```
+:::
+
+### C2. activation마다 필요한 gain
+
+$z \sim \mathcal N(0, 1)$ 일 때 $\mathbb E[f(z)^2]$ 를 수치적분으로 구하고, $\mathrm{Var}(z)$ 를 1로 보존하는 gain $= 1/\sqrt{\mathbb E[f(z)^2]}$ 를 ReLU, tanh, GELU에 대해 계산하라 (initialization 표준편차 $=$ gain $/\sqrt{n_{\text{in}}}$).
+그 gain으로 폭 512, 50층 망을 만들어 pre-activation 표준편차가 실제로 유지되는지 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+ReLU의 gain은 $\sqrt2 \approx 1.414$ (He), tanh는 약 1.59, GELU는 약 1.53이다. (PyTorch의 tanh 권장 gain 5/3 ≈ 1.67과 가깝다.)
+
+첫 층은 입력이 activation을 거치지 않은 표준정규라 표준편차가 gain 크기로 시작한다. 그 뒤 tanh는 1로 수렴하고, ReLU는 크기를 그대로 통과시키는 성질 때문에 시작한 크기(1.4) 근처에서 유한한 폭의 무작위 흔들림만 보이며 1~1.5 사이에 머문다. **GELU는 점점 커진다.**
+gain을 분산 1인 지점 하나에서만 맞췄기 때문이다. ReLU는 크기를 바꿔도 모양이 같아서(양의 배수를 그대로 통과시킨다) 어느 크기에서나 같은 비율을 유지하지만,
+GELU는 입력이 커지면 ReLU처럼, 작으면 직선처럼 행동해 크기마다 비율이 다르다. 분산이 1보다 조금 커지면 비율이 1을 넘어 계속 커지는 쪽으로 흘러간다 — 분산 1이 **불안정한 고정점**이다.
+그래서 GELU를 쓰는 Transformer는 initialization만으로 scale을 맞추지 않고 매 block에 normalization을 둔다. 본문 callout의 "initialization은 normalization과 함께 봐야 한다"가 이것이다.
+
+```{python}
+#| label: ex-act-gain
+
+import numpy as np
+from scipy import integrate, special
+
+pdf = lambda z: np.exp(-z * z / 2) / np.sqrt(2 * np.pi)
+acts = {
+    "ReLU": lambda z: np.maximum(z, 0),
+    "tanh": np.tanh,
+    "GELU": lambda z: z * 0.5 * (1 + special.erf(z / np.sqrt(2))),
+}
+
+rng = np.random.default_rng(0)
+n, L = 512, 50
+for name, f in acts.items():
+    m2 = integrate.quad(lambda z: f(z) ** 2 * pdf(z), -12, 12)[0]
+    gain = 1 / np.sqrt(m2)
+    h, stds = rng.normal(size=(256, n)), []
+    for _ in range(L):
+        z = h @ rng.normal(0, gain / np.sqrt(n), (n, n))
+        stds.append(z.std())
+        h = f(z)
+    print(f"{name:<5} E[f²]={m2:.3f}  gain={gain:.3f}   z 표준편차: 1층 {stds[0]:.2f}, 10층 {stds[9]:.2f}, 50층 {stds[-1]:.2f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
