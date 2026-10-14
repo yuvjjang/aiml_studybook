@@ -853,6 +853,191 @@ decoder 출력 분포를 Gaussian에서 discretized logistic으로 바꾸면 선
 흐릿함이 ELBO 탓인지 decoder 탓인지 판단하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. KL 항을 차원별로 읽기
+
+latent가 2차원이고, 어떤 입력 $x$ 에 대해 encoder가 $\mu = (1,\ 0)$, $\sigma^2 = (1,\ 0.25)$ 를 냈다.
+
+(a) 본문의 닫힌 식으로 KL 항을 차원별로 구하라.
+(b) 각 차원은 무엇을 하고 있는가? 세 번째 차원이 $\mu = 0$, $\sigma^2 = 1$ 이라면?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 1번 차원: $\tfrac12(1 + 1 - 1 - \log 1) = 0.5$. 2번 차원: $\tfrac12(0 + 0.25 - 1 - \log 0.25) = \tfrac12(-0.75 + 1.386) \approx 0.318$. 합 약 **0.818** nat.
+
+(b) 1번 차원은 **평균을 옮겨서**($\mu = 1$) 정보를 담는다. "이 입력은 이쪽"이라고 위치로 말한다.
+2번 차원은 평균은 그대로지만 **분산을 줄여서**($\sigma^2 = 0.25$) 정보를 담는다. "이 입력은 prior보다 좁은 범위에 있다"고 말한다.
+세 번째 차원이 $\mu = 0$, $\sigma^2 = 1$ 이면 KL이 정확히 0이다. prior와 똑같아 이 입력에 대해 아무 정보도 나르지 않는다 — 본문 "어떤 차원이 살아남는가"의 collapse한 차원이 이 모습이다.
+KL 항은 각 차원이 나르는 정보의 "요금"이고, 요금을 낼 가치가 없는 차원은 prior로 돌아간다.
+:::
+
+### A2. 참인가 거짓인가
+
+1. $\theta$ 를 고정하고 ELBO를 $\phi$ 에 대해 최대화하는 것은 $D_{KL}(q_\phi(z\mid x)\,\|\,p_\theta(z\mid x))$ 를 최소화하는 것과 같다.
+2. β-VAE의 목적함수 $\mathbb E_q[\log p(x\mid z)] - \beta D_{KL}$ 은 $\beta$ 가 무엇이든 $\log p(x)$ 의 lower bound다.
+3. KL 항이 0이 되었다면 모델이 데이터를 완벽하게 학습했다는 뜻이다.
+4. reconstruction 항을 $z$ 하나만 뽑아 계산해도 그 기댓값의 unbiased estimator다.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. **참.** 본문 방법 2의 분해 $\log p_\theta(x) = \mathcal L + D_{KL}(q\|p_\theta(z\mid x))$ 에서 좌변은 $\phi$ 와 무관하다. $\mathcal L$ 을 올리는 만큼 KL이 정확히 줄어든다(B1).
+2. **거짓.** $\beta \ge 1$ 이면 더 큰 양을 빼므로 여전히 lower bound다. $\beta < 1$ 이면 ELBO보다 커질 수 있어 $\log p(x)$ 를 넘을 수 있다.
+3. **거짓.** posterior collapse다. $q(z\mid x) = p(z)$ 라 latent가 아무 정보도 나르지 않는다. reconstruction은 decoder가 혼자 하거나(autoregressive), 평균만 내고 있다.
+4. **참.** 표본 하나의 평균도 평균이다. 다만 분산이 커서, gradient로 쓸 때 분산을 줄이는 것이 reparameterization의 역할이다(B2).
+:::
+
+### B1. ELBO와 $\log p(x)$ 의 간극이 KL인 이유
+
+$p_\theta(x, z) = p_\theta(z\mid x)\,p_\theta(x)$ 를 써서 다음을 유도하라.
+
+$$\log p_\theta(x) = \underbrace{\mathbb E_{q_\phi(z\mid x)}\Big[\log\frac{p_\theta(x, z)}{q_\phi(z\mid x)}\Big]}_{\mathcal L} + D_{KL}\big(q_\phi(z\mid x)\,\|\,p_\theta(z\mid x)\big)$$
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+$\log p_\theta(x)$ 는 $z$ 와 무관하므로 $\mathbb E_q[\log p_\theta(x)]$ 와 같다. 그 안에 $\log p_\theta(x) = \log p_\theta(x, z) - \log p_\theta(z\mid x)$ 를 넣고 $\log q$ 를 더했다 뺀다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$$\log p_\theta(x) = \mathbb E_q\big[\log p_\theta(x, z) - \log p_\theta(z\mid x)\big]
+= \mathbb E_q\Big[\log\frac{p_\theta(x, z)}{q(z\mid x)}\Big] + \mathbb E_q\Big[\log\frac{q(z\mid x)}{p_\theta(z\mid x)}\Big]$$
+
+둘째 항이 정의대로 $D_{KL}(q\|p_\theta(z\mid x))$ 다.
+
+$\log p(x)$ 는 고정된 "전체 예산"이고, 그것이 ELBO와 KL 간극으로 나뉜다. $q$ 를 바꿔도 합은 그대로이므로, ELBO를 $\phi$ 로 올리면 간극이 그만큼 준다(A2의 1번).
+간극이 0이 되려면 $q$ 가 진짜 posterior와 같아야 한다. encoder가 대각 Gaussian만 낼 수 있는데 진짜 posterior가 휘어 있거나 봉우리가 둘이면 간극이 남는다 — 이것을 amortization/approximation gap이라 부르고, C1의 IWAE가 이 간극을 줄인다.
+:::
+
+### B2. 두 gradient estimator의 분산을 정확히 계산하기
+
+$z \sim \mathcal N(\mu, 1)$, $f(z) = z^2$ 일 때 $\nabla_\mu\mathbb E[f(z)] = 2\mu$ 다.
+
+(a) score function estimator $g_s = f(z)\,\nabla_\mu\log q(z) = z^2(z - \mu)$ 의 평균이 $2\mu$ 임을 보이고, 분산이 $\mu^4 + 14\mu^2 + 15$ 임을 보여라.
+(b) reparameterization estimator $g_r = \nabla_\mu f(\mu + \varepsilon) = 2(\mu + \varepsilon)$ 의 분산을 구하라.
+(c) $\mu = 0$ 과 $\mu = 2$ 에서 분산 비를 구하라. 본문의 "$\mu$ 가 클수록 격차가 커진다"를 이 식으로 설명하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+$z = \mu + \varepsilon$, $\varepsilon \sim \mathcal N(0, 1)$ 로 쓰면 $g_s = (\mu + \varepsilon)^2\varepsilon$ 이다. $\mathbb E[\varepsilon^2] = 1$, $\mathbb E[\varepsilon^4] = 3$, $\mathbb E[\varepsilon^6] = 15$, 홀수 차수는 0.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $g_s = (\mu^2 + 2\mu\varepsilon + \varepsilon^2)\varepsilon$ 의 평균은 홀수 차수가 사라져 $2\mu\,\mathbb E[\varepsilon^2] = 2\mu$. unbiased다.
+second moment는 $\mathbb E[(\mu^2 + 2\mu\varepsilon + \varepsilon^2)^2\varepsilon^2]$ 이다. 제곱을 펼쳐 짝수 차수만 남기면
+
+$$\mu^4\mathbb E[\varepsilon^2] + (4\mu^2 + 2\mu^2)\mathbb E[\varepsilon^4] + \mathbb E[\varepsilon^6] = \mu^4 + 18\mu^2 + 15$$
+
+분산은 여기서 $(2\mu)^2$ 을 빼 $\mu^4 + 14\mu^2 + 15$.
+
+(b) $\mathrm{Var}(2\varepsilon) = 4$. $\mu$ 와 무관하다.
+
+(c) $\mu = 0$: $15/4 = 3.75$ 배, $\mu = 2$: $87/4 \approx 22$ 배.
+score function은 $f$ 의 **값** $z^2$ 을 곱하는데, $\mu$ 가 커지면 $f$ 값 자체가 커져 잡음도 같이 커진다. reparameterization은 $f$ 의 **기울기**를 쓰므로 값의 크기와 무관하다.
+"고도계 숫자만 보는 것과 경사 방향을 보는 것"의 차이가 $\mu^4$ 이라는 항으로 드러났다. score function에 baseline($f$ 에서 상수를 빼기)을 쓰면 이 항이 줄어드는데, 그것이 [10.4 policy gradient](../10_rl/04_policy_gradient.qmd)의 baseline이다.
+:::
+
+### B3. decoder의 $\sigma_x$ 가 곧 $\beta$ 다
+
+Gaussian decoder $p(x\mid z) = \mathcal N(x;\ \hat x(z),\ \sigma_x^2 I)$ ($x$ 는 $D$ 차원)를 쓴다.
+
+(a) ELBO를 $\sigma_x$ 를 포함해 적고, $2\sigma_x^2$ 을 곱하면 "MSE $+ \beta\cdot$KL" 꼴이 됨을 보여라. $\beta$ 는 $\sigma_x$ 와 어떤 관계인가?
+(b) $\sigma_x$ 를 학습 가능한 파라미터로 두면 최적값은 무엇인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\log p(x\mid z) = -\dfrac{\|x - \hat x\|^2}{2\sigma_x^2} - D\log\sigma_x + \text{상수}$ 이므로 (σ_x를 고정하면)
+
+$$-\mathcal L = \frac{\|x - \hat x\|^2}{2\sigma_x^2} + D_{KL} + \text{상수} \quad\Longrightarrow\quad 2\sigma_x^2(-\mathcal L) = \|x - \hat x\|^2 + 2\sigma_x^2 D_{KL}$$
+
+즉 $\beta = 2\sigma_x^2$ 인 "MSE + β·KL"과 같다. decoder가 잡음을 크다고 볼수록($\sigma_x$ 가 클수록) 복원 오차를 덜 중요하게 여겨, KL 쪽이 상대적으로 세진다.
+본문 β-sweep에서 $\beta$ 를 바꾼 것은 사실상 "decoder가 가정하는 픽셀 잡음 크기"를 바꾼 것이다.
+
+(b) $-\mathcal L$ 에서 $\sigma_x$ 가 들어간 부분 $\dfrac{\text{SSE}}{2\sigma_x^2} + D\log\sigma_x$ 를 미분하면 $-\dfrac{\text{SSE}}{\sigma_x^3} + \dfrac{D}{\sigma_x} = 0$, 즉 $\sigma_x^2 = \text{SSE}/D$, **차원당 평균 제곱 복원 오차**다.
+학습이 진행되어 복원이 좋아지면 $\sigma_x$ 가 작아지고 실효 $\beta$ 도 작아진다. 그래서 $\sigma_x$ 를 학습시키면 β를 손으로 정하지 않아도 되지만, 초반 복원이 나쁠 때 실효 β가 커서 collapse가 쉬워지는 함정이 있다.
+:::
+
+### C1. 표본을 여러 개 쓰면 lower bound가 조여진다
+
+$p(x)$ 를 정확히 아는 장난감 모델로 IWAE bound를 확인한다: $z \sim \mathcal N(0, 1)$, $x\mid z \sim \mathcal N(z, 0.5^2)$, 관측 $x = 2$.
+이때 $p(x) = \mathcal N(x;\ 0,\ 1.25)$ 이고 진짜 posterior는 $\mathcal N(1.6,\ 0.2)$ 다.
+일부러 어긋난 $q = \mathcal N(1.28,\ 0.4)$ 를 쓰고, IWAE bound
+
+$$\mathcal L_K = \mathbb E\Big[\log\frac1K\sum_{k=1}^K\frac{p(x, z_k)}{q(z_k)}\Big], \qquad z_k \sim q$$
+
+를 $K = 1, 10, 100, 1000$ 에서 Monte Carlo로 구해 $\log p(x)$ 와 비교하라. ($K = 1$ 이 보통의 ELBO다.)
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+$\log p(x) \approx -2.631$ 이다. ELBO($K = 1$)는 약 $-3.03$ 으로 0.4 nat 낮다 — $q$ 가 어긋난 만큼의 KL 간극이다(B1).
+$K = 10$ 이면 $-2.65$, $K = 1000$ 이면 $-2.631$ 로 참값에 붙는다. $K$ 가 커질수록 bound가 단조롭게 조여진다.
+표본 여러 개 중 $p(x, z)/q(z)$ 가 큰 것(진짜 posterior에 가까운 것)이 평균을 지배하므로, $q$ 가 틀린 것을 표본 수로 보상하는 셈이다. 대가는 계산량이 $K$ 배라는 것이다.
+
+```{python}
+#| label: ex-iwae
+
+import numpy as np
+from scipy.special import logsumexp
+
+rng = np.random.default_rng(0)
+x, s = 2.0, 0.5
+logN = lambda a, m, v: -0.5 * np.log(2 * np.pi * v) - (a - m) ** 2 / (2 * v)
+log_px = logN(x, 0.0, 1 + s * s)
+m, v = 1.28, 0.4                                       # 일부러 어긋난 q (참 posterior N(1.6, 0.2))
+
+for K in [1, 10, 100, 1000]:
+    z = m + np.sqrt(v) * rng.normal(size=(20_000, K))
+    log_w = logN(z, 0, 1) + logN(x, z, s * s) - logN(z, m, v)   # log p(x,z) - log q(z)
+    bound = np.mean(logsumexp(log_w, axis=1) - np.log(K))
+    print(f"K={K:>5}   L_K = {bound:.4f}   간극 {log_px - bound:.4f}")
+print(f"log p(x) = {log_px:.4f}")
+```
+:::
+
+### C2. 두 estimator의 분산을 시뮬레이션으로
+
+B2의 식을 $\mu = 0, 1, 2$ 에서 표본 100만 개로 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+score function 분산이 15, 30, 87로 공식 $\mu^4 + 14\mu^2 + 15$ 와 맞고, reparameterization 분산은 $\mu$ 와 무관하게 4다. 두 estimator의 평균은 모두 $2\mu$ 다.
+
+```{python}
+#| label: ex-estimator-var
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+for mu in [0, 1, 2]:
+    eps = rng.normal(size=1_000_000)
+    z = mu + eps
+    g_score = z**2 * eps            # f(z) · ∇_μ log q(z)
+    g_reparam = 2 * z               # ∇_μ f(μ + ε)
+    print(f"μ={mu}   평균 {g_score.mean():.3f} / {g_reparam.mean():.3f}   "
+          f"분산 score {g_score.var():6.2f} (공식 {mu**4 + 14 * mu**2 + 15})   reparam {g_reparam.var():.2f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
