@@ -635,6 +635,203 @@ $t_{\max} = 190$ 까지의 오차와 $t_{\max} = 199$ 의 절벽 중 어느 쪽�
 반응하지 않는 쪽의 원인이 무엇인지 $\sqrt{\bar\alpha}$ 로 설명하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. score를 손으로 구하기
+
+(a) $p = \mathcal N(\mu, \sigma^2)$ 의 score를 구하라. normalization 상수 $1/\sqrt{2\pi\sigma^2}$ 는 어디로 갔는가?
+(b) mixture $p = \pi_1\mathcal N(\mu_1, \sigma^2) + \pi_2\mathcal N(\mu_2, \sigma^2)$ 의 score가 "각 성분의 score를 responsibility(그 점이 각 성분에서 나왔을 posterior 확률)로 가중평균한 것"임을 보여라.
+(c) $0.5\,\mathcal N(-2, 1) + 0.5\,\mathcal N(2, 1)$ 에서 $x = 0$ 과 $x = 1$ 의 score를 구하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\log p = -\dfrac{(x - \mu)^2}{2\sigma^2} - \log\sqrt{2\pi\sigma^2}$ 를 $x$ 로 미분하면 $s(x) = -(x - \mu)/\sigma^2$. 상수항은 미분하면 사라진다 — 본문의 "$Z$ 를 모르고도 score는 안다".
+평균을 향해, 멀수록 세게, 분산이 작을수록 세게 당기는 용수철이다.
+
+(b) $\nabla\log p = \dfrac{\nabla p}{p} = \dfrac{\sum_k\pi_k\mathcal N_k\,s_k}{\sum_j\pi_j\mathcal N_j} = \sum_k r_k(x)\,s_k(x)$, 여기서 $r_k = \pi_k\mathcal N_k/\sum_j\pi_j\mathcal N_j$ 가 responsibility다.
+
+(c) $x = 0$ 에서 두 성분의 responsibility가 0.5씩이고 score가 $+2$, $-2$ 라 합이 **0**이다. 두 봉우리 사이의 골짜기 바닥이라 오르막이 양쪽으로 같다.
+$x = 1$ 에서는 $r_2 = 1/(1 + e^{-4}) \approx 0.982$ 라 score $\approx 0.982\times(2 - 1) + 0.018\times(-2 - 1) \approx 0.93$, 오른쪽 봉우리로 당긴다.
+:::
+
+### A2. Langevin 한 걸음
+
+표준정규 $p = \mathcal N(0, 1)$ 의 score $s(x) = -x$ 로 Langevin을 돌린다. step $\delta = 0.1$.
+
+(a) $x = 2$ 에서 noise $z = 0$ 일 때 다음 위치는? $z = 1$ 이면?
+(b) noise 항을 빼면(gradient ascent만 하면) 표본들은 결국 어디로 가는가? noise 항은 무엇을 위해 있는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $z = 0$: $2 + 0.05\times(-2) = 1.9$. $z = 1$: $1.9 + \sqrt{0.1} \approx 2.22$ — 흔들림 때문에 오히려 멀어질 수도 있다.
+
+(b) 모든 표본이 봉우리 꼭대기 $x = 0$ 한 점으로 모인다. 그것은 분포가 아니라 최빈값(mode) 하나다.
+noise 항은 표본이 분포의 **폭**만큼 퍼져 있게 만든다. score는 "어디가 높은가"를, noise는 "얼마나 퍼져 있어야 하는가"를 맞추고, 둘의 균형점이 $p$ 다. 등산객이 비틀거려야 산 전체를 밟는다(본문의 비유).
+:::
+
+### B1. Tweedie 공식 유도
+
+깨끗한 데이터 $x_0 \sim p_0$ 에 noise를 더해 $x = x_0 + \sigma\varepsilon$ 을 관측한다. 그러면 $p(x) = \int p_0(x_0)\,\mathcal N(x;\ x_0, \sigma^2)\,dx_0$ 이다.
+
+(a) 이 적분을 $x$ 로 미분해 다음을 보여라.
+
+$$\mathbb E[x_0\mid x] = x + \sigma^2\,\nabla_x\log p(x)$$
+
+(b) diffusion의 $x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1 - \bar\alpha_t}\,\varepsilon$ 에 적용해, 본문의 $\nabla\log p_t = -\varepsilon_\theta/\sqrt{1 - \bar\alpha_t}$ 를 얻어라. ($\varepsilon_\theta$ 가 $\mathbb E[\varepsilon\mid x_t]$ 를 학습한다고 둔다.)
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+$\nabla_x\mathcal N(x;\ x_0, \sigma^2) = -\dfrac{x - x_0}{\sigma^2}\,\mathcal N(x;\ x_0, \sigma^2)$ 이다.
+(b)에서는 $y = x_t/\sqrt{\bar\alpha_t}$ 로 두면 $y = x_0 + \sigma\varepsilon$, $\sigma^2 = (1 - \bar\alpha_t)/\bar\alpha_t$ 꼴이 된다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 적분 안에서 미분하면
+
+$$\nabla p(x) = \int p_0(x_0)\Big(-\frac{x - x_0}{\sigma^2}\Big)\mathcal N\,dx_0 = -\frac{x\,p(x) - \int x_0\,p_0(x_0)\mathcal N\,dx_0}{\sigma^2}$$
+
+$p(x)$ 로 나누면 $\int x_0\,p_0\mathcal N\,dx_0/p(x) = \mathbb E[x_0\mid x]$ 이므로
+
+$$\nabla\log p(x) = \frac{\mathbb E[x_0\mid x] - x}{\sigma^2}$$
+
+정리하면 식이 나온다. "noise를 걷어낸 최선의 추측 = 관측값 + (분산) × (score)".
+
+(b) $x_t$ 를 직접 쓰면, 같은 계산이 $\nabla\log p_t(x_t) = \dfrac{\sqrt{\bar\alpha_t}\,\mathbb E[x_0\mid x_t] - x_t}{1 - \bar\alpha_t}$ 를 준다.
+$x_t - \sqrt{\bar\alpha_t}\,x_0 = \sqrt{1 - \bar\alpha_t}\,\varepsilon$ 의 조건부 기댓값을 취하면 분자는 $-\sqrt{1 - \bar\alpha_t}\,\mathbb E[\varepsilon\mid x_t]$ 이므로
+
+$$\nabla\log p_t(x_t) = -\frac{\mathbb E[\varepsilon\mid x_t]}{\sqrt{1 - \bar\alpha_t}}$$
+
+MSE로 $\varepsilon$ 을 맞히도록 학습하면 $\varepsilon_\theta \to \mathbb E[\varepsilon\mid x_t]$ (MSE의 최적해는 조건부 평균, [3.3](../03_deep_learning/03_losses.qmd))이므로 본문의 식이 된다. [6.5 연습 문제 C2](05_diffusion.qmd)에서 score를 $\hat x_0$ 로 바꿀 때 쓴 것이 이 공식이다.
+:::
+
+### B2. step이 유한하면 Langevin은 조금 틀린다
+
+목표가 $\mathcal N(0, \tau^2)$ 이고 score가 $-x/\tau^2$ 이다. Langevin $x_{k+1} = x_k + \tfrac\delta2 s(x_k) + \sqrt\delta\,z_k$ 를 오래 돌린다.
+
+(a) 정상 상태의 분산이 $\dfrac{\tau^2}{1 - \delta/(4\tau^2)}$ 임을 보여라.
+(b) $\tau = 1$ 에서 $\delta = 0.1,\ 0.5,\ 1$ 이면 분산은 몇 % 부풀려지는가?
+(c) 이 오차를 없애는 방법 두 가지를 말하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $x_{k+1} = a\,x_k + \sqrt\delta\,z_k$, $a = 1 - \dfrac{\delta}{2\tau^2}$ 이다. 정상 상태에서 $V = a^2V + \delta$ 이므로
+
+$$V = \frac{\delta}{1 - a^2} = \frac{\delta}{\frac{\delta}{\tau^2} - \frac{\delta^2}{4\tau^4}} = \frac{\tau^2}{1 - \delta/(4\tau^2)}$$
+
+(b) 2.6%, 14%, 33% 부풀려진다. [3.4 연습 문제 C1](../03_deep_learning/04_optimizers.qmd)의 "SGD 잡음이 만드는 바닥"과 같은 구조로, 이산화된 한 걸음이 클수록 분포가 퍼진다.
+
+(c) ① $\delta$ 를 작게(그 대신 오래) 돌린다. ② 매 걸음을 Metropolis 규칙으로 받아들일지 결정해 정확히 $p$ 를 목표로 맞춘다(MALA, Metropolis-adjusted Langevin).
+diffusion의 annealed Langevin은 ①에 가깝다 — noise 수준이 낮아질수록 $\delta$ 를 함께 줄인다.
+:::
+
+### B3. probability flow ODE가 분포를 보존하는 것을 직접 확인하기
+
+1차원 VP-SDE $dx = -\tfrac12\beta x\,dt + \sqrt\beta\,dw$ ($\beta$ 는 상수)에 데이터가 $\mathcal N(0, s_0^2)$ 로 들어간다.
+
+(a) 시간 $t$ 의 분포가 $\mathcal N(0, s_t^2)$, $s_t^2 = 1 + (s_0^2 - 1)e^{-\beta t}$ 임을 받아들이고, 그 score를 적어라.
+(b) probability flow ODE $\dfrac{dx}{dt} = -\tfrac12\beta x - \tfrac12\beta\,\nabla\log p_t(x)$ 를 적고, 해가 $x(t) = x(0)\,s_t/s_0$ 임을 보여라.
+(c) (b)가 "경로는 결정론적인데 분포는 SDE와 같다"는 본문의 주장을 어떻게 보여 주는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\nabla\log p_t(x) = -x/s_t^2$.
+
+(b) $\dfrac{dx}{dt} = -\tfrac12\beta x + \tfrac12\beta\dfrac{x}{s_t^2} = -\dfrac{\beta(s_t^2 - 1)}{2s_t^2}\,x$.
+한편 $s_t^2$ 을 미분하면 $\dfrac{d s_t^2}{dt} = -\beta(s_0^2 - 1)e^{-\beta t} = -\beta(s_t^2 - 1)$, 즉 $\dfrac{ds_t}{dt} = -\dfrac{\beta(s_t^2 - 1)}{2s_t}$ 다.
+$x = c\,s_t$ 를 넣으면 $\dfrac{dx}{dt} = c\dfrac{ds_t}{dt} = -\dfrac{\beta(s_t^2 - 1)}{2s_t}\,c = -\dfrac{\beta(s_t^2 - 1)}{2s_t^2}\,x$ 로 ODE를 만족한다. $c = x(0)/s_0$.
+
+(c) 모든 점이 같은 배율 $s_t/s_0$ 로 늘어나거나 줄어든다. $x(0) \sim \mathcal N(0, s_0^2)$ 이면 $x(t) \sim \mathcal N(0, s_t^2)$ 이므로, 무작위 흔들림 없이 **정확히 SDE와 같은 marginal**을 지난다.
+SDE에서는 각 점이 제멋대로 흔들리면서 전체 모양이 바뀌고, ODE에서는 모든 점이 줄지어 질서 있게 움직이면서 같은 모양으로 바뀐다. 본문의 개미 떼 비유다.
+거꾸로 돌리면($t$ 를 줄이면) 표준정규에서 출발해 데이터 분포로 결정론적으로 돌아간다 — DDIM이 하는 일이다.
+:::
+
+### C1. Langevin의 정상 분산 확인
+
+B2를 $\tau = 1$, $\delta = 0.1,\ 0.5,\ 1$ 에서 표본 2만 개, 2,000 step으로 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+분산이 1.03, 1.15, 1.33 근처로 공식 $1/(1 - \delta/4)$ 와 맞는다.
+
+```{python}
+#| label: ex-langevin-var
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+for delta in [0.1, 0.5, 1.0]:
+    x = rng.normal(size=20_000)
+    for _ in range(2000):
+        x = x + delta / 2 * (-x) + np.sqrt(delta) * rng.normal(size=x.size)   # score = −x
+    print(f"δ={delta}   정상 분산 {x.var():.3f}   공식 1/(1−δ/4) = {1 / (1 - delta / 4):.3f}")
+```
+:::
+
+### C2. 정확한 score로도 단일 scale Langevin은 실패한다
+
+본문의 두 mode 실험(가중치 0.8/0.2, 중심 $\mp5$, $\sigma = 0.3$)을 **학습된 모델 대신 정확한 score**로 다시 한다.
+
+(a) 원점 근처($\mathcal N(0, 0.5^2)$)에서 출발해 noise 없는 데이터의 score로 Langevin을 오래 돌리면, 오른쪽 mode에 가는 비율은?
+(b) noise 수준 $s$ 를 10에서 0.01까지 낮추며 $p_s = $ "데이터 + $\mathcal N(0, s^2)$" 의 정확한 score로 annealed Langevin을 돌리면?
+(c) 본문은 실패 원인으로 "모델 score의 부호가 틀린 구간"을 들었다. 정확한 score에서도 (a)가 실패한다면, 원인이 하나 더 있다는 뜻이다. 무엇인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 약 **49%** 가 오른쪽으로 간다. 참값은 20%다. 정확한 score로도 틀린다.
+
+(b) 약 **21%** 로 참값에 붙는다.
+
+(c) 두 mode가 좁고($\sigma = 0.3$) 멀어서, 원점에서 score가 어느 쪽을 가리키는지는 **아주 좁은 경계**로 갈린다. 두 성분의 log-likelihood 차이는 $x$ 에 대해 $20x/(2\times0.09) \approx 111x$ 로 가파르게 변하므로, 가중치 차이 $\log(0.8/0.2) \approx 1.4$ 가 경계를 $x \approx 0.0125$ 로 밀 뿐이다.
+결국 출발점이 경계의 어느 쪽에 있느냐가 갈 곳을 정하고, 원점 근처에서 대칭으로 출발했으니 거의 반반이 된다. 일단 한 mode에 들어가면 사이의 깊은 골짜기를 건널 수 없어서, 0.8/0.2라는 **가중치 정보가 결과에 반영될 기회가 없다**(mixing 실패).
+annealing은 큰 noise에서 두 mode를 하나로 뭉쳐 놓고 시작한다. 그 상태의 score는 "왼쪽이 더 무겁다"를 넓은 범위에서 알려 주므로 올바른 비율로 갈라진 뒤 다듬어진다.
+본문의 원인(저밀도 영역의 score 오차)과 이 원인(mode 사이를 건너지 못함) 둘 다를 annealing이 함께 해결한다.
+
+```{python}
+#| label: ex-langevin-modes
+
+w, m, sd = np.array([0.8, 0.2]), np.array([-5.0, 5.0]), 0.3
+
+def score(x, s):
+    """데이터 + N(0, s²) 인 mixture 의 정확한 score."""
+    v = sd**2 + s**2
+    logr = np.log(w) - (x[:, None] - m) ** 2 / (2 * v)
+    r = np.exp(logr - logr.max(1, keepdims=True))
+    r /= r.sum(1, keepdims=True)
+    return (r * (-(x[:, None] - m) / v)).sum(1)
+
+x = rng.normal(0, 0.5, 20_000)                             # 원점 근처에서 출발
+for _ in range(5000):
+    x = x + 0.01 / 2 * score(x, 0) + np.sqrt(0.01) * rng.normal(size=x.size)
+print(f"단일 scale (정확한 score)   오른쪽 비율 {np.mean(x > 0):.3f}   (참값 0.200)")
+
+x = rng.normal(0, 10, 20_000)
+for s in np.geomspace(10, 0.01, 50):                       # noise 수준을 큰 것부터
+    delta = 0.1 * s**2 + 1e-4
+    for _ in range(50):
+        x = x + delta / 2 * score(x, s) + np.sqrt(delta) * rng.normal(size=x.size)
+print(f"annealed (정확한 score)     오른쪽 비율 {np.mean(x > 0):.3f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
