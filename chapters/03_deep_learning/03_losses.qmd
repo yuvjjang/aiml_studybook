@@ -864,6 +864,199 @@ $\gamma=0$ 이면 무엇이 되는가? $\gamma=5$ 면 쉬운 샘플의 기여가
 `focal-effect` 로 확인하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. label smoothing이 gradient를 어떻게 바꾸는가
+
+세 class 분류에서 예측이 $p = [0.7,\ 0.2,\ 0.1]$ 이고 정답은 두 번째 class다.
+
+(a) 보통의 cross-entropy에서 loss와 logit gradient $p - y$ 를 구하라.
+(b) $\epsilon = 0.1$ 인 label smoothing 목표 분포를 적고, loss $-\sum_k y_k^{\text{smooth}}\log p_k$ 와 gradient $p - y^{\text{smooth}}$ 를 구하라.
+(c) 세 번째 class의 gradient 부호와 크기가 어떻게 달라졌는지 해석하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) loss $= -\log 0.2 \approx 1.609$, gradient $= [0.7,\ -0.8,\ 0.1]$.
+
+(b) 목표는 정답에 $0.9 + 0.1/3 \approx 0.933$, 나머지에 각각 $0.033$ 이다.
+loss $= -(0.033\log0.7 + 0.933\log0.2 + 0.033\log0.1) \approx 1.591$, gradient $\approx [0.667,\ -0.733,\ 0.067]$.
+
+(c) 세 번째 class의 gradient가 $0.1$ 에서 $0.067$ 로 줄었다. 보통 cross-entropy는 오답 logit을 **0 확률이 될 때까지** 계속 내리라고 하지만, smoothing은 "0.033까지만 내려라"라고 한다.
+그래서 오답의 예측 확률이 0.033 아래로 내려가면 gradient 부호가 **뒤집혀** 오히려 올리라는 신호가 된다. 이것이 본문의 "logit 격차가 유한한 곳에서 멈춘다"의 gradient 쪽 모습이다.
+:::
+
+### A2. 이 상황에는 어떤 loss를?
+
+각 상황에 맞는 loss를 고르고 이유를 한 줄로 적어라.
+
+1. 고객센터의 시간당 전화 건수 예측 (0, 1, 2, … 의 정수, 평균이 작음)
+2. 배달 앱의 "이 시간 안에 90% 확률로 도착" 안내
+3. 피부 사진 1,000장 중 악성 병변이 10장뿐인 이진 분류
+4. 상품 사진과 상품 설명을 짝지어 검색에 쓸 embedding 학습 (class label 없음)
+5. 사람이 붙인 label의 약 15%가 틀린 것으로 알려진 이미지 분류
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. **Poisson loss.** 결과가 셀 수 있는 건수이고 분산이 평균과 함께 커진다. MSE는 음수 예측도 허용하고 잡음 크기를 일정하다고 가정한다(B1).
+2. **quantile loss ($\tau = 0.9$).** 평균이 아니라 90번째 백분위를 예측해야 한다.
+3. **focal loss** 또는 class weight를 준 cross-entropy. 쉬운 음성 990장이 loss를 지배하지 않게 한다(C1).
+4. **InfoNCE.** "이 사진의 짝은 이 설명"이라는 정보만으로 배운다.
+5. **label smoothing을 넣은 cross-entropy**, 또는 MAE 같은 robust loss. cross-entropy의 $1/p$ gradient가 틀린 label에 끌려가는 것을 줄인다(본문 실측 절).
+
+loss를 고르는 질문은 늘 "무엇을 예측하고 싶은가"와 "어떤 실수가 비싼가"다.
+:::
+
+### B1. Poisson loss 유도
+
+결과 $y$ 가 평균 $\lambda$ 인 Poisson 분포를 따른다: $p(y\mid\lambda) = \lambda^y e^{-\lambda}/y!$.
+
+(a) negative log-likelihood가 본문 표의 $\lambda - y\log\lambda$ (상수 제외)임을 보여라.
+(b) 여러 관측의 평균 loss를 최소로 하는 상수 $\lambda$ 가 표본평균임을 보여라.
+(c) 모델이 $\lambda = e^z$ 로 출력할 때(양수를 보장하는 log link) $\partial L/\partial z$ 를 구하라. 어디서 본 모양인가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $-\log p = -y\log\lambda + \lambda + \log y!$ 이고, $\log y!$ 은 $\lambda$ 와 무관한 상수다.
+
+(b) $\frac1N\sum_i(\lambda - y_i\log\lambda)$ 를 미분하면 $1 - \bar y/\lambda = 0$, 즉 $\lambda = \bar y$. 본문 표대로 "조건부 강도", 곧 평균을 추정한다.
+
+(c) $L = e^z - yz$ 이므로 $\partial L/\partial z = e^z - y = \lambda - y$ 다. **예측 − 정답**이다.
+cross-entropy(softmax와 짝)의 $p - y$, logistic regression의 $p - y$, MSE의 $\hat y - y$ 와 같은 모양이다.
+분포에 맞는 짝(link function)을 쓰면 gradient가 늘 이 모양이 되는데, 이 분포들이 모두 exponential family라는 같은 가족에 속하기 때문이다.
+:::
+
+### B2. focal loss의 gradient
+
+이진 분류에서 정답 class의 확률을 $p = \sigma(z)$ 라 하면 focal loss는 $L = -(1 - p)^\gamma\log p$ 다.
+
+(a) $\dfrac{\partial L}{\partial z} = (1-p)^\gamma\big[\gamma\,p\log p - (1 - p)\big]$ 임을 보여라.
+(b) $\gamma = 0$ 이면 cross-entropy의 gradient와 같음을 확인하라.
+(c) $\gamma = 2$ 에서 $p = 0.9$ (쉬운 샘플)와 $p = 0.1$ (어려운 샘플)의 gradient를 cross-entropy와 비교하라.
+
+::: {.callout-tip collapse="true"}
+## 힌트
+
+곱의 미분으로 $\partial L/\partial p$ 를 구한 뒤 $\partial p/\partial z = p(1 - p)$ 를 곱한다.
+:::
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $\dfrac{\partial L}{\partial p} = \gamma(1-p)^{\gamma-1}\log p - \dfrac{(1-p)^\gamma}{p}$. 여기에 $p(1-p)$ 를 곱하면
+
+$$\frac{\partial L}{\partial z} = \gamma\,p(1-p)^\gamma\log p - (1-p)^{\gamma+1} = (1-p)^\gamma\big[\gamma p\log p - (1-p)\big]$$
+
+(b) $\gamma = 0$ 이면 $-(1 - p) = p - 1$ 로, cross-entropy의 "예측 − 정답"이다.
+
+(c)
+
+| $p$ | cross-entropy | focal ($\gamma = 2$) | 비율 |
+|---|---|---|---|
+| 0.9 | $-0.100$ | $-0.0029$ | 0.03배 |
+| 0.1 | $-0.900$ | $-1.102$ | 1.22배 |
+
+쉬운 샘플의 gradient는 30분의 1로 거의 사라진다. 놀랍게도 아주 어려운 샘플의 gradient는 cross-entropy보다 **더 크다** — $\gamma p\log p$ 항이 음수라 신호를 보탠다.
+focal loss는 쉬운 샘플을 깎기만 하는 게 아니라, 학습 신호 전체를 어려운 쪽으로 기울인다.
+:::
+
+### B3. InfoNCE의 출발점과 끝점
+
+batch 크기 $B$ 의 InfoNCE에서 query 하나의 loss는 $L = -\log\dfrac{e^{s_+/\tau}}{\sum_{j=1}^B e^{s_j/\tau}}$ 이다($s_+$ 는 짝과의 유사도, $s_j$ 는 짝을 포함한 모든 후보와의 유사도).
+
+(a) 학습 초기에 모든 유사도가 같다면 $L$ 은 얼마인가?
+(b) $\partial L/\partial s_j$ 를 구하라. cross-entropy의 어떤 결과와 같은가?
+(c) $\tau \to 0$ 일 때, 짝이 모든 negative보다 더 유사한 경우와 어떤 negative가 짝보다 더 유사한 경우 $L$ 은 각각 어떻게 되는가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 모든 항이 같으면 분수는 $1/B$ 이므로 $L = \log B$ 다. "B명 중 무작위로 찍기"의 loss다.
+본문의 "mutual information 하한이 $\log B$ 로 막힌다"는 이 출발점에서 loss를 0까지 줄여 봐야 $\log B$ 만큼만 정보를 얻었다고 말할 수 있다는 뜻이다.
+
+(b) softmax 확률 $q_j = e^{s_j/\tau}/\sum_k e^{s_k/\tau}$ 로 쓰면 $\dfrac{\partial L}{\partial s_j} = \dfrac{1}{\tau}\big(q_j - \mathbb 1[j = +]\big)$ 다.
+[0.4](../00_foundations/04_information_theory.qmd)의 softmax + cross-entropy gradient $q - y$ 에 $1/\tau$ 가 곱해진 것이다. 짝은 끌어당기고(음수), 다른 후보는 자기 확률만큼 밀어낸다.
+
+(c) 짝의 유사도가 가장 크면 $\tau \to 0$ 에서 softmax가 짝에 확률 1을 몰아주어 $L \to 0$ 이다.
+어떤 negative가 짝보다 $\Delta$ 만큼 더 유사하면 $L \approx \Delta/\tau \to \infty$ 다.
+$\tau$ 가 작을수록 "가장 헷갈리는 negative 하나"가 loss를 지배한다 — 본문의 "작은 $\tau$ 는 어려운 negative에 집중한다"가 이것이다.
+:::
+
+### C1. 쉬운 샘플 990개와 어려운 샘플 10개
+
+음성 990개는 모델이 이미 잘 맞혀 정답 확률이 0.95이고, 양성 10개는 정답 확률이 0.3이다.
+
+(a) cross-entropy에서 전체 loss 중 양성 10개가 차지하는 비율은?
+(b) focal loss ($\gamma = 2$)에서는?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 음성 하나 $-\log 0.95 \approx 0.051$, 990개면 약 50.8. 양성 하나 $-\log 0.3 \approx 1.204$, 10개면 약 12.0. 양성의 비율은 **약 19%** 다.
+하나하나는 양성이 23배 크지만, 수가 99배 많은 음성이 전체를 지배한다. gradient도 대부분 이미 잘하는 음성을 더 잘하게 만드는 데 쓰인다.
+
+(b) 음성 하나는 $(0.05)^2 \times 0.051 \approx 0.00013$, 990개면 약 0.13. 양성 하나는 $0.7^2 \times 1.204 \approx 0.59$, 10개면 약 5.9. 양성의 비율은 **약 98%** 다.
+같은 데이터인데 loss의 주인이 뒤집혔다. object detection에서 배경 후보 수만 개 사이의 물체 몇 개를 학습시키려고 focal loss가 나온 이유다.
+
+```{python}
+#| label: ex-focal-share
+
+import numpy as np
+
+n_easy, p_easy = 990, 0.95
+n_hard, p_hard = 10, 0.30
+
+for gamma in [0, 1, 2, 5]:
+    easy = n_easy * (1 - p_easy) ** gamma * -np.log(p_easy)
+    hard = n_hard * (1 - p_hard) ** gamma * -np.log(p_hard)
+    print(f"γ={gamma}   쉬운 990개 {easy:>7.3f}   어려운 10개 {hard:>6.3f}   어려운 쪽 비중 {hard / (easy + hard):.1%}")
+```
+:::
+
+### C2. 무작위 embedding의 InfoNCE
+
+학습 전의 encoder가 무작위 방향의 embedding(128차원 단위벡터)을 낸다고 하자. $\tau = 0.1$ 로 batch 크기 8, 64, 512, 4096에서 InfoNCE를 계산해 B3(a)의 $\log B$ 와 비교하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+모든 batch 크기에서 loss가 $\log B$ 근처에서 시작한다. batch가 클수록 출발점이 높고, 그만큼 줄일 여지(측정할 수 있는 정보)도 크다.
+실측은 $\log B$ 보다 0.4~1 nat 크고, batch가 작을수록 차이가 크다. 무작위 유사도가 완전히 같지 않고 흔들리기 때문이다. $1/\tau = 10$ 배로 증폭된 흔들림 속에서 짝이 평균보다 불리하게 나온 query는 손해를 크게 보고, 유리하게 나온 query는 이득을 덜 본다(로그 안의 합에 대한 Jensen 부등식).
+학습 초반 loss가 $\log B$ 에서 크게 벗어나 있으면 구현을 의심해 볼 만하다 — 유용한 점검 기준이다.
+
+```{python}
+#| label: ex-infonce-random
+
+import numpy as np
+
+rng = np.random.default_rng(0)
+tau, d = 0.1, 128
+
+def unit(n):
+    v = rng.normal(size=(n, d))
+    return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+for B in [8, 64, 512, 4096]:
+    q, k = unit(B), unit(B)                      # i 번째 query 의 짝은 i 번째 key
+    S = q @ k.T / tau
+    S -= S.max(1, keepdims=True)
+    loss = -(np.diag(S) - np.log(np.exp(S).sum(1))).mean()
+    print(f"B={B:>5}   InfoNCE {loss:.3f}   log B {np.log(B):.3f}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
