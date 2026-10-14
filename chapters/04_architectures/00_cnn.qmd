@@ -724,6 +724,115 @@ $3\times3$ conv를 몇 층 쌓아야 receptive field가 $32\times32$ 를 덮는�
 `receptive-field-numbers` 의 공식으로 계산하고 dilation을 쓰면 몇 층이면 되는지 비교하라.
 :::
 
+## 연습 문제
+
+위의 "직접 해보기"가 코드를 고쳐 보며 감을 잡는 과제였다면, 여기서는 종이와 펜으로 푼다.
+문제는 세 종류다.
+
+- **A. 개념 확인** — 정의를 정확히 알고 있는지 확인한다.
+- **B. 유도** — 본문의 공식을 손으로 다시 만들어 본다.
+- **C. 계산** — 숫자로 확인한다. 직접 코드를 짜 봐도 좋다.
+
+풀이는 접혀 있다. 먼저 끝까지 풀어 본 뒤에 펼쳐서 맞춰 보자.
+틀렸거나 막힌 문제는 제목 옆 책갈피 버튼으로 표시해 두면 [북마크](../../bookmarks.qmd) 페이지에서 다시 찾을 수 있다.
+
+### A1. 출력 크기 따라가기
+
+224×224 입력에 다음을 차례로 적용한다. 각 단계의 출력 크기를 본문의 공식으로 구하라.
+
+1. 7×7 convolution, stride 2, padding 3
+2. 3×3 max pooling, stride 2, padding 1
+3. 3×3 convolution, stride 1, dilation 2, padding 2
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+1. $\lfloor(224 + 6 - 6 - 1)/2\rfloor + 1 = 111 + 1 = $ **112**.
+2. $\lfloor(112 + 2 - 2 - 1)/2\rfloor + 1 = 55 + 1 = $ **56**.
+3. $\lfloor(56 + 4 - 2\times2 - 1)/1\rfloor + 1 = $ **56**. 크기 유지 조건 $P = D(K-1)/2 = 2$ 를 만족한다.
+
+1–2는 ResNet의 stem(입구) 구조다. 두 번의 stride 2로 해상도를 4분의 1로 줄여, 비싼 뒤쪽 층들이 56×56에서 일하게 한다.
+:::
+
+### A2. parameter와 연산량
+
+56×56 feature map에서 64 channel을 128 channel로 바꾸는 3×3 convolution(stride 1, padding 1)이 있다.
+
+(a) parameter 수(bias 포함)는?
+(b) 같은 일을 depthwise separable convolution(3×3 depthwise + 1×1 pointwise)으로 하면 weight 수는? 비율을 본문의 $1/C_{\text{out}} + 1/K^2$ 과 비교하라.
+(c) 일반 convolution의 곱셈-덧셈 FLOPs(2 FLOPs로 셈)는?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) $3\times3\times64\times128 + 128 = 73{,}856$.
+
+(b) depthwise $3\times3\times64 = 576$, pointwise $64\times128 = 8{,}192$, 합 8,768 (bias 제외). 비율 $8{,}768/73{,}728 \approx 0.119 = 1/128 + 1/9$ 로 정확히 같다.
+
+(c) 출력 위치 $56^2 = 3{,}136$ 개마다 weight 73,728개를 한 번씩 쓰므로 $2\times73{,}728\times3{,}136 \approx 4.6\times10^8$ FLOPs.
+parameter는 7만 개뿐이지만 연산은 4.6억 번이다. CNN은 parameter를 아끼는 대신 같은 weight를 위치마다 재사용하므로, **parameter 수가 연산량을 말해 주지 않는다.** 모바일 모델이 depthwise separable로 연산을 줄이는 이유다.
+:::
+
+### B1. receptive field를 층별로 쌓기
+
+본문의 점화식 $r_l = r_{l-1} + (k_l - 1)\prod_{i<l}s_i$ ($r_0 = 1$)를 쓴다.
+
+(a) 다음 쌓기의 receptive field를 층마다 구하라: 7×7 conv(stride 2) → 3×3 pool(stride 2) → 3×3 conv(stride 1) 네 개.
+(b) 같은 깊이에서 3×3 conv 네 개를 stride 2로 바꾸면 마지막 receptive field는?
+(c) 마지막 층의 neuron 하나가 원본에서 몇 pixel 간격으로 놓이는가(stride의 곱)? 이것이 "receptive field가 넓다"와 어떻게 다른가?
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+(a) 누적 stride를 $j$ 라 하면
+
+| 층 | $k$ | $s$ | $r$ | $j$ |
+|---|---|---|---|---|
+| 7×7 conv | 7 | 2 | 7 | 2 |
+| 3×3 pool | 3 | 2 | $7 + 2\times2 = 11$ | 4 |
+| 3×3 conv ×4 | 3 | 1 | 19, 27, 35, **43** | 4 |
+
+stride가 멈춘 뒤로는 층마다 $2\times4 = 8$ 씩 선형으로 는다.
+
+(b) stride 2가 계속되면 $j$ 가 8, 16, 32, 64로 늘어나 $r = 11 + 2(4 + 8 + 16 + 32) = 131$ 이다. 같은 층 수로 세 배 넓게 본다.
+
+(c) (a)의 마지막 neuron은 원본에서 4 pixel 간격, (b)는 64 pixel 간격으로 놓인다. receptive field는 "한 neuron이 얼마나 넓게 보는가", 누적 stride는 "neuron들이 얼마나 촘촘히 놓였는가"다.
+(b)는 넓게 보지만 64 pixel보다 작은 위치 차이를 출력에서 구별할 수 없다. 본문의 "stride는 성기게, dilation은 촘촘하게"가 이 두 숫자의 차이다.
+:::
+
+### C1. receptive field를 직접 세기
+
+1차원 convolution 층들을 쌓은 뒤, 마지막 층의 출력 하나에 영향을 주는 입력 위치를 거꾸로 추적해 세어 B1(a)의 43과 같은지 확인하라.
+
+::: {.callout-note collapse="true"}
+## 풀이
+
+출력 위치 $p$ 는 이전 층의 $p\cdot s, \dots, p\cdot s + k - 1$ 을 본다. 이것을 맨 앞까지 거꾸로 펼쳐 닿는 입력 위치의 범위를 재면 정확히 43이다. 점화식이 이 펼침을 한 줄로 쓴 것이다.
+
+```{python}
+#| label: ex-receptive-field
+
+def receptive_field(layers):
+    r, jump = 1, 1
+    for k, s in layers:
+        r += (k - 1) * jump
+        jump *= s
+    return r, jump
+
+def traced(layers):
+    """마지막 층 출력 0 에 영향을 주는 입력 위치를 거꾸로 모은다."""
+    pos = {0}
+    for k, s in reversed(layers):
+        pos = {p * s + m for p in pos for m in range(k)}
+    return max(pos) - min(pos) + 1
+
+for name, layers in [("ResNet 입구 + 3×3 네 층", [(7, 2), (3, 2)] + [(3, 1)] * 4),
+                     ("3×3 네 층을 stride 2 로", [(7, 2), (3, 2)] + [(3, 2)] * 4)]:
+    r, jump = receptive_field(layers)
+    print(f"{name:<24} 점화식 r = {r:>3}   추적 = {traced(layers):>3}   누적 stride = {jump}")
+```
+:::
+
 ## 요약
 
 | 개념 | 핵심 |
