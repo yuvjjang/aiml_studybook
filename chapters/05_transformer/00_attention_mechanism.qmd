@@ -78,6 +78,12 @@ $$Q = XW_Q, \quad K = XW_K, \quad V = XW_V$$
 식을 한 번에 보지 말고 세 단계로 끊어 보자.
 query 위치를 옮겨가며 **점수 → softmax → 가중합**이 실제 숫자로 어떻게 흘러가는지 확인한다.
 
+숫자가 아무 의미 없는 난수이면 막대가 왜 그 높이인지 읽을 수 없다. 그래서 여기서는 $X$, $W_Q$, $W_K$, $W_V$ 를 **손으로 설계**한다. 학습이 잘 끝난 attention head 하나가 이런 모양이라고 가정하는 것이다.
+
+- 각 token의 embedding $X$ 는 두 부분으로 되어 있다. **문법 역할**(주어·시간·수식어·목적어·서술어·어미 중 하나)과 **의미**(사람·과거·빨강·음식·먹기)다.
+- $W_Q$ 와 $W_K$ 는 문법 역할만 읽는다. query는 "어떤 역할의 token을 찾는가", key는 "어떤 역할로 검색되는가"다. 예를 들어 수식어 "빨간"의 query는 꾸밀 명사(목적어)를 찾고, 서술어 "먹었"의 query는 목적어를 강하게, 주어를 약하게 찾는다.
+- $W_V$ 는 의미만 읽는다. 검색이 끝난 뒤 실제로 건네지는 것은 의미다.
+
 ```{python}
 #| label: fig-attention-steps
 #| fig-cap: "query 하나가 value들의 가중 평균을 만들기까지의 세 단계"
@@ -88,14 +94,46 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src import attention, viz
 
-# 작은 예제: token 6개, d_k = 4
-tokens = ["나는", "어제", "빨간", "사과를", "먹었", "다"]
-n, d_k = len(tokens), 4
+tokens   = ["나는", "어제", "빨간", "사과를", "먹었", "다"]
+meanings = ["사람", "과거", "빨강", "음식", "먹기"]
+n = len(tokens)
 
-rng = np.random.default_rng(7)
-Q = rng.normal(size=(n, d_k))
-K = rng.normal(size=(n, d_k))
-V = rng.normal(size=(n, d_k))
+# embedding X = [문법 역할 one-hot | 의미]
+# 역할은 token 순서대로 주어·시간·수식어·목적어·서술어·어미 — 하나씩이라 단위행렬이 된다
+X_role = np.eye(n)
+X_mean = np.array([
+    [1, 0, 0, 0, 0],   # 나는   — 사람
+    [0, 1, 0, 0, 0],   # 어제   — 과거
+    [0, 0, 1, 0, 0],   # 빨간   — 빨강
+    [0, 0, 0, 1, 0],   # 사과를 — 음식
+    [0, 1, 0, 0, 1],   # 먹었   — 과거, 먹기
+    [0, 0, 0, 0, 0],   # 다     — 문장을 끝낼 뿐 의미 없음
+], dtype=float)
+
+# 검색 채널 d_k = 4개: [주어, 목적어, 수식어, 서술어]
+# W_K: "나는 어떤 역할로 검색되는가"
+W_K = 2.0 * np.array([
+    [1, 0, 0,   0  ],   # 주어
+    [0, 0, 0.5, 0  ],   # 시간 — 약한 수식어
+    [0, 0, 1,   0  ],   # 수식어
+    [0, 1, 0,   0  ],   # 목적어
+    [0, 0, 0,   1  ],   # 서술어
+    [0, 0, 0,   0.3],   # 어미 — 약한 서술어
+])
+# W_Q: "나는 어떤 역할의 token 을 찾는가" (음수 = 피한다)
+W_Q = 2.0 * np.array([
+    [-0.5,  0,    0,    1  ],   # 주어   → 서술어
+    [ 0,    0,   -0.5,  1  ],   # 시간   → 서술어
+    [ 0,    1,   -0.5,  0  ],   # 수식어 → 꾸밀 명사(목적어)
+    [ 0,   -0.5,  1,    0  ],   # 목적어 → 자기를 꾸미는 수식어
+    [ 0.6,  1,    0,   -0.5],   # 서술어 → 목적어(강), 주어(약)
+    [ 0,    0,    0,    1  ],   # 어미   → 서술어
+])
+d_k = W_Q.shape[1]
+
+Q = X_role @ W_Q        # Q·K 는 문법 역할만 읽는다
+K = X_role @ W_K
+V = X_mean              # V 는 의미만 읽는다 (W_V = 의미 부분을 그대로 꺼내는 행렬)
 
 scores = Q @ K.T / np.sqrt(d_k)          # 1단계
 weights = attention.softmax(scores)      # 2단계
@@ -113,7 +151,7 @@ fig.add_trace(go.Bar(x=tokens, y=scores[q0], marker_color=viz.ACCENT,
                      name="점수", showlegend=False), row=1, col=1)
 fig.add_trace(go.Bar(x=tokens, y=weights[q0], marker_color=viz.GREEN,
                      name="가중치", showlegend=False), row=1, col=2)
-fig.add_trace(go.Bar(x=[f"d{i}" for i in range(d_k)], y=out[q0],
+fig.add_trace(go.Bar(x=meanings, y=out[q0],
                      marker_color=viz.WARM, name="출력", showlegend=False), row=1, col=3)
 
 steps = []
@@ -151,6 +189,22 @@ fig.show()
 
 ::: {.interaction-hint}
 슬라이더로 query token을 바꿔보세요. ①의 점수는 음수도 가지지만, ②를 지나면 모두 양수가 되고 합이 1이 됩니다.
+:::
+
+query를 "먹었"에 두고 세 패널을 차례로 읽어 보자.
+
+1. **점수.** "먹었"의 query는 목적어와 주어를 찾고, 같은 서술어는 피한다(음수). 그래서 "사과를"이 가장 높고 "나는"이 그다음이며, 자기 자신은 음수다.
+2. **softmax.** 가중치는 "사과를" 약 0.53, "나는" 약 0.24다. 가장 큰 하나만 고르지 않고 나머지에도 조금씩 나눠 준다.
+3. **가중합.** 출력은 "음식" 약 0.53, "사람" 약 0.24다. 동사가 "누가 무엇을" 먹었는지를 자기 표현에 모았다.
+
+"사과를"이 어떻게 쓰였는지 보자. **검색될 때는 "목적어"라는 문법 역할로 찾아지고(Key), 실제로 건넨 것은 "음식"이라는 의미다(Value).** 위의 "그것 → 고양이" 예와 같은 구조다. Key와 Value를 하나의 벡터로 합쳤다면 "목적어"라는 검색 표지가 출력에 섞여 들어갔을 것이다.
+
+"빨간"을 query로 두면 "사과를"을 찾아 출력이 "음식"이 되고, "사과를"을 query로 두면 "빨간"을 찾아 출력이 "빨강"이 된다. 꾸미는 말과 꾸밈을 받는 말이 서로의 의미를 주고받는다.
+
+::: {.callout-note}
+## 실제 모델과 다른 점
+
+여기서는 embedding의 각 성분에 "주어", "음식" 같은 이름을 붙이고 $W$ 를 손으로 정했다. 실제 모델에서는 $W_Q, W_K, W_V$ 를 학습으로 얻고, embedding의 성분 하나하나에는 이렇게 깔끔한 이름이 붙지 않는다. 그래도 학습된 head 중에는 "목적어 → 자기 동사", "한정사(the, a) → 명사"처럼 문법 관계를 따라가는 것들이 실제로 관찰된다(Clark et al., 2019, *What Does BERT Look At?*).
 :::
 
 세 단계를 코드로 쓰면 이게 전부다.
