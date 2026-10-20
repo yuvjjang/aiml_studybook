@@ -390,17 +390,34 @@ import numpy as np
 from src import attention, viz
 
 sent = ["빨간", "사과가", "책상", "위에", "놓여", "있었", "다"]
-n, d_k = len(sent), 16
+# 역할은 token 순서대로 수식어·주어·장소·후치사·동사·보조동사·어미 — 하나씩이다
+n = len(sent)
 
-# 실제 학습된 모델은 아니지만, head가 흔히 배우는 패턴 하나를 재현한다:
-# "이전 token에 주목하되 의미적으로 관련된 token을 더 본다"
-rng = np.random.default_rng(3)
-base = rng.normal(size=(n, d_k)) * 0.5
-Q = base + rng.normal(size=(n, d_k)) * 0.3
-K = base + rng.normal(size=(n, d_k)) * 0.3
-V = rng.normal(size=(n, d_k))
+# 손으로 설계한 head 하나. 검색 채널이 두 종류다.
+#   위치 채널: key 는 "나는 j 번째", query 는 "바로 앞(i−1 번째)을 찾는다"
+#   관계 채널: key 는 "나는 이 역할", query 는 "이 역할을 찾는다" (아래 WANT 표)
+WANT = np.array([
+    # 수식어 주어 장소 후치사 동사 보조동사 어미
+    [0,     1,   0,   0,     0,   0,       0],   # 빨간   → 꾸밀 명사
+    [1,     0,   0,   0,     0.5, 0,       0],   # 사과가 → 자기를 꾸미는 말, 서술어(약)
+    [0,     0,   0,   1,     0,   0,       0],   # 책상   → 뒤에 붙는 후치사
+    [0,     0,   1,   0,     0,   0,       0],   # 위에   → 기준이 되는 장소
+    [0,     1,   0,   0.6,   0,   0,       0],   # 놓여   → 주어(강), 장소 표현(중)
+    [0,     0,   0,   0,     1,   0,       0],   # 있었   → 본동사
+    [0,     0,   0,   0,     0.5, 1,       0],   # 다     → 보조동사, 본동사(약)
+])
+prev = np.eye(n, k=-1)                     # i 행의 i−1 열만 1
 
-_, attn = attention.scaled_dot_product_attention(Q, K, V)
+def head_weights(pos_w, rel_w, a=3.0):
+    K = np.hstack([a * np.eye(n), a * np.eye(n)])          # [위치 | 역할]
+    Q = np.hstack([pos_w * a * prev, rel_w * a * WANT])
+    d_k = Q.shape[1]
+    return attention.softmax(Q @ K.T / np.sqrt(d_k))
+
+modes = {"위치만": head_weights(0.4, 0),
+         "관계만": head_weights(0, 1),
+         "위치 + 관계": head_weights(0.4, 1)}
+attn = modes["위치 + 관계"]
 
 fig = viz.heatmap(
     attn,
@@ -409,17 +426,31 @@ fig = viz.heatmap(
     title="attention 가중치 행렬",
     text=np.round(attn, 2),
     hover="query %{y}<br>key %{x}<br>가중치 %{z:.3f}<extra></extra>",
-    height=470,
+    height=500,
 )
 fig.update_xaxes(tickmode="array", tickvals=list(range(n)), ticktext=sent)
 fig.update_yaxes(tickmode="array", tickvals=list(range(n)), ticktext=sent)
+fig.update_traces(zmin=0, zmax=1)
+fig.update_layout(sliders=[viz.slider(
+    [(name, {"z": [w], "text": [np.round(w, 2)]}) for name, w in modes.items()],
+    prefix="검색 채널 = ", active=2, pad_t=60,
+)])
 viz.annotate_box(fig, f"행 합 = {attn.sum(axis=1)[0]:.3f} (모든 행 동일)", color_=viz.ACCENT)
+fig.update_layout(margin=dict(b=120))
 fig.show()
 ```
 
 ::: {.interaction-hint}
-칸에 마우스를 올리면 정확한 가중치가 나옵니다. **행 방향으로만** 합이 1이라는 점에 주의하세요 — 열 합은 1이 아닙니다.
+칸에 마우스를 올리면 정확한 가중치가 나옵니다. **행 방향으로만** 합이 1이라는 점에 주의하세요 — 열 합은 1이 아닙니다. 슬라이더로 검색 채널을 바꿔보세요.
 :::
+
+G5.0.1처럼 이 head도 손으로 설계했다. 이번에는 query가 두 가지를 동시에 찾는다. **바로 앞 token**(위치 채널)과 **문법적으로 관계있는 token**(관계 채널)이다. 슬라이더로 하나씩 꺼 보면 행렬이 어떻게 만들어지는지 보인다.
+
+- **위치만.** 대각선 바로 아래 한 줄만 밝다. 모든 token이 앞 token을 본다. 첫 token "빨간"은 앞이 없어서 가중치가 모든 칸에 고르게 퍼진다.
+- **관계만.** 밝은 칸이 흩어진다. "빨간 ↔ 사과가", "책상 ↔ 위에"는 서로를 보고, "놓여"는 세 칸 앞의 주어 "사과가"를 찾는다.
+- **위치 + 관계.** 두 채널의 점수가 더해진다. "위에 → 책상", "있었 → 놓여"처럼 앞 token이 곧 관계 대상인 칸은 두 점수가 겹쳐 0.8 넘게 밝아진다. "놓여"는 바로 앞 "위에"(위치)와 멀리 있는 "사과가"(관계)가 0.41씩 비긴다.
+
+점수가 query·key 내적이므로 **채널을 이어 붙이면 점수가 더해진다.** 실제 head도 위치 정보와 내용 정보를 한 벡터에 섞어 쓰고, 그래서 한 head의 map에 여러 패턴이 겹쳐 보인다. 바로 앞 token만 보는 head는 학습된 모델에서 실제로 자주 관찰된다(previous-token head, [12.1](../12_trust/01_mechanistic.qmd)의 induction head를 이루는 부품). 위치 정보가 어떻게 embedding에 들어가는지는 [5.3](03_positional_encoding.qmd)에서 다룬다.
 
 ::: {.callout-warning}
 ## attention map을 "모델의 설명"으로 읽지 말 것
