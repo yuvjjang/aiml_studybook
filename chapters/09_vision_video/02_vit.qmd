@@ -780,16 +780,16 @@ ViT 이후의 흐름은 대체로 **뺐던 bias를 조금씩 되가져오는** �
 ## 직접 해보기
 
 **① patch 수를 손으로 센다**
-`patch-arith` 로 224px 이미지에 patch 16·14·8을 각각 적용하면 token이 몇 개인가?
-attention 비용은 몇 배씩 늘어나는가?
+`patch-arith` 의 patch 크기 목록 `[32, 16, 8]` 에 14를 추가하라. 224px 이미지에서 token이 몇 개인가? 먼저 손으로 계산하라.
+patch를 16에서 14로, 다시 8로 줄일 때 attention 비용은 몇 배씩 늘어나는가?
 
 **② positional embedding을 interpolation한다**
-`pe-interp` 로 224로 학습한 모델을 384로 쓸 때 interpolation 없이 그냥 자르면
-성능이 얼마나 떨어지는가?
+`pe-interp` 는 14×14 격자의 positional embedding을 다른 크기 `m` 으로 interpolation한 뒤, 그 크기에서 직접 만든 embedding과의 cosine 유사도를 잰다.
+목록 `[14, 16, 20, 24, 32]` 에 48과 64를 추가하라. 격자가 커질수록 유사도는 어떻게 되는가? (이 청크는 모델의 정확도가 아니라 embedding이 얼마나 보존되는지를 잰다.)
 
 **③ 교차점을 옮긴다**
-`crossover` 에서 데이터 양을 바꾸며 CNN과 ViT가 역전되는 지점을 찾아라.
-augmentation을 강하게 하면 그 지점이 어디로 이동하는가?
+`crossover` 의 표와 그림에서 weight를 공유하는 모델과 공유하지 않는 모델이 역전되는 학습 표본 수를 읽어라.
+그다음 규칙이 뒤집히는 patch를 `EXC = [0]` 에서 `EXC = [0, 5, 10]` 으로 늘려라. 역전 지점이 어디로 이동하는가? 왜 그런가?
 :::
 
 ## 요약
