@@ -570,6 +570,186 @@ adapter는 층을 추가하므로 그럴 수 없다.
 - 단서 — 이 주장은 "일반 대화"에 대한 것이고, 전문 과제나 안전 alignment에서는 훨씬 많은 데이터가 필요하다
 
 
+## 실제 도구로: PyTorch와 PEFT
+
+지금까지는 NumPy로 직접 만든 LoRA였다. 실제 작업에서는 PyTorch와 Hugging Face의 `peft` library를 쓴다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 대신 따로 돌려서 확인한 것이고, 확인한 환경과 나온 값을 함께 적었다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `peft` 0.21
+- 주석의 숫자는 그 환경에서 실제로 나온 값이다. 버전이나 장비가 다르면 끝자리가 달라질 수 있다.
+
+**표기가 본문과 조금 다르다.** 본문은 행벡터 관례로 $h = xW + x(AB)\frac{\alpha}{r}$ 라 썼고 $A$ 가 $d_{in}\times r$ 였다.
+PyTorch의 `nn.Linear` 는 weight를 $(d_{out}, d_{in})$ 모양으로 저장하므로, 아래에서는 `A` 가 $r\times d_{in}$, `B` 가 $d_{out}\times r$ 이고 갱신량은 `B @ A` 다.
+역할은 같다. **입력에 먼저 닿는 `A` 가 무작위, 나중에 닿는 `B` 가 0이다.**
+
+### ① 층 하나를 직접 만든다
+
+본문의 `LoRA` class를 PyTorch로 옮긴 것이다. backward를 손으로 쓰지 않아도 된다는 점만 다르다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch, torch.nn as nn
+
+
+class LoRALinear(nn.Module):
+    """frozen nn.Linear 위에 low-rank 보정을 얹는다."""
+
+    def __init__(self, base: nn.Linear, r=8, alpha=16):
+        super().__init__()
+        self.base = base
+        for p in base.parameters():
+            p.requires_grad_(False)                    # W, b 는 frozen
+        d_in, d_out = base.in_features, base.out_features
+        self.A = nn.Parameter(torch.randn(r, d_in) / d_in**0.5)   # 무작위
+        self.B = nn.Parameter(torch.zeros(d_out, r))              # 0 에서 출발
+        self.scale = alpha / r
+
+    def forward(self, x):
+        return self.base(x) + self.scale * (x @ self.A.T @ self.B.T)
+
+    @torch.no_grad()
+    def merge(self):
+        """W' = W + (alpha/r) B A 를 한 번 계산해 원래 층에 써넣는다."""
+        self.base.weight += self.scale * (self.B @ self.A)
+        return self.base
+
+
+torch.manual_seed(0)
+d, r = 512, 8
+layer = LoRALinear(nn.Linear(d, d), r=r, alpha=16)
+x = torch.randn(4, d)
+
+# 확인 1 — B = 0 이므로 처음에는 원래 층과 출력이 정확히 같다
+print(torch.equal(layer(x), layer.base(x)))                       # True
+
+# 확인 2 — 학습되는 것은 A, B 뿐이다: 2dr 개
+n_train = sum(p.numel() for p in layer.parameters() if p.requires_grad)
+print(n_train, 2 * d * r, d * d)                                  # 8192 8192 262144
+
+# 확인 3 — 몇 step 학습한 뒤 merge 해도 출력이 같다
+opt = torch.optim.AdamW([p for p in layer.parameters() if p.requires_grad], lr=1e-2)
+target = torch.randn(4, d)
+for _ in range(20):
+    loss = ((layer(x) - target) ** 2).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+before = layer(x)
+merged = layer.merge()                                            # 보통의 nn.Linear
+print((before - merged(x)).abs().max().item())                    # 1.4e-06
+```
+
+세 확인이 본문의 세 주장에 하나씩 대응한다.
+확인 1은 "identity에서 출발한다", 확인 2는 "$d\times d$ 가 $2dr$ 로 줄어든다", 확인 3은 "merge하면 inference 구조가 원본과 같다"이다.
+확인 3의 차이가 정확히 0이 아닌 것은 float32 반올림 때문이다 ([0.5](../00_foundations/05_numerical_computing.qmd)).
+덧셈의 순서가 바뀌었으므로 끝자리가 달라진다.
+
+### ② `peft` 로 실제 모델에 붙인다
+
+같은 일을 library로 한다. 모델은 CPU에서도 돌아가는 `distilgpt2`(약 8,200만 parameter)를 쓴다.
+처음 실행할 때 모델 파일 약 350 MB를 내려받는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import LoraConfig, get_peft_model
+
+torch.manual_seed(0)
+tok = AutoTokenizer.from_pretrained("distilgpt2")
+model = AutoModelForCausalLM.from_pretrained("distilgpt2")
+
+# domain B (새로 맞출 문체) 와 domain A (원래 잘하던 문체) 를 한 문단씩
+text_B = ("Ahoy matey! The ship be sailin' at dawn, arr. "
+          "Hoist the sails and mind the riggin', ye scurvy dogs. ")
+text_A = ("The meeting will be held on Monday morning. "
+          "Please send the report to the manager before the end of the week. ")
+
+
+def loss_on(m, text):
+    ids = tok(text, return_tensors="pt").input_ids
+    m.eval()
+    with torch.no_grad():
+        return m(input_ids=ids, labels=ids).loss.item()    # token당 평균 cross-entropy (nat)
+
+
+B0, A0 = loss_on(model, text_B), loss_on(model, text_A)
+ids_A = tok(text_A, return_tensors="pt").input_ids
+with torch.no_grad():
+    logits0 = model(input_ids=ids_A).logits
+
+cfg = LoraConfig(
+    r=8, lora_alpha=16, lora_dropout=0.05,
+    target_modules=["c_attn"],      # GPT-2 에서 Q·K·V 를 한꺼번에 만드는 층
+    fan_in_fan_out=True,            # GPT-2 의 Conv1D 는 weight 를 (in, out) 으로 저장한다
+    task_type="CAUSAL_LM",
+)
+model = get_peft_model(model, cfg)
+model.print_trainable_parameters()
+# trainable params: 147,456 || all params: 82,060,032 || trainable%: 0.1797
+
+# 확인 1 — adapter 를 붙인 직후의 출력은 원래 모델과 같다
+model.eval()
+with torch.no_grad():
+    print((model(input_ids=ids_A).logits - logits0).abs().max().item())     # 0.0
+
+# 학습 — optimizer 에는 requires_grad 인 것(LoRA)만 넣는다
+opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=5e-4)
+ids_B = tok(text_B, return_tensors="pt").input_ids
+model.train()
+for step in range(30):
+    loss = model(input_ids=ids_B, labels=ids_B).loss
+    opt.zero_grad(); loss.backward(); opt.step()
+
+B1, A1 = loss_on(model, text_B), loss_on(model, text_A)
+print(f"B loss {B0:.3f} -> {B1:.3f}   A loss {A0:.3f} -> {A1:.3f}")
+# B loss 5.964 -> 2.717   A loss 3.373 -> 3.294
+
+# 확인 2 — merge 하면 adapter 가 사라지고 원래 구조로 돌아간다
+with torch.no_grad():
+    logits_lora = model(input_ids=ids_A).logits
+merged = model.merge_and_unload()
+with torch.no_grad():
+    print((merged(input_ids=ids_A).logits - logits_lora).abs().max().item())    # 1.4e-04
+print(type(merged).__name__, sum(p.numel() for p in merged.parameters()))
+# GPT2LMHeadModel 81912576
+```
+
+**숫자를 손으로 맞춰 본다.** `c_attn` 은 $768 \to 2304$ 인 층이고 `distilgpt2` 는 6층이다.
+LoRA parameter는 층마다 $r(d_{in} + d_{out}) = 8\times(768 + 2304) = 24{,}576$ 개, 6층이면 $147{,}456$ 개다. 출력과 일치한다.
+merge 뒤의 parameter 수 81,912,576은 원래 모델과 같다. adapter가 weight 안으로 들어가 사라진 것이다.
+
+**이 코드가 보여 주지 못하는 것.**
+B loss가 5.96에서 2.72로 내려간 것은 **학습에 쓴 바로 그 문단**의 loss다. 한 문단을 30번 본 것이므로 외운 것에 가깝고, 새 문장에서도 좋아졌다는 뜻이 아니다.
+A loss가 나빠지지 않았다고 해서 "LoRA는 잊지 않는다"고 읽어서도 안 된다. 문단 하나, 30 step으로는 망각을 잴 수 없다.
+본문 G7.6.2처럼 **학습에 쓰지 않은 데이터로, 여러 rank와 learning rate에서** 재야 비교가 된다.
+이 블록의 목적은 API의 모양과 세 가지 불변 성질(parameter 수, 출발점, merge)을 확인하는 데까지다.
+
+### ③ QLoRA 설정 (여기서는 확인하지 못했다)
+
+frozen weight를 4 bit로 올리는 설정이다. `bitsandbytes` 가 CUDA GPU를 요구해서 **이 책을 쓴 환경(CPU)에서는 돌려 보지 못했다.**
+인자 이름은 library 문서의 것이지만, 직접 쓸 때는 설치된 버전의 문서와 대조하기 바란다.
+
+```python
+# 실행하지 않는 참고 코드 — CUDA GPU 필요. 이 책의 환경에서는 실행해 확인하지 못했다
+import torch
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+bnb = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",               # 본문의 NF4
+    bnb_4bit_use_double_quant=True,          # 본문의 double quantization
+    bnb_4bit_compute_dtype=torch.bfloat16,   # 저장은 4 bit, 계산은 bf16
+)
+model = AutoModelForCausalLM.from_pretrained("<모델 이름>", quantization_config=bnb, device_map="auto")
+model = prepare_model_for_kbit_training(model)
+model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, target_modules="all-linear",
+                                         task_type="CAUSAL_LM"))
+```
+
+merge에서 ②와 다른 점이 하나 있다. weight가 4 bit로 저장되어 있으므로, adapter를 더한 결과를 다시 4 bit로 반올림하면 출력이 조금 달라진다.
+반올림 없이 merge하려면 원래 정밀도의 weight를 다시 불러와 거기에 더한다.
+
 ---
 
 ::: {.callout-tip}
@@ -586,6 +766,10 @@ $\Delta W$ 의 effective rank와 상위 4개 설명 비율이 어떻게 변하�
 **③ α/r scale을 고정한다**
 LoRA의 $\alpha$ 를 바꾸면 사실상 learning rate를 바꾸는 것이다.
 $\alpha/r$ 를 고정하고 $r$ 만 바꾼 실험과, $\alpha$ 를 고정한 실험을 비교하라.
+**④ 실제 도구로: rank를 바꿔 parameter 수를 예측한다**
+"실제 도구로" ②에서 `r=8` 을 `r=32` 로, `target_modules` 를 `["c_attn", "c_proj"]` 로 바꾸면
+학습 parameter는 몇 개가 되는가? 먼저 손으로 계산하고 `print_trainable_parameters()` 로 확인하라.
+(`c_proj` 라는 이름의 층은 attention과 MLP 양쪽에 있고, 모양이 서로 다르다.)
 :::
 
 ## 연습 문제
@@ -661,7 +845,7 @@ LoRA는 $W = W_0 + \frac{\alpha}{r}BA$ 로 쓰고, $A$ 는 무작위, $B = 0$ �
 ::: {.callout-note collapse="true"}
 ## 풀이
 
-$r = 4$ 에서 상대 오차가 잡음 수준까지 뚝 떨어지고, 그 이상 키워도 거의 줄지 않는다(남는 것은 잡음뿐). SVD의 상위 $r$ 개 성분이 Frobenius 오차를 최소로 하는 rank-$r$ 근사라는 사실(Eckart–Young)이 LoRA의 이론적 바탕이다. 본문 G7.6.1이 실제 갱신의 effective rank가 낮다는 것을 보였고, 그 경우 작은 $r$ 로 충분하다.
+$r = 4$ 에서 상대 오차가 잡음 수준까지 뚝 떨어지고, 그 이상 키워도 거의 줄지 않는다(남는 것은 잡음뿐). SVD의 상위 $r$ 개 성분이 Frobenius 오차를 최소로 하는 rank-$r$ 근사라는 사실(Eckart–Young)이, "갱신이 low-rank라면 작은 $r$ 로 충분하다"는 직관의 근거다. 다만 두 가지를 구분해야 한다. 첫째, 본문 G7.6.1에서 본 실제 갱신은 이 문제처럼 깨끗한 low-rank가 아니었다. effective rank는 무작위보다 낮았지만 상위 4개 성분이 설명하는 비율은 작았다. 둘째, LoRA는 $\Delta W$ 의 최선 근사를 SVD로 구해 쓰는 것이 아니라 $A$, $B$ 를 gradient로 학습한다. 그래서 LoRA가 작동하는 이유는 $\Delta W$ 를 재현해서가 아니라, 다른 경로로 비슷한 성능에 도달해서다.
 
 ```{python}
 #| label: ex-lowrank-update
