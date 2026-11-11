@@ -154,19 +154,24 @@ XT = [feats(x) for x, _, _ in TRAIN]
 YT = [frame_labels(l) for _, l, _ in TRAIN]
 XE = [feats(x) for x, _, _ in TEST]
 YE = [frame_labels(l) for _, l, _ in TEST]
+```
 
-print(f"corpus: 학습 {len(TRAIN)} 발화 / test {len(TEST)} 발화, "
-      f"발화당 단어 4개")
+corpus: 학습 `{python} f'{len(TRAIN)}'` 발화 / test `{python} f'{len(TEST)}'` 발화, 발화당 단어 4개
+
+```{python}
+#| label: corpus-2
+#| code-fold: false
+
 print(f"  phoneme {len(PHONES)}종: {' '.join(PHONES)}  "
       f"(모음 5, fricative 3, 묵음 1)")
-print(f"  vocabulary {len(WORDS)}개, pronunciation lexicon으로 phoneme열에 대응")
-print(f"  학습 frame {sum(y.size for y in YT):,}, "
-      f"test frame {sum(y.size for y in YE):,}, feature 차원 {XT[0].shape[0]}")
-print()
-print("**정답을 세 층위에서 알고 있다** — 단어열, phoneme열, 그리고 phoneme 경계.")
-print("  실제 corpus에서 마지막 것을 얻으려면 사람이 손으로 표시해야 한다.")
-print("  그것이 불가능해서 나온 것이 아래의 **forced alignment**다.")
 ```
+
+vocabulary `{python} f'{len(WORDS)}'`개, pronunciation lexicon으로 phoneme열에 대응
+학습 frame `{python} f'{sum((y.size for y in YT)):,}'`, test frame `{python} f'{sum((y.size for y in YE)):,}'`, feature 차원 `{python} f'{XT[0].shape[0]}'`
+
+**정답을 세 층위에서 알고 있다** — 단어열, phoneme열, 그리고 phoneme 경계.  
+실제 corpus에서 마지막 것을 얻으려면 사람이 손으로 표시해야 한다.  
+그것이 불가능해서 나온 것이 아래의 **forced alignment**다.
 
 ---
 
@@ -204,6 +209,11 @@ self-transition(자기 전이) 확률 $p$면 지속 시간이 geometric distribu
 (실제 phoneme 길이는 geometric distribution이 아니다 — HMM의 알려진 약점이다.)
 
 emission $b_j$는 **GMM**(Gaussian mixture model — 가우시안 여러 개를 섞은 분포)으로 둔다. 여기서는 **diagonal covariance(대각 공분산) 가우시안 하나**로 시작한다.
+
+phoneme당 state 3개, 좌→우 transition만 허용
+전체 state 수 = `{python} f'{len(PHONES)}'` phoneme x `{python} f'{NS}'` = `{python} f'{NST}'`
+
+self-transition 확률과 기대 지속 시간 (frame 10 ms 기준)
 
 ```{python}
 #| label: hmm-basics
@@ -269,23 +279,17 @@ def viterbi_linear(B, seq):
     return np.array([seq[p] for p in path])
 
 
-print("phoneme당 state 3개, 좌→우 transition만 허용")
-print(f"  전체 state 수 = {len(PHONES)} phoneme x {NS} = {NST}")
-print()
-print("self-transition 확률과 기대 지속 시간 (frame 10 ms 기준)")
 print(f"{'a_jj':>8} {'기대 지속(frame)':>18} {'ms':>10}")
 print("-" * 40)
 for p in [0.5, 0.7, 0.9, 0.95]:
     print(f"{p:>8.2f} {1/(1-p):>18.1f} {1/(1-p)*10:>10.0f}")
-print()
 lens = [n/SR*1000 for _, labs, _ in TRAIN for p, n in labs if p != "_"]
-print(f"이 corpus의 실제 phoneme 길이: 평균 {np.mean(lens):.0f} ms, "
-      f"표준편차 {np.std(lens):.0f} ms")
-print(f"  geometric distribution이라면 표준편차가 평균과 비슷해야 한다 "
-       f"({np.mean(lens):.0f} ms).")
-print("  **실제로는 훨씬 좁다** — HMM의 지속 시간 모형이 틀렸다는 뜻이다.")
-print("  state를 여러 개 직렬로 쌓는 것이 이 결함을 부분적으로 메운다.")
 ```
+
+이 corpus의 실제 phoneme 길이: 평균 `{python} f'{np.mean(lens):.0f}'` ms, 표준편차 `{python} f'{np.std(lens):.0f}'` ms
+geometric distribution이라면 표준편차가 평균과 비슷해야 한다 (`{python} f'{np.mean(lens):.0f}'` ms).  
+**실제로는 훨씬 좁다** — HMM의 지속 시간 모형이 틀렸다는 뜻이다.  
+state를 여러 개 직렬로 쌓는 것이 이 결함을 부분적으로 메운다.
 
 ---
 
@@ -302,6 +306,8 @@ print("  state를 여러 개 직렬로 쌓는 것이 이 결함을 부분적으�
 2. 그 배정으로 가우시안을 추정한다
 3. 그 가우시안으로 **Viterbi forced alignment**(forced alignment — 정답 phoneme열을 알고 있을 때, 각 frame이 어느 phoneme인지 최적으로 맞추는 것)를 다시 한다
 4. 2~3을 반복한다 — 이것이 **embedded re-estimation**(임베디드 재학습)이다
+
+flat start에서 시작해 alignment와 재추정을 번갈아 한다
 
 ```{python}
 #| label: alignment
@@ -330,8 +336,6 @@ def boundary_err(pred_states, y):
 
 Xa = np.concatenate(XT, axis=1)
 ST = [flat_start(y) for y in YT]
-print("flat start에서 시작해 alignment와 재추정을 번갈아 한다")
-print()
 print(f"{'단계':>8} {'경계 평균오차(frame)':>20} {'ms':>8} "
       f"{'test frame 정확도':>20}")
 print("-" * 60)
@@ -352,26 +356,24 @@ for it in range(5):
     print(f"{it+1:>8} {err:>20.2f} {err*10:>8.1f} {acc:>20.4f}")
     ST = aligns
 mus, covs = fit_gauss(Xa, np.concatenate(ST))
-print()
-print(f"**한 번의 재alignment로 경계 오차가 {ALIGN[0][1]*10:.1f} ms → "
-      f"{ALIGN[1][1]*10:.1f} ms로 떨어진다** "
-      f"({ALIGN[0][1]/ALIGN[1][1]:.1f}배).")
-print("  경계를 하나도 알려주지 않았는데 frame 하나 이내로 맞춘다.")
-print()
-print("**그 뒤로는 거의 나아지지 않는다.**")
-print(f"  반복 2~5에서 {ALIGN[2][1]*10:.1f}~{ALIGN[-1][1]*10:.1f} ms로 "
-      "오히려 조금씩 나빠진다.")
-print("  합성 데이터라 애초에 경계가 선명해서 고칠 것이 없기 때문이다.")
-print("  실제 음성에서는 여러 번 반복하며 계속 좋아진다.")
-print()
-print("**forced alignment는 지금도 쓰인다.**")
-for s in ["TTS 학습 데이터의 phoneme 지속 시간 label (8.7)",
-          "**Montreal Forced Aligner** 등이 여전히 HMM-GMM 기반이다",
-          "pronunciation lexicon 검증 — alignment 점수가 낮으면 transcription이 틀렸을 가능성",
-          "자막 동기화, 노래 가사 alignment",
-          "end-to-end 모델의 학습 데이터를 만들 때도 쓴다"]:
-    print(f"  · {s}")
 ```
+
+**한 번의 재alignment로 경계 오차가 `{python} f'{ALIGN[0][1] * 10:.1f}'` ms → `{python} f'{ALIGN[1][1] * 10:.1f}'` ms로 떨어진다** (`{python} f'{ALIGN[0][1] / ALIGN[1][1]:.1f}'`배).  
+경계를 하나도 알려주지 않았는데 frame 하나 이내로 맞춘다.
+
+**그 뒤로는 거의 나아지지 않는다.**
+
+반복 2\~5에서 `{python} f'{ALIGN[2][1] * 10:.1f}'`\~`{python} f'{ALIGN[-1][1] * 10:.1f}'` ms로 오히려 조금씩 나빠진다.  
+합성 데이터라 애초에 경계가 선명해서 고칠 것이 없기 때문이다.  
+실제 음성에서는 여러 번 반복하며 계속 좋아진다.
+
+**forced alignment는 지금도 쓰인다.**
+
+- TTS 학습 데이터의 phoneme 지속 시간 label (8.7)
+- **Montreal Forced Aligner** 등이 여전히 HMM-GMM 기반이다
+- pronunciation lexicon 검증 — alignment 점수가 낮으면 transcription이 틀렸을 가능성
+- 자막 동기화, 노래 가사 alignment
+- end-to-end 모델의 학습 데이터를 만들 때도 쓴다
 
 ---
 
@@ -419,31 +421,33 @@ for kind in ["logmel", "mfcc"]:
     DCTRES[kind] = (float(np.mean(rs)), accs[0], accs[1])
     print(f"{kind:<10} {Xa26.shape[0]:>5} {np.mean(rs):>14.3f} "
           f"{accs[0]:>12.4f} {accs[1]:>12.4f}")
-print()
 lm_, mf_ = DCTRES["logmel"], DCTRES["mfcc"]
-print("**① full covariance에서는 두 표현이 정확히 같다** "
-      f"({lm_[2]:.4f} vs {mf_[2]:.4f}).")
-print("  당연하다 — DCT는 orthogonal rotation이고 가우시안은 회전에 equivariant(등변 — 입력을 돌리면 출력도 똑같이 돌아갈 뿐)다.")
-print("  이 일치가 실험 설계가 옳다는 확인이 된다.")
-print()
-print(f"**② DCT는 실제로 decorrelation시킨다** — class 내 |r| "
-      f"{lm_[0]:.3f} → {mf_[0]:.3f}.")
-print("  8.2에서 잰 것과 같은 현상이다.")
-print()
-print(f"**③ 그런데 diagonal covariance 정확도는 오히려 log-mel이 높다** "
-      f"({lm_[1]:.4f} vs {mf_[1]:.4f}).")
-print("  **8.2에서 예상한 방향과 반대다.** 그대로 보고한다.")
-print()
-print("왜 이런가 — 이 실험이 재현하지 못하는 조건들")
-for s in ["여기는 phoneme 9개이고 서로 매우 다르다. covariance 모형이 병목이 아니다",
-          "실제 system은 **수만 개의 묶인 state**에 state당 **수십 개 mixture**를 쓴다",
-          "  그 규모에서는 parameter 수가 곧 성능이고, decorrelation의 값어치가 커진다",
-          "합성 음성이라 화자·coarticulation에 의한 **class 내 변이가 거의 없다**",
-          "  decorrelation이 중요해지는 것은 바로 그 변이가 클 때다"]:
-    print(f"  · {s}")
-print()
-print("**여기서 강하게 재현되는 것은 다른 사실이다** — 학습 데이터가 적을 때.")
-print()
+```
+
+**① full covariance에서는 두 표현이 정확히 같다** (`{python} f'{lm_[2]:.4f}'` vs `{python} f'{mf_[2]:.4f}'`).  
+당연하다 — DCT는 orthogonal rotation이고 가우시안은 회전에 equivariant(등변 — 입력을 돌리면 출력도 똑같이 돌아갈 뿐)다.  
+이 일치가 실험 설계가 옳다는 확인이 된다.
+
+**② DCT는 실제로 decorrelation시킨다** — class 내 |r| `{python} f'{lm_[0]:.3f}'` → `{python} f'{mf_[0]:.3f}'`.  
+8.2에서 잰 것과 같은 현상이다.
+
+**③ 그런데 diagonal covariance 정확도는 오히려 log-mel이 높다** (`{python} f'{lm_[1]:.4f}'` vs `{python} f'{mf_[1]:.4f}'`).  
+**8.2에서 예상한 방향과 반대다.** 그대로 보고한다.
+
+왜 이런가 — 이 실험이 재현하지 못하는 조건들
+
+- 여기는 phoneme 9개이고 서로 매우 다르다. covariance 모형이 병목이 아니다
+- 실제 system은 **수만 개의 묶인 state**에 state당 **수십 개 mixture**를 쓴다
+- 그 규모에서는 parameter 수가 곧 성능이고, decorrelation의 값어치가 커진다
+- 합성 음성이라 화자·coarticulation에 의한 **class 내 변이가 거의 없다**
+- decorrelation이 중요해지는 것은 바로 그 변이가 클 때다
+
+**여기서 강하게 재현되는 것은 다른 사실이다** — 학습 데이터가 적을 때.
+
+```{python}
+#| label: dct-test-2
+#| code-fold: false
+
 print(f"{'학습 발화':>10} {'diagonal cov':>12} {'full cov':>12} {'차이':>10}")
 print("-" * 48)
 for ntr in [50, 20, 8]:
@@ -455,13 +459,14 @@ for ntr in [50, 20, 8]:
         m, c = fit_gauss(Xs, ys, len(PHONES), diag)
         r.append(float((loglik(Xb26, m, c).argmax(0) == yb).mean()))
     print(f"{ntr:>10} {r[0]:>12.4f} {r[1]:>12.4f} {r[0]-r[1]:>+10.4f}")
-print()
-print("**데이터가 줄수록 diagonal covariance가 유리해진다.**")
-print(f"  26차원이면 full covariance는 state마다 {26*27//2}개 parameter,")
-print(f"  diagonal이면 {26}개다. {26*27//2/26:.0f}배 차이다.")
-print("  **이것이 diagonal covariance를 쓴 진짜 이유다** — 추정 분산을 줄이려고.")
-print("  DCT는 그 제약을 덜 아프게 만들기 위한 보조 장치였다.")
 ```
+
+**데이터가 줄수록 diagonal covariance가 유리해진다.**
+
+26차원이면 full covariance는 state마다 `{python} f'{26 * 27 // 2}'`개 parameter,
+diagonal이면 `{python} f'{26}'`개다. `{python} f'{26 * 27 // 2 / 26:.0f}'`배 차이다.  
+**이것이 diagonal covariance를 쓴 진짜 이유다** — 추정 분산을 줄이려고.  
+DCT는 그 제약을 덜 아프게 만들기 위한 보조 장치였다.
 
 ---
 
@@ -543,25 +548,39 @@ for lmw, tag in [(0.0, "phoneme loop Viterbi"), (3.0, "  + phoneme bigram x3")]:
                         for o, y in zip(outs, YE)]))
     DEC.append((tag, fv, pv))
     print(f"{tag:<30} {fv:>14.4f} {pv:>18.4f}")
-print()
 d0, d1, d2 = DEC
-print("**여기서 두 지표가 반대로 움직인다.**")
-print(f"  frame 정확도: {d0[1]:.4f} → {d1[1]:.4f} — **떨어진다**")
+```
+
+**여기서 두 지표가 반대로 움직인다.**
+
+frame 정확도: `{python} f'{d0[1]:.4f}'` → `{python} f'{d1[1]:.4f}'` — **떨어진다**
+
+```{python}
+#| label: decode-phone-2
+#| code-fold: false
+
 print(f"  phoneme 오류율:   {d0[2]:.4f} → {d1[2]:.4f} — "
       f"**{d0[2]/max(d1[2],1e-9):.1f}배 좋아진다**")
-print()
-print("Viterbi는 개별 frame을 조금 희생하고 **경로 전체**를 맞춘다.")
-print("  frame argmax는 짧게 깜빡이는 오류를 내는데 (한 frame만 다른 phoneme으로 튄다),")
-print("  그 하나가 phoneme열에 insertion 오류를 만든다 — sequence 지표에서는 훨씬 비싸다.")
-print()
-print(f"**phoneme bigram(직전 phoneme이 주어졌을 때 다음 phoneme의 확률)을 더하면 PER이 {d2[2]:.4f}가 된다.**")
+```
+
+Viterbi는 개별 frame을 조금 희생하고 **경로 전체**를 맞춘다.  
+frame argmax는 짧게 깜빡이는 오류를 내는데 (한 frame만 다른 phoneme으로 튄다),
+그 하나가 phoneme열에 insertion 오류를 만든다 — sequence 지표에서는 훨씬 비싸다.
+
+**phoneme bigram(직전 phoneme이 주어졌을 때 다음 phoneme의 확률)을 더하면 PER이 `{python} f'{d2[2]:.4f}'`가 된다.**
+
+```{python}
+#| label: decode-phone-3
+#| code-fold: false
+
 if d2[2] == 0:
     print("  이 corpus에서는 완벽하다. pronunciation lexicon이 phoneme 연쇄를 강하게 제약하기 때문이다.")
-print()
-print("**교훈: 최적화하는 지표와 보고하는 지표를 혼동하지 말 것.**")
-print("  frame 정확도가 올라도 WER이 나빠질 수 있고, 그 반대도 마찬가지다.")
-print("  [8.4](04_ctc_rnnt.qmd)의 CTC는 아예 **sequence 확률을 직접** 최적화한다.")
 ```
+
+**교훈: 최적화하는 지표와 보고하는 지표를 혼동하지 말 것.**
+
+frame 정확도가 올라도 WER이 나빠질 수 있고, 그 반대도 마찬가지다.  
+[8.4](04_ctc_rnnt.qmd)의 CTC는 아예 **sequence 확률을 직접** 최적화한다.
 
 ---
 
@@ -656,13 +675,17 @@ def wer_ops(ref, hyp):
             S[2] += 1
             j -= 1
     return S
+```
 
+단어 network: node `{python} f'{N_NODE}'`개 (단어 `{python} f'{len(WORDS)}'`개를 phoneme·state로 펼침)
 
-print(f"단어 network: node {N_NODE}개 (단어 {len(WORDS)}개를 phoneme·state로 펼침)")
-print()
-print("WER(word error rate) = (substitution + deletion + insertion) / 참조 단어 수")
-print("  substitution(치환) = 다른 단어로 잘못 들음, deletion(삭제) = 단어를 빠뜨림, insertion(삽입) = 없는 단어를 끼워 넣음")
-print()
+WER(word error rate) = (substitution + deletion + insertion) / 참조 단어 수
+substitution(치환) = 다른 단어로 잘못 들음, deletion(삭제) = 단어를 빠뜨림, insertion(삽입) = 없는 단어를 끼워 넣음
+
+```{python}
+#| label: decode-word-2
+#| code-fold: false
+
 print(f"{'평가 조건':<22} {'WER':>9} {'substitution':>7} {'deletion':>7} {'insertion':>7}")
 print("-" * 58)
 WER = []
@@ -677,19 +700,26 @@ for tag, sg in [("학습과 같은 조건", 0.01), ("noise 추가 (σ=0.10)", 0.
     WER.append((tag, float(tot.sum()/nref), tot.copy()))
     print(f"{tag:<22} {tot.sum()/nref:>9.4f} {int(tot[0]):>7} "
           f"{int(tot[1]):>7} {int(tot[2]):>7}")
-print()
-print(f"**학습과 같은 조건에서는 WER {WER[0][1]:.4f}다.**")
-print("  pronunciation lexicon + 단어 bigram이 탐색 공간을 강하게 좁히기 때문이다.")
-print()
-print(f"**그런데 noise를 조금만 더하면 {WER[1][1]:.2f}로 무너진다.**")
-print(f"  오류가 거의 전부 **deletion**이다 ({int(WER[1][2][1])}개) — "
-      "단어를 못 찾고 통째로 빠뜨린다.")
-print()
-print("원인을 본다 — noise가 각 phoneme의 **자기 frame**에서 likelihood(우도 — 그 state가 이 소리를 낼 확률)를 얼마나 바꾸는가")
 gn = np.random.default_rng(5)
 num = np.zeros(len(PHONES))
 den = np.zeros(len(PHONES))
 top_wrong = collections.Counter()
+```
+
+**학습과 같은 조건에서는 WER `{python} f'{WER[0][1]:.4f}'`다.**
+
+pronunciation lexicon + 단어 bigram이 탐색 공간을 강하게 좁히기 때문이다.
+
+**그런데 noise를 조금만 더하면 `{python} f'{WER[1][1]:.2f}'`로 무너진다.**
+
+오류가 거의 전부 **deletion**이다 (`{python} f'{int(WER[1][2][1])}'`개) — 단어를 못 찾고 통째로 빠뜨린다.
+
+원인을 본다 — noise가 각 phoneme의 **자기 frame**에서 likelihood(우도 — 그 state가 이 소리를 낼 확률)를 얼마나 바꾸는가
+
+```{python}
+#| label: decode-word-3
+#| code-fold: false
+
 for (x, labs, _), y in zip(TEST[:12], YE[:12]):
     Bc = loglik(feats(x), mus, covs)
     Bn = loglik(feats(x + gn.normal(0, 0.10, len(x))), mus, covs)
@@ -710,28 +740,32 @@ print("-" * 48)
 for pi in order:
     if den[pi] > 0:
         print(f"{PHONES[pi]:>7} {shift[pi]:>32.1f} {int(den[pi]):>10}")
-print()
-print("가장 흔한 frame 혼동 (noise σ=0.10)")
+```
+
+가장 흔한 frame 혼동 (noise σ=0.10)
+
+```{python}
+#| label: decode-word-4
+#| code-fold: false
+
 print(f"{'참 → 예측':>14} {'횟수':>8}")
 print("-" * 26)
 for (a, b), c in top_wrong.most_common(5):
     print(f"{a + ' → ' + b:>14} {c:>8}")
-print()
 worst = PHONES[int(order[0])]
-print(f"**모든 phoneme의 likelihood가 크게 흔들린다** (최대 {shift[order[0]]:.0f}, "
-      f"최소 {shift[order[-1]]:.0f}).")
-print("  절대 likelihood가 무너지면 Viterbi는 **가장 덜 나쁜 경로**를 고르는데,")
-print("  단어 network에서 그것은 대개 '단어를 적게 지나는 경로'다 — 그래서 deletion이다.")
-print()
-print("**학습·평가 조건이 어긋나면 우아하게 나빠지지 않는다 — 무너진다.**")
-for s in ["가우시안은 학습 때 본 분포 밖에서 **어떤 보정도 하지 않는다**",
-          "**likelihood의 절대값이 무너지면 경로 비교 자체가 의미를 잃는다**",
-          "그래서 고전 system은 조건마다 **따로 학습**하는 것이 상식이었다",
-          "완화책: multi-condition 학습, feature normalization(CMVN, 8.2), noise adaptation(MLLR)",
-          "**Whisper가 공격한 것이 바로 이 취약성이다** (8.6) — "
-          "다양한 조건을 대량으로 학습해 버렸다"]:
-    print(f"  · {s}")
 ```
+
+**모든 phoneme의 likelihood가 크게 흔들린다** (최대 `{python} f'{shift[order[0]]:.0f}'`, 최소 `{python} f'{shift[order[-1]]:.0f}'`).  
+절대 likelihood가 무너지면 Viterbi는 **가장 덜 나쁜 경로**를 고르는데,
+단어 network에서 그것은 대개 '단어를 적게 지나는 경로'다 — 그래서 deletion이다.
+
+**학습·평가 조건이 어긋나면 우아하게 나빠지지 않는다 — 무너진다.**
+
+- 가우시안은 학습 때 본 분포 밖에서 **어떤 보정도 하지 않는다**
+- **likelihood의 절대값이 무너지면 경로 비교 자체가 의미를 잃는다**
+- 그래서 고전 system은 조건마다 **따로 학습**하는 것이 상식이었다
+- 완화책: multi-condition 학습, feature normalization(CMVN, 8.2), noise adaptation(MLLR)
+- **Whisper가 공격한 것이 바로 이 취약성이다** (8.6) — 다양한 조건을 대량으로 학습해 버렸다
 
 ::: {.callout-note}
 ## WER을 읽는 법
@@ -777,41 +811,47 @@ print("-" * 50)
 print(f"{'monophone':<22} {P:>12,} {P*NS:>12,}")
 print(f"{'triphone (가능한 전부)':<22} {P**3:>12,} {P**3*NS:>12,}")
 print(f"{'triphone (학습에서 관측)':<22} {len(seen):>12,} {len(seen)*NS:>12,}")
-print()
 rare = sum(1 for v in seen.values() if v < 5)
-print(f"**가능한 triphone의 {len(seen)/P**3:.1%}만 학습에서 나타났다.**")
-print(f"  그중 {rare}개({rare/len(seen):.0%})는 5회 미만이다 — "
-      "가우시안을 추정하기에 턱없이 부족하다.")
-print()
-print("실제 규모에서는 훨씬 심각하다")
+```
+
+**가능한 triphone의 `{python} f'{len(seen) / P ** 3:.1%}'`만 학습에서 나타났다.**  
+그중 `{python} f'{rare}'`개(`{python} f'{rare / len(seen):.0%}'`)는 5회 미만이다 — 가우시안을 추정하기에 턱없이 부족하다.
+
+실제 규모에서는 훨씬 심각하다
+
+```{python}
+#| label: triphone-2
+#| code-fold: false
+
 print(f"{'phoneme 수':>10} {'triphone':>14} {'state(3개씩)':>14}")
 print("-" * 42)
 for p in [9, 40, 50]:
     print(f"{p:>8} {p**3:>14,} {p**3*3:>14,}")
-print()
-print("**해법이 state tying(상태 묶기)이다.** 비슷한 학생끼리 한 반으로 묶어 같은 선생님이 가르치게 하는 것이다.")
-for s in ["음향적으로 비슷한 triphone state들이 **같은 가우시안을 공유**한다",
-          "묶는 기준을 **phonetic decision tree(음성학적 결정 트리)**로 정한다",
-          "  '앞 phoneme이 비음인가?', '뒤가 원순모음인가?' 같은 질문으로 분기",
-          "**보지 못한 triphone도 tree를 타고 내려가 state를 배정받는다**",
-          "  이것이 state tying의 진짜 값어치다 — 일반화",
-          "결과: 수십만 state → 보통 2,000~10,000개의 묶인 state"]:
-    print(f"  · {s}")
-print()
-print("**이 문제 구조가 deep learning으로 바뀐 방식**")
-print(f"{'접근':<24} {'문맥을 어떻게 다루나'}")
-print("-" * 62)
-for a, b in [("triphone + decision tree", "**이산 단위를 쪼개고 다시 묶는다**"),
-             ("DNN-HMM hybrid", "여러 frame을 입력으로 받아 state posterior(사후확률)"),
-             ("CTC / RNN-T (8.4)", "encoder가 문맥을 표현. triphone 개념 자체가 없다"),
-             ("Transformer (8.6)", "attention이 발화 전체를 본다")]:
-    print(f"{a:<24} {b}")
-print()
-print("**DNN-HMM이 결정적이었던 이유가 여기 있다.**")
-print("  GMM은 frame 하나만 보므로 문맥을 **단위 쪼개기**로 넣어야 했다.")
-print("  DNN은 앞뒤 frame을 그냥 입력으로 받는다 — triphone이 하던 일을")
-print("  parameter 공유로 훨씬 값싸게 한다.")
 ```
+
+**해법이 state tying(상태 묶기)이다.** 비슷한 학생끼리 한 반으로 묶어 같은 선생님이 가르치게 하는 것이다.
+
+- 음향적으로 비슷한 triphone state들이 **같은 가우시안을 공유**한다
+- 묶는 기준을 **phonetic decision tree(음성학적 결정 트리)**로 정한다
+- '앞 phoneme이 비음인가?', '뒤가 원순모음인가?' 같은 질문으로 분기
+- **보지 못한 triphone도 tree를 타고 내려가 state를 배정받는다**
+- 이것이 state tying의 진짜 값어치다 — 일반화
+- 결과: 수십만 state → 보통 2,000\~10,000개의 묶인 state
+
+**이 문제 구조가 deep learning으로 바뀐 방식**
+
+| 접근 | 문맥을 어떻게 다루나 |
+|---|---|
+| triphone + decision tree | **이산 단위를 쪼개고 다시 묶는다** |
+| DNN-HMM hybrid | 여러 frame을 입력으로 받아 state posterior(사후확률) |
+| CTC / RNN-T (8.4) | encoder가 문맥을 표현. triphone 개념 자체가 없다 |
+| Transformer (8.6) | attention이 발화 전체를 본다 |
+
+**DNN-HMM이 결정적이었던 이유가 여기 있다.**
+
+GMM은 frame 하나만 보므로 문맥을 **단위 쪼개기**로 넣어야 했다.  
+DNN은 앞뒤 frame을 그냥 입력으로 받는다 — triphone이 하던 일을
+parameter 공유로 훨씬 값싸게 한다.
 
 ---
 
