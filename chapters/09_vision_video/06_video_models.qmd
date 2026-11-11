@@ -73,9 +73,10 @@ def probe(Xa, ya, Xb, yb, cls, steps=600, lr=0.5, lam=1e-3):
 
 Vtr, str_, dtr = dataset(500, np.random.default_rng(1))
 Vte, ste, dte = dataset(300, np.random.default_rng(2))
-print(f"학습 {len(Vtr)} clip / 평가 {len(Vte)} clip")
-print(f"  모양 2종 (static 단서) / 방향 4종 (temporal 단서)")
 ```
+
+학습 `{python} f'{len(Vtr)}'` clip / 평가 `{python} f'{len(Vte)}'` clip
+모양 2종 (static 단서) / 방향 4종 (temporal 단서)
 
 ---
 
@@ -93,8 +94,14 @@ TimeSformer와 ViViT가 시험한 factorization들을 비용으로 세워 본다
 import numpy as np
 
 HW = 196                                   # 224px / patch 16
-print(f"frame마다 {HW} patch (224px/P16)일 때, attention 원소 수")
-print()
+```
+
+frame마다 `{python} f'{HW}'` patch (224px/P16)일 때, attention 원소 수
+
+```{python}
+#| label: attn-cost-2
+#| code-fold: false
+
 print(f"{'factorization':<24} {'식':<22} {'T=8':>12} {'T=32':>13} {'T=32 비율':>11}")
 print("-" * 86)
 COST = []
@@ -108,32 +115,25 @@ for nm, formula, fn in [
     COST.append((nm, b))
     ref = (32*HW)**2
     print(f"{nm:<24} {formula:<22} {a:>12,} {b:>13,} {b/ref:>11.4f}")
-print()
-print("**factorization이 사는 것과 파는 것**")
-print()
-print(f"{'방식':<22} {'같은 층에서 무엇을 볼 수 있나':<32} {'대가'}")
-print("-" * 82)
-for a, b, c in [
-    ("joint", "모든 frame의 모든 patch", "T=32에서 3,900만 원소"),
-    ("divided", "같은 시각의 모든 patch → 같은 위치의 모든 시각",
-     "**움직이는 물체를 한 번에 못 본다**"),
-    ("공간만 + 시간 pooling", "한 frame 안", "시간 순서가 사라진다"),
-    ("window", "가까운 spatiotemporal 이웃", "층을 쌓아야 전역 (9.2의 Swin)"),
-]:
-    print(f"{a:<22} {b:<32} {c}")
-print()
-print("**divided attention의 미묘한 약점**")
-for s in ["공간 attention은 **한 시각 안에서만** patch를 본다",
-          "시간 attention은 **한 위치에서만** 시각을 본다",
-          "그런데 움직이는 물체는 **시각이 바뀌면 위치도 바뀐다**",
-          "즉 (t=0, 왼쪽)과 (t=5, 오른쪽)을 **한 층에서는 직접 못 잇는다** — "
-          "같은 줄 사람들끼리만, 그리고 같은 자리 사람들끼리만 대화가 허용된 교실에서 "
-          "대각선 자리의 두 사람은 중간 사람을 거쳐야 소식이 닿는다",
-          "두 층을 거쳐야 이어진다 — 그래서 TimeSformer는 층을 충분히 쌓는다",
-          "이것이 [9.5](05_video_representation.qmd)의 optical flow를 "
-          "명시적으로 넣던 이유이기도 하다 — 움직임을 따라가는 연결"]:
-    print(f"  · {s}")
 ```
+
+**factorization이 사는 것과 파는 것**
+
+| 방식 | 같은 층에서 무엇을 볼 수 있나 | 대가 |
+|---|---|---|
+| joint | 모든 frame의 모든 patch | T=32에서 3,900만 원소 |
+| divided | 같은 시각의 모든 patch → 같은 위치의 모든 시각 | **움직이는 물체를 한 번에 못 본다** |
+| 공간만 + 시간 pooling | 한 frame 안 | 시간 순서가 사라진다 |
+| window | 가까운 spatiotemporal 이웃 | 층을 쌓아야 전역 (9.2의 Swin) |
+
+**divided attention의 미묘한 약점**
+
+- 공간 attention은 **한 시각 안에서만** patch를 본다
+- 시간 attention은 **한 위치에서만** 시각을 본다
+- 그런데 움직이는 물체는 **시각이 바뀌면 위치도 바뀐다**
+- 즉 (t=0, 왼쪽)과 (t=5, 오른쪽)을 **한 층에서는 직접 못 잇는다** — 같은 줄 사람들끼리만, 그리고 같은 자리 사람들끼리만 대화가 허용된 교실에서 대각선 자리의 두 사람은 중간 사람을 거쳐야 소식이 닿는다
+- 두 층을 거쳐야 이어진다 — 그래서 TimeSformer는 층을 충분히 쌓는다
+- 이것이 [9.5](05_video_representation.qmd)의 optical flow를 명시적으로 넣던 이유이기도 하다 — 움직임을 따라가는 연결
 
 ---
 
@@ -147,6 +147,8 @@ for s in ["공간 attention은 **한 시각 안에서만** patch를 본다",
 
 그렇다면 표현력에서는 무엇을 잃는가. 그것을 재 보자.
 
+(2+1)D는 parameter를 맞추도록 설계된 factorization이다
+
 ```{python}
 #| label: r21d
 #| code-fold: false
@@ -154,8 +156,6 @@ for s in ["공간 attention은 **한 시각 안에서만** patch를 본다",
 import numpy as np
 
 k = 3
-print("(2+1)D는 parameter를 맞추도록 설계된 factorization이다")
-print()
 print(f"{'channel C':>9} {'3D parameter':>14} {'중간 channel M':>14} {'(2+1)D':>14} {'비율':>8}")
 print("-" * 60)
 for C in [64, 256, 512]:
@@ -163,8 +163,6 @@ for C in [64, 256, 512]:
     M = int(round(k*k*k*C*C/(k*k*C + k*C)))
     p21 = k*k*C*M + k*M*C
     print(f"{C:>9} {p3:>14,} {M:>14} {p21:>14,} {p21/p3:>8.3f}")
-print("  → **parameter는 같다.** 다른 것은 ReLU 하나가 중간에 들어간다는 점이다.")
-print()
 
 g = np.random.default_rng(0)
 
@@ -180,6 +178,14 @@ def rank1_residual(K):
 # ① 분리형: 공간 pattern x 시간 가중치
 sep = np.zeros((3, 3, 3))
 spatial = np.array([[0, 1, 0], [0, 0, 0], [0, -1, 0]], float)
+```
+
+→ **parameter는 같다.** 다른 것은 ReLU 하나가 중간에 들어간다는 점이다.
+
+```{python}
+#| label: r21d-2
+#| code-fold: false
+
 for t in range(3):
     sep[t] = (t - 1)*spatial
 # ② 운동 검출: 시간이 흐르면 공간 위치가 옮겨간다
@@ -187,10 +193,15 @@ mot = np.zeros((3, 3, 3))
 for t in range(3):
     mot[t, 1, t] = 1.0
 rnd = [rank1_residual(g.normal(0, 1, (3, 3, 3))) for _ in range(300)]
+```
 
-print("kernel 종류별 — rank 1(=(2+1)D 갈래 하나)로 표현되는가")
-print("  rank = 행렬을 '공간 패턴 × 시간 가중치' 곱 몇 개의 합으로 써야 하는가. residual = rank 1로 근사했을 때 남는 비율")
-print()
+kernel 종류별 — rank 1(=(2+1)D 갈래 하나)로 표현되는가
+rank = 행렬을 '공간 패턴 × 시간 가중치' 곱 몇 개의 합으로 써야 하는가. residual = rank 1로 근사했을 때 남는 비율
+
+```{python}
+#| label: r21d-3
+#| code-fold: false
+
 print(f"{'kernel':<28} {'rank-1 residual':>15} {'필요한 rank':>12}")
 print("-" * 54)
 for nm, Kk in [("분리형 (공간 x 시간 가중치)", sep),
@@ -198,22 +209,20 @@ for nm, Kk in [("분리형 (공간 x 시간 가중치)", sep),
     r = np.linalg.matrix_rank(Kk.reshape(3, -1))
     print(f"{nm:<28} {rank1_residual(Kk):>15.4f} {r:>12}")
 print(f"{'무작위 3x3x3 (300개 평균)':<28} {np.mean(rnd):>15.4f} {'~3':>12}")
-print()
-print("**운동 검출 kernel이 무작위 kernel보다도 덜 분리된다.**")
-print(f"  residual {rank1_residual(mot):.4f} vs 무작위 {np.mean(rnd):.4f}.")
-print("  '시간이 지나면 위치가 옮겨간다'는 것은 본질적으로 "
-      "**공간과 시간이 얽힌** pattern이다 — 대각선은 가로 한 줄과 세로 한 줄의 곱으로 안 그려진다.")
-print()
-print("**그래서 M이 필요하다.**")
-for s in ["(2+1)D 갈래 하나는 rank 1이므로, 운동 검출 kernel을 못 만든다",
-          f"운동 검출 kernel의 rank는 {np.linalg.matrix_rank(mot.reshape(3,-1))} — "
-          "**중간 channel 3개를 합쳐야** 만들어진다",
-          "M을 parameter가 맞도록 크게 잡는 것이 표현력 측면에서도 필수인 셈",
-          "즉 (2+1)D는 '싼 근사'가 아니라 **같은 예산으로 비선형을 하나 더 사는** 거래다",
-          "I3D의 '2D 가중치 inflation(팽창)'도 같은 문제를 다른 쪽에서 푼다 — "
-          "이미지 pretraining 가중치를 시간축으로 복사해 초기값으로 삼는다"]:
-    print(f"  · {s}")
 ```
+
+**운동 검출 kernel이 무작위 kernel보다도 덜 분리된다.**
+
+residual `{python} f'{rank1_residual(mot):.4f}'` vs 무작위 `{python} f'{np.mean(rnd):.4f}'`.  
+'시간이 지나면 위치가 옮겨간다'는 것은 본질적으로 **공간과 시간이 얽힌** pattern이다 — 대각선은 가로 한 줄과 세로 한 줄의 곱으로 안 그려진다.
+
+**그래서 M이 필요하다.**
+
+- (2+1)D 갈래 하나는 rank 1이므로, 운동 검출 kernel을 못 만든다
+- 운동 검출 kernel의 rank는 `{python} f'{np.linalg.matrix_rank(mot.reshape(3, -1))}'` — **중간 channel 3개를 합쳐야** 만들어진다
+- M을 parameter가 맞도록 크게 잡는 것이 표현력 측면에서도 필수인 셈
+- 즉 (2+1)D는 '싼 근사'가 아니라 **같은 예산으로 비선형을 하나 더 사는** 거래다
+- I3D의 '2D 가중치 inflation(팽창)'도 같은 문제를 다른 쪽에서 푼다 — 이미지 pretraining 가중치를 시간축으로 복사해 초기값으로 삼는다
 
 ---
 
@@ -227,6 +236,8 @@ Slow pathway(느린 경로)는 frame을 적게 보되 channel(용량)을 크게,
 사람 눈도 비슷하다 — 색과 세부를 보는 세포와 움직임에 민감한 세포가 따로 있다.
 
 feature 차원을 **512로 고정**하고 시간·공간 배분만 바꿔 확인한다.
+
+feature 차원을 512로 고정하고, 시간과 공간의 배분만 바꾼다
 
 ```{python}
 #| label: slowfast
@@ -242,8 +253,6 @@ def path(V, tstride, sp):
     return f.reshape(len(V), f.shape[1], sp, b, sp, b).mean((3, 5))
 
 
-print("feature 차원을 512로 고정하고, 시간과 공간의 배분만 바꾼다")
-print()
 print(f"{'배분':<24} {'frame':>7} {'해상도':>9} {'차원':>7} "
       f"{'모양(static)':>12} {'방향(temporal)':>14}")
 print("-" * 74)
@@ -267,25 +276,22 @@ both = (probe(ca, str_, cb, ste, 2), probe(ca, dtr, cb, dte, 4))
 SF.append(("두 경로 (SlowFast)", None, None, ca.shape[1], *both))
 print(f"{'두 경로 (SlowFast)':<24} {'1+16':>7} {'16+4':>9} {ca.shape[1]:>7} "
       f"{both[0]:>12.4f} {both[1]:>14.4f}")
-print()
 slow, mid, fast = SF[0], SF[1], SF[2]
-print("**한쪽으로 몰면 반대쪽을 잃는다.**")
-print(f"  공간 우선(2 frame 16x16): 모양 {slow[4]:.4f}로 좋지만 "
-      f"방향은 {slow[5]:.4f}")
-print(f"  시간 우선(32 frame 4x4) : 방향 {fast[5]:.4f}로 완벽하지만 "
-      f"모양은 {fast[4]:.4f}로 무너진다")
-print()
-print(f"**나눠 쓰면 둘 다 얻는다** — 모양 {both[0]:.4f}, 방향 {both[1]:.4f}.")
-print(f"  같은 512차원인데 두 축 모두 단일 경로 최고치를 넘거나 같다.")
-for s in ["움직임을 보는 데는 **해상도가 별로 필요 없다** — 4x4로도 방향은 완벽",
-          "모양을 보는 데는 **frame이 별로 필요 없다** — 1장이면 충분",
-          "두 요구가 **직교**(서로 겹치지 않음)하므로, 하나의 경로로 절충하는 것은 손해다",
-          "SlowFast가 Fast pathway의 **channel을 대폭 줄인** 것도 같은 이유다 — "
-          "움직임 정보는 용량을 덜 먹는다",
-          "실제 SlowFast는 두 경로를 옆으로 연결(lateral connection)해 "
-          "Slow pathway가 Fast pathway의 정보를 받는다"]:
-    print(f"  · {s}")
 ```
+
+**한쪽으로 몰면 반대쪽을 잃는다.**
+
+공간 우선(2 frame 16x16): 모양 `{python} f'{slow[4]:.4f}'`로 좋지만 방향은 `{python} f'{slow[5]:.4f}'`
+시간 우선(32 frame 4x4) : 방향 `{python} f'{fast[5]:.4f}'`로 완벽하지만 모양은 `{python} f'{fast[4]:.4f}'`로 무너진다
+
+**나눠 쓰면 둘 다 얻는다** — 모양 `{python} f'{both[0]:.4f}'`, 방향 `{python} f'{both[1]:.4f}'`.  
+같은 512차원인데 두 축 모두 단일 경로 최고치를 넘거나 같다.
+
+- 움직임을 보는 데는 **해상도가 별로 필요 없다** — 4x4로도 방향은 완벽
+- 모양을 보는 데는 **frame이 별로 필요 없다** — 1장이면 충분
+- 두 요구가 **직교**(서로 겹치지 않음)하므로, 하나의 경로로 절충하는 것은 손해다
+- SlowFast가 Fast pathway의 **channel을 대폭 줄인** 것도 같은 이유다 — 움직임 정보는 용량을 덜 먹는다
+- 실제 SlowFast는 두 경로를 옆으로 연결(lateral connection)해 Slow pathway가 Fast pathway의 정보를 받는다
 
 ```{python}
 #| label: fig-slowfast
@@ -403,36 +409,36 @@ for ratio in [0.5, 0.75, 0.9, 0.95]:
                float(np.mean(tu)), float(np.mean(nb))))
     print(f"{ratio:>7.0%} {VM[-1][1]:>12.4f} {VM[-1][2]:>14.4f} "
           f"{VM[-1][3]:>11.4f} {VM[-1][4]:>17.2f}")
-print("  (tube masking에서는 '같은 patch 이웃 시각'이 정의상 항상 0이다)")
-print()
 half = VM[0]; nine = VM[2]
-print("**① 시간 지름길은 확실히 존재한다.**")
-print(f"  50% 무작위 masking에서 가려진 token마다 "
-      f"같은 위치의 다른 시각이 평균 {half[4]:.2f}개 보인다.")
-print("  tube masking은 그 값을 0으로 만든다 — 설계 의도 그대로다.")
-print()
-print("**② 그런데 이 clip에서는 그 지름길이 결정적이지 않았다.**")
-print(f"  50%: 무작위 {half[1]:.4f} vs tube {half[3]:.4f} "
-      f"— 차이 {half[1]-half[3]:+.4f}. 사실상 같다.")
-print(f"  시간 지름길만 쓰면 {half[2]:.4f}밖에 안 된다 — "
-      f"전체({half[1]:.4f})의 절반 수준이다.")
-print("  **즉 복원의 대부분을 공간 문맥이 하고 있었다.**")
-print()
-print("**③ 차이는 90%에서야 나타난다.**")
-print(f"  90%: 무작위 {nine[1]:.4f} vs tube {nine[3]:.4f} "
-      f"— 차이 {nine[1]-nine[3]:+.4f}")
-print("  이 지점에서 공간 문맥도 희박해지므로, 시간 지름길의 유무가 드러난다.")
-print()
-print("**이 결과를 어떻게 읽어야 하나**")
-for s in ["tube masking의 **mechanism**은 재현됐다 — 이웃 시각 수를 0으로 만든다",
-          "**효과 크기**는 재현되지 않았다 — 이 clip은 공간 redundancy가 너무 크다",
-          "32x32 이미지의 4x4 patch는 매끄러운 blob의 일부라 옆에서 거의 복원된다",
-          "224px의 16x16 patch는 그렇지 않다 — patch마다 고유한 내용이 있다",
-          "**VideoMAE가 90~95%를 쓰는 것이 우연이 아니다** — "
-          "이미지 MAE의 75%보다 훨씬 높다",
-          "video는 시간 redundancy까지 더해지므로 **더 많이 가려야 과제가 사소해지지 않는다**"]:
-    print(f"  · {s}")
 ```
+
+(tube masking에서는 '같은 patch 이웃 시각'이 정의상 항상 0이다)
+
+**① 시간 지름길은 확실히 존재한다.**
+
+50% 무작위 masking에서 가려진 token마다 같은 위치의 다른 시각이 평균 `{python} f'{half[4]:.2f}'`개 보인다.  
+tube masking은 그 값을 0으로 만든다 — 설계 의도 그대로다.
+
+**② 그런데 이 clip에서는 그 지름길이 결정적이지 않았다.**
+
+50%: 무작위 `{python} f'{half[1]:.4f}'` vs tube `{python} f'{half[3]:.4f}'` — 차이 `{python} f'{half[1] - half[3]:+.4f}'`. 사실상 같다.  
+시간 지름길만 쓰면 `{python} f'{half[2]:.4f}'`밖에 안 된다 — 전체(`{python} f'{half[1]:.4f}'`)의 절반 수준이다.
+
+**즉 복원의 대부분을 공간 문맥이 하고 있었다.**
+
+**③ 차이는 90%에서야 나타난다.**
+
+90%: 무작위 `{python} f'{nine[1]:.4f}'` vs tube `{python} f'{nine[3]:.4f}'` — 차이 `{python} f'{nine[1] - nine[3]:+.4f}'`
+이 지점에서 공간 문맥도 희박해지므로, 시간 지름길의 유무가 드러난다.
+
+**이 결과를 어떻게 읽어야 하나**
+
+- tube masking의 **mechanism**은 재현됐다 — 이웃 시각 수를 0으로 만든다
+- **효과 크기**는 재현되지 않았다 — 이 clip은 공간 redundancy가 너무 크다
+- 32x32 이미지의 4x4 patch는 매끄러운 blob의 일부라 옆에서 거의 복원된다
+- 224px의 16x16 patch는 그렇지 않다 — patch마다 고유한 내용이 있다
+- **VideoMAE가 90\~95%를 쓰는 것이 우연이 아니다** — 이미지 MAE의 75%보다 훨씬 높다
+- video는 시간 redundancy까지 더해지므로 **더 많이 가려야 과제가 사소해지지 않는다**
 
 ---
 
@@ -443,6 +449,8 @@ for s in ["tube masking의 **mechanism**은 재현됐다 — 이웃 시각 수�
 
 [9.5](05_video_representation.qmd)의 두 과제를 이번엔 **benchmark 진단 도구**로 쓴다.
 frame 하나만 주는 모델(single-frame baseline)의 점수를 재고, 그것이 전체 대비 얼마나 되는지 본다.
+
+두 'benchmark'를 single-frame baseline으로 진단한다
 
 ```{python}
 #| label: single-frame
@@ -459,8 +467,6 @@ def ds8(v, idx):
 
 ALL = list(np.linspace(0, T-1, 8).astype(int))
 ONE = [T//2]
-print("두 'benchmark'를 single-frame baseline으로 진단한다")
-print()
 print(f"{'benchmark':<22} {'무작위':>8} {'1 frame':>9} {'8 frame':>9} "
       f"{'static bias 지수':>16}")
 print("-" * 70)
@@ -473,36 +479,41 @@ for nm, y_tr, y_te, cls in [("모양 (static bias형)", str_, ste, 2),
     idx = (a1 - ch)/max(a8 - ch, 1e-9)
     DIAG.append((nm, ch, a1, a8, idx))
     print(f"{nm:<22} {ch:>8.3f} {a1:>9.4f} {a8:>9.4f} {idx:>16.3f}")
-print()
-print("**static bias 지수 = (1 frame 점수 − 무작위) / (전체 점수 − 무작위)**")
-print("  1에 가까우면 frame 하나로 다 풀린다는 뜻 — 시간 modeling이 잴 수 없다.")
-print()
 a, b = DIAG[0], DIAG[1]
-print(f"  {a[0]}: 지수 {a[4]:.3f} — **frame 하나가 전부, 그 이상**")
+```
+
+**static bias 지수 = (1 frame 점수 − 무작위) / (전체 점수 − 무작위)**
+
+1에 가까우면 frame 하나로 다 풀린다는 뜻 — 시간 modeling이 잴 수 없다.
+
+`{python} f'{a[0]}'`: 지수 `{python} f'{a[4]:.3f}'` — **frame 하나가 전부, 그 이상**
+
+```{python}
+#| label: single-frame-2
+#| code-fold: false
+
 if a[4] > 1:
     print(f"    1을 넘는다 — 1 frame({a[2]:.4f})이 8 frame({a[3]:.4f})보다 높다.")
     print("    frame을 더 주면 차원만 늘어 overfitting한다 "
           "([9.5](05_video_representation.qmd)에서 본 그대로).")
-print(f"  {b[0]}: 지수 {b[4]:.3f} — 시간 정보가 실제로 필요하다")
-print()
-print("**이것이 action recognition benchmark의 오래된 문제다.**")
-for s in ["Kinetics의 상당수 class는 **배경과 물체**로 풀린다 — "
-          "'수영'은 물이 보이면 되고 '기타 치기'는 기타가 보이면 된다",
-          "그런 데이터에서는 정교한 시간 modeling의 이득이 **소수점 아래**로 묻힌다",
-          "논문의 향상이 시간 modeling 덕인지 **더 큰 backbone** 덕인지 구분되지 않는다",
-          "Something-Something은 이 문제를 데이터 설계로 풀었다 — "
-          "label이 '무언가를 왼쪽으로 밀기'처럼 **동작 자체**다",
-          "**새 video 모델을 볼 때 single-frame baseline부터 확인하는 것**이 "
-          "가장 값싼 검증이다 — 시험 문제가 교과서 없이도 풀리면 그 시험은 공부량을 못 잰다"]:
-    print(f"  · {s}")
-print()
-print("**그리고 이것은 [9.1](01_vision_tasks.qmd)·[9.3](03_ssl_vision.qmd)에서 "
-      "본 것과 같은 병이다.**")
-print("  지표가 무엇을 벌하지 않으면(9.1의 mAP와 중복), "
-      "그 방향의 개선은 측정되지 않는다.")
-print("  protocol이 차이를 압축하면(9.3의 kNN), 결론이 달라진다.")
-print("  **모델을 고치기 전에 측정 도구를 확인해야 한다.**")
 ```
+
+`{python} f'{b[0]}'`: 지수 `{python} f'{b[4]:.3f}'` — 시간 정보가 실제로 필요하다
+
+**이것이 action recognition benchmark의 오래된 문제다.**
+
+- Kinetics의 상당수 class는 **배경과 물체**로 풀린다 — '수영'은 물이 보이면 되고 '기타 치기'는 기타가 보이면 된다
+- 그런 데이터에서는 정교한 시간 modeling의 이득이 **소수점 아래**로 묻힌다
+- 논문의 향상이 시간 modeling 덕인지 **더 큰 backbone** 덕인지 구분되지 않는다
+- Something-Something은 이 문제를 데이터 설계로 풀었다 — label이 '무언가를 왼쪽으로 밀기'처럼 **동작 자체**다
+- **새 video 모델을 볼 때 single-frame baseline부터 확인하는 것**이 가장 값싼 검증이다 — 시험 문제가 교과서 없이도 풀리면 그 시험은 공부량을 못 잰다
+
+**그리고 이것은 [9.1](01_vision_tasks.qmd)·[9.3](03_ssl_vision.qmd)에서 본 것과 같은 병이다.**
+
+지표가 무엇을 벌하지 않으면(9.1의 mAP와 중복), 그 방향의 개선은 측정되지 않는다.  
+protocol이 차이를 압축하면(9.3의 kNN), 결론이 달라진다.
+
+**모델을 고치기 전에 측정 도구를 확인해야 한다.**
 
 ```{python}
 #| label: fig-diag
