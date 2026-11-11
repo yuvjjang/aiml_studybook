@@ -48,6 +48,8 @@ $$\mathcal{B}(\texttt{a a} \varnothing \texttt{a b b}) = \texttt{a a b}$$
 
 ## G8.4.1 — alignment 경로는 몇 개인가
 
+blank를 끼워 만들 수 있는 alignment 경로의 수
+
 ```{python}
 #| label: count
 #| code-fold: false
@@ -93,8 +95,6 @@ def count_alignments(T, U):
     return int(dp[S-1] + (dp[S-2] if S > 1 else 0))
 
 
-print("blank를 끼워 만들 수 있는 alignment 경로의 수")
-print()
 print(f"{'frame T':>10} {'label U':>8} {'경로 수':>30}")
 print("-" * 52)
 for T, U in [(10, 3), (20, 5), (50, 10), (100, 20)]:
@@ -102,12 +102,13 @@ for T, U in [(10, 3), (20, 5), (50, 10), (100, 20)]:
     print(f"{T:>10} {U:>8} {n:>30,}")
 n300 = count_alignments(300, 40)
 print(f"{300:>10} {40:>8} {'약 1.9 x 10^' + str(len(str(n300))-1):>30}")
-print()
-print(f"**3초 발화에 40 phoneme이면 경로가 10의 {len(str(n300))-1}제곱 규모다.**")
-print("  하나하나 세는 것은 불가능하다. 그런데 **더하는 것**은 O(T·U)에 된다.")
-print("  [8.3](03_classical_speech.qmd)의 Viterbi가 max를 취하던 자리에")
-print("  logsumexp를 넣으면 된다 — 같은 lattice, 다른 반환값이다.")
 ```
+
+**3초 발화에 40 phoneme이면 경로가 10의 `{python} f'{len(str(n300)) - 1}'`제곱 규모다.**
+
+하나하나 세는 것은 불가능하다. 그런데 **더하는 것**은 O(T·U)에 된다.  
+[8.3](03_classical_speech.qmd)의 Viterbi가 max를 취하던 자리에
+logsumexp를 넣으면 된다 — 같은 lattice, 다른 반환값이다.
 
 ---
 
@@ -123,6 +124,8 @@ $$\alpha_t(s) = y^t_{\ell'_s}\Big[\alpha_{t-1}(s) + \alpha_{t-1}(s-1)
 $y^t_k$는 시각 $t$에 모델이 출력 $k$에 준 확률이다.
 세 번째 항의 조건이 collapse 규칙에서 그대로 나온다 —
 blank는 건너뛸 수 있지만, **같은 글자가 연속이면 사이의 blank를 건너뛸 수 없다.**
+
+forward algorithm vs 완전 열거 — 정말 같은 값인가
 
 ```{python}
 #| label: forward
@@ -173,8 +176,6 @@ def brute_force_logZ(logp, target, blank=0):
 
 
 rg = np.random.default_rng(0)
-print("forward algorithm vs 완전 열거 — 정말 같은 값인가")
-print()
 print(f"{'T':>4} {'C':>4} {'target':>12} {'forward':>14} {'완전 열거':>14} "
       f"{'차이':>11}")
 print("-" * 66)
@@ -186,11 +187,12 @@ for T, C, tgt in [(4, 3, [1]), (5, 3, [1, 2]), (6, 3, [1, 1]),
     bf = brute_force_logZ(logp, tgt)
     print(f"{T:>4} {C:>4} {str(tgt):>12} {f:>14.6f} {bf:>14.6f} "
           f"{abs(f-bf):>11.2e}")
-print()
-print("**부동소수점 오차 안에서 정확히 같다.**")
-print("  `[1, 1]` 처럼 **같은 글자가 반복되는 경우**도 맞는다 —")
-print("  건너뛰기 조건이 없으면 여기서 틀린다. 이 줄이 그 조건의 검증이다.")
 ```
+
+**부동소수점 오차 안에서 정확히 같다.**
+
+`[1, 1]` 처럼 **같은 글자가 반복되는 경우**도 맞는다 —
+건너뛰기 조건이 없으면 여기서 틀린다. 이 줄이 그 조건의 검증이다.
 
 ---
 
@@ -318,6 +320,8 @@ $$\frac{\partial \mathcal{L}}{\partial z^t_k}
 [8.3](03_classical_speech.qmd)의 forced alignment가 hard label("이 frame은 확실히 a")을 만들던 자리에,
 CTC는 **soft alignment**("이 frame은 a일 확률 0.6, blank일 확률 0.4")를 쓴다.
 
+해석적 gradient vs 수치 미분
+
 ```{python}
 #| label: grad
 #| code-fold: false
@@ -357,8 +361,6 @@ def ctc_loss_grad(logits, target, blank=0):
     return -logZ, np.exp(logp) - np.exp(acc - logp - logZ)
 
 
-print("해석적 gradient vs 수치 미분")
-print()
 print(f"{'T':>4} {'C':>4} {'target':>12} {'최대 절대오차':>16}")
 print("-" * 44)
 for T, C, tgt in [(6, 4, [1, 2]), (10, 5, [1, 2, 3]), (8, 4, [2, 2, 1])]:
@@ -374,9 +376,9 @@ for T, C, tgt in [(6, 4, [1, 2]), (10, 5, [1, 2, 3]), (8, 4, [2, 2, 1])]:
             num[i, j] = (ctc_loss_grad(p, tgt)[0]
                          - ctc_loss_grad(m, tgt)[0])/(2*eps)
     print(f"{T:>4} {C:>4} {str(tgt):>12} {np.abs(G-num).max():>16.2e}")
-print()
-print("**구현이 맞다.** 이제 실제로 학습시킨다.")
 ```
+
+**구현이 맞다.** 이제 실제로 학습시킨다.
 
 ---
 
@@ -475,17 +477,16 @@ TEX = [stack(feats(x)) for x, _ in TEST]
 TRY = [[O2I[p] for p, _ in l if p != "_"] for _, l in TRAIN]
 TEY = [[O2I[p] for p, _ in l if p != "_"] for _, l in TEST]
 D = TRX[0].shape[1]
-
-print(f"encoder 입력 {D}차원 (MFCC 13 x 문맥 9 frame)")
-print(f"출력 {NC}종 = phoneme {len(OUT_PH)}개 + blank")
-print(f"학습 발화 {len(TRX)}개, 평균 {np.mean([x.shape[0] for x in TRX]):.0f} frame "
-      f"→ label {np.mean([len(t) for t in TRY]):.1f}개")
-print()
-print("**모델에 주는 것은 (waveform, phoneme열) 쌍뿐이다.**")
-print(f"  frame {np.mean([x.shape[0] for x in TRX]):.0f}개와 label "
-      f"{np.mean([len(t) for t in TRY]):.1f}개의 대응은 알려주지 않는다.")
-print("  8.3에서는 이것을 forced alignment로 만들어야 학습을 시작할 수 있었다.")
 ```
+
+encoder 입력 `{python} f'{D}'`차원 (MFCC 13 x 문맥 9 frame)  
+출력 `{python} f'{NC}'`종 = phoneme `{python} f'{len(OUT_PH)}'`개 + blank
+학습 발화 `{python} f'{len(TRX)}'`개, 평균 `{python} f'{np.mean([x.shape[0] for x in TRX]):.0f}'` frame → label `{python} f'{np.mean([len(t) for t in TRY]):.1f}'`개
+
+**모델에 주는 것은 (waveform, phoneme열) 쌍뿐이다.**
+
+frame `{python} f'{np.mean([x.shape[0] for x in TRX]):.0f}'`개와 label `{python} f'{np.mean([len(t) for t in TRY]):.1f}'`개의 대응은 알려주지 않는다.  
+8.3에서는 이것을 forced alignment로 만들어야 학습을 시작할 수 있었다.
 
 ```{python}
 #| label: train
@@ -549,11 +550,17 @@ for ep in range(1, 31):
                                     .argmax(1) == 0) for X in TEX]))
         CURVE.append((ep, tot, tr, te, bl))
         print(f"{ep:>6} {tot:>14.4f} {tr:>10.4f} {te:>12.4f} {bl:>18.3f}")
-print()
 fin = CURVE[-1]
-print(f"**test phoneme 오류율 {fin[3]:.4f}** — alignment를 한 번도 주지 않았다.")
-print()
-print("[8.3](03_classical_speech.qmd)과 비교")
+```
+
+**test phoneme 오류율 `{python} f'{fin[3]:.4f}'`** — alignment를 한 번도 주지 않았다.
+
+[8.3](03_classical_speech.qmd)과 비교
+
+```{python}
+#| label: train-2
+#| code-fold: false
+
 print(f"{'':<4}{'항목':<24} {'HMM-GMM (8.3)':<22} {'CTC (여기)'}")
 print("-" * 76)
 for a, b, c in [("학습에 필요한 label", "frame별 state", "**phoneme열만**"),
@@ -562,9 +569,9 @@ for a, b, c in [("학습에 필요한 label", "frame별 state", "**phoneme열만
                 ("깨끗한 조건 오류율", "PER 0.0033 (Viterbi)", f"PER {fin[3]:.4f}"),
                 ("학습 반복", "alignment-재추정 5회", "SGD 30 epoch")]:
     print(f"{'':<4}{a:<24} {b:<22} {c}")
-print()
-print("**모델이 alignment를 스스로 찾아냈다.** 어떻게 생긴 alignment인지 다음에서 본다.")
 ```
+
+**모델이 alignment를 스스로 찾아냈다.** 어떻게 생긴 alignment인지 다음에서 본다.
 
 ---
 
@@ -601,28 +608,26 @@ print(f"{'spike 폭 (frame)':<34} {np.mean(width):.1f}")
 print(f"{'참 phoneme 길이 (frame)':<34} {np.mean(dur):.1f}")
 print(f"{'폭 / phoneme 길이':<34} {np.mean(width)/np.mean(dur):.1%}")
 print(f"{'phoneme 구간 안에서의 상대 위치':<34} {np.mean(rel):.3f}")
-print()
-print(f"**출력이 phoneme 구간의 앞이 아니라 뒤쪽에 몰린다** "
-      f"(상대 위치 {np.mean(rel):.2f}, 0=시작 1=끝).")
-print("  CTC는 **증거를 충분히 본 뒤에** 결정하는 편이 유리하다 — 단어를 끝까지 듣고 받아쓰는 속기사처럼.")
-print("  같은 alignment 확률을 얻는다면 늦게 내는 쪽이 더 많은 frame을 근거로 쓴다.")
-print()
-print("**이것이 streaming에서 곧바로 문제가 된다.**")
-for s in ["출력이 늦으면 **latency**가 생긴다 — 실시간 자막에서 체감된다",
-          "완화: latency에 penalty를 주는 loss(FastEmit), 미래 문맥 제한",
-          f"여기서는 context window가 ±4 frame(±40ms)뿐인데도 "
-          f"{np.mean(rel):.0%} 지점에서 낸다"]:
-    print(f"  · {s}")
-print()
-print("**왜 뾰족해지는가**")
-for s in ["정답 경로 집합에 blank가 압도적으로 많다 — 어느 시점에 내도 되므로",
-          "확률을 한 frame에 몰아주는 것이 **여러 frame에 나누는 것보다 안전**하다",
-          "  나누면 collapse 규칙 때문에 중복 출력 위험이 생긴다",
-          f"결과: frame의 {CURVE[-1][4]:.0%}가 blank, 나머지가 뾰족한 봉우리",
-          "**부작용**: frame 단위 posterior가 alignment 정보로는 쓸 만하지 않다",
-          "  forced alignment 용도로는 여전히 HMM 계열이 쓰이는 이유다 (8.3)"]:
-    print(f"  · {s}")
 ```
+
+**출력이 phoneme 구간의 앞이 아니라 뒤쪽에 몰린다** (상대 위치 `{python} f'{np.mean(rel):.2f}'`, 0=시작 1=끝).  
+CTC는 **증거를 충분히 본 뒤에** 결정하는 편이 유리하다 — 단어를 끝까지 듣고 받아쓰는 속기사처럼.  
+같은 alignment 확률을 얻는다면 늦게 내는 쪽이 더 많은 frame을 근거로 쓴다.
+
+**이것이 streaming에서 곧바로 문제가 된다.**
+
+- 출력이 늦으면 **latency**가 생긴다 — 실시간 자막에서 체감된다
+- 완화: latency에 penalty를 주는 loss(FastEmit), 미래 문맥 제한
+- 여기서는 context window가 ±4 frame(±40ms)뿐인데도 `{python} f'{np.mean(rel):.0%}'` 지점에서 낸다
+
+**왜 뾰족해지는가**
+
+- 정답 경로 집합에 blank가 압도적으로 많다 — 어느 시점에 내도 되므로
+- 확률을 한 frame에 몰아주는 것이 **여러 frame에 나누는 것보다 안전**하다
+- 나누면 collapse 규칙 때문에 중복 출력 위험이 생긴다
+- 결과: frame의 `{python} f'{CURVE[-1][4]:.0%}'`가 blank, 나머지가 뾰족한 봉우리
+- **부작용**: frame 단위 posterior가 alignment 정보로는 쓸 만하지 않다
+- forced alignment 용도로는 여전히 HMM 계열이 쓰이는 이유다 (8.3)
 
 ---
 
@@ -697,34 +702,38 @@ for sg in [0.0, 0.05, 0.12]:
         row.append(tot/n)
     DEC.append((sg, *row))
     print(f"{sg:>8.2f} {row[0]:>10.4f} {row[1]:>10.4f} {row[2]:>20.4f}")
-print()
 d5 = [d for d in DEC if d[0] == 0.05][0]
-print(f"**beam search만으로는 이득이 작다** — σ=0.05에서 "
-      f"{d5[1]:.4f} → {d5[2]:.4f} ({(d5[1]-d5[2])/d5[1]:.0%} 감소).")
-print("  출력이 이미 뾰족해서 경로 하나가 확률의 대부분을 차지하기 때문이다.")
-print("  G8.4.4에서 잰 blank 비율이 그 이유를 그대로 설명한다.")
-print()
-print(f"**이득은 language model에서 온다** ({d5[1]:.4f} → {d5[3]:.4f}).")
-print("  beam search의 진짜 값어치는 경로 합산이 아니라 **LM을 끼워 넣을 자리**다.")
-print()
-print("이 결합 방식을 **shallow fusion**이라 부른다.")
-print(f"  $\\log P = \\log P_{{CTC}} + \\alpha \\log P_{{LM}} + \\beta |y|$")
-print("  CTC 점수에 LM 점수를 **decoding 시점에** 더한다. 학습은 따로다.")
-print()
-print(f"{'fusion 방식':<18} {'언제 결합':<18} {'특징'}")
-print("-" * 66)
-for a, b, c in [("shallow fusion", "decoding 시점", "가장 흔하다. 가중치 tuning 필요"),
-                ("deep fusion", "학습 시점 (gate)", "LM을 바꾸기 어려워진다"),
-                ("cold fusion", "처음부터 함께", "LM 교체가 쉬워진다"),
-                ("rescoring", "N-best 재점수", "큰 LM을 쓸 수 있다")]:
-    print(f"{a:<18} {b:<18} {c}")
-print()
-print(f"**그리고 σ=0.12에서는 모든 방법이 무너진다** "
-      f"(PER {DEC[-1][1]:.2f}).")
-print("  [8.3](03_classical_speech.qmd)의 HMM도 같은 방식으로 무너졌다.")
-print("  **학습 조건 밖에서 취약한 것은 CTC여도 마찬가지다** —")
-print("  이 문제를 푸는 것은 목적함수가 아니라 **데이터의 다양성**이다 (8.5, 8.6).")
 ```
+
+**beam search만으로는 이득이 작다** — σ=0.05에서 `{python} f'{d5[1]:.4f}'` → `{python} f'{d5[2]:.4f}'` (`{python} f'{(d5[1] - d5[2]) / d5[1]:.0%}'` 감소).  
+출력이 이미 뾰족해서 경로 하나가 확률의 대부분을 차지하기 때문이다.  
+G8.4.4에서 잰 blank 비율이 그 이유를 그대로 설명한다.
+
+**이득은 language model에서 온다** (`{python} f'{d5[1]:.4f}'` → `{python} f'{d5[3]:.4f}'`).  
+beam search의 진짜 값어치는 경로 합산이 아니라 **LM을 끼워 넣을 자리**다.
+
+이 결합 방식을 **shallow fusion**이라 부른다.
+
+```{python}
+#| label: decode-2
+#| code-fold: false
+
+print(f"  $\\log P = \\log P_{{CTC}} + \\alpha \\log P_{{LM}} + \\beta |y|$")
+```
+
+CTC 점수에 LM 점수를 **decoding 시점에** 더한다. 학습은 따로다.
+
+| fusion 방식 | 언제 결합 | 특징 |
+|---|---|---|
+| shallow fusion | decoding 시점 | 가장 흔하다. 가중치 tuning 필요 |
+| deep fusion | 학습 시점 (gate) | LM을 바꾸기 어려워진다 |
+| cold fusion | 처음부터 함께 | LM 교체가 쉬워진다 |
+| rescoring | N-best 재점수 | 큰 LM을 쓸 수 있다 |
+
+**그리고 σ=0.12에서는 모든 방법이 무너진다** (PER `{python} f'{DEC[-1][1]:.2f}'`).  
+[8.3](03_classical_speech.qmd)의 HMM도 같은 방식으로 무너졌다.  
+**학습 조건 밖에서 취약한 것은 CTC여도 마찬가지다** —
+이 문제를 푸는 것은 목적함수가 아니라 **데이터의 다양성**이다 (8.5, 8.6).
 
 ---
 
@@ -737,21 +746,21 @@ $$P(\pi \mid X) = \prod_{t=1}^{T} y^t_{\pi_t}$$
 **frame별 출력이 서로 독립**이다 — conditional independence(조건부 독립). 앞에서 무엇을 냈는지가 다음 출력에 영향을 주지 않는다.
 받아쓰기를 하면서 자기가 방금 쓴 글자를 전혀 보지 않는 것과 같다.
 
+conditional independence가 무엇을 못 하게 하는가
+
+- 'q' 다음에는 'u'가 온다 같은 **출력 사이의 규칙**을 배울 수 없다
+- 그래서 외부 LM이 거의 필수다 (위 표에서 이득이 LM에서 왔다)
+- **중복 출력** — 같은 label을 몇 번 낼지 판단할 근거가 frame뿐이다
+- 긴 문맥의 철자·형태 규칙을 encoder가 전부 떠안아야 한다
+
+**RNN-T(RNN transducer)는 prediction network를 더해 이 가정을 없앤다.**
+
+방금 쓴 글자를 다시 읽어 보며 다음 글자를 정하는 속기사다.
+
 ```{python}
 #| label: rnnt
 #| code-fold: false
 
-print("conditional independence가 무엇을 못 하게 하는가")
-print()
-for s in ["'q' 다음에는 'u'가 온다 같은 **출력 사이의 규칙**을 배울 수 없다",
-          "그래서 외부 LM이 거의 필수다 (위 표에서 이득이 LM에서 왔다)",
-          "**중복 출력** — 같은 label을 몇 번 낼지 판단할 근거가 frame뿐이다",
-          "긴 문맥의 철자·형태 규칙을 encoder가 전부 떠안아야 한다"]:
-    print(f"  · {s}")
-print()
-print("**RNN-T(RNN transducer)는 prediction network를 더해 이 가정을 없앤다.**")
-print("  방금 쓴 글자를 다시 읽어 보며 다음 글자를 정하는 속기사다.")
-print()
 print(f"{'':<4}{'구성':<22} {'CTC':<26} {'RNN-T'}")
 print("-" * 78)
 for a, b, c in [
@@ -763,39 +772,37 @@ for a, b, c in [
     ("한 frame에", "label 하나 또는 blank", "**label 여러 개 가능**"),
 ]:
     print(f"{'':<4}{a:<22} {b:<26} {c}")
-print()
-print("lattice의 차이가 핵심이다.")
-print("  CTC lattice는 시간축을 따라 **한 방향**으로만 간다.")
-print("  RNN-T lattice는 (시간, 출력 위치) 평면에서 오른쪽·위로 간다 —")
-print("  시간을 넘기지 않고도 label을 연달아 낼 수 있다.")
-print()
-print("**그래서 RNN-T가 streaming의 표준이 되었다.**")
-print(f"{'요구':<26} {'CTC':<20} {'RNN-T':<18} {'attention seq2seq'}")
-print("-" * 84)
-for a, b, c, d in [
-    ("streaming", "가능", "**가능**", "어렵다 (전체를 본다)"),
-    ("출력 의존성", "없다", "**있다**", "있다"),
-    ("외부 LM 필요", "**크다**", "중간", "작다"),
-    ("학습 비용", "낮다", "높다 (T x U lattice)", "중간"),
-    ("alignment 단조성", "보장", "**보장**", "보장 안 됨"),
-]:
-    print(f"{a:<26} {b:<20} {c:<18} {d}")
-print()
-print("**attention 기반 seq2seq(LAS)의 monotonicity(단조성 — 출력 순서가 입력 시간 순서를 거스르지 않는 성질) 문제**")
-for s in ["attention은 입력의 아무 곳이나 볼 수 있다 — 음성은 **단조**인데도",
-          "그래서 반복·건너뜀·조기 종료 같은 실패가 난다 (7.15의 hallucination과 같은 계열)",
-          "Whisper도 이 계열이고, 실제로 반복 문제가 보고된다 (8.6)",
-          "완화: CTC를 보조 loss로 함께 학습해 **단조성을 강제**한다"]:
-    print(f"  · {s}")
-print()
-print("**현재의 표준 조합**")
-for s in ["**encoder**: Conformer — convolution(국소)과 attention(전역)을 섞는다",
-          "**loss**: CTC + attention 다중 목표 (hybrid CTC/attention)",
-          "**streaming**: RNN-T, 또는 chunk 단위 causal attention",
-          "**출력 단위**: 문자보다 **subword**(7.1) — sequence가 짧아져 유리",
-          "  그리고 subword는 OOV 문제를 없앤다 (8.3의 pronunciation lexicon과 대조)"]:
-    print(f"  · {s}")
 ```
+
+lattice의 차이가 핵심이다.  
+CTC lattice는 시간축을 따라 **한 방향**으로만 간다.  
+RNN-T lattice는 (시간, 출력 위치) 평면에서 오른쪽·위로 간다 —
+시간을 넘기지 않고도 label을 연달아 낼 수 있다.
+
+**그래서 RNN-T가 streaming의 표준이 되었다.**
+
+| 요구 | CTC | RNN-T | attention seq2seq |
+|---|---|---|---|
+| streaming | 가능 | **가능** | 어렵다 (전체를 본다) |
+| 출력 의존성 | 없다 | **있다** | 있다 |
+| 외부 LM 필요 | **크다** | 중간 | 작다 |
+| 학습 비용 | 낮다 | 높다 (T x U lattice) | 중간 |
+| alignment 단조성 | 보장 | **보장** | 보장 안 됨 |
+
+**attention 기반 seq2seq(LAS)의 monotonicity(단조성 — 출력 순서가 입력 시간 순서를 거스르지 않는 성질) 문제**
+
+- attention은 입력의 아무 곳이나 볼 수 있다 — 음성은 **단조**인데도
+- 그래서 반복·건너뜀·조기 종료 같은 실패가 난다 (7.15의 hallucination과 같은 계열)
+- Whisper도 이 계열이고, 실제로 반복 문제가 보고된다 (8.6)
+- 완화: CTC를 보조 loss로 함께 학습해 **단조성을 강제**한다
+
+**현재의 표준 조합**
+
+- **encoder**: Conformer — convolution(국소)과 attention(전역)을 섞는다
+- **loss**: CTC + attention 다중 목표 (hybrid CTC/attention)
+- **streaming**: RNN-T, 또는 chunk 단위 causal attention
+- **출력 단위**: 문자보다 **subword**(7.1) — sequence가 짧아져 유리
+- 그리고 subword는 OOV 문제를 없앤다 (8.3의 pronunciation lexicon과 대조)
 
 ---
 
