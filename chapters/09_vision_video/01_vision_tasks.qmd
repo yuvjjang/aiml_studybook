@@ -84,16 +84,13 @@ CROWD = [(lambda gt: (gt,) + make_detections(gt, g0))(make_scene(g0, 4, 0.9))
 
 ov = [iou(s[0], s[0])[np.triu_indices(len(s[0]), 1)].mean()
       for s in CROWD if len(s[0]) > 1]
-print(f"일반 장면 {len(SCENES)}개 — 객체 평균 "
-      f"{np.mean([len(s[0]) for s in SCENES]):.1f}개")
-print(f"혼잡 장면 {len(CROWD)}개 — 객체 평균 "
-      f"{np.mean([len(s[0]) for s in CROWD]):.1f}개, "
-      f"객체끼리 IoU 평균 {np.mean(ov):.3f}")
-print()
-print(f"detector는 정답마다 box를 {2}개씩 내고, 장면마다 false positive {3}개를 더한다.")
-print(f"  장면당 detection 평균 {np.mean([len(s[1]) for s in SCENES]):.1f}개 "
-      f"(정답은 {np.mean([len(s[0]) for s in SCENES]):.1f}개)")
 ```
+
+일반 장면 `{python} f'{len(SCENES)}'`개 — 객체 평균 `{python} f'{np.mean([len(s[0]) for s in SCENES]):.1f}'`개
+혼잡 장면 `{python} f'{len(CROWD)}'`개 — 객체 평균 `{python} f'{np.mean([len(s[0]) for s in CROWD]):.1f}'`개, 객체끼리 IoU 평균 `{python} f'{np.mean(ov):.3f}'`
+
+detector는 정답마다 box를 `{python} f'{2}'`개씩 내고, 장면마다 false positive `{python} f'{3}'`개를 더한다.  
+장면당 detection 평균 `{python} f'{np.mean([len(s[1]) for s in SCENES]):.1f}'`개 (정답은 `{python} f'{np.mean([len(s[0]) for s in SCENES]):.1f}'`개)
 
 ---
 
@@ -109,6 +106,8 @@ $$\mathrm{IoU} = \frac{|A \cap B|}{|A \cup B|}, \qquad
 
 **IoU**(intersection over union)는 두 box가 겹친 넓이 ÷ 합친 넓이다 — 두 종이를 포개 놓았을 때 겹친 부분이 전체의 몇 %인가. 완전히 같으면 1, 전혀 안 겹치면 0.
 threshold를 바꾸면 어떻게 되는지 잰다.
+
+같은 detection 결과를 IoU threshold만 바꿔 채점한다 (NMS 0.5 고정)
 
 ```{python}
 #| label: map
@@ -160,8 +159,6 @@ def eval_set(scenes, nms_thr=0.5, iou_thr=0.5):
     return float(np.mean(aps)), float(np.mean(nd))
 
 
-print("같은 detection 결과를 IoU threshold만 바꿔 채점한다 (NMS 0.5 고정)")
-print()
 print(f"{'IoU threshold':>13} {'mAP':>10} {'해석'}")
 print("-" * 46)
 IOUS = []
@@ -178,17 +175,17 @@ m50 = [v for t, v in IOUS if t == 0.5][0]
 m75 = [v for t, v in IOUS if t == 0.75][0]
 print(f"**mAP@0.5 = {m50:.3f}, mAP@0.75 = {m75:.3f}, "
       f"COCO mAP@[.5:.95] = {coco:.3f}**")
-print(f"  같은 detector다. 숫자만 {m50/max(m75,1e-9):.1f}배 차이 난다.")
-print()
-print("**'mAP 0.8'이라는 말만으로는 아무것도 알 수 없다.**")
-for s in ["PASCAL VOC는 IoU 0.5 하나만 쓴다 — box가 대충 맞으면 정답",
-          "COCO는 0.50부터 0.95까지 0.05 간격으로 평균낸다 — **위치 precision을 요구**",
-          "그래서 같은 모델의 VOC mAP와 COCO mAP는 비교할 수 없다 — 같은 활쏘기 실력도 과녁 크기가 다르면 점수가 다르다",
-          "논문 표를 볼 때 **어느 threshold인지**를 먼저 확인해야 한다",
-          "[7.13](../07_language/13_evaluation.qmd)에서 본 것과 같은 문제다 — "
-          "지표의 정의가 결론을 바꾼다"]:
-    print(f"  · {s}")
 ```
+
+같은 detector다. 숫자만 `{python} f'{m50 / max(m75, 1e-09):.1f}'`배 차이 난다.
+
+**'mAP 0.8'이라는 말만으로는 아무것도 알 수 없다.**
+
+- PASCAL VOC는 IoU 0.5 하나만 쓴다 — box가 대충 맞으면 정답
+- COCO는 0.50부터 0.95까지 0.05 간격으로 평균낸다 — **위치 precision을 요구**
+- 그래서 같은 모델의 VOC mAP와 COCO mAP는 비교할 수 없다 — 같은 활쏘기 실력도 과녁 크기가 다르면 점수가 다르다
+- 논문 표를 볼 때 **어느 threshold인지**를 먼저 확인해야 한다
+- [7.13](../07_language/13_evaluation.qmd)에서 본 것과 같은 문제다 — 지표의 정의가 결론을 바꾼다
 
 ---
 
@@ -197,14 +194,14 @@ for s in ["PASCAL VOC는 IoU 0.5 하나만 쓴다 — box가 대충 맞으면 �
 detector는 한 객체에 box를 여러 개 낸다. **NMS**(non-maximum suppression — 비최대 억제)가 그것을 정리한다.
 점수 순으로 훑으며, 이미 채택한 box와 IoU가 threshold를 넘는 것을 버린다. "같은 자리에 겹친 후보는 제일 점수 높은 하나만 남긴다"는 규칙이다.
 
+NMS threshold를 바꿔 가며 — 일반 장면과 혼잡 장면
+
 ```{python}
 #| label: nms
 #| code-fold: false
 
 import numpy as np
 
-print("NMS threshold를 바꿔 가며 — 일반 장면과 혼잡 장면")
-print()
 print(f"{'NMS threshold':>13} {'일반 mAP50':>12} {'객체당 box':>12} "
       f"{'혼잡 mAP50':>12} {'객체당 box':>12}")
 print("-" * 64)
@@ -219,36 +216,40 @@ for thr in [0.2, 0.3, 0.5, 0.7, 0.9, 1.01]:
     lbl = f"{thr:.2f}" if thr <= 1.0 else "없음"
     print(f"{lbl:>13} {row[0][0]:>12.4f} {row[0][1]:>12.2f} "
           f"{row[1][0]:>12.4f} {row[1][1]:>12.2f}")
-print()
 lo = [n for n in NMS if n[0] == 0.2][0]
 mid = [n for n in NMS if n[0] == 0.5][0]
 none = NMS[-1]
-print(f"**① threshold가 낮으면 혼잡 장면이 무너진다** — "
-      f"혼잡 mAP {mid[2][0]:.3f} → {lo[2][0]:.3f}.")
-print("  옆에 붙어 있는 **진짜 객체**를 중복으로 오인해 지워 버린다.")
-print("  이것이 NMS의 대표적 실패다 — 사람이 붐비는 장면, 겹친 차량. 나란히 선 쌍둥이를 한 명으로 세는 것이다.")
-print()
-print(f"**② 그런데 NMS를 아예 안 해도 mAP는 안 떨어진다** "
-      f"({none[1][0]:.3f} vs {mid[1][0]:.3f}).")
-print(f"  대신 객체당 box가 {mid[1][1]:.2f}개 → {none[1][1]:.2f}개가 된다.")
-print()
-print("**AP가 중복을 잘 벌하지 않기 때문이다.**")
-for s in ["중복 box는 점수가 낮으므로 PR 곡선의 **뒤쪽**에 온다",
-          "precision 단조 보정을 하면 앞쪽 높은 precision이 그대로 남는다",
-          "즉 **mAP만 보면 NMS를 할 이유가 없어 보인다**",
-          "그런데 제품에서는 한 사람에게 box 3개를 그릴 수 없다"]:
-    print(f"  · {s}")
-print()
-print("**NMS를 정당화하는 것은 지표가 아니라 downstream이다.**")
-print(f"{'용도':<22} {'중복이 왜 문제인가'}")
-print("-" * 62)
-for a, b in [("화면에 그리기", "box가 겹쳐 보인다"),
-             ("개수 세기", "**세는 값이 2~3배가 된다**"),
-             ("tracking (9.7)", "같은 객체가 여러 track으로 갈라진다"),
-             ("downstream crop", "같은 영역을 여러 번 처리 — 비용")]:
-    print(f"{a:<22} {b}")
-print()
-print("**NMS의 변형들**")
+```
+
+**① threshold가 낮으면 혼잡 장면이 무너진다** — 혼잡 mAP `{python} f'{mid[2][0]:.3f}'` → `{python} f'{lo[2][0]:.3f}'`.  
+옆에 붙어 있는 **진짜 객체**를 중복으로 오인해 지워 버린다.  
+이것이 NMS의 대표적 실패다 — 사람이 붐비는 장면, 겹친 차량. 나란히 선 쌍둥이를 한 명으로 세는 것이다.
+
+**② 그런데 NMS를 아예 안 해도 mAP는 안 떨어진다** (`{python} f'{none[1][0]:.3f}'` vs `{python} f'{mid[1][0]:.3f}'`).  
+대신 객체당 box가 `{python} f'{mid[1][1]:.2f}'`개 → `{python} f'{none[1][1]:.2f}'`개가 된다.
+
+**AP가 중복을 잘 벌하지 않기 때문이다.**
+
+- 중복 box는 점수가 낮으므로 PR 곡선의 **뒤쪽**에 온다
+- precision 단조 보정을 하면 앞쪽 높은 precision이 그대로 남는다
+- 즉 **mAP만 보면 NMS를 할 이유가 없어 보인다**
+- 그런데 제품에서는 한 사람에게 box 3개를 그릴 수 없다
+
+**NMS를 정당화하는 것은 지표가 아니라 downstream이다.**
+
+| 용도 | 중복이 왜 문제인가 |
+|---|---|
+| 화면에 그리기 | box가 겹쳐 보인다 |
+| 개수 세기 | **세는 값이 2\~3배가 된다** |
+| tracking (9.7) | 같은 객체가 여러 track으로 갈라진다 |
+| downstream crop | 같은 영역을 여러 번 처리 — 비용 |
+
+**NMS의 변형들**
+
+```{python}
+#| label: nms-2
+#| code-fold: false
+
 for a, b in [("Soft-NMS", "지우는 대신 **점수를 깎는다** — 혼잡 장면에서 낫다"),
              ("class별 NMS", "다른 class끼리는 억제하지 않는다"),
              ("IoU 예측 head", "점수 대신 **위치 품질**로 정렬한다"),
@@ -268,6 +269,8 @@ $$\hat\sigma = \arg\min_{\sigma \in \mathfrak{S}_N}
 
 일대일이므로 **한 객체에 box가 둘 배정되는 일이 원리적으로 없다.** 좌석 하나에 한 사람만 앉는 지정석이다.
 
+같은 detection 결과를 Hungarian matching으로 짝지어 본다
+
 ```{python}
 #| label: hungarian
 #| code-fold: false
@@ -275,8 +278,6 @@ $$\hat\sigma = \arg\min_{\sigma \in \mathfrak{S}_N}
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-print("같은 detection 결과를 Hungarian matching으로 짝지어 본다")
-print()
 print(f"{'방법':<26} {'mAP50':>9} {'객체당 box':>12} {'중복 비율':>11}")
 print("-" * 62)
 
@@ -308,29 +309,32 @@ for nm, SET in [("일반 장면", SCENES), ("혼잡 장면", CROWD)]:
         ROWS.append((nm, tag, float(np.mean(aps)), float(np.mean(ratio))))
         print(f"{nm + ' / ' + tag:<26} {np.mean(aps):>9.4f} "
               f"{np.mean(per):>12.2f} {np.mean(ratio):>11.3f}")
-print()
-print("**'중복 비율' = box를 2개 이상 배정받은 객체의 비율이다.**")
 n_nms = [r for r in ROWS if r[0] == "혼잡 장면" and r[1] == "NMS 0.5"][0]
 n_hun = [r for r in ROWS if r[0] == "혼잡 장면" and "Hungarian" in r[1]][0]
-print(f"  혼잡 장면에서 NMS는 {n_nms[3]:.3f}, Hungarian은 {n_hun[3]:.3f} — "
-      f"{n_nms[3]/max(n_hun[3], 1e-9):.1f}분의 1이다.")
-print(f"  mAP도 {n_nms[2]:.3f} → {n_hun[2]:.3f}로 올랐다 — "
-      "혼잡 장면에서 특히 그렇다.")
-print()
-print("**완전히 0이 아닌 것은 이 실험의 짝짓기 방식 때문이다.**")
-for s in ["matching 비용에 점수를 섞었으므로, 어떤 box가 "
-          "**가장 많이 겹치는 정답이 아닌 쪽**에 배정될 수 있다",
-          "그러면 남은 box 둘이 같은 정답에 몰릴 수 있다",
-          "실제 DETR은 이 matching을 **학습 신호로만** 쓰고, "
-          "inference 때는 query마다 하나씩 낸다"]:
-    print(f"  · {s}")
-print()
-print("[ 중요한 단서 ]")
-print("  **여기서는 짝짓기에 정답 box를 썼다.** inference 때 쓸 수 있는 방법이 아니다.")
-print("  일대일 배정이 무엇을 사는지 보기 위한 **진단**이고,")
-print("  DETR은 같은 효과를 학습으로 얻는다 — query가 서로 다른 것을 맡도록.")
-print()
-print("**DETR이 실제로 한 것과, 그 대가**")
+```
+
+**'중복 비율' = box를 2개 이상 배정받은 객체의 비율이다.**
+
+혼잡 장면에서 NMS는 `{python} f'{n_nms[3]:.3f}'`, Hungarian은 `{python} f'{n_hun[3]:.3f}'` — `{python} f'{n_nms[3] / max(n_hun[3], 1e-09):.1f}'`분의 1이다.  
+mAP도 `{python} f'{n_nms[2]:.3f}'` → `{python} f'{n_hun[2]:.3f}'`로 올랐다 — 혼잡 장면에서 특히 그렇다.
+
+**완전히 0이 아닌 것은 이 실험의 짝짓기 방식 때문이다.**
+
+- matching 비용에 점수를 섞었으므로, 어떤 box가 **가장 많이 겹치는 정답이 아닌 쪽**에 배정될 수 있다
+- 그러면 남은 box 둘이 같은 정답에 몰릴 수 있다
+- 실제 DETR은 이 matching을 **학습 신호로만** 쓰고, inference 때는 query마다 하나씩 낸다
+
+[ 중요한 단서 ]
+**여기서는 짝짓기에 정답 box를 썼다.** inference 때 쓸 수 있는 방법이 아니다.  
+일대일 배정이 무엇을 사는지 보기 위한 **진단**이고,
+DETR은 같은 효과를 학습으로 얻는다 — query가 서로 다른 것을 맡도록.
+
+**DETR이 실제로 한 것과, 그 대가**
+
+```{python}
+#| label: hungarian-2
+#| code-fold: false
+
 print(f"{'':<4}{'얻은 것':<30} {'대가'}")
 print("-" * 70)
 for a, b in [("NMS 제거 — 후처리가 사라진다", "학습이 느리다 (초기 DETR 500 epoch)"),
@@ -338,14 +342,14 @@ for a, b in [("NMS 제거 — 후처리가 사라진다", "학습이 느리다 (
              ("end-to-end 미분 가능", "**matching이 학습 초기에 불안정**하다"),
              ("set prediction이라 순서 무관", "query 수가 상한을 만든다")]:
     print(f"{'':<4}{a:<30} {b}")
-print()
-print("**학습 초기 불안정이 핵심 문제였다.**")
-for s in ["matching이 epoch마다 바뀌면 같은 query가 매번 다른 객체를 배우게 된다 — 자리 배정이 매 시간 바뀌는 교실",
-          "Deformable DETR — sparse attention으로 수렴을 빠르게",
-          "DN-DETR / DINO — **noise 섞은 정답을 함께 넣어** matching을 안정화",
-          "이 계열이 지금 detection 성능의 상위권이다"]:
-    print(f"  · {s}")
 ```
+
+**학습 초기 불안정이 핵심 문제였다.**
+
+- matching이 epoch마다 바뀌면 같은 query가 매번 다른 객체를 배우게 된다 — 자리 배정이 매 시간 바뀌는 교실
+- Deformable DETR — sparse attention으로 수렴을 빠르게
+- DN-DETR / DINO — **noise 섞은 정답을 함께 넣어** matching을 안정화
+- 이 계열이 지금 detection 성능의 상위권이다
 
 ---
 
@@ -373,13 +377,6 @@ g = np.random.default_rng(3)
 p_neg = np.clip(g.beta(1.2, 60, N_ANCHOR - N_POS), 1e-6, 1 - 1e-6)  # 객체일 확률
 p_pos = np.clip(g.beta(3, 3, N_POS), 1e-6, 1 - 1e-6)
 
-print(f"anchor {N_ANCHOR:,}개 중 객체는 {N_POS}개 "
-      f"({N_POS/N_ANCHOR:.4%})")
-print(f"  배경 anchor의 '객체일 확률' 중앙값 {np.median(p_neg):.4f} — "
-      "대부분 이미 잘 맞힌다")
-print(f"  객체 anchor의 확률 중앙값 {np.median(p_pos):.3f} — 아직 애매하다")
-print()
-
 
 def losses(gamma, alpha=None):
     """p_t 기준 loss. gamma=0이면 그냥 CE."""
@@ -388,7 +385,15 @@ def losses(gamma, alpha=None):
     if alpha is not None:
         lp, ln = alpha*lp, (1 - alpha)*ln
     return lp.sum(), ln.sum()
+```
 
+anchor `{python} f'{N_ANCHOR:,}'`개 중 객체는 `{python} f'{N_POS}'`개 (`{python} f'{N_POS / N_ANCHOR:.4%}'`)  
+배경 anchor의 '객체일 확률' 중앙값 `{python} f'{np.median(p_neg):.4f}'` — 대부분 이미 잘 맞힌다
+객체 anchor의 확률 중앙값 `{python} f'{np.median(p_pos):.3f}'` — 아직 애매하다
+
+```{python}
+#| label: focal-2
+#| code-fold: false
 
 print(f"{'loss':<22} {'positive 총합':>13} {'negative 총합':>13} {'negative 비중':>13}")
 print("-" * 62)
@@ -399,32 +404,32 @@ for nm, gm, al in [("CE (γ=0)", 0.0, None), ("focal γ=1", 1.0, None),
     lp, ln = losses(gm, al)
     FOCAL.append((nm, lp, ln, ln/(lp + ln)))
     print(f"{nm:<22} {lp:>13.1f} {ln:>13.1f} {ln/(lp+ln):>13.3f}")
-print()
 ce, f2 = FOCAL[0], FOCAL[2]
-print(f"**CE에서는 loss의 {ce[3]:.1%}가 배경에서 나온다.**")
-print(f"  개별 배경 anchor의 loss는 작지만 {N_ANCHOR-N_POS:,}개가 모이면 압도한다.")
-print(f"  객체 {N_POS}개의 신호가 그 안에 묻힌다 — 잔돈 10만 개가 지폐 20장을 덮는 셈이다.")
-print()
-print(f"**focal γ=2로 바꾸면 negative 비중이 {f2[3]:.1%}로 떨어진다.**")
-print(f"  $(1-p_t)^\\gamma$가 **이미 맞힌 것의 loss를 억누른다.**")
-print(f"  p_t=0.99인 anchor의 loss가 γ=2에서 "
-      f"{(1-0.99)**2:.4f}배가 된다 — 사실상 0이다.")
-print()
-print("**같은 문제를 다르게 푸는 방법들**")
-print(f"{'방법':<24} {'무엇을 하는가':<30} {'쓰이는 곳'}")
-print("-" * 76)
-for a, b, c in [
-    ("hard negative mining", "loss 큰 negative만 골라 학습", "SSD, 2단계 detector"),
-    ("sampling 비율 고정", "positive:negative = 1:3으로 뽑는다", "Faster R-CNN"),
-    ("**focal loss**", "쉬운 것의 loss를 눌러 버린다", "RetinaNet, 1단계 계열"),
-    ("2단계 구조", "1단계가 후보를 걸러 불균형 완화", "R-CNN 계열"),
-]:
-    print(f"{a:<24} {b:<30} {c}")
-print()
-print("**2단계 detector가 애초에 불균형을 덜 겪는 이유가 마지막 줄이다.**")
-print("  RPN(region proposal network — 후보 영역 제안기)이 후보를 수천 개로 줄여 주므로 2단계는 균형 잡힌 문제를 푼다.")
-print("  1단계가 그 이점 없이 경쟁하려면 loss 쪽에서 해결해야 했다.")
 ```
+
+**CE에서는 loss의 `{python} f'{ce[3]:.1%}'`가 배경에서 나온다.**
+
+개별 배경 anchor의 loss는 작지만 `{python} f'{N_ANCHOR - N_POS:,}'`개가 모이면 압도한다.  
+객체 `{python} f'{N_POS}'`개의 신호가 그 안에 묻힌다 — 잔돈 10만 개가 지폐 20장을 덮는 셈이다.
+
+**focal γ=2로 바꾸면 negative 비중이 `{python} f'{f2[3]:.1%}'`로 떨어진다.**
+
+\$(1-p_t)\^\\gamma\$가 **이미 맞힌 것의 loss를 억누른다.**  
+p_t=0.99인 anchor의 loss가 γ=2에서 `{python} f'{(1 - 0.99) ** 2:.4f}'`배가 된다 — 사실상 0이다.
+
+**같은 문제를 다르게 푸는 방법들**
+
+| 방법 | 무엇을 하는가 | 쓰이는 곳 |
+|---|---|---|
+| hard negative mining | loss 큰 negative만 골라 학습 | SSD, 2단계 detector |
+| sampling 비율 고정 | positive:negative = 1:3으로 뽑는다 | Faster R-CNN |
+| **focal loss** | 쉬운 것의 loss를 눌러 버린다 | RetinaNet, 1단계 계열 |
+| 2단계 구조 | 1단계가 후보를 걸러 불균형 완화 | R-CNN 계열 |
+
+**2단계 detector가 애초에 불균형을 덜 겪는 이유가 마지막 줄이다.**
+
+RPN(region proposal network — 후보 영역 제안기)이 후보를 수천 개로 줄여 주므로 2단계는 균형 잡힌 문제를 푼다.  
+1단계가 그 이점 없이 경쟁하려면 loss 쪽에서 해결해야 했다.
 
 ---
 
@@ -434,6 +439,8 @@ segmentation은 pixel 단위 classification이라 짝짓기 문제가 없다. �
 
 $$\mathrm{IoU} = \frac{|A\cap B|}{|A\cup B|}, \qquad
 \mathrm{Dice} = \frac{2|A\cap B|}{|A| + |B|}$$
+
+객체 크기를 바꿔 가며, **1 pixel 두께만큼 경계를 놓쳤을 때**
 
 ```{python}
 #| label: segmentation
@@ -457,8 +464,6 @@ def metrics(pred, true):
             float((pred == true).mean()))                    # pixel 정확도
 
 
-print("객체 크기를 바꿔 가며, **1 pixel 두께만큼 경계를 놓쳤을 때**")
-print()
 print(f"{'반지름':>7} {'객체 비율':>10} {'IoU':>9} {'Dice':>9} {'pixel 정확도':>12}")
 print("-" * 54)
 SEG = []
@@ -468,50 +473,54 @@ for r in [4, 8, 16, 32, 50]:
     io_, di, acc = metrics(pred, true)
     SEG.append((r, float(true.mean()), io_, di, acc))
     print(f"{r:>7} {true.mean():>10.4f} {io_:>9.4f} {di:>9.4f} {acc:>12.5f}")
-print()
 small, big = SEG[0], SEG[-1]
-print(f"**같은 '1 pixel 오차'인데 반지름 {small[0]}에서는 IoU {small[2]:.3f}, "
-      f"반지름 {big[0]}에서는 {big[2]:.3f}다.**")
-print("  작은 객체는 경계 pixel의 비중이 커서 지표가 훨씬 가혹하다 — 작은 동전의 테두리는 동전 전체에서 큰 몫이다.")
-print()
-print(f"**pixel 정확도는 전부 {small[4]:.3f}~{big[4]:.3f}로 높다** — "
-      "쓸모없는 지표다.")
-print(f"  반지름 {small[0]} 원은 이미지의 {small[1]:.2%}뿐이라,")
-print("  전부 배경이라고 답해도 정확도가 높게 나온다.")
-print("  **[7.15](../07_language/15_safety.qmd)·[8.10](../08_audio/10_audio_tasks.qmd)"
-      "의 base rate 문제가 여기서도 같다.**")
-print()
-print(f"**Dice는 IoU보다 항상 크다** "
-      f"(반지름 {small[0]}: {small[2]:.3f} vs {small[3]:.3f}).")
-print("  같은 결과를 더 좋게 보이게 한다 — 논문 비교 시 어느 쪽인지 확인해야 한다.")
-print(r"  둘은 단조 관계다: $\mathrm{Dice} = 2\,\mathrm{IoU}/(1+\mathrm{IoU})$")
-print()
-print("**세 가지 segmentation 과제**")
-print(f"{'과제':<24} {'무엇을 구분하나':<30} {'같은 class 두 개는'}")
-print("-" * 80)
-for a, b, c in [("semantic segmentation", "pixel마다 class", "**구분 안 된다**"),
-                ("instance segmentation", "객체마다 mask", "구분된다 (detection과 같은 문제)"),
-                ("panoptic segmentation", "둘을 합친다", "사물은 구분, 배경은 통합")]:
-    print(f"{a:<24} {b:<30} {c}")
-print()
-print("**panoptic이 나온 이유**")
-for s in ["semantic segmentation은 '사람 3명'을 하나의 사람 영역으로 본다",
-          "instance segmentation은 하늘·도로처럼 **셀 수 없는 것**을 다루지 못한다",
-          "panoptic은 things(셀 수 있는 것)와 stuff(셀 수 없는 것)를 나눠 다룬다",
-          "지표도 PQ = (segmentation 품질) x (인식 품질)로 둘을 곱한다"]:
-    print(f"  · {s}")
-print()
-print("**구조: U-Net과 dilated convolution은 같은 문제를 다르게 푼다**")
+```
+
+**같은 '1 pixel 오차'인데 반지름 `{python} f'{small[0]}'`에서는 IoU `{python} f'{small[2]:.3f}'`, 반지름 `{python} f'{big[0]}'`에서는 `{python} f'{big[2]:.3f}'`다.**
+
+작은 객체는 경계 pixel의 비중이 커서 지표가 훨씬 가혹하다 — 작은 동전의 테두리는 동전 전체에서 큰 몫이다.
+
+**pixel 정확도는 전부 `{python} f'{small[4]:.3f}'`\~`{python} f'{big[4]:.3f}'`로 높다** — 쓸모없는 지표다.  
+반지름 `{python} f'{small[0]}'` 원은 이미지의 `{python} f'{small[1]:.2%}'`뿐이라,
+전부 배경이라고 답해도 정확도가 높게 나온다.
+
+**[7.15](../07_language/15_safety.qmd)·[8.10](../08_audio/10_audio_tasks.qmd)의 base rate 문제가 여기서도 같다.**
+
+**Dice는 IoU보다 항상 크다** (반지름 `{python} f'{small[0]}'`: `{python} f'{small[2]:.3f}'` vs `{python} f'{small[3]:.3f}'`).  
+같은 결과를 더 좋게 보이게 한다 — 논문 비교 시 어느 쪽인지 확인해야 한다.  
+둘은 단조 관계다: \$\\mathrm{Dice} = 2\\,\\mathrm{IoU}/(1+\\mathrm{IoU})\$
+
+**세 가지 segmentation 과제**
+
+| 과제 | 무엇을 구분하나 | 같은 class 두 개는 |
+|---|---|---|
+| semantic segmentation | pixel마다 class | **구분 안 된다** |
+| instance segmentation | 객체마다 mask | 구분된다 (detection과 같은 문제) |
+| panoptic segmentation | 둘을 합친다 | 사물은 구분, 배경은 통합 |
+
+**panoptic이 나온 이유**
+
+- semantic segmentation은 '사람 3명'을 하나의 사람 영역으로 본다
+- instance segmentation은 하늘·도로처럼 **셀 수 없는 것**을 다루지 못한다
+- panoptic은 things(셀 수 있는 것)와 stuff(셀 수 없는 것)를 나눠 다룬다
+- 지표도 PQ = (segmentation 품질) x (인식 품질)로 둘을 곱한다
+
+**구조: U-Net과 dilated convolution은 같은 문제를 다르게 푼다**
+
+```{python}
+#| label: segmentation-2
+#| code-fold: false
+
 print(f"{'':<4}{'접근':<28} {'해상도를 어떻게 되찾나'}")
 print("-" * 68)
 for a, b in [("U-Net", "downsample 후 upsample + **skip connection**으로 세부 복원"),
              ("dilated convolution (DeepLab)", "downsample 없이 **receptive field만 키운다**"),
              ("FPN", "여러 해상도의 feature를 함께 쓴다 (detection과 공유)")]:
     print(f"{'':<4}{a:<28} {b}")
-print()
-print("  [9.0](00_image_basics.qmd)에서 잰 receptive field 식이 여기서 설계 도구가 된다 —")
-print("  segmentation은 **넓은 문맥과 정밀한 경계를 동시에** 요구하기 때문이다.")
 ```
+
+[9.0](00_image_basics.qmd)에서 잰 receptive field 식이 여기서 설계 도구가 된다 —
+segmentation은 **넓은 문맥과 정밀한 경계를 동시에** 요구하기 때문이다.
 
 ```{python}
 #| label: fig-tasks
