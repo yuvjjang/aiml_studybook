@@ -4,11 +4,11 @@ subtitle: "least squares·normal equation·기하학 — 가장 단순한 모델
 jupyter: ai-ml-study
 ---
 
-선형회귀는 **closed form 해(공식 한 줄로 딱 떨어지는 답)가 존재하는 거의 유일한 모델**이다.
+선형회귀는 **closed form 해(공식 한 줄로 딱 떨어지는 답)가 있는 몇 안 되는 모델**이다.
 
-그래서 이 장은 특별하다. 다른 모델에서는 "gradient descent로 어딘가 수렴했다"로 끝나지만,
+그래서 이 장은 특별하다. 대부분의 모델에서는 "gradient descent로 어딘가 수렴했다"로 끝나지만,
 여기서는 정답을 직접 계산해 비교할 수 있다.
-학습·최적화·regularization·통계적 추론의 개념을 **끝까지 계산해볼 수 있는 유일한 실험실**이다.
+학습·최적화·regularization·통계적 추론의 개념을 **끝까지 손으로 계산해 볼 수 있는 드문 실험실**이다.
 
 그리고 이 구조는 사라지지 않는다.
 신경망의 마지막 층은 선형이고, [attention의 projection](../05_transformer/00_attention_mechanism.qmd) $XW_Q$ 도 선형이다.

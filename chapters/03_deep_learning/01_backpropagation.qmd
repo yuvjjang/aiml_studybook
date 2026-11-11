@@ -327,12 +327,12 @@ print("위 구현과 src/nn.py 의 최대 차이:",
 
 ---
 
-## gradient check: 유일한 신뢰 근거
+## gradient check: 구현을 믿을 근거
 
 backpropagation은 **조용히 틀린다.** 전치를 하나 빠뜨려도 gradient가 "대략 맞는 방향"이라
 손실이 여전히 조금 내려가고, 그래서 버그를 눈치채기 어렵다.
 
-유일한 방어책은 **gradient check**(gradient 검사)다 — backpropagation이 낸 값을
+가장 확실한 방어책은 **gradient check**(gradient 검사)다 — backpropagation이 낸 값을
 **numerical differentiation**(수치 미분 — 미분의 정의 그대로, 입력을 아주 조금 바꿔 출력이 얼마나 변하는지 나눠 보는 것)과 대조한다.
 계산기로 긴 암산을 검산하는 것과 같다. 느리지만 독립적인 방법이라 같은 실수를 반복하지 않는다.
 

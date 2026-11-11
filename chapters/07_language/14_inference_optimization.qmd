@@ -897,7 +897,7 @@ print(f"continuous 사용률 {used / (steps * B):.1%}   (step {steps:,})")
 | SmoothQuant | scale을 층 사이로 옮기면 **`{python} f"{s6[2]:.2f}"`로 회복** (함수는 그대로) |
 | speculative decoding | 기대 token = $(1-\alpha^{k+1})/(1-\alpha)$. 최적 k는 α와 비용이 정한다 |
 | 느려질 수도 | c=0.30, α=0.6, k=8이면 speedup **`{python} f"{SLOW_K8:.2f}"`** |
-| speculative의 미덕 | **출력 분포가 바뀌지 않는다** — 품질을 걸지 않는 유일한 최적화 |
+| speculative의 미덕 | **출력 분포가 바뀌지 않는다** — quantization과 달리 품질을 걸지 않는다 (KV cache·batching도 그렇다) |
 | prompt caching | 변하는 부분을 **뒤에** 둔다. 앞에 두면 cache가 통째로 날아간다 |
 | SLO | batch 크기 하나가 latency와 throughput을 맞바꾼다. p99를 본다 |
 

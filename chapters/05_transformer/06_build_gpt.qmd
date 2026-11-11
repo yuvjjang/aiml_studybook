@@ -701,7 +701,7 @@ optimizer.step()         # ← 5절의 AdamW 갱신
 | 얻어가야 할 것 | |
 |---|---|
 | 초기 loss = $\log V$ | 가장 값싼 버그 탐지 |
-| gradient check | backward pass 구현의 유일한 신뢰 근거 |
+| gradient check | backward pass 구현을 믿을 수 있는 근거 |
 | residual의 backward | gradient가 **그대로** 양쪽으로 (분배기) |
 | `np.add.at` | 중복 index 누적 (분기는 합) |
 | KV cache | 근사가 아니라 정확히 같은 계산 |

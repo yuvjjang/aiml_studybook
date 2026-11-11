@@ -14,7 +14,7 @@ jupyter: ai-ml-study
 | 축 | 선택지 | 지금의 관행 |
 |----|--------|------------|
 | vision encoder | CLIP ViT, SigLIP, DINOv2 | **pretraining된 것을 그대로** |
-| connector(connector — 눈과 입 사이의 통역) | projection(projection — 행렬 곱 한 번), Q-Former, cross-attention | **단순한 projection**이 이겼다 |
+| connector(connector — 눈과 입 사이의 통역) | projection(projection — 행렬 곱 한 번), Q-Former, cross-attention | **단순한 projection**이 널리 쓰인다 |
 | 언어모델 | 기존 LLM | 그대로 쓰고 instruction tuning(지시 조정 — 질문에 답하는 형태로 다듬기) |
 | 학습 데이터 | caption + instruction 데이터 | 합성 데이터 비중이 크다 |
 
@@ -22,8 +22,8 @@ LLaVA가 보여 준 것이 "linear projection 한 층 + 좋은 instruction 데�
 그 뒤로 대부분이 그 골격을 따른다.
 
 이 장은 그 골격의 **비용**과 **구조적 한계**를 잰다.
-특히 VLM이 왜 개수를 못 세고 좌우를 헷갈리며 없는 것을 봤다고 하는지 —
-그것이 우연이 아니라 **구조에서 나온다**는 것을 보인다.
+특히 VLM이 개수를 못 세고 좌우를 헷갈리며 없는 것을 봤다고 하는 실패가
+**구조만으로도 생길 수 있다**는 것을 작은 실험으로 보인다.
 
 ---
 
@@ -64,7 +64,9 @@ one, big = BUD[0], BUD[-1]
 print("**이미지 한 장이 context의 상당 부분을 먹는다.**")
 print(f"  336px 단일: token {one[2]}개 — 4096 context의 {one[3]:.1%}")
 print(f"  AnyRes 3x3: token {big[2]:,}개 — {big[3]:.1%}. "
-      "**이미지 두 장이면 context가 꽉 찬다.**")
+      "**한 장으로 이미 이 기준을 넘는다.**")
+print("  (4096은 비교를 위해 잡은 기준값이다. 실제 모델의 context 길이는 "
+      "수천에서 수십만 token까지 다양하다.)")
 print()
 print("**그래서 두 방향의 압력이 생긴다**")
 print()
@@ -242,9 +244,9 @@ print(f"  가장 좋은 것이 {max(c[4] for c in CONN):.4f} — 무작위 0.25�
 for s in ["개수를 세려면 셀마다 **'물체가 있다/없다'로 자른 뒤 더해야** 한다",
           "선형 모델은 그 자르기(threshold)를 못 한다 — 흐릿한 점수를 그냥 합칠 뿐. "
           "'사람 같음 0.6 + 0.7 + 0.4'를 더하면 1.7이지, 몇 명인지가 아니다",
-          "**실제 VLM의 개수 세기 실패도 구조가 비슷하다** — "
+          "**실제 VLM의 개수 세기 실패도 비슷한 구조일 수 있다** — "
           "언어모델이 visual token의 부드러운 집계를 읽는다",
-          "그래서 개수는 token을 늘려도, 모델을 키워도 잘 안 는다"]:
+          "이 실험에서는 token 수를 바꿔도 개수 정확도가 낮은 채로 남는다 (위 표)"]:
     print(f"  · {s}")
 print()
 print("**④ 그리고 token이 많다고 늘 좋지도 않다.**")
@@ -373,8 +375,8 @@ for a, b, c, d in [
 ]:
     print(f"{a:<24} {b:<16} {c:<22} {d}")
 print()
-print("**LLaVA의 '그냥 projection'이 이긴 이유가 여기 보인다.**")
-for s in ["압축하지 않으니 **아무것도 안 잃는다** — 위치도 세부도 그대로",
+print("**LLaVA의 '그냥 projection'이 널리 쓰이게 된 이유 하나가 여기 보인다.**")
+for s in ["connector가 token을 줄이지 않으니 **encoder가 준 위치와 세부가 그대로 넘어간다**",
           "대가는 token 수(G9.9.1)인데, context가 길어지면서 그 대가가 싸졌다",
           "Q-Former는 token이 비쌌던 시기의 해법이었다",
           "지금도 **video**에서는 압축이 필수다 — frame 수만큼 곱해지니까"]:
@@ -417,10 +419,10 @@ fig
 이 그림은 [9.2](02_vit.qmd)의 permutation invariance 실험과 **같은 이야기**다.
 거기서는 patch를 섞어도 attention 출력이 같았고, 여기서는 query가 위치를 못 본다.
 
-VLM이 "왼쪽/오른쪽", "위/아래", "A 앞에 B"를 자주 틀리는 이유가 여기 있다.
-**모델이 멍청해서가 아니라, 위치 정보가 connector에서 새기 때문이다.**
-그래서 최근 모델들은 visual token에 2D positional embedding을 명시적으로 유지하거나,
-아예 압축하지 않는 쪽(LLaVA 계열)을 택한다.
+실제 VLM도 "왼쪽/오른쪽", "위/아래", "A 앞에 B"를 자주 틀린다고 보고된다.
+이 실험이 보여 주는 것은 그 **원인 후보 하나**다. 위치 정보가 connector에서 사라지면, 뒤에 오는 언어모델이 아무리 좋아도 되찾을 수 없다.
+실제 모델의 공간 추론 실패에는 다른 원인도 함께 지목된다. 학습 데이터에 공간 관계를 말하는 문장이 드물다는 것, vision encoder가 위치보다 내용을 맞히도록 학습되었다는 것 등이다. 6×6 격자 실험은 이 원인들을 서로 가려내지 못한다.
+설계 쪽에서는 visual token에 2D positional embedding을 명시적으로 유지하는 방식과, 아예 압축하지 않는 방식(LLaVA 계열)이 쓰인다.
 :::
 
 ---
@@ -551,24 +553,24 @@ single-frame baseline의 VLM 판이다.
 ::: {.callout-tip}
 ## 직접 해보기
 
-**① visual token 예산을 조인다**
-`budget` 에서 이미지당 token을 32·256·1024로 바꾸며 세밀한 질문
-(작은 글씨 읽기 등)의 정확도를 재라. 어디서 포화하는가?
+**① context 기준을 바꾼다**
+`budget` 의 `CTX = 4096` 을 32,768과 131,072로 바꿔 "context 대비" 열을 다시 보라.
+AnyRes 3x3 한 장이 context의 10% 아래로 내려가려면 context가 얼마나 길어야 하는가? 먼저 손으로 계산하고 확인하라.
 
-**② connector를 바꾼다**
-`connector` 의 linear projection과 `qformer` 를 같은 예산으로 비교하라.
-학습 데이터가 적을 때는 어느 쪽이 유리한가?
+**② overfitting 설명을 검증한다**
+본문은 전체 token(36개)이 tile 3x3보다 좌우 정확도가 낮은 이유를 "차원이 커서 overfitting한다"로 설명했다.
+그 설명이 맞다면 학습 장면을 늘릴 때 차이가 줄어야 한다. `data` 의 `dataset(4000, g0)` 을 16,000으로 바꾸고 `connector` 를 다시 돌려라. 줄어드는가?
 
-**③ hallucination을 유도한다**
-`hallucination` 에서 이미지에 없는 물체를 묻는 질문을 만들어라.
-"예"라고 답하는 비율이 얼마인가? 부정 질문을 섞어 학습하면 줄어드는가?
+**③ co-occurrence의 세기를 바꾼다**
+`hallucination` 의 `cooc=0.9` 를 0.5와 0.99로 바꿔 "0 있음 → 1 환각" 비율을 보라.
+환각 비율이 크게 변하는 동안 전체 정확도는 얼마나 변하는가?
 :::
 
 ## 요약
 
 | 개념 | 수치·핵심 | |
 |------|----------|--|
-| **visual token 예산** | 336px = 576 token, AnyRes 3x3 = 5,760 | context의 141%를 먹는다 (회의 시간을 사진 설명에) |
+| **visual token 예산** | 336px = 576 token, AnyRes 3x3 = 5,760 | 4096 token 기준의 141% — 한 장으로 넘친다 (회의 시간을 사진 설명에) |
 | 두 방향의 압력 | 세부는 해상도, 비용은 token 수 | AnyRes가 절충안 (전국 지도 + 지역 상세 지도) |
 | **압축에 강한 것** | 존재: 36 token 0.746 → 1 token 0.760 | 집합 질문은 평균에 남는다 |
 | **압축에 죽는 것** | 좌우: 0.702 → **0.509 (무작위)** | 평균이 위치를 지운다 (평균 얼굴은 자리를 모른다) |
@@ -576,7 +578,7 @@ single-frame baseline의 VLM 판이다.
 | token이 많다고 좋지 않다 | tile 3x3(0.785) > 전체(0.702) | 고차원은 overfitting한다 |
 | **Q-Former의 벽** | 위치 없음: query 1→8개, 0.536→0.528 | attention은 permutation equivariant |
 | 위치를 주면 | 0.536 → **0.811** | 위치 + 충분한 query, 둘 다 필요 |
-| 왜 LLaVA가 이겼나 | 압축을 안 하니 아무것도 안 잃는다 | context가 싸지면서 대가도 싸졌다 |
+| linear projection의 강점 | 압축을 안 하니 encoder가 준 것이 그대로 넘어간다 | context가 싸지면서 대가도 싸졌다 |
 | **co-occurrence hallucination** | 0번 보면 1번 환각 **0.593** vs 0.260 | 대조군은 0.180 vs 0.153 (포크가 보이면 나이프도) |
 | 조건부 격차 | 0.027 → **0.333** (12배) | |
 | 그런데 | 전체 정확도는 0.744 vs 0.760 | **평균 지표가 감춘다** |

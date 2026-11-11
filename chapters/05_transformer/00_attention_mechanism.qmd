@@ -4,7 +4,7 @@ subtitle: "Query·Key·Value와 scaled dot-product — 이 책의 중심"
 jupyter: ai-ml-study
 ---
 
-현대 AI의 거의 전부가 한 줄의 식 위에 서 있다.
+오늘날 널리 쓰이는 대형 모델의 대부분이 한 줄의 식을 핵심 부품으로 쓴다.
 
 $$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V$$
 

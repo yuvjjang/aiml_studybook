@@ -566,7 +566,7 @@ sampling이 1 pass가 되는 대신 학습(density 평가)이 d pass가 된다.
 | 분야 | 현황 | 이유 |
 |---|---|---|
 | 이미지 생성 | 밀림 | 표현력 대비 parameter가 비싸다. diffusion이 압도 |
-| density estimation·anomaly detection | **현역** | 정확한 likelihood가 필요한 유일한 선택지 |
+| density estimation·anomaly detection | **현역** | 정확한 likelihood를 계산할 수 있다 (autoregressive 모델도 가능하다) |
 | variational posterior | 현역 | IAF로 q(z\|x)를 유연하게 (VAE 개선) |
 | simulation-based inference | **현역** | likelihood를 못 쓰는 과학 simulation의 posterior 추정 |
 | 음성 합성 | 밀림→부활 | WaveGlow 후 diffusion에 밀렸다가 flow matching으로 복귀 |

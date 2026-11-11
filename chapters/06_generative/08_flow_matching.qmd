@@ -387,7 +387,7 @@ adversarial loss가 그 흐릿함을 막는다.
 
 | 축 | autoregressive (GPT) | diffusion language model |
 |---|---|---|
-| 품질 | **압도적 우위** | 따라잡는 중 |
+| 품질 | **앞서 있다** | 따라잡는 중 |
 | 생성 방식 | 왼쪽→오른쪽 순차 | **병렬·임의 순서** |
 | step 수 | token 수 L | L보다 적을 수 있음 |
 | 수정 가능성 | 되돌릴 수 없음 | **이전 token을 고칠 수 있음** |
