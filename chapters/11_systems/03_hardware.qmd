@@ -44,11 +44,15 @@ import numpy as np
 PEAK = 312e12          # A100 bf16 tensor core (TFLOP/s)
 BW = 2039e9            # A100 80GB HBM2e (GB/s)
 RIDGE = PEAK/BW
+```
 
-print(f"A100: 연산 {PEAK/1e12:.0f} TFLOP/s, bandwidth {BW/1e9:.0f} GB/s")
+A100: 연산 `{python} f'{PEAK / 1000000000000.0:.0f}'` TFLOP/s, bandwidth `{python} f'{BW / 1000000000.0:.0f}'` GB/s
+
+```{python}
+#| label: roofline-2
+#| code-fold: false
+
 print(f"  **ridge point = {RIDGE:.0f} FLOP/byte**")
-print(f"  byte 하나를 읽어 올 때마다 {RIDGE:.0f}번은 계산해야 본전이다")
-print()
 
 S, H = 4096, 4096
 OPS = [
@@ -60,7 +64,16 @@ OPS = [
     ("softmax", 5/(2*2*2)),
     ("elementwise (x*2+1)", 2/(2*4)),
 ]
-print("  GEMM = 행렬 곱 (general matrix multiply)")
+```
+
+byte 하나를 읽어 올 때마다 `{python} f'{RIDGE:.0f}'`번은 계산해야 본전이다
+
+GEMM = 행렬 곱 (general matrix multiply)
+
+```{python}
+#| label: roofline-3
+#| code-fold: false
+
 print(f"{'연산':<28} {'AI':>11} {'제한':>8} {'달성 상한':>14} {'peak 대비':>10}")
 print("-" * 76)
 ROOF = []
@@ -69,19 +82,15 @@ for nm, ai in OPS:
     ROOF.append((nm, ai, ach))
     print(f"{nm:<28} {ai:>11.2f} {'연산' if ai > RIDGE else '메모리':>8} "
           f"{ach/1e12:>12.1f}T {ach/PEAK:>10.1%}")
-print()
-print("**같은 hardware에서 성능이 600배 차이 난다.**")
-for s in ["큰 GEMM은 ridge point의 9배 — 연산 유닛을 채울 수 있다",
-          "**elementwise(원소별 연산)는 peak의 0.2%**밖에 못 낸다. "
-          "값 하나 읽어 곱셈 한 번 하고 다시 쓰기 때문",
-          "LayerNorm·softmax도 같은 처지다 — "
-          "이들은 FLOPs로 세면 무시할 만한데 **시간은 많이 먹는다**",
-          "그래서 '모델 FLOPs의 몇 %'로 성능을 논하면 "
-          "**어디서 시간이 가는지 못 본다**",
-          "**처방이 갈린다**: GEMM은 precision을 낮춰 빨라지고, "
-          "elementwise는 precision을 낮춰도 그대로다 (읽는 byte가 반으로 줄어야 빨라진다)"]:
-    print(f"  · {s}")
 ```
+
+**같은 hardware에서 성능이 600배 차이 난다.**
+
+- 큰 GEMM은 ridge point의 9배 — 연산 유닛을 채울 수 있다
+- **elementwise(원소별 연산)는 peak의 0.2%**밖에 못 낸다. 값 하나 읽어 곱셈 한 번 하고 다시 쓰기 때문
+- LayerNorm·softmax도 같은 처지다 — 이들은 FLOPs로 세면 무시할 만한데 **시간은 많이 먹는다**
+- 그래서 '모델 FLOPs의 몇 %'로 성능을 논하면 **어디서 시간이 가는지 못 본다**
+- **처방이 갈린다**: GEMM은 precision을 낮춰 빨라지고, elementwise는 precision을 낮춰도 그대로다 (읽는 byte가 반으로 줄어야 빨라진다)
 
 ```{python}
 #| label: fig-roofline
@@ -125,6 +134,8 @@ LLM 추론은 두 단계다.
 
 같은 attention인데 arithmetic intensity가 완전히 다르다.
 
+attention의 arithmetic intensity (KV cache를 읽는 비용까지 세면)
+
 ```{python}
 #| label: attention-ai
 #| code-fold: false
@@ -132,8 +143,6 @@ LLM 추론은 두 단계다.
 import numpy as np
 
 H_ = 4096
-print("attention의 arithmetic intensity (KV cache를 읽는 비용까지 세면)")
-print()
 print(f"{'상황':<28} {'FLOPs':>11} {'이동 byte':>13} {'AI':>10} {'제한':>8}")
 print("-" * 76)
 ATT = []
@@ -146,37 +155,30 @@ for nm, B_, Sq, Skv in [("prefill  B=1, S=4096", 1, 4096, 4096),
     ATT.append((nm, fl, byt, fl/byt))
     print(f"{nm:<28} {fl/1e9:>9.2f}G {byt/1e6:>11.1f}M {fl/byt:>10.2f} "
           f"{'연산' if fl/byt > RIDGE else '메모리':>8}")
-print()
 pre, dec = ATT[0], ATT[1]
-print(f"**prefill은 arithmetic intensity {pre[3]:.0f}, decode는 {dec[3]:.0f}다** "
-      f"— {pre[3]/dec[3]:.0f}배 차이.")
-print(f"  ridge point {RIDGE:.0f}을 기준으로 **완전히 반대편**에 있다.")
-print()
-for s in ["decode는 token 하나를 만들려고 **KV cache 전체를 읽는다** — "
-          "읽은 byte당 계산이 거의 없다. 책 한 권을 다 뒤져 한 글자 쓰는 셈",
-          "**batch를 키워도 arithmetic intensity가 안 오른다** — "
-          "요청마다 자기 KV cache를 읽어야 하니 FLOPs와 byte가 같이 는다",
-          "이것이 LLM 추론이 근본적으로 **memory bandwidth 문제**인 이유다",
-          "그래서 처방이 전부 '읽는 byte를 줄이기' 쪽이다"]:
-    print(f"  · {s}")
-print()
-print("**KV cache를 줄이는 방법들**")
-print()
-print(f"{'기법':<24} {'무엇을 줄이나':<30} {'대가'}")
-print("-" * 74)
-for a, b, c in [
-    ("MQA / GQA", "KV head 수를 1개 또는 group으로", "표현력 약간 손해"),
-    ("KV cache quantization", "bf16 → int8/int4", "정확도 약간 손해"),
-    ("sliding window", "먼 과거를 버린다", "장거리 의존성 손실"),
-    ("PagedAttention", "fragmentation을 없애 실효 batch를 키움", "구현 복잡도"),
-    ("speculative decoding", "**한 번 읽고 여러 token**", "검증 비용, 수용률"),
-]:
-    print(f"{a:<24} {b:<30} {c}")
-print()
-print("  마지막 줄이 특히 arithmetic intensity를 직접 올린다 —")
-print("  가중치를 한 번 읽어 **k개 token을 검증**하면 AI가 k배가 된다.")
-print("  [11.5](05_serving.qmd)에서 다시 본다.")
 ```
+
+**prefill은 arithmetic intensity `{python} f'{pre[3]:.0f}'`, decode는 `{python} f'{dec[3]:.0f}'`다** — `{python} f'{pre[3] / dec[3]:.0f}'`배 차이.  
+ridge point `{python} f'{RIDGE:.0f}'`을 기준으로 **완전히 반대편**에 있다.
+
+- decode는 token 하나를 만들려고 **KV cache 전체를 읽는다** — 읽은 byte당 계산이 거의 없다. 책 한 권을 다 뒤져 한 글자 쓰는 셈
+- **batch를 키워도 arithmetic intensity가 안 오른다** — 요청마다 자기 KV cache를 읽어야 하니 FLOPs와 byte가 같이 는다
+- 이것이 LLM 추론이 근본적으로 **memory bandwidth 문제**인 이유다
+- 그래서 처방이 전부 '읽는 byte를 줄이기' 쪽이다
+
+**KV cache를 줄이는 방법들**
+
+| 기법 | 무엇을 줄이나 | 대가 |
+|---|---|---|
+| MQA / GQA | KV head 수를 1개 또는 group으로 | 표현력 약간 손해 |
+| KV cache quantization | bf16 → int8/int4 | 정확도 약간 손해 |
+| sliding window | 먼 과거를 버린다 | 장거리 의존성 손실 |
+| PagedAttention | fragmentation을 없애 실효 batch를 키움 | 구현 복잡도 |
+| speculative decoding | **한 번 읽고 여러 token** | 검증 비용, 수용률 |
+
+마지막 줄이 특히 arithmetic intensity를 직접 올린다 —
+가중치를 한 번 읽어 **k개 token을 검증**하면 AI가 k배가 된다.  
+[11.5](05_serving.qmd)에서 다시 본다.
 
 ::: {.interaction-hint}
 prefill과 decode가 roofline의 양 끝에 있다는 사실이 serving 설계 전체를 지배한다.
@@ -194,6 +196,8 @@ prefill과 decode가 roofline의 양 끝에 있다는 사실이 serving 설계 �
 
 같은 결과를 **여러 단계로 나눠 계산**하면 중간 결과가 매번 메모리를 왕복한다. 재료를 한 번에 다 꺼내 요리하는 대신 매 단계마다 냉장고에 넣었다 꺼내는 것이다.
 수학적으로 하나로 합칠 수 있는 식으로 비교하면 그 비용만 남는다.
+
+같은 결과를 나눠 계산 vs 한 번에 (numpy는 중간 결과를 매번 새 배열로 만든다)
 
 ```{python}
 #| label: fusion
@@ -214,8 +218,6 @@ def bench(f, rep=5, warm=2):
     return float(np.median(ts))
 
 
-print("같은 결과를 나눠 계산 vs 한 번에 (numpy는 중간 결과를 매번 새 배열로 만든다)")
-print()
 print(f"{'배열 크기':>10} {'연산 수':>8} {'분리 (ms)':>11} {'fusion (ms)':>11} "
       f"{'비율':>7} {'메모리 통과':>12}")
 print("-" * 66)
@@ -244,37 +246,31 @@ for MB in [32, 200]:
           f"{t3/f3:>7.2f} {'6회 → 2회':>12}")
     print(f"{MB:>8}MB {5:>8} {t5*1e3:>11.2f} {f5*1e3:>11.2f} "
           f"{t5/f5:>7.2f} {'10회 → 2회':>12}")
-print()
 big5 = [f for f in FUSE if f[0] == 200 and f[1] == 5][0]
 big3 = [f for f in FUSE if f[0] == 200 and f[1] == 3][0]
-print(f"**연산을 나눠 하면 {big3[2]/big3[3]:.1f}~{big5[2]/big5[3]:.1f}배 느리다.**")
-print("  계산량은 똑같다. 늘어난 것은 **메모리 왕복뿐**이다.")
-print()
-for s in ["이론상 배수는 메모리 통과 횟수의 비(3배·5배)에 가까워야 한다",
-          f"실측은 그보다 작다 ({big5[2]/big5[3]:.1f}배) — "
-          "일부가 cache에서 처리되고, 연산 자체의 비용도 섞여 있어서다",
-          "**그래도 방향은 분명하다**: 같은 계산을 나누면 느려진다",
-          "이것이 **kernel fusion**(커널 융합 — 여러 연산을 한 GPU 함수로 합치기)이 존재하는 이유다 — "
-          "torch.compile·Triton·XLA가 하는 일의 핵심",
-          "FlashAttention도 같은 원리다 — "
-          "attention 행렬을 HBM에 쓰지 않고 **SRAM 안에서 소비**한다"]:
-    print(f"  · {s}")
-print()
-print("**메모리 계층과 왕복 비용** (위로 갈수록 작고 빠르다 — 손·조리대·냉장고·창고)")
-print()
-print(f"{'계층':<18} {'대략 용량':<14} {'대략 bandwidth':<16} {'왕복하면'}")
-print("-" * 70)
-for a, b, c, d in [
-    ("register", "SM당 256KB", "수십 TB/s", "공짜"),
-    ("SRAM (shared memory)", "SM당 ~200KB", "~19 TB/s", "싸다"),
-    ("L2 cache", "40MB", "~5 TB/s", "보통"),
-    ("HBM", "80GB", "2 TB/s", "**비싸다**"),
-    ("host (PCIe)", "TB급", "~64 GB/s", "**아주 비싸다**"),
-]:
-    print(f"{a:<18} {b:<14} {c:<16} {d}")
-print()
-print("  fusion의 목표는 하나다 — **HBM 왕복을 SRAM 왕복으로 바꾼다.**")
 ```
+
+**연산을 나눠 하면 `{python} f'{big3[2] / big3[3]:.1f}'`\~`{python} f'{big5[2] / big5[3]:.1f}'`배 느리다.**
+
+계산량은 똑같다. 늘어난 것은 **메모리 왕복뿐**이다.
+
+- 이론상 배수는 메모리 통과 횟수의 비(3배·5배)에 가까워야 한다
+- 실측은 그보다 작다 (`{python} f'{big5[2] / big5[3]:.1f}'`배) — 일부가 cache에서 처리되고, 연산 자체의 비용도 섞여 있어서다
+- **그래도 방향은 분명하다**: 같은 계산을 나누면 느려진다
+- 이것이 **kernel fusion**(커널 융합 — 여러 연산을 한 GPU 함수로 합치기)이 존재하는 이유다 — torch.compile·Triton·XLA가 하는 일의 핵심
+- FlashAttention도 같은 원리다 — attention 행렬을 HBM에 쓰지 않고 **SRAM 안에서 소비**한다
+
+**메모리 계층과 왕복 비용** (위로 갈수록 작고 빠르다 — 손·조리대·냉장고·창고)
+
+| 계층 | 대략 용량 | 대략 bandwidth | 왕복하면 |
+|---|---|---|---|
+| register | SM당 256KB | 수십 TB/s | 공짜 |
+| SRAM (shared memory) | SM당 \~200KB | \~19 TB/s | 싸다 |
+| L2 cache | 40MB | \~5 TB/s | 보통 |
+| HBM | 80GB | 2 TB/s | **비싸다** |
+| host (PCIe) | TB급 | \~64 GB/s | **아주 비싸다** |
+
+fusion의 목표는 하나다 — **HBM 왕복을 SRAM 왕복으로 바꾼다.**
 
 ---
 
@@ -283,6 +279,8 @@ print("  fusion의 목표는 하나다 — **HBM 왕복을 SRAM 왕복으로 바
 이론 FLOPs는 크기와 무관하게 $2n^3$이다. 실제로는 그렇지 않다.
 이 기계에서 직접 재 본다.
 
+정사각 행렬곱의 실측 throughput (float32, median)
+
 ```{python}
 #| label: gemm
 #| code-fold: false
@@ -290,8 +288,6 @@ print("  fusion의 목표는 하나다 — **HBM 왕복을 SRAM 왕복으로 바
 import time
 import numpy as np
 
-print("정사각 행렬곱의 실측 throughput (float32, median)")
-print()
 print(f"{'n':>6} {'시간 (ms)':>11} {'GFLOP/s':>10} {'AI':>10} "
       f"{'working set MB':>12}")
 print("-" * 56)
@@ -308,35 +304,27 @@ for n in [64, 128, 256, 512, 1024, 2048, 3072]:
     GEMM.append((n, t, fl/t/1e9, fl/byt, byt/1e6))
     print(f"{n:>6} {t*1e3:>11.3f} {fl/t/1e9:>10.1f} {fl/byt:>10.1f} "
           f"{byt/1e6:>12.2f}")
-print()
 best = max(GEMM, key=lambda r: r[2])
 small = GEMM[0]
-print(f"**최고 {best[2]:.0f} GFLOP/s (n={best[0]}), "
-      f"n={small[0]}에서는 {small[2]:.0f} GFLOP/s** — "
-      f"{best[2]/small[2]:.0f}배 차이.")
-print()
-for s in ["작은 행렬은 **호출 overhead와 데이터 이동**이 계산을 압도한다",
-          "arithmetic intensity가 $n/6$로 자라므로, n이 작으면 ridge point에 못 미친다",
-          "**이 측정은 잡음이 있다** — CPU의 BLAS(행렬 연산 library)는 크기마다 다른 "
-          "algorithm·thread 수를 고르고, cache 상태에 민감하다",
-          "그래도 **작은 행렬이 peak에 못 미친다**는 방향은 일관되다",
-          "GPU에서도 같다 — 작은 batch, 좁은 층, 많은 작은 kernel이 "
-          "**연산 유닛을 못 채운다**"]:
-    print(f"  · {s}")
-print()
-print("**그래서 실무에서 하는 것들**")
-print()
-print(f"{'증상':<26} {'처방'}")
-print("-" * 66)
-for a, b in [
-    ("작은 kernel이 아주 많다", "fusion, **CUDA graph**로 실행 overhead 제거"),
-    ("batch가 작다", "dynamic/continuous batching ([11.5](05_serving.qmd))"),
-    ("층이 좁다", "너비를 키우고 깊이를 줄이는 편이 유리할 때가 있다"),
-    ("차원이 8·16 배수가 아니다", "**tensor core가 안 쓰인다** — padding"),
-    ("memory-bound가 확실하다", "precision을 낮춰 **byte를 줄인다**"),
-]:
-    print(f"{a:<26} {b}")
 ```
+
+**최고 `{python} f'{best[2]:.0f}'` GFLOP/s (n=`{python} f'{best[0]}'`), n=`{python} f'{small[0]}'`에서는 `{python} f'{small[2]:.0f}'` GFLOP/s** — `{python} f'{best[2] / small[2]:.0f}'`배 차이.
+
+- 작은 행렬은 **호출 overhead와 데이터 이동**이 계산을 압도한다
+- arithmetic intensity가 \$n/6\$로 자라므로, n이 작으면 ridge point에 못 미친다
+- **이 측정은 잡음이 있다** — CPU의 BLAS(행렬 연산 library)는 크기마다 다른 algorithm·thread 수를 고르고, cache 상태에 민감하다
+- 그래도 **작은 행렬이 peak에 못 미친다**는 방향은 일관되다
+- GPU에서도 같다 — 작은 batch, 좁은 층, 많은 작은 kernel이 **연산 유닛을 못 채운다**
+
+**그래서 실무에서 하는 것들**
+
+| 증상 | 처방 |
+|---|---|
+| 작은 kernel이 아주 많다 | fusion, **CUDA graph**로 실행 overhead 제거 |
+| batch가 작다 | dynamic/continuous batching ([11.5](05_serving.qmd)) |
+| 층이 좁다 | 너비를 키우고 깊이를 줄이는 편이 유리할 때가 있다 |
+| 차원이 8·16 배수가 아니다 | **tensor core가 안 쓰인다** — padding |
+| memory-bound가 확실하다 | precision을 낮춰 **byte를 줄인다** |
 
 ```{python}
 #| label: fig-gemm
@@ -368,12 +356,12 @@ fig
 
 ## G11.3.5 — precision과 6ND: 예산 계산
 
+A100의 precision별 이론 throughput (tensor core)
+
 ```{python}
 #| label: precision
 #| code-fold: false
 
-print("A100의 precision별 이론 throughput (tensor core)")
-print()
 print(f"{'precision':<12} {'TFLOP/s':>10} {'FP32 대비':>10} {'byte/값':>10} "
       f"{'쓰임'}")
 print("-" * 72)
@@ -385,22 +373,23 @@ for nm, tf, by, use in [
     ("INT8", 624, 1, "추론 quantization ([11.4](04_efficiency.qmd))"),
 ]:
     print(f"{nm:<12} {tf:>10.1f} {tf/19.5:>9.0f}x {by:>10} {use}")
-print()
-for s in ["**BF16이 FP16을 대체한 이유는 속도가 아니라 exponent(지수) 범위**다 — "
-          "둘 다 312 TFLOP/s인데 BF16은 FP32와 같은 exponent bit를 갖는다. "
-          "자릿수(precision)를 줄이는 대신 표현할 수 있는 크기 범위는 그대로 둔 것",
-          "그래서 loss scaling 없이도 overflow·underflow가 덜 난다",
-          "precision을 낮추면 **연산도 빨라지고 byte도 준다** — "
-          "memory-bound 연산에도 도움이 된다",
-          "다만 [11.2](02_distributed_training.qmd)에서 봤듯 "
-          "**optimizer 상태는 fp32로 남긴다** — 누적 오차 때문"]:
-    print(f"  · {s}")
-print()
-print("**학습 총 연산량의 어림식: 6ND**")
-print("  parameter N개, token D개면 총 FLOPs ≈ 6ND")
-print("  (forward 2ND + backward 4ND. backward가 입력·가중치 양쪽 gradient를 계산)")
-print()
 MFU = 0.4
+```
+
+- **BF16이 FP16을 대체한 이유는 속도가 아니라 exponent(지수) 범위**다 — 둘 다 312 TFLOP/s인데 BF16은 FP32와 같은 exponent bit를 갖는다. 자릿수(precision)를 줄이는 대신 표현할 수 있는 크기 범위는 그대로 둔 것
+- 그래서 loss scaling 없이도 overflow·underflow가 덜 난다
+- precision을 낮추면 **연산도 빨라지고 byte도 준다** — memory-bound 연산에도 도움이 된다
+- 다만 [11.2](02_distributed_training.qmd)에서 봤듯 **optimizer 상태는 fp32로 남긴다** — 누적 오차 때문
+
+**학습 총 연산량의 어림식: 6ND**
+
+parameter N개, token D개면 총 FLOPs ≈ 6ND
+(forward 2ND + backward 4ND. backward가 입력·가중치 양쪽 gradient를 계산)
+
+```{python}
+#| label: precision-2
+#| code-fold: false
+
 print(f"{'모델':<8} {'N':>8} {'D':>9} {'총 FLOPs':>11} {'A100-시간':>13} "
       f"{'1024장이면':>12}")
 print("-" * 66)
@@ -413,37 +402,29 @@ for nm, N_, D_ in [("125M", 125e6, 2.5e9), ("1.3B", 1.3e9, 26e9),
     COST.append((nm, fl, hrs))
     print(f"{nm:<8} {N_/1e9:>7.2f}B {D_/1e12:>8.3f}T {fl:>11.2e} "
           f"{hrs:>13,.0f} {hrs/1024/24:>10.1f}일")
-print()
-print(f"  (MFU {MFU:.0%} 가정 — MFU(model FLOPs utilization)는 이론 peak 대비 실제로 낸 비율. 이 값이 이 장 전체의 주제다)")
-print()
 c7, c405 = COST[2], COST[4]
-print(f"**7B는 1024장으로 {c7[2]/1024/24:.1f}일, "
-      f"405B는 {c405[2]/1024/24:.0f}일이다.**")
-for s in ["MFU를 40%에서 50%로 올리면 **비용이 20% 준다** — "
-          "그래서 kernel 최적화에 사람을 붙인다",
-          "MFU를 떨어뜨리는 것들: pipeline bubble "
-          "([11.2](02_distributed_training.qmd)), 겹치지 못한 통신, "
-          "memory-bound 연산, data loader 대기 ([11.1](01_data_pipeline.qmd))",
-          "**Part 11의 앞 세 장이 전부 이 한 숫자를 위한 것**이었다",
-          "6ND는 어림식이다 — attention의 $S^2$ 항은 무시했고, "
-          "긴 context에서는 그 항이 커진다"]:
-    print(f"  · {s}")
-print()
-print("**profiling(어디서 시간이 가는지 재기) 없이 최적화하지 말 것**")
-print()
-print(f"{'질문':<30} {'보는 것'}")
-print("-" * 66)
-for a, b in [
-    ("GPU가 놀고 있나", "accelerator 사용률, kernel timeline의 빈틈"),
-    ("compute-bound인가 memory-bound인가", "**달성 bandwidth vs 달성 FLOPs**"),
-    ("어떤 kernel이 오래 걸리나", "kernel별 시간 상위 목록"),
-    ("kernel이 너무 많나", "kernel 개수와 평균 실행 시간"),
-    ("통신이 겹치고 있나", "통신 kernel과 계산 kernel의 중첩"),
-]:
-    print(f"{a:<30} {b}")
-print()
-print("  **두 번째 줄이 이 장의 요점이다.** 그것을 모르면 처방이 반대가 된다.")
 ```
+
+(MFU `{python} f'{MFU:.0%}'` 가정 — MFU(model FLOPs utilization)는 이론 peak 대비 실제로 낸 비율. 이 값이 이 장 전체의 주제다)
+
+**7B는 1024장으로 `{python} f'{c7[2] / 1024 / 24:.1f}'`일, 405B는 `{python} f'{c405[2] / 1024 / 24:.0f}'`일이다.**
+
+- MFU를 40%에서 50%로 올리면 **비용이 20% 준다** — 그래서 kernel 최적화에 사람을 붙인다
+- MFU를 떨어뜨리는 것들: pipeline bubble ([11.2](02_distributed_training.qmd)), 겹치지 못한 통신, memory-bound 연산, data loader 대기 ([11.1](01_data_pipeline.qmd))
+- **Part 11의 앞 세 장이 전부 이 한 숫자를 위한 것**이었다
+- 6ND는 어림식이다 — attention의 \$S\^2\$ 항은 무시했고, 긴 context에서는 그 항이 커진다
+
+**profiling(어디서 시간이 가는지 재기) 없이 최적화하지 말 것**
+
+| 질문 | 보는 것 |
+|---|---|
+| GPU가 놀고 있나 | accelerator 사용률, kernel timeline의 빈틈 |
+| compute-bound인가 memory-bound인가 | **달성 bandwidth vs 달성 FLOPs** |
+| 어떤 kernel이 오래 걸리나 | kernel별 시간 상위 목록 |
+| kernel이 너무 많나 | kernel 개수와 평균 실행 시간 |
+| 통신이 겹치고 있나 | 통신 kernel과 계산 kernel의 중첩 |
+
+**두 번째 줄이 이 장의 요점이다.** 그것을 모르면 처방이 반대가 된다.
 
 ---
 
