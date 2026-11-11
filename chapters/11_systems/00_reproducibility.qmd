@@ -64,16 +64,22 @@ def train_once(s_init=0, s_batch=0, s_drop=0, hidden=32, steps=300):
              opt=nn.Optimizer("adam", lr=0.01),
              steps=steps, batch_size=64, seed=s_batch)   # batch 추출
     return float((m.predict(Xte).argmax(1) == yte).mean())
-
-
-print(f"학습 {len(Xtr)}개 / 평가 {len(Xte)}개, 3-class, MLP [12,32,32,3]")
-print(f"  무작위성 출처 세 가지를 **따로 seed**로 제어한다")
-print(f"    · 가중치 초기화")
-print(f"    · batch 추출 순서")
-print(f"    · dropout mask")
-print()
-print("**데이터는 고정이다.** 그런데도 결과가 흔들린다 — 얼마나 흔들리는지 잰다.")
 ```
+
+학습 `{python} f'{len(Xtr)}'`개 / 평가 `{python} f'{len(Xte)}'`개, 3-class, MLP [12,32,32,3]
+무작위성 출처 세 가지를 **따로 seed**로 제어한다
+
+- 가중치 초기화
+- batch 추출 순서
+
+```{python}
+#| label: setup-2
+#| code-fold: false
+
+print(f"    · dropout mask")
+```
+
+**데이터는 고정이다.** 그런데도 결과가 흔들린다 — 얼마나 흔들리는지 잰다.
 
 ---
 
@@ -89,32 +95,42 @@ print("**데이터는 고정이다.** 그런데도 결과가 흔들린다 — �
 import numpy as np
 
 ACC = np.array([train_once(s, s, s) for s in range(40)])
-print(f"같은 설정으로 seed만 바꿔 {len(ACC)}번 학습했다")
-print()
-print(f"  평균     {ACC.mean():.4f}")
-print(f"  표준편차 {ACC.std():.4f}")
-print(f"  최소     {ACC.min():.4f}")
-print(f"  최대     {ACC.max():.4f}")
+```
+
+같은 설정으로 seed만 바꿔 `{python} f'{len(ACC)}'`번 학습했다
+
+평균 `{python} f'{ACC.mean():.4f}'`
+표준편차 `{python} f'{ACC.std():.4f}'`
+최소 `{python} f'{ACC.min():.4f}'`
+최대 `{python} f'{ACC.max():.4f}'`
+
+```{python}
+#| label: seed-spread-2
+#| code-fold: false
+
 print(f"  **폭     {ACC.max()-ACC.min():.4f}** "
       f"({(ACC.max()-ACC.min())*100:.1f}%p)")
-print()
-print("분포")
 lo, hi = ACC.min(), ACC.max()
+```
+
+분포
+
+```{python}
+#| label: seed-spread-3
+#| code-fold: false
+
 for i in range(10):
     a, b = lo + (hi-lo)*i/10, lo + (hi-lo)*(i+1)/10
     c = int(((ACC >= a) & (ACC < b + (1e-9 if i == 9 else 0))).sum())
     print(f"  {a:.4f}–{b:.4f} {'█'*c}{'' if c else '·'} {c}")
-print()
-print(f"**최고 seed와 최저 seed의 차이가 "
-      f"{(ACC.max()-ACC.min())*100:.1f}%p다.**")
-for s in ["논문에서 '우리 방법이 1%p 개선했다'는 주장을 흔히 본다",
-          f"그런데 여기서는 **아무것도 안 바꿔도** "
-          f"{(ACC.max()-ACC.min())*100:.1f}%p가 흔들린다",
-          "seed 하나만 돌리고 보고하면, 그 숫자는 **방법이 아니라 seed의 성질**이다",
-          "[10.3](../10_rl/03_deep_rl.qmd)에서도 같은 것을 봤다 — "
-          "deep reinforcement learning의 seed 표준편차가 평균의 10~20%였다"]:
-    print(f"  · {s}")
 ```
+
+**최고 seed와 최저 seed의 차이가 `{python} f'{(ACC.max() - ACC.min()) * 100:.1f}'`%p다.**
+
+- 논문에서 '우리 방법이 1%p 개선했다'는 주장을 흔히 본다
+- 그런데 여기서는 **아무것도 안 바꿔도** `{python} f'{(ACC.max() - ACC.min()) * 100:.1f}'`%p가 흔들린다
+- seed 하나만 돌리고 보고하면, 그 숫자는 **방법이 아니라 seed의 성질**이다
+- [10.3](../10_rl/03_deep_rl.qmd)에서도 같은 것을 봤다 — deep reinforcement learning의 seed 표준편차가 평균의 10\~20%였다
 
 ```{python}
 #| label: fig-spread
@@ -150,14 +166,14 @@ fig
 
 무작위성의 출처를 하나씩만 풀어 놓고 나머지를 고정하면, 각자의 기여를 볼 수 있다.
 
+한 출처만 바꾸고 나머지는 고정 (각 20회)
+
 ```{python}
 #| label: sources
 #| code-fold: false
 
 import numpy as np
 
-print("한 출처만 바꾸고 나머지는 고정 (각 20회)")
-print()
 print(f"{'바꾼 것':<24} {'표준편차':>10} {'폭':>9} {'전체 σ 대비':>12}")
 print("-" * 58)
 FULL = float(ACC.std())
@@ -170,41 +186,34 @@ for nm, f in [("전부 (셋 다)", lambda s: (s, s, s)),
     SRC.append((nm, float(a.std()), float(a.max()-a.min())))
     print(f"{nm:<24} {SRC[-1][1]:>10.4f} {SRC[-1][2]:>9.4f} "
           f"{SRC[-1][1]/FULL:>12.2f}")
-print()
 parts = [s[1] for s in SRC[1:]]
 quad = float(np.sqrt(sum(p*p for p in parts)))
-print("**분산은 대략 제곱합으로 더해진다.** (독립인 흔들림은 표준편차가 아니라 분산끼리 더해진다)")
-print(f"  각 출처: {' , '.join(f'{p:.4f}' for p in parts)}")
-print(f"  제곱합의 제곱근 {quad:.4f} vs 전부 함께 {SRC[0][1]:.4f}")
-print(f"  ({'가깝다' if abs(quad-SRC[0][1])/SRC[0][1] < 0.35 else '차이가 있다'} "
-      "— 출처들이 대체로 독립이라는 뜻이다)")
-print()
 big = max(SRC[1:], key=lambda x: x[1])
-print(f"**가장 큰 출처는 {big[0].replace('만','')}다** (σ {big[1]:.4f}).")
-for s in ["제곱합이므로 **가장 큰 것 하나를 잡는 것이 가장 이득**이다 — "
-          "큰 구멍 하나를 막는 것이 작은 구멍 여럿을 막는 것보다 낫다",
-          "작은 출처를 없애도 전체 σ는 거의 안 준다",
-          "그래서 'dropout seed만 고정했는데 왜 여전히 흔들리죠'라는 "
-          "질문이 나온다",
-          "실무에서는 **하나의 master seed에서 모든 하위 seed를 파생**시켜 "
-          "전부를 한 번에 고정한다"]:
-    print(f"  · {s}")
-print()
-print("**실제 학습에서 무작위성이 들어오는 자리들**")
-print()
-print(f"{'출처':<24} {'고정 방법':<30} {'놓치기 쉬운 점'}")
-print("-" * 80)
-for a, b, c in [
-    ("가중치 초기화", "framework 전역 seed", "층마다 다른 생성기를 쓰기도"),
-    ("데이터 순서·shuffle", "DataLoader seed", "**worker마다 별도 seed**가 필요"),
-    ("데이터 augmentation", "augmentation pipeline seed", "worker process에서 재seed 필요"),
-    ("dropout·noise", "전역 seed", "—"),
-    ("non-deterministic GPU kernel", "deterministic 모드 켜기", "**속도 손해**, 일부 연산은 불가"),
-    ("distributed training의 통신 순서", "고정 어려움", "all-reduce 순서가 floating point를 바꾼다"),
-    ("library version", "dependency lock(의존성 잠금)", "같은 version이어도 CPU 명령어셋 차이"),
-]:
-    print(f"{a:<24} {b:<30} {c}")
 ```
+
+**분산은 대략 제곱합으로 더해진다.** (독립인 흔들림은 표준편차가 아니라 분산끼리 더해진다)  
+각 출처: `{python} f'{' , '.join((f'{p:.4f}' for p in parts))}'`
+제곱합의 제곱근 `{python} f'{quad:.4f}'` vs 전부 함께 `{python} f'{SRC[0][1]:.4f}'`
+(`{python} f'{('가깝다' if abs(quad - SRC[0][1]) / SRC[0][1] < 0.35 else '차이가 있다')}'` — 출처들이 대체로 독립이라는 뜻이다)
+
+**가장 큰 출처는 `{python} f'{big[0].replace('만', '')}'`다** (σ `{python} f'{big[1]:.4f}'`).
+
+- 제곱합이므로 **가장 큰 것 하나를 잡는 것이 가장 이득**이다 — 큰 구멍 하나를 막는 것이 작은 구멍 여럿을 막는 것보다 낫다
+- 작은 출처를 없애도 전체 σ는 거의 안 준다
+- 그래서 'dropout seed만 고정했는데 왜 여전히 흔들리죠'라는 질문이 나온다
+- 실무에서는 **하나의 master seed에서 모든 하위 seed를 파생**시켜 전부를 한 번에 고정한다
+
+**실제 학습에서 무작위성이 들어오는 자리들**
+
+| 출처 | 고정 방법 | 놓치기 쉬운 점 |
+|---|---|---|
+| 가중치 초기화 | framework 전역 seed | 층마다 다른 생성기를 쓰기도 |
+| 데이터 순서·shuffle | DataLoader seed | **worker마다 별도 seed**가 필요 |
+| 데이터 augmentation | augmentation pipeline seed | worker process에서 재seed 필요 |
+| dropout·noise | 전역 seed | — |
+| non-deterministic GPU kernel | deterministic 모드 켜기 | **속도 손해**, 일부 연산은 불가 |
+| distributed training의 통신 순서 | 고정 어려움 | all-reduce 순서가 floating point를 바꾼다 |
+| library version | dependency lock(의존성 잠금) | 같은 version이어도 CPU 명령어셋 차이 |
 
 ---
 
@@ -228,18 +237,26 @@ if A.mean() >= B.mean():
 else:
     GOOD, BAD, GN, BN = B, A, "B (hidden 48)", "A (hidden 32)"
 DELTA = float(GOOD.mean() - BAD.mean())
+```
 
-print(f"seed 60개씩 돌려 얻은 **참 성능**")
-print()
+seed 60개씩 돌려 얻은 **참 성능**
+
+```{python}
+#| label: two-methods-2
+#| code-fold: false
+
 print(f"  {GN:<14} {GOOD.mean():.4f} ± {GOOD.std():.4f}")
 print(f"  {BN:<14} {BAD.mean():.4f} ± {BAD.std():.4f}")
-print(f"  참 차이 δ = {DELTA:+.4f} — 표준편차의 {DELTA/GOOD.std():.2f}배뿐이다")
-print()
-print(f"**{GN}가 진짜로 낫다. 이제 이것을 안다고 치고, 관행을 시험한다.**")
 ```
+
+참 차이 δ = `{python} f'{DELTA:+.4f}'` — 표준편차의 `{python} f'{DELTA / GOOD.std():.2f}'`배뿐이다
+
+**`{python} f'{GN}'`가 진짜로 낫다. 이제 이것을 안다고 치고, 관행을 시험한다.**
 
 **흔한 관행: 여러 번 돌려 가장 좋은 결과를 보고한다.** 이것이 **best-of-k**다 — 주사위를 10번 던져 가장 높은 눈만 보고하는 것.
 열등한 방법이 그렇게 하면 어떻게 되는지 본다.
+
+열등한 방법(`{python} f'{BN}'`)을 k번 돌려 **최고만** 보고할 때
 
 ```{python}
 #| label: best-of-k
@@ -248,8 +265,6 @@ print(f"**{GN}가 진짜로 낫다. 이제 이것을 안다고 치고, 관행을
 import numpy as np
 
 rng = np.random.default_rng(0)
-print(f"열등한 방법({BN})을 k번 돌려 **최고만** 보고할 때")
-print()
 print(f"{'k':>4} {'best-of-k 기대':>14} {'참 평균 대비':>14} "
       f"{'우수 방법의 평균을 넘길 확률':>26}")
 print("-" * 62)
@@ -260,38 +275,31 @@ for k in [1, 2, 3, 5, 10, 20, 50]:
     BOK.append((k, float(m.mean()), float(np.mean(m > GOOD.mean()))))
     print(f"{k:>4} {m.mean():>14.4f} {m.mean()-BAD.mean():>+14.4f} "
           f"{np.mean(m > GOOD.mean()):>26.4f}")
-print()
-print(f"  (참 평균: 열등 {BAD.mean():.4f}, 우수 {GOOD.mean():.4f})")
-print()
 k10 = [b for b in BOK if b[0] == 10][0]
 k3 = [b for b in BOK if b[0] == 3][0]
-print(f"**k=3이면 이미 {k3[2]:.1%} 확률로 우수한 방법을 이긴다.**")
-print(f"**k=10이면 {k10[2]:.1%} — 사실상 확실하다.**")
-print()
-for s in ["열등한 방법을 열 번 돌려 최고만 보고하면 "
-          "**거의 항상 이긴다**",
-          "부정직할 필요도 없다 — '몇 번 돌려서 잘 된 걸 썼다'는 "
-          "아주 자연스러운 행동이다",
-          "[10.3](../10_rl/03_deep_rl.qmd) G10.3.1의 **maximization bias**와 "
-          "정확히 같은 수학이다 — $\\mathbb{E}[\\max] > \\max\\mathbb{E}$",
-          "거기서는 Q 값이 부풀었고, 여기서는 **보고된 성능**이 부푼다",
-          "차이는 하나뿐이다. Q-learning은 그걸 자동으로 하고, "
-          "여기서는 **사람이 한다**"]:
-    print(f"  · {s}")
-print()
-print("**그래서 protocol이 필요하다**")
-print()
-print(f"{'하지 말 것':<30} {'대신':<34}")
-print("-" * 68)
-for a, b in [
-    ("최선 seed의 결과를 보고", "**seed 여러 개의 평균 ± 표준편차**"),
-    ("우리 방법만 여러 번 돌리기", "양쪽에 같은 예산"),
-    ("validation set으로 seed 고르기", "seed 선택도 결과의 일부로 보고"),
-    ("잘 된 실험만 기록", "실패한 실험도 함께 (기록의 완결성)"),
-    ("hyperparameter를 한쪽만 tuning", "**양쪽에 같은 탐색 예산**"),
-]:
-    print(f"{a:<30} {b:<34}")
 ```
+
+(참 평균: 열등 `{python} f'{BAD.mean():.4f}'`, 우수 `{python} f'{GOOD.mean():.4f}'`)
+
+**k=3이면 이미 `{python} f'{k3[2]:.1%}'` 확률로 우수한 방법을 이긴다.**
+
+**k=10이면 `{python} f'{k10[2]:.1%}'` — 사실상 확실하다.**
+
+- 열등한 방법을 열 번 돌려 최고만 보고하면 **거의 항상 이긴다**
+- 부정직할 필요도 없다 — '몇 번 돌려서 잘 된 걸 썼다'는 아주 자연스러운 행동이다
+- [10.3](../10_rl/03_deep_rl.qmd) G10.3.1의 **maximization bias**와 정확히 같은 수학이다 — \$\\mathbb{E}[\\max] > \\max\\mathbb{E}\$
+- 거기서는 Q 값이 부풀었고, 여기서는 **보고된 성능**이 부푼다
+- 차이는 하나뿐이다. Q-learning은 그걸 자동으로 하고, 여기서는 **사람이 한다**
+
+**그래서 protocol이 필요하다**
+
+| 하지 말 것 | 대신 |
+|---|---|
+| 최선 seed의 결과를 보고 | **seed 여러 개의 평균 ± 표준편차** |
+| 우리 방법만 여러 번 돌리기 | 양쪽에 같은 예산 |
+| validation set으로 seed 고르기 | seed 선택도 결과의 일부로 보고 |
+| 잘 된 실험만 기록 | 실패한 실험도 함께 (기록의 완결성) |
+| hyperparameter를 한쪽만 tuning | **양쪽에 같은 탐색 예산** |
 
 ```{python}
 #| label: fig-bok
@@ -344,9 +352,15 @@ from scipy import stats
 
 warnings.filterwarnings("ignore")
 rng = np.random.default_rng(1)
-print(f"참 차이 δ = {DELTA:+.4f}를 seed n개로 판별하기")
-print("  t-test = 두 평균의 차이가 우연으로 설명되기 어려운지(p<0.05) 보는 검정")
-print()
+```
+
+참 차이 δ = `{python} f'{DELTA:+.4f}'`를 seed n개로 판별하기
+t-test = 두 평균의 차이가 우연으로 설명되기 어려운지(p<0.05) 보는 검정
+
+```{python}
+#| label: power-2
+#| code-fold: false
+
 print(f"{'seed n':>7} {'순위가 뒤집힐 확률':>18} {'t-test로 옳게 검출':>20}")
 print("-" * 50)
 POW = []
@@ -365,40 +379,32 @@ for n in [1, 2, 3, 5, 10, 20, 40]:
     POW.append((n, wrong/T, det/T if n > 1 else np.nan))
     d = f"{det/T:.4f}" if n > 1 else "—"
     print(f"{n:>7} {wrong/T:>18.4f} {d:>20}")
-print()
 need = ((GOOD.std()**2 + BAD.std()**2)*(1.96 + 0.84)**2)/DELTA**2
-print(f"**정규 근사로 계산한 필요 표본: 군당 약 {need:.0f}개 seed** "
-      "(statistical power 80%, 유의수준 5%)")
-print()
 p1 = POW[0]; p3 = [p for p in POW if p[0] == 3][0]
 p20 = [p for p in POW if p[0] == 20][0]
-print("**현실은 이렇다.**")
-print(f"  seed 1개: {p1[1]:.1%} 확률로 **순위를 거꾸로** 본다")
-print(f"  seed 3개 (흔한 관행): {p3[1]:.1%}가 여전히 뒤집히고, "
-      f"t-test로 옳게 검출할 확률은 {p3[2]:.1%}뿐")
-print(f"  seed 20개: 뒤집힘 {p20[1]:.1%}, 검출 {p20[2]:.1%}")
-print()
-for s in [f"δ가 표준편차의 {DELTA/GOOD.std():.2f}배밖에 안 되기 때문이다 — "
-          "**작은 효과를 재려면 표본이 많이 든다**",
-          "이것은 [7.13](../07_language/13_evaluation.qmd)에서 본 것과 "
-          "같은 통계 문제다 (statistical power — 진짜 차이를 잡아낼 확률)",
-          "**seed 3개는 '분산을 보고했다'는 알리바이일 뿐** "
-          "판별력은 거의 없다",
-          "그렇다고 53개를 돌릴 수도 없다 — 그래서 실무의 답은 셋 중 하나다"]:
-    print(f"  · {s}")
-print()
-print(f"{'전략':<24} {'무엇을 하나':<34} {'대가'}")
-print("-" * 76)
-for a, b, c in [
-    ("효과 크기를 키운다", "작은 개선은 아예 주장하지 않는다", "보수적"),
-    ("분산을 줄인다", "seed 외 요소를 짝지어 통제", "설계 비용"),
-    ("여러 과제에서 잰다", "과제 수로 표본을 늘린다", "과제 선택 편향"),
-    ("불확실성을 그대로 보고", "'구별되지 않는다'고 쓴다", "**논문이 안 팔린다**"),
-]:
-    print(f"{a:<24} {b:<34} {c}")
-print()
-print("  마지막 줄이 이 문제가 안 풀리는 진짜 이유다.")
 ```
+
+**정규 근사로 계산한 필요 표본: 군당 약 `{python} f'{need:.0f}'`개 seed** (statistical power 80%, 유의수준 5%)
+
+**현실은 이렇다.**
+
+seed 1개: `{python} f'{p1[1]:.1%}'` 확률로 **순위를 거꾸로** 본다
+seed 3개 (흔한 관행): `{python} f'{p3[1]:.1%}'`가 여전히 뒤집히고, t-test로 옳게 검출할 확률은 `{python} f'{p3[2]:.1%}'`뿐
+seed 20개: 뒤집힘 `{python} f'{p20[1]:.1%}'`, 검출 `{python} f'{p20[2]:.1%}'`
+
+- δ가 표준편차의 `{python} f'{DELTA / GOOD.std():.2f}'`배밖에 안 되기 때문이다 — **작은 효과를 재려면 표본이 많이 든다**
+- 이것은 [7.13](../07_language/13_evaluation.qmd)에서 본 것과 같은 통계 문제다 (statistical power — 진짜 차이를 잡아낼 확률)
+- **seed 3개는 '분산을 보고했다'는 알리바이일 뿐** 판별력은 거의 없다
+- 그렇다고 53개를 돌릴 수도 없다 — 그래서 실무의 답은 셋 중 하나다
+
+| 전략 | 무엇을 하나 | 대가 |
+|---|---|---|
+| 효과 크기를 키운다 | 작은 개선은 아예 주장하지 않는다 | 보수적 |
+| 분산을 줄인다 | seed 외 요소를 짝지어 통제 | 설계 비용 |
+| 여러 과제에서 잰다 | 과제 수로 표본을 늘린다 | 과제 선택 편향 |
+| 불확실성을 그대로 보고 | '구별되지 않는다'고 쓴다 | **논문이 안 팔린다** |
+
+마지막 줄이 이 문제가 안 풀리는 진짜 이유다.
 
 ```{python}
 #| label: fig-power
@@ -465,46 +471,42 @@ for v in x:
 s_np = x.sum()                              # numpy의 pairwise 합
 s_rev = x[::-1].sum()                       # 역순
 
-print("같은 100,000개 수를 순서만 바꿔 더한다 (float32)")
-print()
-print(f"  순차 누적   {float(s_seq):.7f}")
-print(f"  numpy 합    {float(s_np):.7f}")
-print(f"  역순 합     {float(s_rev):.7f}")
-print()
-print(f"  순차 vs numpy 절대차 {abs(float(s_seq)-float(s_np)):.3e}, "
-      f"상대차 {abs(float(s_seq)-float(s_np))/abs(float(s_np)):.3e}")
-print(f"  numpy vs 역순 절대차 {abs(float(s_np)-float(s_rev)):.3e}")
-print()
-print("**전부 다르다.** 그런데 이것이 '버그'가 아니다.")
-for s in ["floating point는 유효자릿수가 유한하다 — 더하는 순서가 반올림을 바꾼다",
-          "GPU는 **수천 개 thread가 병렬로 부분합을 만들고 합친다** — "
-          "그 순서가 실행마다 달라질 수 있다",
-          "distributed training의 all-reduce(여러 GPU의 gradient를 모아 더하는 통신)도 마찬가지다 — "
-          "node가 도착하는 순서가 매번 다르다",
-          "그래서 **bit-level reproducibility는 성능을 포기해야** 얻어진다"]:
-    print(f"  · {s}")
-print()
-print("**이 미세한 차이가 커지는가**")
 d = abs(float(s_seq) - float(s_np))/abs(float(s_np))
-print(f"  한 번의 합에서 상대차는 {d:.1e} — 무시할 만하다")
-print("  그런데 학습은 그 연산을 **수백만 번 반복**하고,")
-print("  그 사이에 **분기점**들이 있다 — argmax, threshold 비교, early stopping 판단")
-print("  한 번이라도 분기가 갈리면 그 뒤는 완전히 다른 궤적이 된다")
-print()
-print("**층위별 실무 처방**")
-print()
-print(f"{'목표':<16} {'해야 할 일':<38} {'대가'}")
-print("-" * 76)
-for a, b, c in [
-    ("bit-level", "deterministic kernel, 단일 thread reduction, 고정 순서", "속도 **수십 %** 손해"),
-    ("statistical", "seed 여러 개 + 분산 보고", "계산 비용 n배"),
-    ("conceptual", "코드·데이터·설정을 commit hash로 고정", "거의 공짜 — **먼저 해야 할 것**"),
-]:
-    print(f"{a:<16} {b:<38} {c}")
-print()
-print("  **셋째 줄부터 하면 된다.** 비용이 거의 없고 효과가 가장 크다.")
-print("  bit-level은 regression test나 규제 요건이 있을 때만 값어치가 있다.")
 ```
+
+같은 100,000개 수를 순서만 바꿔 더한다 (float32)
+
+순차 누적 `{python} f'{float(s_seq):.7f}'`
+numpy 합 `{python} f'{float(s_np):.7f}'`
+역순 합 `{python} f'{float(s_rev):.7f}'`
+
+순차 vs numpy 절대차 `{python} f'{abs(float(s_seq) - float(s_np)):.3e}'`, 상대차 `{python} f'{abs(float(s_seq) - float(s_np)) / abs(float(s_np)):.3e}'`
+numpy vs 역순 절대차 `{python} f'{abs(float(s_np) - float(s_rev)):.3e}'`
+
+**전부 다르다.** 그런데 이것이 '버그'가 아니다.
+
+- floating point는 유효자릿수가 유한하다 — 더하는 순서가 반올림을 바꾼다
+- GPU는 **수천 개 thread가 병렬로 부분합을 만들고 합친다** — 그 순서가 실행마다 달라질 수 있다
+- distributed training의 all-reduce(여러 GPU의 gradient를 모아 더하는 통신)도 마찬가지다 — node가 도착하는 순서가 매번 다르다
+- 그래서 **bit-level reproducibility는 성능을 포기해야** 얻어진다
+
+**이 미세한 차이가 커지는가**
+
+한 번의 합에서 상대차는 `{python} f'{d:.1e}'` — 무시할 만하다
+그런데 학습은 그 연산을 **수백만 번 반복**하고,
+그 사이에 **분기점**들이 있다 — argmax, threshold 비교, early stopping 판단
+한 번이라도 분기가 갈리면 그 뒤는 완전히 다른 궤적이 된다
+
+**층위별 실무 처방**
+
+| 목표 | 해야 할 일 | 대가 |
+|---|---|---|
+| bit-level | deterministic kernel, 단일 thread reduction, 고정 순서 | 속도 **수십 %** 손해 |
+| statistical | seed 여러 개 + 분산 보고 | 계산 비용 n배 |
+| conceptual | 코드·데이터·설정을 commit hash로 고정 | 거의 공짜 — **먼저 해야 할 것** |
+
+**셋째 줄부터 하면 된다.** 비용이 거의 없고 효과가 가장 크다.  
+bit-level은 regression test나 규제 요건이 있을 때만 값어치가 있다.
 
 ---
 
