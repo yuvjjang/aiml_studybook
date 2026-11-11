@@ -60,12 +60,10 @@ gw = rl.GridWorld(rows=5, cols=7, walls=WALLS, terminals=TERM,
                   step_cost=-0.04, slip=0.2)
 GAMMA = 0.95
 V_star, PI_star, it_star = rl.value_iteration(gw.P, gw.R, GAMMA)
-
-print(f"[10.0](00_mdp.qmd)의 GridWorld를 그대로 쓴다 — "
-      f"상태 {gw.nS}, 행동 {gw.nA}, 미끄러짐 {gw.slip:.0%}")
-print(f"  γ={GAMMA} 최적해: value iteration {it_star}회, "
-      f"V 범위 [{V_star.min():.3f}, {V_star.max():.3f}]")
 ```
+
+[10.0](00_mdp.qmd)의 GridWorld를 그대로 쓴다 — 상태 `{python} f'{gw.nS}'`, 행동 `{python} f'{gw.nA}'`, 미끄러짐 `{python} f'{gw.slip:.0%}'`
+γ=`{python} f'{GAMMA}'` 최적해: value iteration `{python} f'{it_star}'`회, V 범위 [`{python} f'{V_star.min():.3f}'`, `{python} f'{V_star.max():.3f}'`]
 
 ---
 
@@ -73,6 +71,8 @@ print(f"  γ={GAMMA} 최적해: value iteration {it_star}회, "
 
 이론이 말하는 것은 부등식 $\le \gamma$다.
 실제로 그 상한에 **닿는지**를 무작위 $V$ 쌍으로 확인한다.
+
+무작위 V 쌍 300개로 contraction 비율 측정
 
 ```{python}
 #| label: contraction
@@ -88,8 +88,6 @@ def T_star(V, g):
     return rl.q_from_v(gw.P, gw.R, V, g).max(1)
 
 
-print("무작위 V 쌍 300개로 contraction 비율 측정")
-print()
 print(f"{'γ':>6} {'측정 최대':>12} {'측정 평균':>12} {'이론 상한':>10}")
 print("-" * 44)
 CON = []
@@ -101,31 +99,41 @@ for g_ in [0.5, 0.9, 0.95, 0.99]:
                   / np.max(np.abs(V1 - V2)))
     CON.append((g_, float(max(rs)), float(np.mean(rs))))
     print(f"{g_:>6.2f} {CON[-1][1]:>12.6f} {CON[-1][2]:>12.6f} {g_:>10.2f}")
-print()
-print("**최대값이 정확히 γ다.** 상한이 빡빡하다는 뜻이다.")
-for s in ["최악의 경우($V_1$과 $V_2$가 모든 상태에서 같은 방향으로 어긋날 때)에 "
-          "정확히 γ배가 된다",
-          "평균은 그보다 작다 — 상태마다 어긋남이 상쇄되기 때문",
-          "**그래서 실제 수렴은 이론 상한보다 빠르다** — 다음 절에서 확인",
-          "γ→1이면 contraction이 약해진다. 이것이 장기 문제가 어려운 수학적 이유다"]:
-    print(f"  · {s}")
-print()
-print("**수렴 궤적을 직접 보자** (γ=0.95, V0=0에서 시작)")
-print()
 V, PI, it, hist = rl.value_iteration(gw.P, gw.R, GAMMA, track=True)
 errs = [float(np.max(np.abs(h - V_star))) for h in hist]
+```
+
+**최대값이 정확히 γ다.** 상한이 빡빡하다는 뜻이다.
+
+- 최악의 경우(\$V_1\$과 \$V_2\$가 모든 상태에서 같은 방향으로 어긋날 때)에 정확히 γ배가 된다
+- 평균은 그보다 작다 — 상태마다 어긋남이 상쇄되기 때문
+- **그래서 실제 수렴은 이론 상한보다 빠르다** — 다음 절에서 확인
+- γ→1이면 contraction이 약해진다. 이것이 장기 문제가 어려운 수학적 이유다
+
+**수렴 궤적을 직접 보자** (γ=0.95, V0=0에서 시작)
+
+```{python}
+#| label: contraction-2
+#| code-fold: false
+
 print(f"{'반복':>5} {'‖V_k − V*‖∞':>15} {'직전 대비 비율':>15}")
 print("-" * 40)
 for k in [0, 1, 2, 5, 10, 20, 30, 40, len(errs)-1]:
     ratio = errs[k]/errs[k-1] if k > 0 and errs[k-1] > 0 else np.nan
     print(f"{k:>5} {errs[k]:>15.3e} {ratio:>15.4f}")
-print()
 tail = float(np.mean([errs[k]/errs[k-1] for k in range(20, 35)]))
-print(f"**후반부 감소 비율이 {tail:.4f}로 안정된다 — 기하 수렴(매번 일정 비율로 줄어듦)이다.**")
-print(f"  그런데 이 값은 γ={GAMMA}가 **아니다.** {tail/GAMMA:.2f}배 더 빠르다.")
-print()
-print("여러 γ에서 실제 수렴률을 재 보면")
-print()
+```
+
+**후반부 감소 비율이 `{python} f'{tail:.4f}'`로 안정된다 — 기하 수렴(매번 일정 비율로 줄어듦)이다.**
+
+그런데 이 값은 γ=`{python} f'{GAMMA}'`가 **아니다.** `{python} f'{tail / GAMMA:.2f}'`배 더 빠르다.
+
+여러 γ에서 실제 수렴률을 재 보면
+
+```{python}
+#| label: contraction-3
+#| code-fold: false
+
 print(f"{'γ':>6} {'실측 수렴률':>12} {'γ 대비':>9}")
 print("-" * 30)
 RATE = []
@@ -137,17 +145,15 @@ for g_ in [0.8, 0.9, 0.95, 0.99]:
                        if e[k-1] > 1e-12]))
     RATE.append((g_, r))
     print(f"{g_:>6.2f} {r:>12.4f} {r/g_:>9.2f}")
-print()
-print("**전부 γ보다 작다.** 이유가 있다.")
-for s in ["γ는 **최악의 경우** contraction 비율이다 (G10.1.1의 최대값)",
-          "실제 수렴률은 $\gamma P_{\pi^*}$의 spectral radius(spectrum 반지름 — 행렬을 거듭 곱할 때 커지거나 줄어드는 비율)에 딸려 있다",
-          "이 환경은 **episode가 끝난다** — terminal 상태가 absorbing(한번 들어가면 못 나오는) 상태라 "
-          "transition 행렬의 행 합이 1보다 작아지고, 그만큼 반지름이 작아진다. 매 걸음 확률의 일부가 '끝'으로 새어 나가는 셈이다",
-          "**끝나지 않는 문제라면 γ에 더 가까워진다** — "
-          "그래서 continuing task(끝없이 이어지는 과제)가 더 느리게 수렴한다",
-          "실무 함의: 이론 상한으로 반복 예산을 잡으면 크게 과대 추정한다"]:
-    print(f"  · {s}")
 ```
+
+**전부 γ보다 작다.** 이유가 있다.
+
+- γ는 **최악의 경우** contraction 비율이다 (G10.1.1의 최대값)
+- 실제 수렴률은 \$\\gamma P_{\\pi\^\*}\$의 spectral radius(spectrum 반지름 — 행렬을 거듭 곱할 때 커지거나 줄어드는 비율)에 딸려 있다
+- 이 환경은 **episode가 끝난다** — terminal 상태가 absorbing(한번 들어가면 못 나오는) 상태라 transition 행렬의 행 합이 1보다 작아지고, 그만큼 반지름이 작아진다. 매 걸음 확률의 일부가 '끝'으로 새어 나가는 셈이다
+- **끝나지 않는 문제라면 γ에 더 가까워진다** — 그래서 continuing task(끝없이 이어지는 과제)가 더 느리게 수렴한다
+- 실무 함의: 이론 상한으로 반복 예산을 잡으면 크게 과대 추정한다
 
 ```{python}
 #| label: fig-contraction
@@ -183,6 +189,8 @@ value iteration을 언제 멈춰야 할까.
 
 두 시점이 얼마나 차이 나는지 잰다.
 
+가치가 수렴하는 시점 vs policy가 최적이 되는 시점
+
 ```{python}
 #| label: early-stop
 #| code-fold: false
@@ -190,8 +198,6 @@ value iteration을 언제 멈춰야 할까.
 import numpy as np
 from src import rl
 
-print("가치가 수렴하는 시점 vs policy가 최적이 되는 시점")
-print()
 print(f"{'γ':>6} {'가치 수렴':>10} {'policy 확정':>11} {'비율':>8} "
       f"{'이론 상한':>10} {'상한/실제':>10}")
 print("-" * 60)
@@ -206,28 +212,33 @@ for g_ in [0.5, 0.8, 0.9, 0.95, 0.99]:
     EARLY.append((g_, itg, k_pi, bound))
     print(f"{g_:>6.2f} {itg:>10} {k_pi:>11} {k_pi/itg:>8.2f} "
           f"{bound:>10.0f} {bound/itg:>10.1f}")
-print()
 mid = [e for e in EARLY if e[0] == 0.95][0]
-print(f"**γ=0.95에서 가치는 {mid[1]}번 걸리는데 policy는 {mid[2]}번에 굳는다.**")
-print(f"  {mid[2]/mid[1]:.0%} 지점에서 이미 답을 알고 있었던 셈이다.")
-print()
-print("**왜 이런 일이 생기나**")
-for s in ["policy는 Q의 **순위**만 보면 된다 — 절대값이 정확할 필요가 없다. "
-          "달리기 1등이 누구인지는 기록이 소수점까지 나오기 전에 이미 안다",
-          "가치는 마지막 소수점까지 맞추느라 오래 걸린다",
-          "일단 어떤 행동이 확실히 1등이 되면, 그 뒤 갱신은 순위를 안 바꾼다",
-          "**그래서 실무에서는 policy 변화를 멈춤 조건으로 쓰는 것이 낫다**",
-          "다만 'policy가 안 바뀜'이 최적을 보장하지는 않는다 — "
-          "잠시 멈췄다 다시 바뀔 수 있다 (다음 절에서 실제로 본다)"]:
-    print(f"  · {s}")
-print()
-print("**이론 상한은 훨씬 느슨하다.**")
+```
+
+**γ=0.95에서 가치는 `{python} f'{mid[1]}'`번 걸리는데 policy는 `{python} f'{mid[2]}'`번에 굳는다.**
+
+`{python} f'{mid[2] / mid[1]:.0%}'` 지점에서 이미 답을 알고 있었던 셈이다.
+
+**왜 이런 일이 생기나**
+
+- policy는 Q의 **순위**만 보면 된다 — 절대값이 정확할 필요가 없다. 달리기 1등이 누구인지는 기록이 소수점까지 나오기 전에 이미 안다
+- 가치는 마지막 소수점까지 맞추느라 오래 걸린다
+- 일단 어떤 행동이 확실히 1등이 되면, 그 뒤 갱신은 순위를 안 바꾼다
+- **그래서 실무에서는 policy 변화를 멈춤 조건으로 쓰는 것이 낫다**
+- 다만 'policy가 안 바뀜'이 최적을 보장하지는 않는다 — 잠시 멈췄다 다시 바뀔 수 있다 (다음 절에서 실제로 본다)
+
+**이론 상한은 훨씬 느슨하다.**
+
+```{python}
+#| label: early-stop-2
+#| code-fold: false
+
 for g_, it, kp, bd in EARLY:
     print(f"  γ={g_}: 상한 {bd:.0f}회 vs 실제 {it}회 — {bd/it:.1f}배 보수적")
-print()
-print("  G10.1.1에서 본 이유다 — contraction 비율의 **최악 경우**가 γ지만,")
-print("  실제 궤적은 그보다 빨리 줄어든다.")
 ```
+
+G10.1.1에서 본 이유다 — contraction 비율의 **최악 경우**가 γ지만,
+실제 궤적은 그보다 빨리 줄어든다.
 
 ---
 
@@ -243,6 +254,8 @@ reinforcement learning 전체를 관통하는 도식이다.
 공부 계획을 세우고(policy) 성적을 확인하고(평가) 계획을 고치는(개선) 반복에서, "성적을 얼마나 꼼꼼히 확인한 뒤 계획을 고칠 것인가"의 문제다.
 
 평가 sweep(모든 상태를 한 바퀴 갱신) 수 $k$를 바꿔 가며 비용을 재 본다.
+
+평가 sweep k를 바꿔 가며 (γ=`{python} f'{GAMMA}'`)
 
 ```{python}
 #| label: gpi
@@ -276,8 +289,6 @@ def modified_pi(P, R, gamma, k, max_iter=2000):
     return V, pi, max_iter, sweeps
 
 
-print(f"평가 sweep k를 바꿔 가며 (γ={GAMMA})")
-print()
 print(f"{'k':>12} {'외부 반복':>9} {'총 backup':>10} {'policy 최적?':>12} {'V 오차':>11}")
 print("-" * 58)
 GPI = []
@@ -291,25 +302,24 @@ for k in [1, 2, 3, 5, 10, 20, None]:
 vi_backups = it_star*gw.nS*gw.nA
 print(f"{'value iteration':>12} {it_star:>9} {vi_backups:>10,} {'True':>12} "
       f"{0.0:>11.2e}")
-print()
 best = min((g for g in GPI if g[3]), key=lambda g: g[2])
-print(f"**최적 policy를 가장 싸게 얻는 것은 k={best[0]}다** — "
-      f"backup {best[2]:,}회.")
-print(f"  value iteration({vi_backups:,})의 {best[2]/vi_backups:.2f}배, "
-      f"policy iteration({GPI[-1][2]:,})의 {best[2]/GPI[-1][2]:.2f}배.")
-print()
-print("**양 끝은 둘 다 낭비다.**")
-for s in [f"k=1 (value iteration 쪽): 개선이 잦지만 평가가 부정확해 "
-          f"외부 반복이 는다",
-          f"k=끝까지 (policy iteration): 외부 반복은 {GPI[-1][1]}번뿐인데 "
-          f"평가 한 번이 너무 비싸다",
-          "**중간이 이긴다.** 대충 평가하고 자주 개선하는 것이 효율적이다 — "
-          "모의고사 한 번마다 계획을 고치는 것이, 매 문제마다 고치거나 학기 끝에야 고치는 것보다 낫다",
-          "이것이 GPI가 '도식'인 이유다 — 특정 algorithm이 아니라 "
-          "평가와 개선의 **비율을 고르는 자유도**를 말한다"]:
-    print(f"  · {s}")
-print()
 bad = [g for g in GPI if not g[3]]
+```
+
+**최적 policy를 가장 싸게 얻는 것은 k=`{python} f'{best[0]}'`다** — backup `{python} f'{best[2]:,}'`회.  
+value iteration(`{python} f'{vi_backups:,}'`)의 `{python} f'{best[2] / vi_backups:.2f}'`배, policy iteration(`{python} f'{GPI[-1][2]:,}'`)의 `{python} f'{best[2] / GPI[-1][2]:.2f}'`배.
+
+**양 끝은 둘 다 낭비다.**
+
+- k=1 (value iteration 쪽): 개선이 잦지만 평가가 부정확해 외부 반복이 는다
+- k=끝까지 (policy iteration): 외부 반복은 `{python} f'{GPI[-1][1]}'`번뿐인데 평가 한 번이 너무 비싸다
+- **중간이 이긴다.** 대충 평가하고 자주 개선하는 것이 효율적이다 — 모의고사 한 번마다 계획을 고치는 것이, 매 문제마다 고치거나 학기 끝에야 고치는 것보다 낫다
+- 이것이 GPI가 '도식'인 이유다 — 특정 algorithm이 아니라 평가와 개선의 **비율을 고르는 자유도**를 말한다
+
+```{python}
+#| label: gpi-2
+#| code-fold: false
+
 if bad:
     print("**그런데 작은 k에서는 policy가 최적이 아닌 채로 멈췄다.**")
     for k, it, tot, opt, err in bad:
@@ -372,6 +382,8 @@ SARSA·Q-learning은 k=1 쪽, actor-critic은 critic을 얼마나 학습시킬�
 **in-place(제자리)**로 바꾸면 갱신한 값을 같은 sweep 안에서 바로 쓴다.
 그러면 **순서가 중요해진다.** 소문이 퍼질 때, 이미 들은 사람이 바로 옆 사람에게 전하면 한 바퀴에 더 멀리 퍼지는 것과 같다.
 
+갱신 방식과 순서에 따른 sweep 수 (γ=0.95, 같은 정확도까지)
+
 ```{python}
 #| label: async
 #| code-fold: false
@@ -396,8 +408,6 @@ def vi_inplace(P, R, gamma, order, tol=1e-10, max_iter=5000):
 
 dist_goal = np.array([abs(gw.rc(s)[0] - 0) + abs(gw.rc(s)[1] - 6)
                       for s in range(gw.nS)])
-print("갱신 방식과 순서에 따른 sweep 수 (γ=0.95, 같은 정확도까지)")
-print()
 print(f"{'방식':<26} {'sweep':>7} {'상태 갱신':>10} {'기준 대비':>10} {'V 오차':>11}")
 print("-" * 68)
 ASY = [("synchronous (기준)", None),
@@ -412,24 +422,24 @@ for nm, od in ASY:
         V, it = vi_inplace(gw.P, gw.R, GAMMA, od)
         print(f"{nm:<26} {it:>7} {it*gw.nS:>10,} {it*gw.nS/base:>10.2f} "
               f"{np.max(np.abs(V - V_star)):>11.2e}")
-print()
-print("**in-place 갱신만으로도 3분의 2로 준다.**")
-print("  같은 sweep 안에서 갱신된 값을 바로 쓰니 정보가 더 빨리 퍼진다.")
-print()
-print("**그리고 순서가 또 한 번 차이를 만든다.**")
-for s in ["목표에서 **가까운 순**으로 갱신하면 가장 빠르다 — "
-          "보상 정보가 물결처럼 뒤로 퍼진다",
-          "**먼 순**은 반대다 — 아직 0인 이웃을 보고 갱신하니 헛수고가 는다",
-          "이것을 일반화한 것이 **prioritized sweeping**(우선순위 스위핑)이다 — "
-          "TD 오차(갱신 전후 차이)가 큰 상태부터 갱신한다",
-          "실무의 대응물: [10.3](03_deep_rl.qmd)의 **prioritized experience replay(PER)**",
-          "**갱신할 가치가 있는 곳부터 갱신하라** — DP부터 deep RL까지 같은 원칙"]:
-    print(f"  · {s}")
-print()
-print("**asynchronous(비동기) DP의 수렴 조건**")
-print("  모든 상태를 **무한히 자주** 갱신하기만 하면 순서와 무관하게 수렴한다.")
-print("  순서는 속도에만 영향을 준다 — 이것이 실용적으로 큰 자유를 준다.")
 ```
+
+**in-place 갱신만으로도 3분의 2로 준다.**
+
+같은 sweep 안에서 갱신된 값을 바로 쓰니 정보가 더 빨리 퍼진다.
+
+**그리고 순서가 또 한 번 차이를 만든다.**
+
+- 목표에서 **가까운 순**으로 갱신하면 가장 빠르다 — 보상 정보가 물결처럼 뒤로 퍼진다
+- **먼 순**은 반대다 — 아직 0인 이웃을 보고 갱신하니 헛수고가 는다
+- 이것을 일반화한 것이 **prioritized sweeping**(우선순위 스위핑)이다 — TD 오차(갱신 전후 차이)가 큰 상태부터 갱신한다
+- 실무의 대응물: [10.3](03_deep_rl.qmd)의 **prioritized experience replay(PER)**
+- **갱신할 가치가 있는 곳부터 갱신하라** — DP부터 deep RL까지 같은 원칙
+
+**asynchronous(비동기) DP의 수렴 조건**
+
+모든 상태를 **무한히 자주** 갱신하기만 하면 순서와 무관하게 수렴한다.  
+순서는 속도에만 영향을 준다 — 이것이 실용적으로 큰 자유를 준다.
 
 ---
 
@@ -442,6 +452,8 @@ dynamic programming은 정확하고 수렴이 보장된다. 그런데 두 가지
 
 두 번째가 먼저 무너진다.
 
+격자 크기에 따른 비용 (γ=0.95, 미끄러짐 20%)
+
 ```{python}
 #| label: curse
 #| code-fold: false
@@ -450,8 +462,6 @@ import time
 import numpy as np
 from src import rl
 
-print("격자 크기에 따른 비용 (γ=0.95, 미끄러짐 20%)")
-print()
 print(f"{'격자':>9} {'상태':>7} {'P 원소 수':>14} {'P 메모리':>11} "
       f"{'value iteration 시간':>13}")
 print("-" * 60)
@@ -464,50 +474,42 @@ for n in [5, 10, 20, 40, 60]:
     CURSE.append((n, env.nS, env.P.size, env.P.nbytes/1e6, dt))
     print(f"{f'{n}x{n}':>9} {env.nS:>7} {env.P.size:>14,} "
           f"{env.P.nbytes/1e6:>10.1f}MB {dt:>12.3f}s")
-print()
 a, b = CURSE[0], CURSE[-1]
-print(f"**격자 변이 {b[0]/a[0]:.0f}배가 되면 P는 {b[2]/a[2]:,.0f}배가 된다.**")
-print(f"  상태가 $n^2$, transition 표가 $|S|^2|A|$이므로 **$n^4$**로 자란다. 이것이 curse of dimensionality(차원의 저주)다.")
-print()
-print("**현실의 문제들은 이 표를 만들 수조차 없다**")
-print()
-print(f"{'문제':<22} {'상태 공간':<30} {'표로 가능?'}")
-print("-" * 66)
-for x, y, z in [
-    ("GridWorld 60x60", f"{60*60:,}", "가능 (위 표)"),
-    ("backgammon", "약 10^20", "불가능"),
-    ("바둑", "약 10^170", "불가능"),
-    ("Atari 화면", "256^(84·84·4)", "불가능"),
-    ("로봇 관절 각도", "연속 — 무한", "불가능"),
-    ("LLM context", "|vocabulary|^context 길이", "불가능"),
-]:
-    print(f"{x:<22} {y:<30} {z}")
-print()
-print("**그래서 두 방향으로 갈라진다**")
-for s in ["**모델을 모르는 경우** → sample로 기댓값을 근사한다 "
-          "([10.2](02_model_free.qmd))",
-          "**표가 너무 큰 경우** → value function을 근사한다 "
-          "([10.3](03_deep_rl.qmd)) 또는 policy를 직접 parameter화한다 "
-          "([10.4](04_policy_gradient.qmd))",
-          "대부분의 실제 문제는 **둘 다** 해당한다",
-          "그러나 이 장의 도식(GPI)은 그대로 살아남는다 — "
-          "무엇을 근사하든 평가와 개선을 번갈아 한다"]:
-    print(f"  · {s}")
-print()
-print("**approximate dynamic programming 관점**")
-print("  이후 algorithm들을 'Bellman backup을 어떻게 근사했나'로 읽으면 정리된다.")
-print()
-print(f"{'algorithm':<18} {'기댓값을':<20} {'가치 표를'}")
-print("-" * 60)
-for x, y, z in [
-    ("dynamic programming", "정확히 계산", "그대로 (표)"),
-    ("Monte Carlo", "episode 표본 평균", "그대로 (표)"),
-    ("TD / Q-learning", "한 transition으로 근사", "그대로 (표)"),
-    ("DQN", "한 transition으로 근사", "**신경망으로 근사**"),
-    ("policy gradient", "궤적 표본으로 근사", "policy를 직접 parameter화"),
-]:
-    print(f"{x:<18} {y:<20} {z}")
 ```
+
+**격자 변이 `{python} f'{b[0] / a[0]:.0f}'`배가 되면 P는 `{python} f'{b[2] / a[2]:,.0f}'`배가 된다.**
+
+상태가 \$n\^2\$, transition 표가 \$|S|\^2|A|\$이므로 **\$n\^4\$**로 자란다. 이것이 curse of dimensionality(차원의 저주)다.
+
+**현실의 문제들은 이 표를 만들 수조차 없다**
+
+| 문제 | 상태 공간 | 표로 가능? |
+|---|---|---|
+| GridWorld 60x60 | `{python} f'{60 * 60:,}'` | 가능 (위 표) |
+| backgammon | 약 10\^20 | 불가능 |
+| 바둑 | 약 10\^170 | 불가능 |
+| Atari 화면 | 256\^(84·84·4) | 불가능 |
+| 로봇 관절 각도 | 연속 — 무한 | 불가능 |
+| LLM context | \|vocabulary\|\^context 길이 | 불가능 |
+
+**그래서 두 방향으로 갈라진다**
+
+- **모델을 모르는 경우** → sample로 기댓값을 근사한다 ([10.2](02_model_free.qmd))
+- **표가 너무 큰 경우** → value function을 근사한다 ([10.3](03_deep_rl.qmd)) 또는 policy를 직접 parameter화한다 ([10.4](04_policy_gradient.qmd))
+- 대부분의 실제 문제는 **둘 다** 해당한다
+- 그러나 이 장의 도식(GPI)은 그대로 살아남는다 — 무엇을 근사하든 평가와 개선을 번갈아 한다
+
+**approximate dynamic programming 관점**
+
+이후 algorithm들을 'Bellman backup을 어떻게 근사했나'로 읽으면 정리된다.
+
+| algorithm | 기댓값을 | 가치 표를 |
+|---|---|---|
+| dynamic programming | 정확히 계산 | 그대로 (표) |
+| Monte Carlo | episode 표본 평균 | 그대로 (표) |
+| TD / Q-learning | 한 transition으로 근사 | 그대로 (표) |
+| DQN | 한 transition으로 근사 | **신경망으로 근사** |
+| policy gradient | 궤적 표본으로 근사 | policy를 직접 parameter화 |
 
 ---
 
@@ -694,8 +696,13 @@ for k in range(1, 200):
     if stop is None and np.abs(V_new - V).max() < 1e-3:
         stop = (k, err)
     V = V_new
+```
 
-print(f"모든 k 에서 ‖V_k − V*‖ ≤ γ^k ‖V_0 − V*‖ : {bound_ok}")
+모든 k 에서 ‖V_k − V\*‖ ≤ γ\^k ‖V_0 − V\*‖ : `{python} f'{bound_ok}'`
+
+```{python}
+#| label: ex-vi-bound-2
+
 print(f"멈춘 시점 k = {stop[0]}   실제 오차 {stop[1]:.4f}   상한 γε/(1−γ) = {g * 1e-3 / (1 - g):.4f}")
 ```
 :::
