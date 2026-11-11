@@ -63,12 +63,11 @@ _r = np.random.default_rng(7)
 PHI = np.hstack([_r.normal(0, 1, (gw.nS, D))/np.sqrt(D),
                  np.ones((gw.nS, 1))])         # 정보 손실이 있는 선형 feature
 DF = PHI.shape[1]
-
-print(f"상태 {gw.nS}개를 feature {DF}차원으로 근사한다 — "
-      f"**표보다 {gw.nS/DF:.1f}배 작다**")
-print(f"  즉 상태들이 서로 간섭한다. 이것이 function approximation의 본질이다")
-print(f"  Q* 범위 [{Q_STAR[OK].min():.3f}, {Q_STAR[OK].max():.3f}]")
 ```
+
+상태 `{python} f'{gw.nS}'`개를 feature `{python} f'{DF}'`차원으로 근사한다 — **표보다 `{python} f'{gw.nS / DF:.1f}'`배 작다**
+즉 상태들이 서로 간섭한다. 이것이 function approximation의 본질이다
+Q\* 범위 [`{python} f'{Q_STAR[OK].min():.3f}'`, `{python} f'{Q_STAR[OK].max():.3f}'`]
 
 ---
 
@@ -83,6 +82,8 @@ $$\mathbb{E}\big[\max_a \hat{Q}(a)\big] \ \ge\ \max_a \mathbb{E}\big[\hat{Q}(a)\
 Jensen 부등식(볼록 함수에서는 "평균의 함숫값 ≤ 함숫값의 평균")이다. 참 $Q$가 전부 0이어도, 잡음 섞인 추정의 최댓값은 양수가 된다.
 얼마나 되는지 재 보자.
 
+참 Q가 전부 0인데, 잡음 섞인 추정의 max는 얼마인가
+
 ```{python}
 #| label: max-bias
 #| code-fold: false
@@ -91,8 +92,6 @@ import numpy as np
 
 rng = np.random.default_rng(0)
 N = 200000
-print("참 Q가 전부 0인데, 잡음 섞인 추정의 max는 얼마인가")
-print()
 print(f"{'행동 수 k':>9} {'잡음 σ':>8} {'단일 추정 E[max]':>17} "
       f"{'double estimator':>11} {'참값':>7}")
 print("-" * 56)
@@ -106,36 +105,33 @@ for k in [2, 4, 8, 16]:
         double = float(q2[np.arange(N), a].mean())   # 고르기와 평가를 분리 (double estimator)
         MB.append((k, sg, single, double))
         print(f"{k:>9} {sg:>8.1f} {single:>17.4f} {double:>11.4f} {0.0:>7.1f}")
-print()
 big = [m for m in MB if m[0] == 16 and m[1] == 1.0][0]
 sml = [m for m in MB if m[0] == 2 and m[1] == 1.0][0]
-print(f"**행동이 많고 잡음이 클수록 bias가 커진다** — "
-      f"k=2에서 {sml[2]:.3f}, k=16에서 {big[2]:.3f}.")
-print(f"  잡음 σ에 비례하고, k에는 대략 $\\sqrt{{\\log k}}$로 자란다.")
-print()
-print("**double estimator(이중 추정)는 bias를 없앤다.**")
-print(f"  k=16, σ=1에서 {big[2]:.4f} → {big[3]:.4f} (참값 0).")
-for s in ["한 추정기로 **행동을 고르고**, 다른 추정기로 **값을 매긴다** — "
-          "모의고사 1등을 고른 뒤, 그 학생의 실력은 다른 시험 점수로 본다",
-          "고를 때의 잡음과 평가할 때의 잡음이 **독립**이라 낙관이 상쇄된다",
-          "이것이 Double Q-learning이고, DQN 판이 **Double DQN**이다",
-          "Double DQN은 표를 두 개 두는 대신 "
-          "**online network로 고르고 target network로 평가**한다 — 공짜에 가깝다"]:
-    print(f"  · {s}")
 ```
 
+**행동이 많고 잡음이 클수록 bias가 커진다** — k=2에서 `{python} f'{sml[2]:.3f}'`, k=16에서 `{python} f'{big[2]:.3f}'`.  
+잡음 σ에 비례하고, k에는 대략 \$\\sqrt{\\log k}\$로 자란다.
+
+**double estimator(이중 추정)는 bias를 없앤다.**
+
+k=16, σ=1에서 `{python} f'{big[2]:.4f}'` → `{python} f'{big[3]:.4f}'` (참값 0).
+
+- 한 추정기로 **행동을 고르고**, 다른 추정기로 **값을 매긴다** — 모의고사 1등을 고른 뒤, 그 학생의 실력은 다른 시험 점수로 본다
+- 고를 때의 잡음과 평가할 때의 잡음이 **독립**이라 낙관이 상쇄된다
+- 이것이 Double Q-learning이고, DQN 판이 **Double DQN**이다
+- Double DQN은 표를 두 개 두는 대신 **online network로 고르고 target network로 평가**한다 — 공짜에 가깝다
+
 **추정 bias가 policy까지 망치는지** 보자. Sutton & Barto의 고전 예제다.
+
+상태 A에서 right는 즉시 종료(보상 0), left는 상태 B로 간다.  
+B에서는 어떤 행동을 해도 N(−0.1, 1) 보상 후 종료 — 즉 left는 손해다.  
+그런데 B의 행동이 10개라 max가 낙관적으로 부푼다.
 
 ```{python}
 #| label: max-bias-mdp
 #| code-fold: false
 
 import numpy as np
-
-print("상태 A에서 right는 즉시 종료(보상 0), left는 상태 B로 간다.")
-print("B에서는 어떤 행동을 해도 N(−0.1, 1) 보상 후 종료 — 즉 left는 손해다.")
-print("그런데 B의 행동이 10개라 max가 낙관적으로 부푼다.")
-print()
 
 
 def maxbias(double=False, n_ep=300, alpha=0.1, eps=0.1, seed=0, nB=10):
@@ -177,24 +173,22 @@ for dbl, nm in [(False, "Q-learning"), (True, "Double Q")]:
     L = np.mean([maxbias(dbl, seed=s) for s in range(200)], 0)
     MBM.append((nm, L, float(L[:100].mean()), float(L[-100:].mean())))
     print(f"{nm:<16} {MBM[-1][2]:>21.4f} {MBM[-1][3]:>24.4f}")
-print()
-print("  (최적은 right. ε=0.1이므로 left 선택률의 하한은 0.05다)")
-print()
 q, d = MBM
-print(f"**Q-learning은 초반 100 episode에서 {q[2]:.1%}를 잘못 고른다.**")
-print(f"  Double Q는 {d[2]:.1%} — {q[2]/d[2]:.1f}배 차이다.")
-print(f"  끝까지 가도 {q[3]:.1%} vs {d[3]:.1%}로 격차가 남는다 "
-      f"(하한 5%).")
-print()
-print("**과대평가가 왜 policy까지 망치나**")
-for s in ["B의 Q 최댓값이 부풀면 A의 left 가치도 따라 부푼다 — "
-          "bootstrap으로 전파된다",
-          "그러면 left를 더 자주 고르고, 더 자주 고르면 더 많이 갱신되고…",
-          "**낙관이 스스로를 강화한다**",
-          "Atari에서 DQN의 Q 값이 실제 return보다 크게 나온다는 것이 "
-          "Double DQN 논문의 출발점이었다"]:
-    print(f"  · {s}")
 ```
+
+(최적은 right. ε=0.1이므로 left 선택률의 하한은 0.05다)
+
+**Q-learning은 초반 100 episode에서 `{python} f'{q[2]:.1%}'`를 잘못 고른다.**
+
+Double Q는 `{python} f'{d[2]:.1%}'` — `{python} f'{q[2] / d[2]:.1f}'`배 차이다.  
+끝까지 가도 `{python} f'{q[3]:.1%}'` vs `{python} f'{d[3]:.1%}'`로 격차가 남는다 (하한 5%).
+
+**과대평가가 왜 policy까지 망치나**
+
+- B의 Q 최댓값이 부풀면 A의 left 가치도 따라 부푼다 — bootstrap으로 전파된다
+- 그러면 left를 더 자주 고르고, 더 자주 고르면 더 많이 갱신되고…
+- **낙관이 스스로를 강화한다**
+- Atari에서 DQN의 Q 값이 실제 return보다 크게 나온다는 것이 Double DQN 논문의 출발점이었다
 
 ```{python}
 #| label: fig-maxbias
@@ -261,26 +255,34 @@ for _ in range(6000):
     s = START if gw.is_terminal(ns) else ns
 seq = np.array(seq)
 
-print("연속 transition의 상태 autocorrelation(자기상관 — k step 떨어진 두 상태가 얼마나 닮았나) vs buffer에서 무작위 추출")
-print()
 LAGS = [1, 2, 5, 10, 20, 50]
 ac = [float(np.corrcoef(seq[:-k], seq[k:])[0, 1]) for k in LAGS]
+```
+
+연속 transition의 상태 autocorrelation(자기상관 — k step 떨어진 두 상태가 얼마나 닮았나) vs buffer에서 무작위 추출
+
+```{python}
+#| label: correlation-2
+#| code-fold: false
+
 print(f"{'시차 k':>7} " + " ".join(f"{k:>8}" for k in LAGS))
 print(f"{'correlation':>7} " + " ".join(f"{v:>+8.3f}" for v in ac))
 idx = np.random.default_rng(1).integers(0, len(seq), len(seq))
 shuf = seq[idx]
 AC1 = ac[0]
 AC_SHUF = float(np.corrcoef(shuf[:-1], shuf[1:])[0, 1])
-print()
-print(f"  buffer에서 무작위 추출한 표본의 k=1 correlation: {AC_SHUF:+.3f}")
-print()
-print(f"**연속 표본은 {AC1:+.3f}로 강하게 correlation돼 있고, "
-      f"무작위 추출은 {AC_SHUF:+.3f}다.**")
-print("  experience replay가 하려는 일은 정확히 이것이고, 확실히 작동한다.")
-print("  덤으로 **한 transition을 여러 번 재사용**하므로 sample efficiency(표본 효율)도 오른다.")
 ```
 
+buffer에서 무작위 추출한 표본의 k=1 correlation: `{python} f'{AC_SHUF:+.3f}'`
+
+**연속 표본은 `{python} f'{AC1:+.3f}'`로 강하게 correlation돼 있고, 무작위 추출은 `{python} f'{AC_SHUF:+.3f}'`다.**
+
+experience replay가 하려는 일은 정확히 이것이고, 확실히 작동한다.  
+덤으로 **한 transition을 여러 번 재사용**하므로 sample efficiency(표본 효율)도 오른다.
+
 **그런데 그 decorrelation(탈상관 — 상관을 없애는 것)이 성능으로 이어지는가.** 직접 재 보면 이야기가 단순하지 않다.
+
+online 갱신 vs experience replay — Q 함수 RMSE (seed 8개)
 
 ```{python}
 #| label: replay
@@ -330,8 +332,6 @@ def summarize(vals):
     return f"{v[ok].mean():.4f}±{v[ok].std():.3f}{tail}"
 
 
-print("online 갱신 vs experience replay — Q 함수 RMSE (seed 8개)")
-print()
 print(f"{'α':>7} {'online':>20} {'experience replay':>20}")
 print("-" * 50)
 REP = []
@@ -340,24 +340,26 @@ for al in [0.02, 0.05, 0.1, 0.2]:
     r = [train("replay", alpha=al, seed=sd) for sd in range(8)]
     REP.append((al, float(np.mean(o)), float(np.mean(r))))
     print(f"{al:>7} {summarize(o):>20} {summarize(r):>20}")
-print()
-print("**정직하게: experience replay의 이득이 뚜렷하지 않다.**")
+```
+
+**정직하게: experience replay의 이득이 뚜렷하지 않다.**
+
+```{python}
+#| label: replay-2
+#| code-fold: false
+
 for al, o, r in REP:
     mark = "replay 우세" if r < o else "online 우세"
     print(f"  α={al}: online {o:.4f} vs replay {r:.4f} — {mark}")
-print()
-print("**작은 α에서는 replay가 낫고, 큰 α에서는 차이가 사라진다.**")
-for s in ["이 환경은 상태 35개에 선형 feature 9개다 — **너무 쉽다**",
-          "episode가 짧아 금방 시작점으로 돌아가므로 "
-          "online도 어느 정도 다양한 상태를 본다",
-          "DQN이 replay를 절실히 필요로 한 이유는 **Atari의 규모** 때문이다 — "
-          "pixel 입력, 깊은 비선형 network, 수천 step짜리 episode",
-          "**장치의 효과는 문제의 난이도에 딸려 있다.** "
-          "쉬운 문제에서 재현이 안 되는 것이 장치가 쓸모없다는 뜻은 아니다",
-          f"그래도 **decorrelation이라는 mechanism 자체는 위에서 확실히 측정됐다** "
-          f"({AC1:+.3f} → {AC_SHUF:+.3f})"]:
-    print(f"  · {s}")
 ```
+
+**작은 α에서는 replay가 낫고, 큰 α에서는 차이가 사라진다.**
+
+- 이 환경은 상태 35개에 선형 feature 9개다 — **너무 쉽다**
+- episode가 짧아 금방 시작점으로 돌아가므로 online도 어느 정도 다양한 상태를 본다
+- DQN이 replay를 절실히 필요로 한 이유는 **Atari의 규모** 때문이다 — pixel 입력, 깊은 비선형 network, 수천 step짜리 episode
+- **장치의 효과는 문제의 난이도에 딸려 있다.** 쉬운 문제에서 재현이 안 되는 것이 장치가 쓸모없다는 뜻은 아니다
+- 그래도 **decorrelation이라는 mechanism 자체는 위에서 확실히 측정됐다** (`{python} f'{AC1:+.3f}'` → `{python} f'{AC_SHUF:+.3f}'`)
 
 ---
 
@@ -415,10 +417,14 @@ def baird_dqn(alpha=0.01, steps=5000, tp=0, batch=1, cap=1000, seed=0):
         if not np.isfinite(w).all():
             return np.inf
     return float(np.linalg.norm(w))
+```
 
+Baird 반례(참 가치 0)에 장치를 하나씩 붙인다 — 5000 step, seed 5개 중앙값
 
-print("Baird 반례(참 가치 0)에 장치를 하나씩 붙인다 — 5000 step, seed 5개 중앙값")
-print()
+```{python}
+#| label: baird-devices-2
+#| code-fold: false
+
 print(f"{'설정':<38} {'‖w‖':>14} {'발산?':>8}")
 print("-" * 62)
 DEV = []
@@ -430,43 +436,42 @@ for nm, kw in [("장치 없음 (10.2의 그것)", dict()),
     v = float(np.median([baird_dqn(seed=s, **kw) for s in range(5)]))
     DEV.append((nm, v))
     print(f"{nm:<38} {v:>14.4g} {'예' if v > 1e3 else '아니오':>8}")
-print()
 none_, rep_, tn_ = DEV[0][1], DEV[1][1], DEV[3][1]
-print("**갈린 지점이 분명하다.**")
-print(f"  experience replay만: {rep_:.4g} — **발산을 못 막는다** "
-      f"(장치 없음 {none_:.4g}와 같은 수준)")
-print(f"  target network만: {tn_:.4g} — **완전히 막는다**")
-print()
-print("길게 돌려도 bounded로 남는가 (주기 1000 + batch 32)")
+```
+
+**갈린 지점이 분명하다.**
+
+experience replay만: `{python} f'{rep_:.4g}'` — **발산을 못 막는다** (장치 없음 `{python} f'{none_:.4g}'`와 같은 수준)  
+target network만: `{python} f'{tn_:.4g}'` — **완전히 막는다**
+
+길게 돌려도 bounded로 남는가 (주기 1000 + batch 32)
+
+```{python}
+#| label: baird-devices-3
+#| code-fold: false
+
 for st in [1000, 5000, 20000, 50000]:
     v = float(np.median([baird_dqn(steps=st, tp=1000, batch=32, seed=s)
                          for s in range(3)]))
     print(f"  {st:>6} step: ‖w‖ = {v:.4g}")
-print()
-print("**왜 target network만 통하는가**")
-for s in ["발산의 원인은 **목표값이 자기 갱신을 따라 움직이는 것**이었다 "
-          "([10.2](02_model_free.qmd)의 feedback loop)",
-          "target을 얼리면 그 고리가 **주기 동안 끊긴다** — "
-          "그 사이에는 supervised regression과 같아진다. 채점 기준표를 고정해 두면 답안만 고치면 된다",
-          "experience replay는 **표본을 섞을 뿐** 목표값의 feedback에는 손대지 않는다",
-          "Baird의 상태 분포는 이미 균등(무작위 추출)이라 섞을 것도 없었다 — "
-          "그래서 replay가 아무 일도 못 했다",
-          "**두 장치를 한 묶음으로 외우면 안 되는 이유**가 이 표에 있다"]:
-    print(f"  · {s}")
-print()
-print("**주기를 어떻게 고르나**")
-print()
-print(f"{'주기':<14} {'효과':<30} {'대가'}")
-print("-" * 68)
-for a, b, c in [
-    ("너무 짧다 (1)", "target network가 없는 것과 같다", "feedback 그대로"),
-    ("적당하다", "feedback이 끊기고 안정적", "—"),
-    ("너무 길다", "안정적이지만 **정보가 늦게 반영**", "학습이 느려진다"),
-    ("soft update (τ)", "$\\theta^- \\leftarrow \\tau\\theta + (1-\\tau)\\theta^-$",
-     "DDPG·SAC의 방식"),
-]:
-    print(f"{a:<14} {b:<30} {c}")
 ```
+
+**왜 target network만 통하는가**
+
+- 발산의 원인은 **목표값이 자기 갱신을 따라 움직이는 것**이었다 ([10.2](02_model_free.qmd)의 feedback loop)
+- target을 얼리면 그 고리가 **주기 동안 끊긴다** — 그 사이에는 supervised regression과 같아진다. 채점 기준표를 고정해 두면 답안만 고치면 된다
+- experience replay는 **표본을 섞을 뿐** 목표값의 feedback에는 손대지 않는다
+- Baird의 상태 분포는 이미 균등(무작위 추출)이라 섞을 것도 없었다 — 그래서 replay가 아무 일도 못 했다
+- **두 장치를 한 묶음으로 외우면 안 되는 이유**가 이 표에 있다
+
+**주기를 어떻게 고르나**
+
+| 주기 | 효과 | 대가 |
+|---|---|---|
+| 너무 짧다 (1) | target network가 없는 것과 같다 | feedback 그대로 |
+| 적당하다 | feedback이 끊기고 안정적 | — |
+| 너무 길다 | 안정적이지만 **정보가 늦게 반영** | 학습이 느려진다 |
+| soft update (τ) | \$\\theta\^- \\leftarrow \\tau\\theta + (1-\\tau)\\theta\^-\$ | DDPG·SAC의 방식 |
 
 ```{python}
 #| label: fig-devices
@@ -518,6 +523,8 @@ $V$(상태 가치)는 "이 상태가 얼마나 좋은가", $A$(**advantage** —
 
 그런데 이 분해에는 문제가 하나 있다.
 
+같은 Q를 만드는 (V, A) 쌍이 무수히 많다
+
 ```{python}
 #| label: dueling
 #| code-fold: false
@@ -526,8 +533,6 @@ import numpy as np
 
 rng = np.random.default_rng(0)
 Q = rng.normal(0, 1, (5, 4))
-print("같은 Q를 만드는 (V, A) 쌍이 무수히 많다")
-print()
 print(f"{'상수 c':>8} {'V 평균':>10} {'A 평균':>10} {'복원 오차':>12}")
 print("-" * 44)
 for c in [0.0, 5.0, -3.0]:
@@ -535,14 +540,20 @@ for c in [0.0, 5.0, -3.0]:
     A = Q - V[:, None]
     print(f"{c:>+8.1f} {V.mean():>+10.4f} {A.mean():>+10.4f} "
           f"{np.abs((V[:, None] + A) - Q).max():>12.2e}")
-print()
-print("**$V$를 c만큼 올리고 $A$를 c만큼 내리면 Q는 그대로다.** 이것이 identifiability(식별) 문제다.")
-print("  즉 신경망이 두 갈래를 학습할 때 **어디로든 drift할 수 있다.**")
-print("  실제로 학습 중 V와 A가 각각 발산하면서 Q만 맞는 일이 생긴다.")
-print()
-print("**해법: 한쪽을 고정한다**")
 Vm = Q.mean(1); Am = Q - Vm[:, None]
 Vx = Q.max(1); Ax = Q - Vx[:, None]
+```
+
+**\$V\$를 c만큼 올리고 \$A\$를 c만큼 내리면 Q는 그대로다.** 이것이 identifiability(식별) 문제다.  
+즉 신경망이 두 갈래를 학습할 때 **어디로든 drift할 수 있다.**  
+실제로 학습 중 V와 A가 각각 발산하면서 Q만 맞는 일이 생긴다.
+
+**해법: 한쪽을 고정한다**
+
+```{python}
+#| label: dueling-2
+#| code-fold: false
+
 print()
 print(f"{'방식':<24} {'제약':<26} {'확인'}")
 print("-" * 68)
@@ -550,17 +561,12 @@ print(f"{'평균 빼기 (Dueling 기본)':<24} {'A의 행별 평균 = 0':<26} "
       f"{np.abs(Am.mean(1)).max():.2e}")
 print(f"{'최댓값 빼기':<24} {'A의 행별 최댓값 = 0':<26} "
       f"{np.abs(Ax.max(1)).max():.2e}")
-print()
-for s in ["**최댓값 빼기**가 이론적으로 더 깔끔하다 — "
-          "그러면 $V(s)=\\max_a Q(s,a)$가 되어 의미가 정확해진다",
-          "**그런데 논문은 평균 빼기를 택했다.** 최댓값은 argmax가 바뀔 때 "
-          "불연속이라 optimization이 불안정하기 때문",
-          "평균을 쓰면 $V$의 의미가 살짝 어긋나지만(최댓값이 아니라 평균 근처) "
-          "**학습이 훨씬 안정적**이다",
-          "이론적 정확성보다 optimization 안정성을 고른 사례 — "
-          "deep reinforcement learning에는 이런 선택이 많다"]:
-    print(f"  · {s}")
 ```
+
+- **최댓값 빼기**가 이론적으로 더 깔끔하다 — 그러면 \$V(s)=\\max_a Q(s,a)\$가 되어 의미가 정확해진다
+- **그런데 논문은 평균 빼기를 택했다.** 최댓값은 argmax가 바뀔 때 불연속이라 optimization이 불안정하기 때문
+- 평균을 쓰면 \$V\$의 의미가 살짝 어긋나지만(최댓값이 아니라 평균 근처) **학습이 훨씬 안정적**이다
+- 이론적 정확성보다 optimization 안정성을 고른 사례 — deep reinforcement learning에는 이런 선택이 많다
 
 ---
 
