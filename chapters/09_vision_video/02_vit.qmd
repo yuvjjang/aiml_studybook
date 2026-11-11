@@ -54,6 +54,8 @@ MLP·projection은 $\mathcal{O}(Nd^2)$로 **token 수에 선형**이고, $d$가 
 그래서 "16배"가 실제 연산량 배수가 되는지는 **$N$과 $d$의 크기에 달려 있다.**
 아래에서 그 경계를 잰다.
 
+해상도·patch 크기별 token 수와 attention 행렬 크기 ([CLS] 포함)
+
 ```{python}
 #| label: patch-arith
 #| code-fold: false
@@ -61,8 +63,6 @@ MLP·projection은 $\mathcal{O}(Nd^2)$로 **token 수에 선형**이고, $d$가 
 import sys; sys.path.append("../..")
 import numpy as np
 
-print("해상도·patch 크기별 token 수와 attention 행렬 크기 ([CLS] 포함)")
-print()
 print(f"{'해상도':>7} {'patch':>5} {'token N':>8} {'attention N²':>13} "
       f"{'ViT-B FLOPs 비':>15}")
 print("-" * 54)
@@ -80,9 +80,15 @@ for H in [224, 384, 512, 1024]:
             base = fl
         ROWS.append((H, P, N, N*N, fl/base))
         print(f"{H:>7} {P:>5} {N:>8} {N*N:>13,} {fl/base:>15.2f}")
-print()
 ref = [r for r in ROWS if r[0] == 224 and r[1] == 16][0]
-print(f"**기준: 224px / patch 16 → token {ref[2]}개** (ViT-B/16)")
+```
+
+**기준: 224px / patch 16 → token `{python} f'{ref[2]}'`개** (ViT-B/16)
+
+```{python}
+#| label: patch-arith-2
+#| code-fold: false
+
 for a, b, lbl in [((224, 32), (224, 16), "patch를 32→16으로 (같은 해상도)"),
                   ((224, 16), (224, 8), "patch를 16→8로"),
                   ((224, 16), (512, 16), "해상도를 224→512로 (같은 patch)")]:
@@ -90,28 +96,25 @@ for a, b, lbl in [((224, 32), (224, 16), "patch를 32→16으로 (같은 해상�
     y = [r for r in ROWS if (r[0], r[1]) == b][0]
     print(f"  · {lbl}: token {x[2]}→{y[2]} ({y[2]/x[2]:.0f}배), "
           f"attention 행렬 {y[3]/x[3]:.0f}배, **전체 연산 {y[4]/x[4]:.1f}배**")
-print()
 a = [r for r in ROWS if (r[0], r[1]) == (224, 32)][0]
 bb = [r for r in ROWS if (r[0], r[1]) == (224, 16)][0]
-print("**여기서 먼저 짚을 것 — 'patch를 반으로 줄이면 16배'는 절반만 맞다.**")
-print(f"  attention 행렬은 정말 {bb[3]/a[3]:.0f}배가 되지만, "
-      f"전체 연산은 {bb[4]/a[4]:.1f}배에 그친다.")
-print(f"  224px/P16에서 attention은 block 연산의 "
-      f"{2*bb[2]*bb[2]*D/(2*bb[2]*bb[2]*D + 12*bb[2]*D*D)*100:.0f}%뿐이다 — "
-      "**아직 MLP가 지배한다.**")
 c = [r for r in ROWS if (r[0], r[1]) == (1024, 8)][0]
-print(f"  1024px/P8에서는 그 비중이 "
-      f"{2*c[2]*c[2]*D/(2*c[2]*c[2]*D + 12*c[2]*D*D)*100:.0f}%로 뒤집힌다.")
-print("  **제곱 비용은 token이 충분히 많아진 뒤에야 나타난다.**")
-print()
-print("**그리고 두 가지가 갈린다.**")
-for s in ["patch를 키우면 싸지지만 **첫 층에서 이미 세부를 버린다** — "
-          "P=32는 32x32 pixel을 벡터 하나로 뭉갠다",
-          "patch를 줄이면 세밀해지지만 **attention이 제곱으로 폭발**한다",
-          "detection·segmentation처럼 고해상도가 필요한 과제에서 이 긴장이 설계를 지배한다",
-          "Swin이 나온 이유가 정확히 이것이다 — 마지막 절에서 다룬다"]:
-    print(f"  · {s}")
 ```
+
+**여기서 먼저 짚을 것 — 'patch를 반으로 줄이면 16배'는 절반만 맞다.**
+
+attention 행렬은 정말 `{python} f'{bb[3] / a[3]:.0f}'`배가 되지만, 전체 연산은 `{python} f'{bb[4] / a[4]:.1f}'`배에 그친다.  
+224px/P16에서 attention은 block 연산의 `{python} f'{2 * bb[2] * bb[2] * D / (2 * bb[2] * bb[2] * D + 12 * bb[2] * D * D) * 100:.0f}'`%뿐이다 — **아직 MLP가 지배한다.**  
+1024px/P8에서는 그 비중이 `{python} f'{2 * c[2] * c[2] * D / (2 * c[2] * c[2] * D + 12 * c[2] * D * D) * 100:.0f}'`%로 뒤집힌다.
+
+**제곱 비용은 token이 충분히 많아진 뒤에야 나타난다.**
+
+**그리고 두 가지가 갈린다.**
+
+- patch를 키우면 싸지지만 **첫 층에서 이미 세부를 버린다** — P=32는 32x32 pixel을 벡터 하나로 뭉갠다
+- patch를 줄이면 세밀해지지만 **attention이 제곱으로 폭발**한다
+- detection·segmentation처럼 고해상도가 필요한 과제에서 이 긴장이 설계를 지배한다
+- Swin이 나온 이유가 정확히 이것이다 — 마지막 절에서 다룬다
 
 ```{python}
 #| label: fig-patch-cost
@@ -173,6 +176,9 @@ patch embedding도 weight를 공유한다 — 다만 **stride $P$로** 공유한
 이미지를 $s$ pixel 옮긴 뒤, **feature map을 격자 단위로 되돌려 정렬**하고 남은 차이를 본다.
 오차 0 = feature가 통째로 평행이동했다는 뜻이다.
 
+이미지를 s pixel 옮긴 뒤 — 격자 단위로 정렬한 후의 equivariance 오차
+(0 = feature가 그대로 평행이동, 1 이상 = feature 자체가 달라짐)
+
 ```{python}
 #| label: shift
 #| code-fold: false
@@ -206,9 +212,6 @@ C = 192
 CONF = [(3, 1, "conv stride1"), (4, 4, "patch P=4"),
         (8, 8, "patch P=8"), (16, 16, "patch P=16")]
 
-print("이미지를 s pixel 옮긴 뒤 — 격자 단위로 정렬한 후의 equivariance 오차")
-print("  (0 = feature가 그대로 평행이동, 1 이상 = feature 자체가 달라짐)")
-print()
 print(f"{'s (px)':>7}" + "".join(f" {nm:>13}" for _, _, nm in CONF))
 print("-" * 62)
 SHIFT = {nm: [] for _, _, nm in CONF}
@@ -227,22 +230,23 @@ for s in SS:
         SHIFT[nm].append(float(np.mean(vals)))
         line += f" {SHIFT[nm][-1]:>13.4f}"
     print(line)
-print()
 p16 = SHIFT["patch P=16"]
-print(f"**stride 1 convolution은 어떤 이동에도 오차 0이다** — 완전한 equivariance.")
-print(f"**patch P=16은 16의 배수에서만 0이다.**")
-print(f"  8 pixel(patch의 절반) 이동에서 오차 {p16[SS.index(8)]:.3f} — "
-      "feature의 크기만큼 틀어진다.")
-print("  즉 **같은 물체가 8 pixel 움직였다는 이유만으로 완전히 다른 token**이 된다 — 퍼즐 조각 경계가 어디에 걸리느냐에 따라 조각 그림이 완전히 달라진다.")
-print()
-print("**흔한 오해 하나를 여기서 정리해 두자.**")
-for s in ["'CNN은 이동 불변, ViT는 아니다'는 **너무 단순한 말**이다",
-          "CNN도 stride와 pooling으로 downsample하므로 같은 종류의 격자를 갖는다",
-          "ResNet의 총 stride는 32 — **ViT-B/16의 격자(16)보다 오히려 거칠다**",
-          "차이는 격자 간격이 아니라, CNN이 **모든 층에서** locality와 공유를 반복한다는 것",
-          "ViT는 첫 층에서 한 번 자르고, 그 뒤로는 전역 attention만 한다"]:
-    print(f"  · {s}")
 ```
+
+**stride 1 convolution은 어떤 이동에도 오차 0이다** — 완전한 equivariance.
+
+**patch P=16은 16의 배수에서만 0이다.**
+
+8 pixel(patch의 절반) 이동에서 오차 `{python} f'{p16[SS.index(8)]:.3f}'` — feature의 크기만큼 틀어진다.  
+즉 **같은 물체가 8 pixel 움직였다는 이유만으로 완전히 다른 token**이 된다 — 퍼즐 조각 경계가 어디에 걸리느냐에 따라 조각 그림이 완전히 달라진다.
+
+**흔한 오해 하나를 여기서 정리해 두자.**
+
+- 'CNN은 이동 불변, ViT는 아니다'는 **너무 단순한 말**이다
+- CNN도 stride와 pooling으로 downsample하므로 같은 종류의 격자를 갖는다
+- ResNet의 총 stride는 32 — **ViT-B/16의 격자(16)보다 오히려 거칠다**
+- 차이는 격자 간격이 아니라, CNN이 **모든 층에서** locality와 공유를 반복한다는 것
+- ViT는 첫 층에서 한 번 자르고, 그 뒤로는 전역 attention만 한다
 
 ```{python}
 #| label: fig-shift
@@ -286,6 +290,9 @@ Transformer attention에는 순서 개념이 없다.
 
 이미지에서는 치명적이다. patch를 뒤섞은 그림과 원본이 **같은 표현**이 된다는 뜻이니까. 퍼즐 조각을 아무렇게나 늘어놓아도 같은 그림으로 본다는 것이다.
 
+patch 순서를 섞은 뒤, 출력을 다시 정렬해 원본과 비교한다
+(출력 scale 대비 상대 차이)
+
 ```{python}
 #| label: posemb
 #| code-fold: false
@@ -311,9 +318,6 @@ Y4 = A.multi_head_attention(X[perm] + PE, *W, n_heads=4)[0]
 # ③ 비교용 — positional embedding도 patch를 따라 같이 옮기면
 Y5 = A.multi_head_attention((X + PE)[perm], *W, n_heads=4)[0]
 
-print("patch 순서를 섞은 뒤, 출력을 다시 정렬해 원본과 비교한다")
-print("  (출력 scale 대비 상대 차이)")
-print()
 print(f"{'경우':<40} {'최대 상대 차이':>14}")
 print("-" * 56)
 print(f"{'positional embedding 없음':<40} "
@@ -322,24 +326,29 @@ print(f"{'positional embedding을 자리에 두고 patch만 섞음':<40} "
       f"{np.abs(Y3[perm]-Y4).max()/scale:>14.2e}")
 print(f"{'positional embedding도 patch를 따라 옮김':<40} "
       f"{np.abs(Y3[perm]-Y5).max()/scale:>14.2e}")
-print()
-print("**첫 줄과 셋째 줄은 부동소수점 오차 수준 — 즉 완전히 같다.**")
-print("  attention은 permutation **equivariant**다. token을 섞으면 출력도 똑같이 섞여 나올 뿐이다.")
-print("  그래서 positional embedding을 patch에 붙여 같이 옮기면 아무것도 달라지지 않는다.")
-print()
-print("**둘째 줄이 요점이다.**")
-print("  positional embedding을 **자리에 고정**하고 patch 내용만 섞으면 출력이 완전히 달라진다.")
-print("  '이 자리에 어떤 patch가 왔는가'가 비로소 의미를 갖는 것이다.")
-print("  positional embedding이 없으면 이미지는 **순서 없는 patch 가방**일 뿐이다.")
-print()
-print("**CNN은 이 문제가 아예 없다.**")
-print("  convolution은 이웃을 kernel window로 정의하므로 위치 정보가 구조에 들어 있다.")
-print("  ViT는 그것을 **parameter로 따로 배워야 한다** — inductive bias를 뺀 대가 하나.")
 ```
+
+**첫 줄과 셋째 줄은 부동소수점 오차 수준 — 즉 완전히 같다.**
+
+attention은 permutation **equivariant**다. token을 섞으면 출력도 똑같이 섞여 나올 뿐이다.  
+그래서 positional embedding을 patch에 붙여 같이 옮기면 아무것도 달라지지 않는다.
+
+**둘째 줄이 요점이다.**
+
+positional embedding을 **자리에 고정**하고 patch 내용만 섞으면 출력이 완전히 달라진다.  
+'이 자리에 어떤 patch가 왔는가'가 비로소 의미를 갖는 것이다.  
+positional embedding이 없으면 이미지는 **순서 없는 patch 가방**일 뿐이다.
+
+**CNN은 이 문제가 아예 없다.**
+
+convolution은 이웃을 kernel window로 정의하므로 위치 정보가 구조에 들어 있다.  
+ViT는 그것을 **parameter로 따로 배워야 한다** — inductive bias를 뺀 대가 하나.
 
 **그런데 이 parameter가 해상도를 바꾸는 순간 문제가 된다.**
 224px/P16으로 학습한 positional embedding은 14×14 격자용이다.
 384px로 fine-tuning하려면 24×24가 필요하다 — interpolation(보간 — 사이 값을 이웃값으로 채워 넣기)해야 한다.
+
+14x14로 배운 positional embedding을 키워 쓸 때, '제대로 된 값'과 얼마나 다른가
 
 ```{python}
 #| label: pe-interp
@@ -362,8 +371,6 @@ def interp2d(E, m):
     return (R[i0]*(1-w) + R[i1]*w).transpose(1, 0, 2)
 
 
-print("14x14로 배운 positional embedding을 키워 쓸 때, '제대로 된 값'과 얼마나 다른가")
-print()
 print(f"{'목표 격자':>10} {'해상도':>9} {'상대 오차':>11} {'cosine 유사도':>14}")
 print("-" * 48)
 PEI = []
@@ -375,19 +382,17 @@ for m in [14, 16, 20, 24, 32]:
                             * np.linalg.norm(tgt, axis=-1) + 1e-9)
     PEI.append((m, err, float(cs.mean())))
     print(f"{m:>4}x{m:<5} {m*16:>9} {err:>11.4f} {cs.mean():>14.4f}")
-print()
-print("**interpolation은 공짜가 아니다.**")
 c24 = [p for p in PEI if p[0] == 24][0]
-print(f"  24x24로 늘리면 cosine 유사도가 {c24[2]:.3f}까지 떨어진다.")
-for s in ["positional embedding은 고주파 성분을 갖는데, interpolation은 그것을 뭉갠다 (작은 사진을 억지로 늘리면 흐려지는 것과 같다)",
-          "그래서 해상도를 바꾸면 **interpolation 후 반드시 fine-tuning**이 필요하다 — "
-          "ViT 논문도 384px fine-tuning 단계를 따로 둔다",
-          "**RoPE·relative positional encoding**은 이 문제가 훨씬 덜하다 — "
-          "격자 크기가 아니라 **상대 거리**의 함수이기 때문",
-          "[5.3](../05_transformer/03_positional_encoding.qmd)의 extrapolation 논의가 "
-          "vision에서는 '해상도 변경'이라는 이름으로 다시 나온다"]:
-    print(f"  · {s}")
 ```
+
+**interpolation은 공짜가 아니다.**
+
+24x24로 늘리면 cosine 유사도가 `{python} f'{c24[2]:.3f}'`까지 떨어진다.
+
+- positional embedding은 고주파 성분을 갖는데, interpolation은 그것을 뭉갠다 (작은 사진을 억지로 늘리면 흐려지는 것과 같다)
+- 그래서 해상도를 바꾸면 **interpolation 후 반드시 fine-tuning**이 필요하다 — ViT 논문도 384px fine-tuning 단계를 따로 둔다
+- **RoPE·relative positional encoding**은 이 문제가 훨씬 덜하다 — 격자 크기가 아니라 **상대 거리**의 함수이기 때문
+- [5.3](../05_transformer/03_positional_encoding.qmd)의 extrapolation 논의가 vision에서는 '해상도 변경'이라는 이름으로 다시 나온다
 
 ---
 
@@ -497,10 +502,10 @@ for n in NS:
 X0, y0 = gen(60, np.random.default_rng(0))
 n1 = train(X0, y0, Xv, yv, True)[2]
 n2 = train(X0, y0, Xv, yv, False)[2]
-print()
-print(f"parameter: 공유 {n1:,} / 위치별 {n2:,} ({n2/n1:.0f}배)")
-print(f"위치를 무시하는 모델의 이론적 상한 = {1-len(EXC)/NP:.4f}")
 ```
+
+parameter: 공유 `{python} f'{n1:,}'` / 위치별 `{python} f'{n2:,}'` (`{python} f'{n2 / n1:.0f}'`배)  
+위치를 무시하는 모델의 이론적 상한 = `{python} f'{1 - len(EXC) / NP:.4f}'`
 
 ```{python}
 #| label: fig-crossover
@@ -543,43 +548,43 @@ for i in range(len(NS)):
     if CURVE[False][i] > CURVE[True][i]:
         cross = NS[i]
         break
-print("**교차점이 재현되었다.**")
-print(f"  표본 {NS[0]}개: 공유 {CURVE[True][0]:.3f} vs "
-      f"위치별 {CURVE[False][0]:.3f} — **공유가 크게 앞선다**")
+```
+
+**교차점이 재현되었다.**
+
+표본 `{python} f'{NS[0]}'`개: 공유 `{python} f'{CURVE[True][0]:.3f}'` vs 위치별 `{python} f'{CURVE[False][0]:.3f}'` — **공유가 크게 앞선다**
+
+```{python}
+#| label: crossover-read-2
+#| code-fold: false
+
 if cross:
     j = NS.index(cross)
     print(f"  표본 {cross}개: 공유 {CURVE[True][j]:.3f} vs "
           f"위치별 {CURVE[False][j]:.3f} — **역전**")
 else:
     print("  이 범위 안에서는 역전이 일어나지 않았다.")
-print()
-print("**mechanism이 점선에 다 보인다.**")
-print(f"  위치별 모델의 **학습** 정확도는 표본 {NS[0]}개에서도 "
-      f"{TRAIN[False][0]:.3f}다 — 완전 memorization.")
-print("  검증만 낮다. 즉 표현력이 없어서가 아니라 **일반화가 안 되는 것**이다.")
-print(f"  공유 모델은 반대다 — 학습 정확도도 결국 "
-      f"{TRAIN[True][-1]:.3f}에서 멈춘다. **가정 자체가 천장**이다.")
-print()
-print("**이 실험이 말하는 것과 말하지 않는 것**")
-for s in ["말하는 것: inductive bias는 **데이터가 적을 때의 대체재**이고, "
-          "동시에 **상한**이다 — 교과서의 공식은 문제를 빨리 풀게 하지만, 공식이 안 맞는 문제는 영영 못 푼다",
-          "말하는 것: bias가 조금이라도 틀리면, 데이터가 늘수록 그 비용이 드러난다",
-          "말하지 않는 것: 실제 ViT vs ResNet의 교차점 위치 "
-          "(논문에서는 1억~3억 장 규모)",
-          "말하지 않는 것: attention의 기여 — 여기서는 위치별 weight만 비교했다"]:
-    print(f"  · {s}")
-print()
-print("**그래서 실무의 답은 '둘 다'가 되었다.**")
-for s in ["**DeiT** — augmentation·distillation으로 ImageNet-1k만으로 ViT를 학습시켰다 "
-          "(데이터 대신 **augmentation이 bias를 대신**한다)",
-          "**hybrid** — 첫 층을 큰 patch 대신 **convolution stem**으로 "
-          "(locality만 되돌려 준다)",
-          "**ConvNeXt** — 반대 방향의 실험. ResNet에 ViT의 학습 recipe와 "
-          "설계를 이식하니 ViT를 따라잡았다",
-          "ConvNeXt의 교훈이 중요하다 — **차이의 상당 부분은 구조가 아니라 "
-          "학습 recipe였다**"]:
-    print(f"  · {s}")
 ```
+
+**mechanism이 점선에 다 보인다.**
+
+위치별 모델의 **학습** 정확도는 표본 `{python} f'{NS[0]}'`개에서도 `{python} f'{TRAIN[False][0]:.3f}'`다 — 완전 memorization.  
+검증만 낮다. 즉 표현력이 없어서가 아니라 **일반화가 안 되는 것**이다.  
+공유 모델은 반대다 — 학습 정확도도 결국 `{python} f'{TRAIN[True][-1]:.3f}'`에서 멈춘다. **가정 자체가 천장**이다.
+
+**이 실험이 말하는 것과 말하지 않는 것**
+
+- 말하는 것: inductive bias는 **데이터가 적을 때의 대체재**이고, 동시에 **상한**이다 — 교과서의 공식은 문제를 빨리 풀게 하지만, 공식이 안 맞는 문제는 영영 못 푼다
+- 말하는 것: bias가 조금이라도 틀리면, 데이터가 늘수록 그 비용이 드러난다
+- 말하지 않는 것: 실제 ViT vs ResNet의 교차점 위치 (논문에서는 1억\~3억 장 규모)
+- 말하지 않는 것: attention의 기여 — 여기서는 위치별 weight만 비교했다
+
+**그래서 실무의 답은 '둘 다'가 되었다.**
+
+- **DeiT** — augmentation·distillation으로 ImageNet-1k만으로 ViT를 학습시켰다 (데이터 대신 **augmentation이 bias를 대신**한다)
+- **hybrid** — 첫 층을 큰 patch 대신 **convolution stem**으로 (locality만 되돌려 준다)
+- **ConvNeXt** — 반대 방향의 실험. ResNet에 ViT의 학습 recipe와 설계를 이식하니 ViT를 따라잡았다
+- ConvNeXt의 교훈이 중요하다 — **차이의 상당 부분은 구조가 아니라 학습 recipe였다**
 
 ---
 
@@ -603,14 +608,19 @@ import numpy as np
 
 G, M = 16, 4                                # 16x16 token 격자, 4x4 window
 n = G*G
-print(f"token 격자 {G}x{G} = {n}개, window {M}x{M}")
-print()
+```
+
+token 격자 `{python} f'{G}'`x`{python} f'{G}'` = `{python} f'{n}'`개, window `{python} f'{M}'`x`{python} f'{M}'`
+
+```{python}
+#| label: swin-2
+#| code-fold: false
+
 print(f"{'방식':<22} {'attention 원소 수':>16} {'token 수 의존':>14}")
 print("-" * 56)
 print(f"{'전역 attention':<22} {n*n:>16,} {'O(N²)':>14}")
 print(f"{'window attention':<22} {n*M*M:>16,} {'O(N·M²)':>14}")
 print(f"{'':22} {'':>16} {f'→ {n*n/(n*M*M):.0f}배 절감':>14}")
-print()
 
 
 def reach(shift_on):
@@ -633,23 +643,32 @@ def reach(shift_on):
 
 
 R0, R1 = reach(False), reach(True)
-print("가운데 token 하나의 정보가 층을 지나며 닿는 token 수")
-print()
+```
+
+가운데 token 하나의 정보가 층을 지나며 닿는 token 수
+
+```{python}
+#| label: swin-3
+#| code-fold: false
+
 print(f"{'층':>4} {'고정 window':>13} {'shifted window':>14} {'전역 attention':>14}")
 print("-" * 48)
 for i in range(8):
     print(f"{i+1:>4} {R0[i]:>13} {R1[i]:>14} {n:>14}")
-print()
 full = next((i+1 for i, v in enumerate(R1) if v == n), None)
-print(f"**고정 window는 {R0[-1]}개에서 영원히 멈춘다** — 자기 window 밖을 못 본다.")
-print(f"**shifted window는 {full}개 층 만에 격자 전체({n}개)에 닿는다.**")
-print("  전역 attention은 1개 층이면 되지만, 비용이 16배다.")
-print("  Swin은 **몇 층을 더 쓰는 대신 비용을 선형으로** 바꾼 것이다.")
-print()
-print("**여기서 [9.0](00_image_basics.qmd)의 receptive field 이야기가 돌아온다.**")
-print("  CNN은 층을 쌓아 receptive field를 넓혔다. Swin도 똑같이 한다.")
-print("  ViT가 버렸던 '계층적으로 넓혀 간다'는 설계를 되가져온 것이다.")
 ```
+
+**고정 window는 `{python} f'{R0[-1]}'`개에서 영원히 멈춘다** — 자기 window 밖을 못 본다.
+
+**shifted window는 `{python} f'{full}'`개 층 만에 격자 전체(`{python} f'{n}'`개)에 닿는다.**
+
+전역 attention은 1개 층이면 되지만, 비용이 16배다.  
+Swin은 **몇 층을 더 쓰는 대신 비용을 선형으로** 바꾼 것이다.
+
+**여기서 [9.0](00_image_basics.qmd)의 receptive field 이야기가 돌아온다.**
+
+CNN은 층을 쌓아 receptive field를 넓혔다. Swin도 똑같이 한다.  
+ViT가 버렸던 '계층적으로 넓혀 간다'는 설계를 되가져온 것이다.
 
 ```{python}
 #| label: fig-swin
