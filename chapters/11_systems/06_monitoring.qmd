@@ -68,13 +68,15 @@ X0, y0 = gen(4000, 2)
 P0 = MODEL.predict(X0)
 BASE_CONF = float(P0.max(1).mean())
 BASE_DIST = np.bincount(P0.argmax(1), minlength=K)/len(P0)
-print(f"배포 시점: 정확도 {acc(X0, y0):.4f}, 평균 confidence {BASE_CONF:.4f}")
-print(f"  (무작위 추측 {1/K:.4f})")
-print()
-print("**두 종류의 drift(표류 — 배포 후 세상이 학습 때와 달라지는 것)를 따로 만든다**")
-print("  · **covariate shift(공변량 이동)** — 입력 분포 P(x)가 움직인다. P(y|x)는 그대로. 손님층이 바뀌었지만 취향은 그대로")
-print("  · **concept drift(개념 드리프트)** — P(y|x)가 바뀐다. 입력은 그대로일 수도 있다. 같은 손님인데 취향이 바뀌었다")
 ```
+
+배포 시점: 정확도 `{python} f'{acc(X0, y0):.4f}'`, 평균 confidence `{python} f'{BASE_CONF:.4f}'`
+(무작위 추측 `{python} f'{1 / K:.4f}'`)
+
+**두 종류의 drift(표류 — 배포 후 세상이 학습 때와 달라지는 것)를 따로 만든다**
+
+- **covariate shift(공변량 이동)** — 입력 분포 P(x)가 움직인다. P(y|x)는 그대로. 손님층이 바뀌었지만 취향은 그대로
+- **concept drift(개념 드리프트)** — P(y|x)가 바뀐다. 입력은 그대로일 수도 있다. 같은 손님인데 취향이 바뀌었다
 
 ---
 
@@ -91,6 +93,8 @@ print("  · **concept drift(개념 드리프트)** — P(y|x)가 바뀐다. 입�
 | **정확도** | 실제 성능 | **필요 — 그래서 늦게 온다** |
 
 두 종류의 drift에 이 지표들이 어떻게 반응하는지 본다.
+
+covariate shift — 입력 분포 P(x)가 움직인다
 
 ```{python}
 #| label: drift
@@ -109,8 +113,6 @@ def monitor(Xc, yc):
     return a, ps, conf, kl
 
 
-print("covariate shift — 입력 분포 P(x)가 움직인다")
-print()
 print(f"{'강도':>6} {'정확도':>9} {'입력 PSI':>10} {'평균 confidence':>10} "
       f"{'예측분포 KL':>12}")
 print("-" * 52)
@@ -119,9 +121,14 @@ for sh in [0.0, 0.2, 0.5, 1.0, 1.5]:
     r = monitor(*gen(4000, 3, shift=sh))
     COV.append((sh, *r))
     print(f"{sh:>6.1f} {r[0]:>9.4f} {r[1]:>10.4f} {r[2]:>10.4f} {r[3]:>12.5f}")
-print()
-print("concept drift — 참 함수가 회전한다 (입력 X는 **완전히 동일**)")
-print()
+```
+
+concept drift — 참 함수가 회전한다 (입력 X는 **완전히 동일**)
+
+```{python}
+#| label: drift-2
+#| code-fold: false
+
 print(f"{'강도':>6} {'정확도':>9} {'입력 PSI':>10} {'평균 confidence':>10} "
       f"{'예측분포 KL':>12}")
 print("-" * 52)
@@ -130,33 +137,30 @@ for co in [0.0, 0.1, 0.2, 0.4, 0.8]:
     r = monitor(*gen(4000, 4, concept=co))
     CON.append((co, *r))
     print(f"{co:>6.1f} {r[0]:>9.4f} {r[1]:>10.4f} {r[2]:>10.4f} {r[3]:>12.5f}")
-print()
 c0, c8 = CON[0], CON[-1]
-print("**이것이 이 장의 핵심이다.**")
-print(f"  concept drift로 정확도가 {c0[1]:.4f} → {c8[1]:.4f} "
-      f"({c0[1]-c8[1]:.3f} 하락, 무작위 {1/K:.3f}에 근접)")
-print(f"  그런데 입력 PSI는 {c0[2]:.4f} → {c8[2]:.4f} — **미동도 안 한다.**")
-print(f"  평균 confidence도 {c0[3]:.4f} → {c8[3]:.4f}로 그대로다.")
-print()
-for s in ["당연하다 — concept drift는 정의상 **입력을 안 건드린다**",
-          "P(y|x)가 바뀌었을 뿐이니 P(x)를 보는 지표는 아무것도 못 본다",
-          "**label 없이 볼 수 있는 지표만으로는 concept drift를 원리적으로 못 잡는다**",
-          "그래서 'drift monitoring을 붙였으니 안심'은 위험한 착각이다",
-          "실제 사고의 상당수가 concept drift다 — "
-          "사용자 행동이 바뀌고, 사기 수법이 바뀌고, 경쟁 서비스가 생긴다"]:
-    print(f"  · {s}")
-print()
 cv0, cv15 = COV[0], COV[-1]
-print("**covariate shift 쪽도 조심할 게 있다.**")
-print(f"  여기서는 PSI가 {cv0[2]:.3f} → {cv15[2]:.3f}로 크게 울리는데, "
-      f"정확도는 오히려 {cv0[1]:.4f} → {cv15[1]:.4f}로 **올랐다**.")
-for s in ["입력이 이동한 방향이 우연히 **더 쉬운 영역**이었기 때문이다",
-          "즉 **PSI 경보 = 성능 저하가 아니다** — 상관은 있지만 인과가 아니다",
-          "drift 지표는 '무언가 달라졌다'는 신호지 "
-          "'나빠졌다'는 신호가 아니다",
-          "그래서 경보가 울리면 **성능을 확인할 방법**이 따로 있어야 한다"]:
-    print(f"  · {s}")
 ```
+
+**이것이 이 장의 핵심이다.**
+
+concept drift로 정확도가 `{python} f'{c0[1]:.4f}'` → `{python} f'{c8[1]:.4f}'` (`{python} f'{c0[1] - c8[1]:.3f}'` 하락, 무작위 `{python} f'{1 / K:.3f}'`에 근접)  
+그런데 입력 PSI는 `{python} f'{c0[2]:.4f}'` → `{python} f'{c8[2]:.4f}'` — **미동도 안 한다.**  
+평균 confidence도 `{python} f'{c0[3]:.4f}'` → `{python} f'{c8[3]:.4f}'`로 그대로다.
+
+- 당연하다 — concept drift는 정의상 **입력을 안 건드린다**
+- P(y|x)가 바뀌었을 뿐이니 P(x)를 보는 지표는 아무것도 못 본다
+- **label 없이 볼 수 있는 지표만으로는 concept drift를 원리적으로 못 잡는다**
+- 그래서 'drift monitoring을 붙였으니 안심'은 위험한 착각이다
+- 실제 사고의 상당수가 concept drift다 — 사용자 행동이 바뀌고, 사기 수법이 바뀌고, 경쟁 서비스가 생긴다
+
+**covariate shift 쪽도 조심할 게 있다.**
+
+여기서는 PSI가 `{python} f'{cv0[2]:.3f}'` → `{python} f'{cv15[2]:.3f}'`로 크게 울리는데, 정확도는 오히려 `{python} f'{cv0[1]:.4f}'` → `{python} f'{cv15[1]:.4f}'`로 **올랐다**.
+
+- 입력이 이동한 방향이 우연히 **더 쉬운 영역**이었기 때문이다
+- 즉 **PSI 경보 = 성능 저하가 아니다** — 상관은 있지만 인과가 아니다
+- drift 지표는 '무언가 달라졌다'는 신호지 '나빠졌다'는 신호가 아니다
+- 그래서 경보가 울리면 **성능을 확인할 방법**이 따로 있어야 한다
 
 ```{python}
 #| label: fig-drift
@@ -218,14 +222,14 @@ fig
 지연이 길수록 proxy metric에 기대야 하는데, 앞 절에서 그 proxy metric이
 concept drift를 못 본다는 걸 확인했다. 상관을 직접 재 본다.
 
+proxy metric과 실제 정확도의 상관 (drift 종류별)
+
 ```{python}
 #| label: proxy
 #| code-fold: false
 
 import numpy as np
 
-print("proxy metric과 실제 정확도의 상관 (drift 종류별)")
-print()
 print(f"{'drift 종류':<16} {'지표':<16} {'상관':>10} {'지표의 변동폭':>14}")
 print("-" * 60)
 for nm, rows in [("covariate shift", COV), ("concept drift", CON)]:
@@ -240,33 +244,28 @@ for nm, rows in [("covariate shift", COV), ("concept drift", CON)]:
             c = float(np.corrcoef(v, A)[0, 1])
             print(f"{nm if lbl == '입력 PSI' else '':<16} {lbl:<16} "
                   f"{c:>+10.4f} {rng_v:>14.6f}")
-print()
-print("**concept drift에서는 상관을 계산할 수조차 없다** — "
-      "지표가 전혀 안 움직여서 분산이 0이다.")
-print()
-print("**그래서 label을 확보하는 방법이 필요하다**")
-print()
-print(f"{'방법':<20} {'무엇':<32} {'주의'}")
-print("-" * 74)
-for a, b, c in [
-    ("delayed label 대기", "결국 오는 정답을 기다린다", "**늦다** — 그동안 손실"),
-    ("표본 labeling", "일부만 사람이 매긴다", "비용, 표본 bias"),
-    ("탐색 traffic", "일부를 무작위 policy로", "단기 손실을 감수"),
-    ("사용자 feedback", "좋아요/신고 버튼", "**bias가 심하다** (아래)"),
-    ("대리 결과", "재문의율, 이탈률, 전환율", "간접적이지만 즉시"),
-    ("검증 가능한 부분", "code 실행, 수식 검산", "가능한 domain이 한정"),
-]:
-    print(f"{a:<20} {b:<32} {c}")
-print()
-print("**사용자 feedback의 bias**")
-for s in ["feedback을 남기는 사람은 **전체의 몇 %**이고 그들은 대표성이 없다",
-          "불만은 남기고 만족은 조용하다 — 부정 쪽으로 치우친다",
-          "그런데 **명백한 실패는 오히려 신고를 안 한다** — 그냥 떠난다. 음식이 정말 형편없으면 리뷰 대신 다시 안 오는 것",
-          "즉 feedback은 '중간 정도로 아쉬운' 사례에 몰린다",
-          "이것을 성능 지표로 쓰면 **개선 방향이 skew**된다 — "
-          "[10.5](../10_rl/05_rl_for_llm.qmd)의 reward hacking과 같은 구조"]:
-    print(f"  · {s}")
 ```
+
+**concept drift에서는 상관을 계산할 수조차 없다** — 지표가 전혀 안 움직여서 분산이 0이다.
+
+**그래서 label을 확보하는 방법이 필요하다**
+
+| 방법 | 무엇 | 주의 |
+|---|---|---|
+| delayed label 대기 | 결국 오는 정답을 기다린다 | **늦다** — 그동안 손실 |
+| 표본 labeling | 일부만 사람이 매긴다 | 비용, 표본 bias |
+| 탐색 traffic | 일부를 무작위 policy로 | 단기 손실을 감수 |
+| 사용자 feedback | 좋아요/신고 버튼 | **bias가 심하다** (아래) |
+| 대리 결과 | 재문의율, 이탈률, 전환율 | 간접적이지만 즉시 |
+| 검증 가능한 부분 | code 실행, 수식 검산 | 가능한 domain이 한정 |
+
+**사용자 feedback의 bias**
+
+- feedback을 남기는 사람은 **전체의 몇 %**이고 그들은 대표성이 없다
+- 불만은 남기고 만족은 조용하다 — 부정 쪽으로 치우친다
+- 그런데 **명백한 실패는 오히려 신고를 안 한다** — 그냥 떠난다. 음식이 정말 형편없으면 리뷰 대신 다시 안 오는 것
+- 즉 feedback은 '중간 정도로 아쉬운' 사례에 몰린다
+- 이것을 성능 지표로 쓰면 **개선 방향이 skew**된다 — [10.5](../10_rl/05_rl_for_llm.qmd)의 reward hacking과 같은 구조
 
 ---
 
@@ -292,17 +291,28 @@ for d in range(400):
     psi_drift.append(max(psi(Xtr[:, j], Xd[:, j]) for j in range(D)))
 psi_null = np.array(psi_null)
 psi_drift = np.array(psi_drift)
+```
 
-print(f"하루 {NDAY}건씩 관측할 때의 PSI 분포 (feature {D}개 중 최댓값)")
-print()
+하루 `{python} f'{NDAY}'`건씩 관측할 때의 PSI 분포 (feature `{python} f'{D}'`개 중 최댓값)
+
+```{python}
+#| label: alerts-2
+#| code-fold: false
+
 print(f"  정상 구간   : 중앙값 {np.median(psi_null):.4f}, "
       f"p95 {np.percentile(psi_null, 95):.4f}, "
       f"최대 {psi_null.max():.4f}")
-print(f"  drift 0.3 : 중앙값 {np.median(psi_drift):.4f}")
-print()
-print("  **정상인데도 PSI가 0이 아니다** — 표본이 작아 생기는 잡음이다.")
-print("  통상 쓰는 '0.1이면 주의' 같은 고정 기준이 위험한 이유다.")
-print()
+```
+
+drift 0.3 : 중앙값 `{python} f'{np.median(psi_drift):.4f}'`
+
+**정상인데도 PSI가 0이 아니다** — 표본이 작아 생기는 잡음이다.  
+통상 쓰는 '0.1이면 주의' 같은 고정 기준이 위험한 이유다.
+
+```{python}
+#| label: alerts-3
+#| code-fold: false
+
 print(f"{'threshold':>9} {'false alarm율':>12} {'탐지율':>9} {'연간 false alarm':>16} "
       f"{'평가'}")
 print("-" * 60)
@@ -321,23 +331,15 @@ if best:
     b = best[0]
     print(f"**이 설정에서 쓸 만한 구간은 threshold {b[0]:.2f} 근처다** — "
           f"연 {b[1]*365:.0f}회 false alarm에 탐지율 {b[2]:.1%}.")
-print()
 f_lo = [a for a in ALERT if a[0] == 0.05][0]
 f_hi = [a for a in ALERT if a[0] == 0.10][0]
-for s in [f"threshold를 0.10에서 0.05로 낮추면 false alarm이 "
-          f"{f_hi[1]:.1%} → {f_lo[1]:.1%}로 **{f_lo[1]/f_hi[1]:.0f}배** 된다 — "
-          "정상 분포의 꼬리에 걸리기 때문",
-          "**해법은 threshold를 잘 고르는 것보다 표본을 키우는 것**이다 — "
-          "잡음이 줄면 두 분포가 잘 갈린다",
-          "그래서 실무에서는 **rolling window**(최근 며칠을 합친 이동 구간)로 며칠을 합쳐 본다 "
-          "(대신 탐지가 늦어진다)",
-          "그리고 경보를 **등급으로 나눈다** — "
-          "'기록만', '검토 대기', '즉시 호출'",
-          "feature 12개의 최댓값을 썼다는 점도 중요하다 — "
-          "**여러 지표를 동시에 보면 multiple comparison(multiple comparison)으로 false alarm이 는다** "
-          "([11.0](00_reproducibility.qmd)의 best-of-k 함정과 같은 수학)"]:
-    print(f"  · {s}")
 ```
+
+- threshold를 0.10에서 0.05로 낮추면 false alarm이 `{python} f'{f_hi[1]:.1%}'` → `{python} f'{f_lo[1]:.1%}'`로 **`{python} f'{f_lo[1] / f_hi[1]:.0f}'`배** 된다 — 정상 분포의 꼬리에 걸리기 때문
+- **해법은 threshold를 잘 고르는 것보다 표본을 키우는 것**이다 — 잡음이 줄면 두 분포가 잘 갈린다
+- 그래서 실무에서는 **rolling window**(최근 며칠을 합친 이동 구간)로 며칠을 합쳐 본다 (대신 탐지가 늦어진다)
+- 그리고 경보를 **등급으로 나눈다** — '기록만', '검토 대기', '즉시 호출'
+- feature 12개의 최댓값을 썼다는 점도 중요하다 — **여러 지표를 동시에 보면 multiple comparison(multiple comparison)으로 false alarm이 는다** ([11.0](00_reproducibility.qmd)의 best-of-k 함정과 같은 수학)
 
 ```{python}
 #| label: fig-alerts
@@ -393,8 +395,14 @@ def fresh_model(day, n=4000, steps=1200, seed=0):
 
 
 EVAL = {d: gen(2500, 7000 + d, concept=RATE*d) for d in range(0, DAYS, 10)}
-print(f"개념이 {DAYS}일에 걸쳐 서서히 회전한다 (총 0.8 radian)")
-print()
+```
+
+개념이 `{python} f'{DAYS}'`일에 걸쳐 서서히 회전한다 (총 0.8 radian)
+
+```{python}
+#| label: retrain-2
+#| code-fold: false
+
 print(f"{'재학습 주기':>11} {'재학습 횟수':>11} {'평균 정확도':>12} "
       f"{'최저 정확도':>12} {'마지막 날':>11}")
 print("-" * 60)
@@ -419,27 +427,22 @@ for period in [0, 30, 60, 90, 10**9]:
                     accs[-1]))
     print(f"{lbl:>11} {n_re:>11} {np.mean(accs):>12.4f} {np.min(accs):>12.4f} "
           f"{accs[-1]:>11.4f}")
-print()
 never = [r for r in RETRAIN if r[0] == "안 함"][0]
 always = RETRAIN[0]
 p60 = [r for r in RETRAIN if r[0] == "60일"][0]
-print(f"**재학습을 안 하면 마지막 날 정확도가 {never[4]:.4f}다** "
-      f"(배포 시점 {acc(X0, y0):.4f}에서 {acc(X0, y0)-never[4]:.3f} 하락).")
-print(f"**매번 재학습하면 {always[2]:.4f}를 유지하지만 "
-      f"{always[1]}번 학습해야 한다.**")
-print(f"**60일마다면 {p60[1]}번으로 평균 {p60[2]:.4f}** — "
-      f"매번의 {p60[2]/always[2]:.1%}를 "
-      f"{p60[1]/max(always[1],1):.0%}의 비용으로.")
-print()
-for s in ["**주기는 drift 속도가 정한다** — 고정된 정답이 없다",
-          "그래서 실무는 주기가 아니라 **trigger**(조건이 맞으면 자동 실행)로 간다 — "
-          "'성능이 임계 아래로 떨어지면' 또는 'drift 지표가 울리면'",
-          "그런데 G11.6.1에서 봤듯 drift 지표는 성능을 대변하지 못한다",
-          "**그래서 label 확보(G11.6.2)가 재학습 자동화의 전제**가 된다",
-          "재학습 자체도 위험하다 — 새 모델이 더 나쁠 수 있으므로 "
-          "[11.5](05_serving.qmd)의 shadow·canary를 거쳐야 한다"]:
-    print(f"  · {s}")
 ```
+
+**재학습을 안 하면 마지막 날 정확도가 `{python} f'{never[4]:.4f}'`다** (배포 시점 `{python} f'{acc(X0, y0):.4f}'`에서 `{python} f'{acc(X0, y0) - never[4]:.3f}'` 하락).
+
+**매번 재학습하면 `{python} f'{always[2]:.4f}'`를 유지하지만 `{python} f'{always[1]}'`번 학습해야 한다.**
+
+**60일마다면 `{python} f'{p60[1]}'`번으로 평균 `{python} f'{p60[2]:.4f}'`** — 매번의 `{python} f'{p60[2] / always[2]:.1%}'`를 `{python} f'{p60[1] / max(always[1], 1):.0%}'`의 비용으로.
+
+- **주기는 drift 속도가 정한다** — 고정된 정답이 없다
+- 그래서 실무는 주기가 아니라 **trigger**(조건이 맞으면 자동 실행)로 간다 — '성능이 임계 아래로 떨어지면' 또는 'drift 지표가 울리면'
+- 그런데 G11.6.1에서 봤듯 drift 지표는 성능을 대변하지 못한다
+- **그래서 label 확보(G11.6.2)가 재학습 자동화의 전제**가 된다
+- 재학습 자체도 위험하다 — 새 모델이 더 나쁠 수 있으므로 [11.5](05_serving.qmd)의 shadow·canary를 거쳐야 한다
 
 ```{python}
 #| label: fig-retrain
