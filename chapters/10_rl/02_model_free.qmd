@@ -73,12 +73,13 @@ def episodes(n, rng, maxlen=150):
 
 
 ep = episodes(200, np.random.default_rng(0))
-print(f"정답 V^π 범위 [{V_TRUE[OKM].min():.3f}, {V_TRUE[OKM].max():.3f}]")
-print(f"  episode 평균 길이 {np.mean([len(t) for t in ep]):.1f} step")
-print(f"  비terminal 상태 {int(OKM.sum())}개에 대해 RMSE(오차 제곱 평균의 제곱근)를 잰다")
-print()
-print("**모델을 안다는 사실은 채점에만 쓴다.** 학습기는 표본만 본다.")
 ```
+
+정답 V\^π 범위 [`{python} f'{V_TRUE[OKM].min():.3f}'`, `{python} f'{V_TRUE[OKM].max():.3f}'`]
+episode 평균 길이 `{python} f'{np.mean([len(t) for t in ep]):.1f}'` step
+비terminal 상태 `{python} f'{int(OKM.sum())}'`개에 대해 RMSE(오차 제곱 평균의 제곱근)를 잰다
+
+**모델을 안다는 사실은 채점에만 쓴다.** 학습기는 표본만 본다.
 
 ---
 
@@ -106,9 +107,14 @@ for tr in EP:
         tg_mc.setdefault(s, []).append(Gt)
         boot = 0.0 if gw.is_terminal(ns) else V_TRUE[ns]
         tg_td.setdefault(s, []).append(r + G*boot)
+```
 
-print("갱신 목표값의 표준편차 (TD는 정답 V를 bootstrap에 썼다 — bias 0 조건)")
-print()
+갱신 목표값의 표준편차 (TD는 정답 V를 bootstrap에 썼다 — bias 0 조건)
+
+```{python}
+#| label: variance-2
+#| code-fold: false
+
 print(f"{'상태':>8} {'표본 수':>8} {'MC 목표 σ':>12} {'TD 목표 σ':>12} {'배수':>7}")
 print("-" * 52)
 VAR = []
@@ -117,17 +123,18 @@ for s in sorted(tg_mc, key=lambda x: -len(tg_mc[x]))[:6]:
     VAR.append((gw.rc(s), len(tg_mc[s]), a, b))
     print(f"{str(gw.rc(s)):>8} {len(tg_mc[s]):>8} {a:>12.4f} {b:>12.4f} "
           f"{a/max(b,1e-9):>7.1f}")
-print()
-print(f"**MC 목표의 variance가 {np.mean([v[2]/v[3] for v in VAR]):.0f}배 크다.**")
-for s in ["MC 목표 $G_t$는 **episode가 끝날 때까지의 모든 무작위성**을 담는다 — "
-          "미끄러짐 한 번, 행동 선택 한 번이 전부 누적된다. 여행 전체의 우연이 다 들어간 여행 경비 같은 것이다",
-          "TD 목표 $R+\\gamma V(s')$는 **한 step의 무작위성**만 담는다",
-          "이것이 TD가 빠르게 안정되는 이유다",
-          "대신 $V(s')$가 틀려 있으면 그 오차가 목표에 그대로 들어간다 — **bias**"]:
-    print(f"  · {s}")
 ```
 
+**MC 목표의 variance가 `{python} f'{np.mean([v[2] / v[3] for v in VAR]):.0f}'`배 크다.**
+
+- MC 목표 \$G_t\$는 **episode가 끝날 때까지의 모든 무작위성**을 담는다 — 미끄러짐 한 번, 행동 선택 한 번이 전부 누적된다. 여행 전체의 우연이 다 들어간 여행 경비 같은 것이다
+- TD 목표 \$R+\\gamma V(s')\$는 **한 step의 무작위성**만 담는다
+- 이것이 TD가 빠르게 안정되는 이유다
+- 대신 \$V(s')\$가 틀려 있으면 그 오차가 목표에 그대로 들어간다 — **bias**
+
 **이제 실제 추정 오차를 재 보자.** 여기서 예상과 다른 것이 나온다.
+
+episode 수에 따른 RMSE (seed 20개 평균)
 
 ```{python}
 #| label: mc-vs-td
@@ -175,8 +182,6 @@ def rmse(V):
     return float(np.sqrt(((V - V_TRUE)[OKM]**2).mean()))
 
 
-print("episode 수에 따른 RMSE (seed 20개 평균)")
-print()
 print(f"{'episode':>8} {'MC 표본평균':>12} {'MC α=0.1':>11} {'TD(0) α=0.1':>13}")
 print("-" * 50)
 CURVE = []
@@ -191,25 +196,22 @@ for n in [10, 30, 100, 300, 1000]:
                   float(np.mean(r3))))
     print(f"{n:>8} {CURVE[-1][1]:>12.4f} {CURVE[-1][2]:>11.4f} "
           f"{CURVE[-1][3]:>13.4f}")
-print()
 lo, hi = CURVE[0], CURVE[-1]
-print("**정직하게: 'TD가 MC보다 빨리 수렴한다'가 그대로는 재현되지 않았다.**")
-print(f"  1000 episode에서 MC 표본평균 {hi[1]:.4f} < TD(0) {hi[3]:.4f}다.")
-print()
-print("**같은 조건으로 맞추면 이야기가 달라진다.**")
-print(f"  상수 learning rate끼리 비교하면 MC(α=0.1) {hi[2]:.4f} vs TD(0) {hi[3]:.4f} — "
-      f"TD가 {hi[2]/hi[3]:.1f}배 낫다.")
-for s in ["**MC 표본평균은 learning rate가 저절로 1/n으로 줄어든다** — "
-          "공짜로 learning rate schedule을 쓰는 셈이다",
-          "상수 α는 최근 표본에 계속 가중치를 주므로 잔여 잡음이 남는다 "
-          f"(MC α=0.1이 {hi[2]:.4f}에서 멈춘 이유)",
-          "교과서의 비교는 **둘 다 상수 α**인 조건이다. 그 조건에서는 TD가 이긴다",
-          "**실무 함의**: non-stationary(비정상 — policy가 계속 바뀌는 학습 중) 환경에서는 "
-          "상수 α를 써야 하고, 그때 TD의 이점이 살아난다",
-          f"초반부에서는 MC 표본평균이 압도적이다 — {lo[0]}개에서 "
-          f"{lo[1]:.4f} vs {lo[3]:.4f}"]:
-    print(f"  · {s}")
 ```
+
+**정직하게: 'TD가 MC보다 빨리 수렴한다'가 그대로는 재현되지 않았다.**
+
+1000 episode에서 MC 표본평균 `{python} f'{hi[1]:.4f}'` < TD(0) `{python} f'{hi[3]:.4f}'`다.
+
+**같은 조건으로 맞추면 이야기가 달라진다.**
+
+상수 learning rate끼리 비교하면 MC(α=0.1) `{python} f'{hi[2]:.4f}'` vs TD(0) `{python} f'{hi[3]:.4f}'` — TD가 `{python} f'{hi[2] / hi[3]:.1f}'`배 낫다.
+
+- **MC 표본평균은 learning rate가 저절로 1/n으로 줄어든다** — 공짜로 learning rate schedule을 쓰는 셈이다
+- 상수 α는 최근 표본에 계속 가중치를 주므로 잔여 잡음이 남는다 (MC α=0.1이 `{python} f'{hi[2]:.4f}'`에서 멈춘 이유)
+- 교과서의 비교는 **둘 다 상수 α**인 조건이다. 그 조건에서는 TD가 이긴다
+- **실무 함의**: non-stationary(비정상 — policy가 계속 바뀌는 학습 중) 환경에서는 상수 α를 써야 하고, 그때 TD의 이점이 살아난다
+- 초반부에서는 MC 표본평균이 압도적이다 — `{python} f'{lo[0]}'`개에서 `{python} f'{lo[1]:.4f}'` vs `{python} f'{lo[3]:.4f}'`
 
 ```{python}
 #| label: fig-mc-td
@@ -248,14 +250,14 @@ $$G_t^{(n)} = R_t + \gamma R_{t+1} + \dots + \gamma^{n-1}R_{t+n-1} + \gamma^n V(
 $n=1$이 TD(0), $n=\infty$가 MC다. **중간이 가장 좋다**는 것이 교과서의 그림이다.
 확인해 보자 — 다만 한 번은 함정에 빠진 뒤에.
 
+α를 0.1로 고정하고 n만 바꾸면 (300 episode, seed 20개)
+
 ```{python}
 #| label: nstep-fixed
 #| code-fold: false
 
 import numpy as np
 
-print("α를 0.1로 고정하고 n만 바꾸면 (300 episode, seed 20개)")
-print()
 print(f"{'n':>7} {'RMSE':>10}")
 print("-" * 20)
 EPS300 = {sd: episodes(300, np.random.default_rng(sd)) for sd in range(20)}
@@ -263,14 +265,18 @@ for n_ in [1, 2, 4, 8, 16, 1000]:
     r = float(np.mean([rmse(nstep_eval(EPS300[sd], 0.1, n_))
                        for sd in range(20)]))
     print(f"{('∞(MC)' if n_ >= 1000 else str(n_)):>7} {r:>10.4f}")
-print()
-print("**단조 증가다 — 중간이 좋다는 U자가 안 나온다.**")
-print("  n=1이 최고고 커질수록 나빠진다. 교과서 그림과 다르다.")
-print()
-print("**α를 고정한 것이 원인이다.**")
-print("  n이 커지면 목표값의 variance가 커지므로 **적정 α도 작아져야** 한다.")
-print("  같은 α를 쓰면 큰 n은 과도한 보폭으로 튀는 셈이다.")
 ```
+
+**단조 증가다 — 중간이 좋다는 U자가 안 나온다.**
+
+n=1이 최고고 커질수록 나빠진다. 교과서 그림과 다르다.
+
+**α를 고정한 것이 원인이다.**
+
+n이 커지면 목표값의 variance가 커지므로 **적정 α도 작아져야** 한다.  
+같은 α를 쓰면 큰 n은 과도한 보폭으로 튀는 셈이다.
+
+각 n마다 α를 sweep한다 (100 episode, seed 20개)
 
 ```{python}
 #| label: nstep-sweep
@@ -280,8 +286,6 @@ import numpy as np
 
 ALPHAS = [0.02, 0.05, 0.1, 0.2, 0.4, 0.7]
 NS_ = [1, 2, 4, 8, 16, 1000]
-print("각 n마다 α를 sweep한다 (100 episode, seed 20개)")
-print()
 print(f"{'n':>7} " + " ".join(f"α={a:<5}" for a in ALPHAS)
       + f" {'최적 RMSE':>10} {'최적 α':>8}")
 print("-" * 76)
@@ -295,25 +299,28 @@ for n_ in NS_:
     lab = "∞(MC)" if n_ >= 1000 else str(n_)
     print(f"{lab:>7} " + " ".join(f"{v:<7.4f}" for v in row)
           + f" {row[j]:>10.4f} {ALPHAS[j]:>8}")
-print()
 best = min(SWEEP, key=lambda x: x[2])
-print(f"**최적 α를 각각 써 주면 n={best[0]}이 이긴다** — RMSE {best[2]:.4f}.")
-print(f"  n=1의 최적 {SWEEP[0][2]:.4f}, MC의 최적 {SWEEP[-1][2]:.4f}보다 낫다.")
-print()
-print("**그리고 최적 α가 n에 따라 움직인다.**")
+```
+
+**최적 α를 각각 써 주면 n=`{python} f'{best[0]}'`이 이긴다** — RMSE `{python} f'{best[2]:.4f}'`.  
+n=1의 최적 `{python} f'{SWEEP[0][2]:.4f}'`, MC의 최적 `{python} f'{SWEEP[-1][2]:.4f}'`보다 낫다.
+
+**그리고 최적 α가 n에 따라 움직인다.**
+
+```{python}
+#| label: nstep-sweep-2
+#| code-fold: false
+
 for n_, row, b, a in SWEEP:
     lab = "∞(MC)" if n_ >= 1000 else f"n={n_}"
     print(f"  {lab:<8} 최적 α = {a}")
-print()
-for s in ["n이 커질수록 최적 α가 작아진다 — 목표 variance가 크니 조심스럽게 가야 한다",
-          "**hyperparameter 하나를 고정한 비교는 결론을 뒤집을 수 있다**",
-          "[9.3](../09_vision_video/03_ssl_vision.qmd)·"
-          "[9.6](../09_vision_video/06_video_models.qmd)에서 본 것과 같은 종류의 함정이다",
-          "**TD(λ)**는 여러 n을 지수 가중으로 섞어 이 선택을 부드럽게 한다 — "
-          "$G^\\lambda = (1-\\lambda)\\sum_n \\lambda^{n-1}G^{(n)}$",
-          "eligibility trace(적격 흔적 — 최근에 지나온 상태일수록 짙게 남는 발자국)는 그것을 **한 번의 순방향 계산**으로 구현한 것이다"]:
-    print(f"  · {s}")
 ```
+
+- n이 커질수록 최적 α가 작아진다 — 목표 variance가 크니 조심스럽게 가야 한다
+- **hyperparameter 하나를 고정한 비교는 결론을 뒤집을 수 있다**
+- [9.3](../09_vision_video/03_ssl_vision.qmd)·[9.6](../09_vision_video/06_video_models.qmd)에서 본 것과 같은 종류의 함정이다
+- **TD(λ)**는 여러 n을 지수 가중으로 섞어 이 선택을 부드럽게 한다 — \$G\^\\lambda = (1-\\lambda)\\sum_n \\lambda\^{n-1}G\^{(n)}\$
+- eligibility trace(적격 흔적 — 최근에 지나온 상태일수록 짙게 남는 발자국)는 그것을 **한 번의 순방향 계산**으로 구현한 것이다
 
 ```{python}
 #| label: fig-nstep
@@ -370,10 +377,6 @@ from src import rl
 
 P, R, START, GOAL, CLIFF, ROWS, COLS = rl.cliff_world()
 nS, nA = R.shape
-print(f"cliff walking: {ROWS}x{COLS}, 시작 {divmod(START,COLS)}, "
-      f"목표 {divmod(GOAL,COLS)}, 절벽 {len(CLIFF)}칸")
-print("  매 step −1, 절벽에 빠지면 −100 후 시작점으로")
-print()
 
 
 def learn(kind, n_ep=500, alpha=0.5, eps=0.1, seed=0, gamma=1.0):
@@ -422,6 +425,15 @@ def show(Q, nm):
 
 
 CLIFFRES = {}
+```
+
+cliff walking: `{python} f'{ROWS}'`x`{python} f'{COLS}'`, 시작 `{python} f'{divmod(START, COLS)}'`, 목표 `{python} f'{divmod(GOAL, COLS)}'`, 절벽 `{python} f'{len(CLIFF)}'`칸
+매 step −1, 절벽에 빠지면 −100 후 시작점으로
+
+```{python}
+#| label: cliff-2
+#| code-fold: false
+
 for kind, nm in [("sarsa", "SARSA"), ("qlearn", "Q-learning")]:
     Qs, rs = [], []
     for sd in range(30):
@@ -436,33 +448,27 @@ for kind, nm in [("sarsa", "SARSA"), ("qlearn", "Q-learning")]:
 
 sa = CLIFFRES["SARSA"][1][:, -100:].mean()
 ql = CLIFFRES["Q-learning"][1][:, -100:].mean()
-print(f"**Q-learning이 최단 경로를 배웠는데 학습 중 성적은 더 나쁘다** "
-      f"({ql:.1f} vs {sa:.1f}).")
-for s in ["Q-learning의 greedy 경로는 **절벽 바로 위**를 지난다 — 진짜 최적 경로다",
-          "그런데 ε-greedy로 움직이는 동안에는 가끔 절벽으로 떨어진다 (−100)",
-          "SARSA는 목표에 $Q(s',a')$를 쓰므로 "
-          "**탐색으로 떨어질 위험까지 가치에 반영**한다",
-          "그래서 한 칸 위로 돌아가는 **안전한 경로**를 배운다 — "
-          "맨정신이면 절벽 옆 지름길이 최단이지만, 가끔 비틀거리는(ε) 사람에게는 안쪽 길이 낫다",
-          "**둘 다 맞다.** Q-learning은 '최적 policy'를, "
-          "SARSA는 '지금 내가 쓰는 policy'를 평가한다"]:
-    print(f"  · {s}")
-print()
-print("**어느 쪽을 써야 하나**")
-print()
-print(f"{'상황':<30} {'선택':<16} {'이유'}")
-print("-" * 74)
-for a, b, c in [
-    ("학습 중 실패 비용이 크다", "SARSA", "실제 로봇, 운영 중 시스템"),
-    ("최종 policy만 중요하다", "Q-learning", "시뮬레이터에서 학습"),
-    ("과거 데이터로 학습한다", "Q-learning 계열", "off-policy라 가능"),
-    ("탐색을 결국 끌 것이다", "둘이 같아진다", "ε→0이면 SARSA→Q-learning"),
-]:
-    print(f"{a:<30} {b:<16} {c}")
-print()
-print("  마지막 줄이 중요하다 — **차이는 ε이 만든다.**")
-print("  off-policy 성질 자체가 [10.3](03_deep_rl.qmd)의 experience replay를 가능하게 한다.")
 ```
+
+**Q-learning이 최단 경로를 배웠는데 학습 중 성적은 더 나쁘다** (`{python} f'{ql:.1f}'` vs `{python} f'{sa:.1f}'`).
+
+- Q-learning의 greedy 경로는 **절벽 바로 위**를 지난다 — 진짜 최적 경로다
+- 그런데 ε-greedy로 움직이는 동안에는 가끔 절벽으로 떨어진다 (−100)
+- SARSA는 목표에 \$Q(s',a')\$를 쓰므로 **탐색으로 떨어질 위험까지 가치에 반영**한다
+- 그래서 한 칸 위로 돌아가는 **안전한 경로**를 배운다 — 맨정신이면 절벽 옆 지름길이 최단이지만, 가끔 비틀거리는(ε) 사람에게는 안쪽 길이 낫다
+- **둘 다 맞다.** Q-learning은 '최적 policy'를, SARSA는 '지금 내가 쓰는 policy'를 평가한다
+
+**어느 쪽을 써야 하나**
+
+| 상황 | 선택 | 이유 |
+|---|---|---|
+| 학습 중 실패 비용이 크다 | SARSA | 실제 로봇, 운영 중 시스템 |
+| 최종 policy만 중요하다 | Q-learning | 시뮬레이터에서 학습 |
+| 과거 데이터로 학습한다 | Q-learning 계열 | off-policy라 가능 |
+| 탐색을 결국 끌 것이다 | 둘이 같아진다 | ε→0이면 SARSA→Q-learning |
+
+마지막 줄이 중요하다 — **차이는 ε이 만든다.**  
+off-policy 성질 자체가 [10.3](03_deep_rl.qmd)의 experience replay를 가능하게 한다.
 
 ```{python}
 #| label: fig-cliff
@@ -552,10 +558,14 @@ def baird(alpha=0.01, steps=5000, off_policy=True, tabular=False,
         if not off_policy:
             s = ns
     return np.array(hist)
+```
 
+triad에서 하나씩 빼 본다 (5000 step, α=0.01, 참 가치는 0)
 
-print("triad에서 하나씩 빼 본다 (5000 step, α=0.01, 참 가치는 0)")
-print()
+```{python}
+#| label: baird-2
+#| code-fold: false
+
 print(f"{'설정':<46} {'‖w‖ 끝':>14} {'발산?':>8}")
 print("-" * 70)
 TRIAD = []
@@ -567,34 +577,38 @@ for nm, kw in [("① 함수근사 + bootstrap + off-policy", dict()),
     h = baird(**kw)
     TRIAD.append((nm, float(h[-1])))
     print(f"{nm:<46} {h[-1]:>14.4g} {'예' if h[-1] > 1e3 else '아니오':>8}")
-print()
-print("**셋이 다 있을 때만 발산한다.** 하나만 빼도 bounded(유계 — 일정 범위 안)로 남는다.")
-print()
-print("발산 속도")
+```
+
+**셋이 다 있을 때만 발산한다.** 하나만 빼도 bounded(유계 — 일정 범위 안)로 남는다.
+
+발산 속도
+
+```{python}
+#| label: baird-3
+#| code-fold: false
+
 for st in [100, 500, 1000, 5000, 20000]:
     print(f"  {st:>6} step: ‖w‖ = {baird(steps=st)[-1]:.4g}")
-print()
-print("**왜 발산하는가**")
-for s in ["off-policy라 **갱신하는 상태의 분포**가 target policy의 분포와 다르다",
-          "함수 근사 때문에 한 상태를 올리면 **다른 상태도 같이 올라간다** "
-          "(가중치를 공유하므로)",
-          "bootstrap 때문에 그 올라간 값이 **다시 목표값이 된다**",
-          "→ feedback loop(되먹임 고리)가 생기고, 그것을 눌러 줄 힘이 없다 — "
-          "마이크가 스피커 소리를 다시 받아 점점 커지는 하울링과 같다",
-          "표 기반이면 상태끼리 독립이라 되먹임이 안 생긴다 (③)",
-          "on-policy면 자주 갱신하는 상태와 목표가 일치해 균형이 잡힌다 (②)",
-          "MC 목표는 자기 추정을 안 쓰니 고리가 끊긴다 (④)"]:
-    print(f"  · {s}")
-print()
-print("**그런데 DQN은 셋 다 쓰면서 작동한다.**")
-for s in ["실무 algorithm은 발산을 **공학적으로** 막는다",
-          "**target network** — 목표값을 잠시 얼려 되먹임을 늦춘다",
-          "**experience replay** — 갱신 분포를 넓혀 편중을 줄인다",
-          "**gradient clipping·작은 learning rate** — 폭주 속도를 제한한다",
-          "[10.3](03_deep_rl.qmd)의 장치들이 전부 이 문제에 대한 대응이다",
-          "이론적 해법도 있다 — Gradient TD, Emphatic TD 계열"]:
-    print(f"  · {s}")
 ```
+
+**왜 발산하는가**
+
+- off-policy라 **갱신하는 상태의 분포**가 target policy의 분포와 다르다
+- 함수 근사 때문에 한 상태를 올리면 **다른 상태도 같이 올라간다** (가중치를 공유하므로)
+- bootstrap 때문에 그 올라간 값이 **다시 목표값이 된다**
+- → feedback loop(되먹임 고리)가 생기고, 그것을 눌러 줄 힘이 없다 — 마이크가 스피커 소리를 다시 받아 점점 커지는 하울링과 같다
+- 표 기반이면 상태끼리 독립이라 되먹임이 안 생긴다 (③)
+- on-policy면 자주 갱신하는 상태와 목표가 일치해 균형이 잡힌다 (②)
+- MC 목표는 자기 추정을 안 쓰니 고리가 끊긴다 (④)
+
+**그런데 DQN은 셋 다 쓰면서 작동한다.**
+
+- 실무 algorithm은 발산을 **공학적으로** 막는다
+- **target network** — 목표값을 잠시 얼려 되먹임을 늦춘다
+- **experience replay** — 갱신 분포를 넓혀 편중을 줄인다
+- **gradient clipping·작은 learning rate** — 폭주 속도를 제한한다
+- [10.3](03_deep_rl.qmd)의 장치들이 전부 이 문제에 대한 대응이다
+- 이론적 해법도 있다 — Gradient TD, Emphatic TD 계열
 
 ```{python}
 #| label: fig-triad
@@ -635,15 +649,14 @@ $$\rho_{t:T} = \prod_{k=t}^{T}\frac{\pi(a_k|s_k)}{b(a_k|s_k)},
 $\rho$는 "target policy라면 이 행동열을 얼마나 더/덜 자주 했을까"의 배율이다. 다른 사람의 여행 기록으로 내 여행을 예측하려면, 내가 갔을 법한 기록에는 가중치를 주고 아닌 기록은 깎아야 한다.
 수학적으로는 깔끔하다. **곱**이라는 것이 문제다.
 
+길이 L의 chain — target policy는 항상 행동 0, behavior policy는 균등(0.5)  
+target policy 하의 참 return은 항상 1.0이다
+
 ```{python}
 #| label: is-variance
 #| code-fold: false
 
 import numpy as np
-
-print("길이 L의 chain — target policy는 항상 행동 0, behavior policy는 균등(0.5)")
-print("  target policy 하의 참 return은 항상 1.0이다")
-print()
 
 
 def is_experiment(L, n_traj=20000, seed=0):
@@ -667,42 +680,46 @@ for L in [1, 2, 4, 8, 12, 16]:
     ISR.append((L, m, sd, wis, k))
     print(f"{L:>4} {2.0**L:>10.0f} {m:>10.4f} {sd:>12.2f} {wis:>11.4f} "
           f"{k:>10}")
-print()
-print("**① 일반 importance sampling은 unbiased(불편 — 평균적으로는 맞는)이지만 variance가 폭발한다.**")
 a, b = ISR[0], ISR[-2]
-print(f"  L={a[0]}: σ={a[2]:.2f} → L={b[0]}: σ={b[2]:.2f} "
-      f"({b[2]/a[2]:.0f}배)")
-print(f"  L={b[0]}에서 20,000 trajectory 중 쓸모 있는 것이 **{b[4]}개**뿐이다.")
-print()
 z = ISR[-1]
-print(f"**② L={z[0]}에서는 추정값이 {z[1]:.4f}로 나온다.** 참값은 1.0이다.")
-print(f"  일치하는 trajectory가 하나도 없어서({z[4]}개) 그냥 0을 답한다.")
-print("  **unbiased 추정량이 100% 틀린 답을 내는 상황**이다 — "
-      "기댓값은 맞지만 어떤 표본에서도 맞지 않는다.")
-print()
-print("**③ weighted importance sampling(가중 IS)은 bias가 있지만 훨씬 안정적이다.**")
+```
+
+**① 일반 importance sampling은 unbiased(불편 — 평균적으로는 맞는)이지만 variance가 폭발한다.**
+
+L=`{python} f'{a[0]}'`: σ=`{python} f'{a[2]:.2f}'` → L=`{python} f'{b[0]}'`: σ=`{python} f'{b[2]:.2f}'` (`{python} f'{b[2] / a[2]:.0f}'`배)  
+L=`{python} f'{b[0]}'`에서 20,000 trajectory 중 쓸모 있는 것이 **`{python} f'{b[4]}'`개**뿐이다.
+
+**② L=`{python} f'{z[0]}'`에서는 추정값이 `{python} f'{z[1]:.4f}'`로 나온다.** 참값은 1.0이다.  
+일치하는 trajectory가 하나도 없어서(`{python} f'{z[4]}'`개) 그냥 0을 답한다.  
+**unbiased 추정량이 100% 틀린 답을 내는 상황**이다 — 기댓값은 맞지만 어떤 표본에서도 맞지 않는다.
+
+**③ weighted importance sampling(가중 IS)은 bias가 있지만 훨씬 안정적이다.**
+
+```{python}
+#| label: is-variance-2
+#| code-fold: false
+
 for L, m, sd, wis, k in ISR[:-1]:
     print(f"  L={L:>2}: 일반 {m:>7.4f} (σ {sd:>7.2f}) vs weighted {wis:.4f}")
-print("  weighted IS는 ρ의 합으로 나누므로 scale이 상쇄된다 — 여기서는 정확히 1.0.")
-print("  (마지막 줄 L=16은 표본이 0이라 둘 다 실패한다)")
-print()
-print("**이것이 실무 설계를 지배한다**")
-print()
-print(f"{'대응':<26} {'무엇을 하나':<34} {'어디서'}")
-print("-" * 78)
-for x, y, zz in [
-    ("weighted IS", "ρ로 normalize — bias 대신 variance를 산다", "off-policy MC 평가"),
-    ("한 step만 보정", "ρ를 곱하지 않고 최대화로 대체", "Q-learning"),
-    ("ratio clipping", "ρ를 구간에 가둔다", "**PPO** ([10.4](04_policy_gradient.qmd))"),
-    ("policy를 가깝게 유지", "KL 제약으로 ρ≈1을 강제", "TRPO, RLHF"),
-    ("짧은 horizon", "곱하는 항의 수를 줄인다", "n-step off-policy"),
-]:
-    print(f"{x:<26} {y:<34} {zz}")
-print()
-print("  **Q-learning이 ρ를 안 쓰는 이유가 여기서 보인다.**")
-print("  max로 목표를 만들면 어떤 policy가 데이터를 모았든 상관없어진다 —")
-print("  곱이 아예 안 생기므로 variance 폭발도 없다. off-policy의 값싼 해법이다.")
 ```
+
+weighted IS는 ρ의 합으로 나누므로 scale이 상쇄된다 — 여기서는 정확히 1.0.  
+(마지막 줄 L=16은 표본이 0이라 둘 다 실패한다)
+
+**이것이 실무 설계를 지배한다**
+
+| 대응 | 무엇을 하나 | 어디서 |
+|---|---|---|
+| weighted IS | ρ로 normalize — bias 대신 variance를 산다 | off-policy MC 평가 |
+| 한 step만 보정 | ρ를 곱하지 않고 최대화로 대체 | Q-learning |
+| ratio clipping | ρ를 구간에 가둔다 | **PPO** ([10.4](04_policy_gradient.qmd)) |
+| policy를 가깝게 유지 | KL 제약으로 ρ≈1을 강제 | TRPO, RLHF |
+| 짧은 horizon | 곱하는 항의 수를 줄인다 | n-step off-policy |
+
+**Q-learning이 ρ를 안 쓰는 이유가 여기서 보인다.**
+
+max로 목표를 만들면 어떤 policy가 데이터를 모았든 상관없어진다 —
+곱이 아예 안 생기므로 variance 폭발도 없다. off-policy의 값싼 해법이다.
 
 ```{python}
 #| label: fig-is
@@ -921,8 +938,13 @@ pi[Q_next.argmax()] += 1 - eps
 a_next = rng.choice(3, size=100_000, p=pi)
 sarsa = r + g * Q_next[a_next]
 expected = r + g * pi @ Q_next
+```
 
-print(f"행동 확률 {pi}")
+행동 확률 `{python} f'{pi}'`
+
+```{python}
+#| label: ex-expected-sarsa-2
+
 print(f"SARSA           목표 평균 {sarsa.mean():.3f}   분산 {sarsa.var():.3f}")
 print(f"Expected SARSA  목표 = {expected:.3f}   분산 0")
 ```
