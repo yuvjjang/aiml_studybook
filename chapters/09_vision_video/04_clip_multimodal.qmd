@@ -61,17 +61,21 @@ def pairs(n, g, noise=0.6):
 g0 = np.random.default_rng(1)
 Itr, Ttr, ctr = pairs(6000, g0)
 Ite, Tte, cte = pairs(2000, g0)
-
-print(f"학습 쌍 {len(Itr):,}개 / 평가 쌍 {len(Ite):,}개")
-print(f"  이미지 {DI}차원, 텍스트 {DT}차원 — **basis가 다르다**")
-print(f"  공유되는 것: 개념 {K}종 + style {SD}차원")
-print()
-print("**두 가지를 따로 잰다.**")
-print("  · **retrieval R@1** — style까지 맞춰 정확한 짝을 찾는가 (1등으로 맞힌 비율)")
-print("  · **zero-shot 정확도** — 텍스트로 만든 prototype(대표 벡터)으로 개념을 맞히는가")
-print()
-print("둘은 다른 능력이다. 이 장에서 계속 갈린다.")
 ```
+
+학습 쌍 `{python} f'{len(Itr):,}'`개 / 평가 쌍 `{python} f'{len(Ite):,}'`개
+이미지 `{python} f'{DI}'`차원, 텍스트 `{python} f'{DT}'`차원 — **basis가 다르다**
+공유되는 것: 개념 `{python} f'{K}'`종 + style `{python} f'{SD}'`차원
+
+**두 가지를 따로 잰다.**
+
+- **retrieval R\@1** — style까지 맞춰 정확한 짝을 찾는가 (1등으로 맞힌 비율)
+- **zero-shot 정확도** — 텍스트로 만든 prototype(대표 벡터)으로 개념을 맞히는가
+
+둘은 다른 능력이다. 이 장에서 계속 갈린다.
+
+학습·평가 함수 준비 완료. 무작위 추측 baseline:  
+retrieval R\@1 (256개 pool) = `{python} f'{1 / 256:.4f}'`
 
 ```{python}
 #| label: model
@@ -149,8 +153,6 @@ def zeroshot(pi, pt, I, c, n_proto=64, seed=7):
     return float(((nrm(ef(pi, I)[1]) @ P.T).argmax(1) == c).mean())
 
 
-print("학습·평가 함수 준비 완료. 무작위 추측 baseline:")
-print(f"  retrieval R@1 (256개 pool) = {1/256:.4f}")
 print(f"  zero-shot ({K}개 개념)     = {1/K:.4f}")
 ```
 
@@ -163,6 +165,8 @@ CLIP이 batch 32,768을 썼다는 사실은 유명하다.
 
 그런데 **무엇이 batch에 민감한가**는 잘 이야기되지 않는다. 갈라서 재 본다.
 
+학습 batch 크기별 — retrieval과 zero-shot을 따로
+
 ```{python}
 #| label: batch
 #| code-fold: false
@@ -172,8 +176,6 @@ import numpy as np
 BATCH = [8, 16, 32, 64, 128, 256]
 BR = []
 MODELS = {}
-print("학습 batch 크기별 — retrieval과 zero-shot을 따로")
-print()
 print(f"{'학습 batch':>10} {'retrieval R@1':>14} {'zero-shot':>10}")
 print("-" * 36)
 for bs in BATCH:
@@ -182,23 +184,28 @@ for bs in BATCH:
     r, z = retrieval(pi, pt, Ite, Tte), zeroshot(pi, pt, Ite, cte)
     BR.append((bs, r, z))
     print(f"{bs:>10} {r:>14.4f} {z:>10.4f}")
-print()
 lo, hi = BR[0], BR[-1]
-print("**두 능력이 완전히 다르게 반응한다.**")
+```
+
+**두 능력이 완전히 다르게 반응한다.**
+
+```{python}
+#| label: batch-2
+#| code-fold: false
+
 print(f"  retrieval: {lo[1]:.4f} → {hi[1]:.4f}  (폭 {hi[1]-lo[1]:.4f})")
 print(f"  zero-shot: {lo[2]:.4f} → {hi[2]:.4f}  (폭 {hi[2]-lo[2]:.4f}) "
       f"— **{(hi[2]-lo[2])/max(hi[1]-lo[1],1e-9):.0f}배 민감**")
-print()
-print("**왜 zero-shot만 이렇게 민감한가.**")
-for s in ["retrieval은 **쌍 하나를 구별**하면 된다 — style 정보만 있으면 풀린다",
-          "batch가 8이면 8지선다다. 그 정도는 style만으로도 맞힌다",
-          "zero-shot은 **개념 구조 전체**가 공간에 자리를 잡아야 한다",
-          "batch가 작으면 '다른 개념'인 negative를 만날 확률 자체가 낮다",
-          f"개념이 {K}종인데 batch가 8이면, 한 batch에 같은 개념이 여러 번 들어와 "
-          "**false negative**(같은 개념인데 '다르다'고 밀어내는 것)가 되기도 한다",
-          "CLIP이 32,768을 쓴 이유는 retrieval이 아니라 **zero-shot 쪽**에 있다"]:
-    print(f"  · {s}")
 ```
+
+**왜 zero-shot만 이렇게 민감한가.**
+
+- retrieval은 **쌍 하나를 구별**하면 된다 — style 정보만 있으면 풀린다
+- batch가 8이면 8지선다다. 그 정도는 style만으로도 맞힌다
+- zero-shot은 **개념 구조 전체**가 공간에 자리를 잡아야 한다
+- batch가 작으면 '다른 개념'인 negative를 만날 확률 자체가 낮다
+- 개념이 `{python} f'{K}'`종인데 batch가 8이면, 한 batch에 같은 개념이 여러 번 들어와 **false negative**(같은 개념인데 '다르다'고 밀어내는 것)가 되기도 한다
+- CLIP이 32,768을 쓴 이유는 retrieval이 아니라 **zero-shot 쪽**에 있다
 
 ```{python}
 #| label: fig-batch
@@ -239,6 +246,8 @@ $\tau$(temperature)는 유사도 분포의 날카로움을 정한다.
 
 CLIP은 이것을 **학습 가능한 parameter**로 두었고, 학습이 끝나면 대략 0.01 근처로 간다.
 
+temperature별 — retrieval·zero-shot과 유사도 분포의 날카로움
+
 ```{python}
 #| label: temp
 #| code-fold: false
@@ -247,8 +256,6 @@ import numpy as np
 
 TAUS = [0.01, 0.03, 0.07, 0.15, 0.3, 1.0]
 TR = []
-print("temperature별 — retrieval·zero-shot과 유사도 분포의 날카로움")
-print()
 print(f"{'τ':>7} {'retrieval R@1':>14} {'zero-shot':>10} {'정답에 걸린 확률':>16}")
 print("-" * 52)
 for tau in TAUS:
@@ -260,36 +267,33 @@ for tau in TAUS:
     r, z = retrieval(pi, pt, Ite, Tte), zeroshot(pi, pt, Ite, cte)
     TR.append((tau, r, z, float(np.diag(P).mean())))
     print(f"{tau:>7.2f} {r:>14.4f} {z:>10.4f} {TR[-1][3]:>16.4f}")
-print()
 best_r = max(TR, key=lambda x: x[1])
 best_z = max(TR, key=lambda x: x[2])
-print(f"**retrieval 최고 τ={best_r[0]} ({best_r[1]:.4f}), "
-      f"zero-shot 최고 τ={best_z[0]} ({best_z[2]:.4f})**")
-print()
 t_lo = [t for t in TR if t[0] == 0.01][0]
 t_hi = [t for t in TR if t[0] == 1.0][0]
-print("**G9.4.1과 같은 비대칭이 여기서도 나온다.**")
-print(f"  τ=0.01 (너무 날카로움): retrieval {t_lo[1]:.4f}로 멀쩡한데 "
-      f"zero-shot은 {t_lo[2]:.4f}로 무너진다.")
-print(f"  τ=1.00 (너무 평평함): 둘 다 떨어진다 "
-      f"({t_hi[1]:.4f}, {t_hi[2]:.4f}).")
-print()
-print("**낮은 temperature가 zero-shot을 죽이는 이유**")
-for s in ["τ가 작으면 loss가 **가장 가까운 하나**에만 신경 쓴다",
-          "그 하나만 밀어내면 되므로 **개념끼리의 거리 구조**는 안 배운다",
-          "retrieval은 그래도 된다 — 정답 하나만 1등이면 되니까",
-          "zero-shot은 개념 prototype 사이의 각도가 맞아야 한다",
-          "**즉 τ는 '얼마나 미세한 구별을 요구할 것인가'를 정하는 손잡이다**"]:
-    print(f"  · {s}")
-print()
-print(f"**내 실험의 최적 τ({best_z[0]})는 CLIP의 학습된 τ(≈0.01)와 다르다.**")
-for s in [f"개념이 {K}종, 쌍이 {len(Itr):,}개뿐인 장난감이기 때문이다",
-          "CLIP은 4억 쌍에 개념이 사실상 무한하다 — "
-          "구별해야 할 것이 훨씬 촘촘하다",
-          "**최적 temperature는 데이터의 세밀함에 딸린 값**이지 보편 상수가 아니다",
-          "CLIP이 τ를 학습시킨 것도 그래서다"]:
-    print(f"  · {s}")
 ```
+
+**retrieval 최고 τ=`{python} f'{best_r[0]}'` (`{python} f'{best_r[1]:.4f}'`), zero-shot 최고 τ=`{python} f'{best_z[0]}'` (`{python} f'{best_z[2]:.4f}'`)**
+
+**G9.4.1과 같은 비대칭이 여기서도 나온다.**
+
+τ=0.01 (너무 날카로움): retrieval `{python} f'{t_lo[1]:.4f}'`로 멀쩡한데 zero-shot은 `{python} f'{t_lo[2]:.4f}'`로 무너진다.  
+τ=1.00 (너무 평평함): 둘 다 떨어진다 (`{python} f'{t_hi[1]:.4f}'`, `{python} f'{t_hi[2]:.4f}'`).
+
+**낮은 temperature가 zero-shot을 죽이는 이유**
+
+- τ가 작으면 loss가 **가장 가까운 하나**에만 신경 쓴다
+- 그 하나만 밀어내면 되므로 **개념끼리의 거리 구조**는 안 배운다
+- retrieval은 그래도 된다 — 정답 하나만 1등이면 되니까
+- zero-shot은 개념 prototype 사이의 각도가 맞아야 한다
+- **즉 τ는 '얼마나 미세한 구별을 요구할 것인가'를 정하는 손잡이다**
+
+**내 실험의 최적 τ(`{python} f'{best_z[0]}'`)는 CLIP의 학습된 τ(≈0.01)와 다르다.**
+
+- 개념이 `{python} f'{K}'`종, 쌍이 `{python} f'{len(Itr):,}'`개뿐인 장난감이기 때문이다
+- CLIP은 4억 쌍에 개념이 사실상 무한하다 — 구별해야 할 것이 훨씬 촘촘하다
+- **최적 temperature는 데이터의 세밀함에 딸린 값**이지 보편 상수가 아니다
+- CLIP이 τ를 학습시킨 것도 그래서다
 
 ---
 
@@ -302,6 +306,9 @@ CLIP embedding을 그려 보면 이상한 것이 보인다.
 
 짝지어진 이미지-텍스트가 서로 가장 가까운데도 그렇다.
 어떻게 그럴 수 있는지, 그리고 왜 학습이 그걸 안 고치는지 재 보자.
+
+학습이 진행되며 gap이 어떻게 되는가 (embedding 24차원)  
+선형 구분 = '이미지냐 텍스트냐'를 직선 하나로 가르는 정확도. 1.0이면 완전히 갈려 있다
 
 ```{python}
 #| label: gap
@@ -350,23 +357,22 @@ def train_snap(I, T, snaps, bs=64, lr=0.05, tau=0.07, seed=0, E=24):
 
 SNAPS = [0, 20, 100, 400, 1500]
 TRK, _ = train_snap(Itr, Ttr, SNAPS)
-print("학습이 진행되며 gap이 어떻게 되는가 (embedding 24차원)")
-print("  선형 구분 = '이미지냐 텍스트냐'를 직선 하나로 가르는 정확도. 1.0이면 완전히 갈려 있다")
-print()
 print(f"{'step':>7} {'중심 거리':>11} {'선형 구분':>11} {'짝 cosine':>11}")
 print("-" * 44)
 for t in SNAPS:
     d, sep, cos = TRK[t]
     print(f"{t:>7} {d:>11.4f} {sep:>11.4f} {cos:>11.4f}")
-print()
-print("**gap은 학습이 만드는 것이 아니라 초기화가 만든다.**")
-print(f"  step 0에서 이미 선형 구분 {TRK[0][1]:.4f} — **완벽히 갈려 있다.**")
-print("  가중치가 무작위인 두 신경망의 출력이 같은 원뿔(cone — 방향이 비슷한 벡터들의 묶음)에 있을 이유가 없다.")
-print(f"  그리고 이 24차원 실험에서는 학습이 그것을 **닫는다** "
-      f"({TRK[0][0]:.4f} → {TRK[1500][0]:.4f}).")
 ```
 
+**gap은 학습이 만드는 것이 아니라 초기화가 만든다.**
+
+step 0에서 이미 선형 구분 `{python} f'{TRK[0][1]:.4f}'` — **완벽히 갈려 있다.**  
+가중치가 무작위인 두 신경망의 출력이 같은 원뿔(cone — 방향이 비슷한 벡터들의 묶음)에 있을 이유가 없다.  
+그리고 이 24차원 실험에서는 학습이 그것을 **닫는다** (`{python} f'{TRK[0][0]:.4f}'` → `{python} f'{TRK[1500][0]:.4f}'`).
+
 **그런데 CLIP에서는 gap이 안 닫힌다.** 차이가 무엇인지 찾아보자.
+
+embedding 차원만 바꿔서 (다른 조건은 동일, 1500 step)
 
 ```{python}
 #| label: gap-dim
@@ -374,8 +380,6 @@ print(f"  그리고 이 24차원 실험에서는 학습이 그것을 **닫는다
 
 import numpy as np
 
-print("embedding 차원만 바꿔서 (다른 조건은 동일, 1500 step)")
-print()
 print(f"{'차원 E':>7} {'중심 거리':>11} {'선형 구분':>11} {'짝 cosine':>11} "
       f"{'retrieval R@1':>14}")
 print("-" * 59)
@@ -386,39 +390,39 @@ for Ed in [8, 24, 64, 128, 256]:
     r = retrieval(pi, pt, Ite, Tte)
     GD.append((Ed, d, sep, cos, r))
     print(f"{Ed:>7} {d:>11.4f} {sep:>11.4f} {cos:>11.4f} {r:>14.4f}")
-print()
 big = [x for x in GD if x[0] >= 128]
-print("**차원을 키우면 gap이 남는다 — 그리고 retrieval은 멀쩡하다.**")
+```
+
+**차원을 키우면 gap이 남는다 — 그리고 retrieval은 멀쩡하다.**
+
+```{python}
+#| label: gap-dim-2
+#| code-fold: false
+
 for Ed, d, sep, cos, r in big:
     print(f"  E={Ed}: 선형 구분 {sep:.4f} (완전 분리), retrieval R@1은 {r:.4f}")
-print()
-print("**이것이 gap이 안 없어지는 이유다.**")
-for s in ["contrastive loss는 **상대적 순서**만 본다 — "
-          "정답 짝이 다른 것들보다 가깝기만 하면 만족한다",
-          "두 덩어리가 통째로 떨어져 있어도 그 조건은 얼마든지 만족된다 — "
-          "대표단이 자기 편에 앉아 있어도 짝끼리 마주 보기만 하면 회의는 된다",
-          "**loss가 gap을 벌하지 않는다.** 그래서 초기값이 그대로 남는다",
-          "차원이 낮으면 공간이 좁아 어쩔 수 없이 섞이지만, "
-          "고차원에는 **떨어져 있을 자리가 충분하다**",
-          "CLIP의 embedding은 512~768차원이다 — 위 표의 오른쪽 끝이다"]:
-    print(f"  · {s}")
-print()
-print("**gap이 실무에서 문제가 되는 곳**")
-print()
-print(f"{'상황':<30} {'무슨 일이 생기나'}")
-print("-" * 74)
-for a, b in [
-    ("이미지-텍스트 유사도를 절대값으로 씀", "0.3이 좋은 건지 나쁜 건지 알 수 없다"),
-    ("CLIP 점수를 threshold로 거름", "threshold가 dataset마다 달라진다"),
-    ("이미지와 텍스트를 한 index에 넣음", "retrieval이 같은 modality로만 쏠린다"),
-    ("텍스트 embedding으로 이미지 생성 conditioning", "학습·추론의 분포가 어긋난다"),
-    ("두 embedding을 평균/interpolation", "중간 지점이 어느 쪽도 아니게 된다"),
-]:
-    print(f"{a:<30} {b}")
-print()
-print("**대처**: 유사도는 **같은 modality 안에서 normalization**해 쓰고,")
-print("  절대값 대신 **순위**로 다룬다. 생성 conditioning에서는 gap 보정을 넣기도 한다.")
 ```
+
+**이것이 gap이 안 없어지는 이유다.**
+
+- contrastive loss는 **상대적 순서**만 본다 — 정답 짝이 다른 것들보다 가깝기만 하면 만족한다
+- 두 덩어리가 통째로 떨어져 있어도 그 조건은 얼마든지 만족된다 — 대표단이 자기 편에 앉아 있어도 짝끼리 마주 보기만 하면 회의는 된다
+- **loss가 gap을 벌하지 않는다.** 그래서 초기값이 그대로 남는다
+- 차원이 낮으면 공간이 좁아 어쩔 수 없이 섞이지만, 고차원에는 **떨어져 있을 자리가 충분하다**
+- CLIP의 embedding은 512\~768차원이다 — 위 표의 오른쪽 끝이다
+
+**gap이 실무에서 문제가 되는 곳**
+
+| 상황 | 무슨 일이 생기나 |
+|---|---|
+| 이미지-텍스트 유사도를 절대값으로 씀 | 0.3이 좋은 건지 나쁜 건지 알 수 없다 |
+| CLIP 점수를 threshold로 거름 | threshold가 dataset마다 달라진다 |
+| 이미지와 텍스트를 한 index에 넣음 | retrieval이 같은 modality로만 쏠린다 |
+| 텍스트 embedding으로 이미지 생성 conditioning | 학습·추론의 분포가 어긋난다 |
+| 두 embedding을 평균/interpolation | 중간 지점이 어느 쪽도 아니게 된다 |
+
+**대처**: 유사도는 **같은 modality 안에서 normalization**해 쓰고,
+절대값 대신 **순위**로 다룬다. 생성 conditioning에서는 gap 보정을 넣기도 한다.
 
 ```{python}
 #| label: fig-gap
@@ -504,8 +508,14 @@ pi_p, pt_p = train(np.vstack(_I), np.vstack(_T), bs=64, seed=0)
 Ip, _, cp = pairs_tmpl(2000, np.random.default_rng(4), 0)
 Uip = nrm(ef(pi_p, Ip)[1])
 PROTOS, PACC = [], []
-print("prompt template별 zero-shot 정확도")
-print()
+```
+
+prompt template별 zero-shot 정확도
+
+```{python}
+#| label: prompt-2
+#| code-fold: false
+
 print(f"{'template':>9} {'정확도':>10}   {'비고'}")
 print("-" * 44)
 for k in range(6):
@@ -521,25 +531,21 @@ e6 = float(((Uip @ nrm(np.mean(PROTOS, 0)).T).argmax(1) == cp).mean())
 print("-" * 44)
 print(f"{'ensemble 0~3':>9} {e4:>10.4f}   4종 prototype 평균")
 print(f"{'ensemble 전체':>9} {e6:>10.4f}   6종 평균")
-print()
 seen, unseen = PACC[:4], PACC[4:]
-print(f"**같은 모델, 같은 이미지인데 정확도가 "
-      f"{min(PACC):.4f} ~ {max(PACC):.4f}로 흔들린다.**")
-print(f"  폭 {max(PACC)-min(PACC):.4f} — 문장 하나 바꾼 값이다.")
-print(f"  학습 때 본 template 평균 {np.mean(seen):.4f}, "
-      f"처음 보는 것 평균 {np.mean(unseen):.4f}")
-print()
-print(f"**ensemble(여러 template의 prototype을 평균)은 평균이 아니라 최고에 가깝다** "
-      f"({np.mean(seen):.4f} 평균 → {e4:.4f} ensemble).")
-for s in ["template마다 오차의 방향이 다르므로, 평균 내면 상쇄된다",
-          "CLIP 논문이 ImageNet에 prompt 80종을 ensemble한 이유가 이것이다",
-          "**zero-shot은 'label이 필요 없다'가 아니라 "
-          "'label 대신 문장 설계가 필요하다'는 뜻이다**",
-          "[7.8](../07_language/08_prompting_icl.qmd)의 prompt 민감도가 "
-          "여기서 그대로 반복된다",
-          "그래서 CoOp·prompt tuning처럼 **문장을 학습시키는** 방법들이 나왔다"]:
-    print(f"  · {s}")
 ```
+
+**같은 모델, 같은 이미지인데 정확도가 `{python} f'{min(PACC):.4f}'` \~ `{python} f'{max(PACC):.4f}'`로 흔들린다.**
+
+폭 `{python} f'{max(PACC) - min(PACC):.4f}'` — 문장 하나 바꾼 값이다.  
+학습 때 본 template 평균 `{python} f'{np.mean(seen):.4f}'`, 처음 보는 것 평균 `{python} f'{np.mean(unseen):.4f}'`
+
+**ensemble(여러 template의 prototype을 평균)은 평균이 아니라 최고에 가깝다** (`{python} f'{np.mean(seen):.4f}'` 평균 → `{python} f'{e4:.4f}'` ensemble).
+
+- template마다 오차의 방향이 다르므로, 평균 내면 상쇄된다
+- CLIP 논문이 ImageNet에 prompt 80종을 ensemble한 이유가 이것이다
+- **zero-shot은 'label이 필요 없다'가 아니라 'label 대신 문장 설계가 필요하다'는 뜻이다**
+- [7.8](../07_language/08_prompting_icl.qmd)의 prompt 민감도가 여기서 그대로 반복된다
+- 그래서 CoOp·prompt tuning처럼 **문장을 학습시키는** 방법들이 나왔다
 
 ---
 
@@ -552,14 +558,14 @@ SigLIP의 제안은 단순하다. softmax를 버리고 **쌍마다 독립적인 
 정답 쌍은 1, 나머지는 0인 binary classification $N^2$개를 푸는 셈이다.
 "이 보기들 중 정답은 누구?"(softmax)에서 "이 쌍은 맞나 틀리나?"를 하나씩 O/X로 채점하는 것(sigmoid)으로 바꾼 것이다.
 
+InfoNCE vs sigmoid loss — batch 크기별 retrieval R\@1
+
 ```{python}
 #| label: siglip
 #| code-fold: false
 
 import numpy as np
 
-print("InfoNCE vs sigmoid loss — batch 크기별 retrieval R@1")
-print()
 print(f"{'batch':>6} {'InfoNCE':>10} {'sigmoid':>11} {'차이':>9}")
 print("-" * 40)
 SL = []
@@ -568,35 +574,35 @@ for bs in [8, 16, 32, 64, 128, 256]:
     b = retrieval(*train(Itr, Ttr, bs=bs, loss="sigmoid", seed=0), Ite, Tte)
     SL.append((bs, a, b))
     print(f"{bs:>6} {a:>10.4f} {b:>11.4f} {b-a:>+9.4f}")
-print()
-print("**sigmoid가 모든 batch에서 앞선다. 그리고 격차는 작은 batch에서 크다.**")
+```
+
+**sigmoid가 모든 batch에서 앞선다. 그리고 격차는 작은 batch에서 크다.**
+
+```{python}
+#| label: siglip-2
+#| code-fold: false
+
 print(f"  batch 8   : {SL[0][2]-SL[0][1]:+.4f}")
 print(f"  batch 256 : {SL[-1][2]-SL[-1][1]:+.4f}")
-print()
-print("**이유**")
-for s in ["softmax는 **batch 안의 다른 것들과 견주어** 정답을 고르게 한다 — "
-          "batch가 작으면 견줄 대상이 부족하다",
-          "sigmoid는 각 쌍을 **독립적으로** 맞다/아니다로 본다 — "
-          "batch 크기와 무관한 목표다",
-          "덤으로 분산 학습에서 전체 행렬을 한 곳에 모을 필요가 없어진다",
-          "대가: positive 1개 대 negative N-1개의 **극심한 불균형**을 bias 항으로 "
-          "보정해야 한다 (여기서는 -10으로 고정, SigLIP은 학습시킨다)",
-          "[9.1](01_vision_tasks.qmd)의 focal loss와 같은 문제 구조다"]:
-    print(f"  · {s}")
-print()
-print("**CLIP 계열의 갈래**")
-print()
-print(f"{'모델':<14} {'바꾼 것':<32} {'얻은 것'}")
-print("-" * 76)
-for a, b, c in [
-    ("CLIP", "이미지-텍스트 contrastive learning", "zero-shot의 문을 열었다"),
-    ("ALIGN", "noise 많은 웹 데이터 그대로", "정제보다 규모가 낫다"),
-    ("SigLIP", "softmax → sigmoid", "작은 batch에서도 학습"),
-    ("EVA-CLIP", "초기화·optimization 개선", "같은 데이터로 더 높이"),
-    ("OpenCLIP", "공개 데이터(LAION) 재현", "데이터 출처의 투명성"),
-]:
-    print(f"{a:<14} {b:<32} {c}")
 ```
+
+**이유**
+
+- softmax는 **batch 안의 다른 것들과 견주어** 정답을 고르게 한다 — batch가 작으면 견줄 대상이 부족하다
+- sigmoid는 각 쌍을 **독립적으로** 맞다/아니다로 본다 — batch 크기와 무관한 목표다
+- 덤으로 분산 학습에서 전체 행렬을 한 곳에 모을 필요가 없어진다
+- 대가: positive 1개 대 negative N-1개의 **극심한 불균형**을 bias 항으로 보정해야 한다 (여기서는 -10으로 고정, SigLIP은 학습시킨다)
+- [9.1](01_vision_tasks.qmd)의 focal loss와 같은 문제 구조다
+
+**CLIP 계열의 갈래**
+
+| 모델 | 바꾼 것 | 얻은 것 |
+|---|---|---|
+| CLIP | 이미지-텍스트 contrastive learning | zero-shot의 문을 열었다 |
+| ALIGN | noise 많은 웹 데이터 그대로 | 정제보다 규모가 낫다 |
+| SigLIP | softmax → sigmoid | 작은 batch에서도 학습 |
+| EVA-CLIP | 초기화·optimization 개선 | 같은 데이터로 더 높이 |
+| OpenCLIP | 공개 데이터(LAION) 재현 | 데이터 출처의 투명성 |
 
 ---
 
