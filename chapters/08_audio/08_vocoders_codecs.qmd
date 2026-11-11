@@ -82,10 +82,11 @@ def melctx(x):
 g0 = np.random.default_rng(0)
 TR = [utter(g0) for _ in range(40)]
 TE = [utter(g0) for _ in range(10)]
-print(f"합성 음성 — 학습 {len(TR)} 발화 / test {len(TE)} 발화")
-print(f"  sample rate {SR}, mel {NMEL}대역, hop {HOP} sample ({HOP/SR*1000:.0f} ms)")
-print(f"  즉 mel frame 하나가 waveform {HOP} sample을 담당한다")
 ```
+
+합성 음성 — 학습 `{python} f'{len(TR)}'` 발화 / test `{python} f'{len(TE)}'` 발화
+sample rate `{python} f'{SR}'`, mel `{python} f'{NMEL}'`대역, hop `{python} f'{HOP}'` sample (`{python} f'{HOP / SR * 1000:.0f}'` ms)  
+즉 mel frame 하나가 waveform `{python} f'{HOP}'` sample을 담당한다
 
 ---
 
@@ -119,13 +120,18 @@ def make_xy(sigs):
 
 Xtr, Ytr = make_xy(TR)
 Xte, Yte = make_xy(TE)
-print(f"입력 {Xtr.shape[1]}차원 (mel {NMEL} x 문맥 {2*W+1} frame) "
-      f"→ 출력 {CH} sample")
-print(f"학습 쌍 {len(Xtr):,}개")
-print()
 
 VOC = nn.MLP([Xtr.shape[1], 512, 512, CH], activation="relu",
              out_activation="identity", seed=0)
+```
+
+입력 `{python} f'{Xtr.shape[1]}'`차원 (mel `{python} f'{NMEL}'` x 문맥 `{python} f'{2 * W + 1}'` frame) → 출력 `{python} f'{CH}'` sample
+학습 쌍 `{python} f'{len(Xtr):,}'`개
+
+```{python}
+#| label: collapse-2
+#| code-fold: false
+
 nn.train(VOC, Xtr, Ytr, loss="mse", opt=nn.Optimizer("adam", lr=1e-3),
          steps=800, batch_size=256, lr=1e-3, schedule="cosine", seed=1)
 P = VOC.predict(Xte)
@@ -144,37 +150,34 @@ print(f"{'MSE (모델)':<34} {mse_p:>12.6f}")
 print(f"{'MSE (항상 0을 출력)':<34} {mse_0:>12.6f}")
 print(f"{'waveform SNR':<34} {snr:>11.2f}dB")
 print(f"{'magnitude spectrum 상대 오차':<34} {relmag:>12.4f}")
-print()
-print(f"**SNR이 {snr:+.2f} dB다 — 무음을 내는 것과 다를 바 없다.**")
-print(f"  실제로 MSE가 '항상 0'보다 "
-      f"{'크다' if mse_p > mse_0 else '작다'} ({mse_p:.5f} vs {mse_0:.5f}).")
-print(f"  출력 진폭도 정답의 {float(P.std()/Yte.std()):.0%}로 눌려 있다.")
-print()
-print("**이유는 [8.7](07_tts.qmd)의 over-smoothing과 같은데, 훨씬 심하다.**")
-for s in ["mel은 **위상을 담지 않는다**. 같은 mel에 대응하는 waveform이 무수히 많다",
-          "  그 waveform들은 서로 부호가 반대이기도 하다 — 평균 내면 **상쇄된다** (+1과 −1의 평균은 0)",
-          "8.7의 mel regression은 9.4%만 못 맞혔지만, waveform은 **거의 전부**가 불확정이다",
-          "그래서 MSE의 최적해가 0에 가깝다 — 모델은 정확히 그것을 배웠다"]:
-    print(f"  · {s}")
-print()
-print("**magnitude spectrum조차 못 맞춘다** "
-      f"(상대 오차 {relmag:.3f}).")
-print("  출력이 0이니 당연하다. regression이 아니라 **다른 loss**가 필요하다.")
-print()
-print(f"{'접근':<22} {'무엇으로 불확정성을 다루나':<30} {'대표'}")
-print("-" * 80)
-for a, b, c in [
-    ("autoregressive", "sample 하나씩, **이전 sample을 조건으로**", "WaveNet, WaveRNN"),
-    ("normalizing flow", "가역 변환으로 분포를 직접 모델링", "WaveGlow, Parallel WaveNet"),
-    ("adversarial 학습", "**discriminator가 평균 낸 출력을 잡아낸다**", "MelGAN, HiFi-GAN"),
-    ("diffusion", "noise에서 반복 제거 (6.5)", "DiffWave, WaveGrad"),
-]:
-    print(f"{a:<22} {b:<30} {c}")
-print()
-print("**공통점: 어느 것도 '평균을 맞히려' 하지 않는다.**")
-print("  autoregressive는 조건을 붙여 불확정성을 없애고,")
-print("  나머지 셋은 **분포**를 모델링한다. 위 표는 6장의 계열 그대로다.")
 ```
+
+**SNR이 `{python} f'{snr:+.2f}'` dB다 — 무음을 내는 것과 다를 바 없다.**
+
+실제로 MSE가 '항상 0'보다 `{python} f'{('크다' if mse_p > mse_0 else '작다')}'` (`{python} f'{mse_p:.5f}'` vs `{python} f'{mse_0:.5f}'`).  
+출력 진폭도 정답의 `{python} f'{float(P.std() / Yte.std()):.0%}'`로 눌려 있다.
+
+**이유는 [8.7](07_tts.qmd)의 over-smoothing과 같은데, 훨씬 심하다.**
+
+- mel은 **위상을 담지 않는다**. 같은 mel에 대응하는 waveform이 무수히 많다
+- 그 waveform들은 서로 부호가 반대이기도 하다 — 평균 내면 **상쇄된다** (+1과 −1의 평균은 0)
+- 8.7의 mel regression은 9.4%만 못 맞혔지만, waveform은 **거의 전부**가 불확정이다
+- 그래서 MSE의 최적해가 0에 가깝다 — 모델은 정확히 그것을 배웠다
+
+**magnitude spectrum조차 못 맞춘다** (상대 오차 `{python} f'{relmag:.3f}'`).  
+출력이 0이니 당연하다. regression이 아니라 **다른 loss**가 필요하다.
+
+| 접근 | 무엇으로 불확정성을 다루나 | 대표 |
+|---|---|---|
+| autoregressive | sample 하나씩, **이전 sample을 조건으로** | WaveNet, WaveRNN |
+| normalizing flow | 가역 변환으로 분포를 직접 모델링 | WaveGlow, Parallel WaveNet |
+| adversarial 학습 | **discriminator가 평균 낸 출력을 잡아낸다** | MelGAN, HiFi-GAN |
+| diffusion | noise에서 반복 제거 (6.5) | DiffWave, WaveGrad |
+
+**공통점: 어느 것도 '평균을 맞히려' 하지 않는다.**
+
+autoregressive는 조건을 붙여 불확정성을 없애고,
+나머지 셋은 **분포**를 모델링한다. 위 표는 6장의 계열 그대로다.
 
 ```{python}
 #| label: fig-collapse
@@ -231,14 +234,14 @@ WaveNet은 autoregressive로 이 문제를 피했다. sample 하나씩 만들되
 
 **dilated convolution**(팽창 합성곱)은 kernel의 칸 사이를 띄워서(1, 2, 4, 8… 간격) 적은 층으로 넓은 범위를 보는 convolution이다. **causal**(인과적)은 과거만 본다는 뜻이다.
 
+dilated convolution의 receptive field(수용영역 — 출력 하나가 보는 입력 범위): kernel k, 층 L, dilation 2\^i
+
 ```{python}
 #| label: dilation
 #| code-fold: false
 
 import numpy as np
 
-print("dilated convolution의 receptive field(수용영역 — 출력 하나가 보는 입력 범위): kernel k, 층 L, dilation 2^i")
-print()
 print(f"{'block 층수':>10} {'stack 수':>8} {'receptive field(sample)':>22} {'시간':>10} "
       f"{'같은 크기를 일반 convolution으로':>28}")
 print("-" * 74)
@@ -250,19 +253,19 @@ for L in [6, 8, 10]:
         DIL.append((L, nstack, rf))
         print(f"{L:>10} {nstack:>8} {rf:>22,} {rf/SR*1000:>9.0f}ms "
               f"{plain:>28,}")
-print()
-print("**층을 하나 더 쌓을 때마다 receptive field가 두 배가 된다.**")
-print(f"  10층 3 stack이면 {3*(2**10-1)+1:,} sample = "
-      f"{(3*(2**10-1)+1)/SR*1000:.0f} ms를 본다.")
-print(f"  같은 층수의 일반 convolution은 {3*10+1} sample뿐이다.")
-print()
-print("**왜 이렇게 넓어야 하는가**")
-for s in ["F0가 100 Hz면 한 주기가 160 sample이다 — 여러 주기를 봐야 pitch를 안다",
-          "formant transition은 수십 ms 단위로 일어난다",
-          "그리고 **causal**이어야 한다 — 미래 sample을 보면 생성할 수 없다",
-          "  ([8.6](06_asr_modern.qmd)의 streaming 제약과 같은 이유)"]:
-    print(f"  · {s}")
 ```
+
+**층을 하나 더 쌓을 때마다 receptive field가 두 배가 된다.**
+
+10층 3 stack이면 `{python} f'{3 * (2 ** 10 - 1) + 1:,}'` sample = `{python} f'{(3 * (2 ** 10 - 1) + 1) / SR * 1000:.0f}'` ms를 본다.  
+같은 층수의 일반 convolution은 `{python} f'{3 * 10 + 1}'` sample뿐이다.
+
+**왜 이렇게 넓어야 하는가**
+
+- F0가 100 Hz면 한 주기가 160 sample이다 — 여러 주기를 봐야 pitch를 안다
+- formant transition은 수십 ms 단위로 일어난다
+- 그리고 **causal**이어야 한다 — 미래 sample을 보면 생성할 수 없다
+- ([8.6](06_asr_modern.qmd)의 streaming 제약과 같은 이유)
 
 ### ② µ-law — 8 bit로 sample을 분류 문제로 만들기
 
@@ -273,6 +276,8 @@ regression이 아니라 분류이므로 multimodal(다봉 — 봉우리가 여�
 µ-law **companding**(압신 — 압축(compress)과 신장(expand)을 합친 말, 작은 값은 촘촘하게 큰 값은 성기게 눈금을 매기는 것)이 그 손해를 다루는 방식을 재 본다.
 
 $$F(x) = \mathrm{sgn}(x)\,\frac{\ln(1 + \mu|x|)}{\ln(1 + \mu)}, \qquad \mu = 255$$
+
+전체 SNR로 보면
 
 ```{python}
 #| label: mulaw
@@ -296,8 +301,6 @@ def quant(x, bits):
 
 
 x = np.concatenate(TE)
-print("전체 SNR로 보면")
-print()
 print(f"{'bit':>5} {'선형':>11} {'µ-law':>11} {'차이':>9}")
 print("-" * 40)
 MU = []
@@ -307,13 +310,7 @@ for b in [4, 6, 8, 10]:
     s2 = float(10*np.log10(np.sum(x**2)/np.sum((mu - x)**2)))
     MU.append((b, s1, s2))
     print(f"{b:>5} {s1:>10.2f}dB {s2:>10.2f}dB {s2-s1:>+8.2f}")
-print()
 m8 = [m for m in MU if m[0] == 8][0]
-print(f"**µ-law가 진다** — 8 bit에서 {m8[2]-m8[1]:+.1f} dB.")
-print("  전체 SNR은 MSE를 재는 것이고, 균등 quantization이 MSE를 최소화하기 때문이다.")
-print()
-print("**그런데 µ-law가 파는 것은 평균이 아니다.** 구간별로 나눠 보자.")
-print()
 
 SEG = 320       # 20 ms
 
@@ -328,8 +325,19 @@ def seg_snr(x, y, seg=SEG):
 
 
 lin8, mu8 = quant(x, 8), mulaw_dec(quant(mulaw_enc(x), 8))
-print(f"8 bit, 20 ms 구간별 SNR의 분포 (구간 {len(seg_snr(x, lin8))}개)")
-print()
+```
+
+**µ-law가 진다** — 8 bit에서 `{python} f'{m8[2] - m8[1]:+.1f}'` dB.  
+전체 SNR은 MSE를 재는 것이고, 균등 quantization이 MSE를 최소화하기 때문이다.
+
+**그런데 µ-law가 파는 것은 평균이 아니다.** 구간별로 나눠 보자.
+
+8 bit, 20 ms 구간별 SNR의 분포 (구간 `{python} f'{len(seg_snr(x, lin8))}'`개)
+
+```{python}
+#| label: mulaw-2
+#| code-fold: false
+
 print(f"{'방식':<10} {'평균':>10} {'중앙값':>10} {'하위 10%':>11} "
       f"{'하위 1%':>10} {'표준편차':>11}")
 print("-" * 66)
@@ -340,31 +348,36 @@ for nm, y in [("선형", lin8), ("µ-law", mu8)]:
     print(f"{nm:<10} {ss.mean():>9.1f}dB {np.median(ss):>9.1f}dB "
           f"{np.percentile(ss, 10):>10.1f}dB {np.percentile(ss, 1):>9.1f}dB "
           f"{ss.std():>11.2f}")
-print()
 sl, sm = SEGS["선형"], SEGS["µ-law"]
-print(f"**표준편차가 {sl.std():.2f} → {sm.std():.2f}로 "
-      f"{sl.std()/sm.std():.0f}분의 1이 된다.**")
-print(f"  하위 1% 구간의 SNR은 {np.percentile(sl, 1):.1f} dB → "
-      f"{np.percentile(sm, 1):.1f} dB — **{np.percentile(sm,1)-np.percentile(sl,1):.0f} dB 개선**이다.")
-print()
 env = np.abs(signal.lfilter(np.ones(SEG)/SEG, 1, np.abs(x)))
 k = len(x)//SEG
 lev = env[:k*SEG].reshape(k, SEG).mean(1)
 n = min(len(lev), len(sl))
 quiet = lev[:n] < np.percentile(env, 20)
-print(f"조용한 구간(하위 20%, {int(quiet.sum())}개)만 보면")
+```
+
+**표준편차가 `{python} f'{sl.std():.2f}'` → `{python} f'{sm.std():.2f}'`로 `{python} f'{sl.std() / sm.std():.0f}'`분의 1이 된다.**
+
+하위 1% 구간의 SNR은 `{python} f'{np.percentile(sl, 1):.1f}'` dB → `{python} f'{np.percentile(sm, 1):.1f}'` dB — **`{python} f'{np.percentile(sm, 1) - np.percentile(sl, 1):.0f}'` dB 개선**이다.
+
+조용한 구간(하위 20%, `{python} f'{int(quiet.sum())}'`개)만 보면
+
+```{python}
+#| label: mulaw-3
+#| code-fold: false
+
 print(f"  선형   {sl[:n][quiet].mean():>6.1f} dB")
 print(f"  µ-law {sm[:n][quiet].mean():>6.1f} dB  "
       f"(**{sm[:n][quiet].mean()-sl[:n][quiet].mean():+.1f} dB**)")
-print()
-print("**이것이 companding의 정체다 — 평균 SNR을 팔아 SNR의 균일함을 산다.**")
-for s in ["귀는 절대 오차가 아니라 **신호 대비 오차**를 듣는다",
-          "조용한 구간에서 SNR이 6 dB인 것이, 큰 구간에서 42 dB인 것보다 훨씬 거슬린다 (조용한 방의 작은 잡음이 시끄러운 거리의 큰 잡음보다 더 들린다)",
-          "µ-law는 작은 값에 quantization 단계를 몰아준다 — 로그가 하는 일이다",
-          "**[8.0](00_sound_and_sampling.qmd)의 dB 이야기와 같은 원리**",
-          "**측정 지표를 잘못 고르면 정반대 결론이 난다** — 위의 첫 표가 그 예다"]:
-    print(f"  · {s}")
 ```
+
+**이것이 companding의 정체다 — 평균 SNR을 팔아 SNR의 균일함을 산다.**
+
+- 귀는 절대 오차가 아니라 **신호 대비 오차**를 듣는다
+- 조용한 구간에서 SNR이 6 dB인 것이, 큰 구간에서 42 dB인 것보다 훨씬 거슬린다 (조용한 방의 작은 잡음이 시끄러운 거리의 큰 잡음보다 더 들린다)
+- µ-law는 작은 값에 quantization 단계를 몰아준다 — 로그가 하는 일이다
+- **[8.0](00_sound_and_sampling.qmd)의 dB 이야기와 같은 원리**
+- **측정 지표를 잘못 고르면 정반대 결론이 난다** — 위의 첫 표가 그 예다
 
 ---
 
@@ -372,14 +385,14 @@ for s in ["귀는 절대 오차가 아니라 **신호 대비 오차**를 듣는�
 
 WaveNet은 품질을 얻었지만 속도를 잃었다. **sample마다 순차적으로** 한 번씩 돌아야 한다.
 
+1초 오디오를 만드는 데 필요한 **순차** step 수
+
 ```{python}
 #| label: arcost
 #| code-fold: false
 
 import numpy as np
 
-print("1초 오디오를 만드는 데 필요한 **순차** step 수")
-print()
 print(f"{'모델 종류':<26} {'step 수 / 초':>14} {'비고'}")
 print("-" * 66)
 for a, b, c in [
@@ -390,36 +403,36 @@ for a, b, c in [
     ("Griffin-Lim (150회)", 150, "8.7에서 잰 것"),
 ]:
     print(f"{a:<26} {b:>14,} {c}")
-print()
-print(f"**sample 단위 autoregressive는 24 kHz면 초당 24,000번 순차 실행이다.**")
-print("  GPU의 병렬성을 전혀 못 쓴다. 실시간의 수십~수백 배가 걸렸다.")
-print()
-print("이 문제를 푼 방법들")
-print(f"{'방법':<24} {'아이디어':<34} {'대가'}")
-print("-" * 78)
-for a, b, c in [
-    ("Parallel WaveNet", "inverse flow distillation — teacher의 분포를 student가", "학습이 복잡"),
-    ("WaveGlow", "가역 flow — 한 번에 역변환", "모델이 크다"),
-    ("**GAN vocoder**", "**discriminator만 있으면 generator는 단순**", "학습이 불안정"),
-    ("diffusion", "noise에서 반복 제거", "step 수만큼 느리다"),
-    ("distillation된 diffusion", "step을 1~4로 줄인다 (6.8)", "품질 손실"),
-]:
-    print(f"{a:<24} {b:<34} {c}")
-print()
-print("**HiFi-GAN이 사실상 표준이 된 이유**")
-for s in ["generator는 **transposed convolution 몇 층**뿐이다 — 아주 빠르고 작다",
-          "품질은 discriminator가 만든다. generator를 키울 필요가 없었다",
-          "**multi-scale discriminator** — 원본·1/2·1/4 배속에서 각각 본다",
-          "**multi-period discriminator** — waveform을 주기 2,3,5,7,11로 접어서 본다",
-          "  주기적 구조(F0 harmonic)를 잡기 위한 것이다. 소수를 쓰는 이유는 겹침을 피하려고",
-          "mel 재구성 loss를 함께 걸어 학습을 안정화한다"]:
-    print(f"  · {s}")
-print()
-print("**discriminator가 G8.8.1의 collapse를 정확히 막는다.**")
-print("  0을 출력하면 discriminator가 즉시 가짜로 판정한다.")
-print("  즉 '평균을 내면 손해'라는 신호를 loss가 직접 준다 —")
-print("  MSE에는 없던 것이다.")
 ```
+
+**sample 단위 autoregressive는 24 kHz면 초당 24,000번 순차 실행이다.**
+
+GPU의 병렬성을 전혀 못 쓴다. 실시간의 수십\~수백 배가 걸렸다.
+
+이 문제를 푼 방법들
+
+| 방법 | 아이디어 | 대가 |
+|---|---|---|
+| Parallel WaveNet | inverse flow distillation — teacher의 분포를 student가 | 학습이 복잡 |
+| WaveGlow | 가역 flow — 한 번에 역변환 | 모델이 크다 |
+| **GAN vocoder** | **discriminator만 있으면 generator는 단순** | 학습이 불안정 |
+| diffusion | noise에서 반복 제거 | step 수만큼 느리다 |
+| distillation된 diffusion | step을 1\~4로 줄인다 (6.8) | 품질 손실 |
+
+**HiFi-GAN이 사실상 표준이 된 이유**
+
+- generator는 **transposed convolution 몇 층**뿐이다 — 아주 빠르고 작다
+- 품질은 discriminator가 만든다. generator를 키울 필요가 없었다
+- **multi-scale discriminator** — 원본·1/2·1/4 배속에서 각각 본다
+- **multi-period discriminator** — waveform을 주기 2,3,5,7,11로 접어서 본다
+- 주기적 구조(F0 harmonic)를 잡기 위한 것이다. 소수를 쓰는 이유는 겹침을 피하려고
+- mel 재구성 loss를 함께 걸어 학습을 안정화한다
+
+**discriminator가 G8.8.1의 collapse를 정확히 막는다.**
+
+0을 출력하면 discriminator가 즉시 가짜로 판정한다.  
+즉 '평균을 내면 손해'라는 신호를 loss가 직접 준다 —
+MSE에는 없던 것이다.
 
 ---
 
@@ -513,11 +526,16 @@ TEM = np.concatenate([melctx(x).T for x in TE])
 mu_, sd_ = TRM.mean(0), TRM.std(0) + 1e-9
 TRMz, TEMz = (TRM - mu_)/sd_, (TEM - mu_)/sd_
 BOOK_M = fit_rvq(TRMz, seed=5)
+```
 
-print(f"codebook {NSTAGE}단계 x {K} code = 단계당 {int(np.log2(K))} bit")
-print(f"  ① raw waveform frame {FR} sample (DCT 직교 변환만)")
-print(f"  ② log-mel frame {NMEL}차원 (hop {HOP} sample)")
-print()
+codebook `{python} f'{NSTAGE}'`단계 x `{python} f'{K}'` code = 단계당 `{python} f'{int(np.log2(K))}'` bit
+① raw waveform frame `{python} f'{FR}'` sample (DCT 직교 변환만)  
+② log-mel frame `{python} f'{NMEL}'`차원 (hop `{python} f'{HOP}'` sample)
+
+```{python}
+#| label: rvq-2
+#| code-fold: false
+
 print(f"{'단계':>4} {'① bitrate':>13} {'① waveform SNR':>14} "
       f"{'② bitrate':>13} {'② mel SNR':>11} {'code entropy':>13}")
 print("-" * 74)
@@ -534,35 +552,33 @@ for ns in range(1, NSTAGE + 1):
     RVQ.append((ns, br_w, snr_w, br_m, snr_m, code_entropy(cm)))
     print(f"{ns:>4} {br_w:>11.1f}k {snr_w:>13.2f}dB {br_m:>11.1f}k "
           f"{snr_m:>10.2f}dB {code_entropy(cm):>13.2f}")
-print()
 r1, r6 = RVQ[0], RVQ[-1]
-print(f"**단계를 쌓을수록 좋아지지만 수확이 체감한다** — "
-      f"① {r1[2]:.2f} → {r6[2]:.2f} dB, ② {r1[4]:.2f} → {r6[4]:.2f} dB.")
-print("  첫 단계가 큰 구조를 잡고, 뒤 단계는 residual의 세부를 다듬는다.")
-print()
-print(f"**그런데 ①과 ②의 격차가 훨씬 크다.**")
-print(f"  비슷한 bitrate에서 raw waveform은 {r6[2]:.1f} dB, "
-      f"log-mel은 {RVQ[3][4]:.1f} dB.")
-print()
-print("**왜 raw waveform은 quantization이 안 되는가**")
-for s in ["같은 소리라도 frame 경계가 어디 걸리느냐에 따라 **위상이 제각각**이다",
-          "  10 ms frame 안의 waveform은 사실상 무한히 많은 모양을 가진다",
-          "codebook 256개로는 그 다양성을 도저히 못 덮는다",
-          "log-mel은 위상을 버렸으므로 **덮어야 할 다양성이 훨씬 작다**",
-          "**그래서 neural codec은 encoder를 먼저 학습한다** —",
-          "  quantization하기 좋은 표현으로 옮긴 다음 RVQ를 건다"]:
-    print(f"  · {s}")
-print()
-print(f"**codebook 사용률도 문제다** — entropy가 {r6[5]:.2f} bit인데 "
-      f"상한은 {np.log2(K):.0f} bit다.")
-print(f"  code의 {(1 - r6[5]/np.log2(K)):.0%}만큼이 낭비되고 있다.")
-print("  실제 codec은 이것을 막는 장치를 둔다:")
-for s in ["**EMA codebook 갱신** — 죽은 code를 살린다",
-          "**codebook 재시작** — 안 쓰이는 code를 자주 쓰이는 code 근처로 옮긴다",
-          "diversity loss ([8.5](05_ssl_speech.qmd)의 wav2vec 2.0과 같은 문제)",
-          "**entropy coding** — 사용 빈도가 불균등하면 그만큼 더 압축한다"]:
-    print(f"  · {s}")
 ```
+
+**단계를 쌓을수록 좋아지지만 수확이 체감한다** — ① `{python} f'{r1[2]:.2f}'` → `{python} f'{r6[2]:.2f}'` dB, ② `{python} f'{r1[4]:.2f}'` → `{python} f'{r6[4]:.2f}'` dB.  
+첫 단계가 큰 구조를 잡고, 뒤 단계는 residual의 세부를 다듬는다.
+
+**그런데 ①과 ②의 격차가 훨씬 크다.**
+
+비슷한 bitrate에서 raw waveform은 `{python} f'{r6[2]:.1f}'` dB, log-mel은 `{python} f'{RVQ[3][4]:.1f}'` dB.
+
+**왜 raw waveform은 quantization이 안 되는가**
+
+- 같은 소리라도 frame 경계가 어디 걸리느냐에 따라 **위상이 제각각**이다
+- 10 ms frame 안의 waveform은 사실상 무한히 많은 모양을 가진다
+- codebook 256개로는 그 다양성을 도저히 못 덮는다
+- log-mel은 위상을 버렸으므로 **덮어야 할 다양성이 훨씬 작다**
+- **그래서 neural codec은 encoder를 먼저 학습한다** —
+- quantization하기 좋은 표현으로 옮긴 다음 RVQ를 건다
+
+**codebook 사용률도 문제다** — entropy가 `{python} f'{r6[5]:.2f}'` bit인데 상한은 `{python} f'{np.log2(K):.0f}'` bit다.  
+code의 `{python} f'{1 - r6[5] / np.log2(K):.0%}'`만큼이 낭비되고 있다.  
+실제 codec은 이것을 막는 장치를 둔다:
+
+- **EMA codebook 갱신** — 죽은 code를 살린다
+- **codebook 재시작** — 안 쓰이는 code를 자주 쓰이는 code 근처로 옮긴다
+- diversity loss ([8.5](05_ssl_speech.qmd)의 wav2vec 2.0과 같은 문제)
+- **entropy coding** — 사용 빈도가 불균등하면 그만큼 더 압축한다
 
 ```{python}
 #| label: fig-rvq
@@ -630,8 +646,14 @@ RVQ가 하는 일은 이 식의 $n_q$를 **하나씩 늘려가며 residual을 �
 import numpy as np
 
 fs, bits = 24_000, 16                      # 원본: 24 kHz, 16 bit
+```
 
-print(f"원본 {fs/1000:.0f} kHz × {bits} bit = {fs*bits/1000:.0f} kbps\n")
+원본 `{python} f'{fs / 1000:.0f}'` kHz × `{python} f'{bits}'` bit = `{python} f'{fs * bits / 1000:.0f}'` kbps
+
+```{python}
+#| label: codec-bitrate-2
+#| code-fold: false
+
 print(f"{'구성':<28}{'단계당 bit':>12}{'bitrate':>13}{'압축률':>10}")
 configs = [
     ("EnCodec  n_q=2,  K=1024, 75Hz",  2, 1024, 75),
@@ -643,12 +665,11 @@ for name, nq, K, fr in configs:
     per = np.log2(K)
     br = nq * per * fr
     print(f"{name:<28}{per:>12.0f}{br/1000:>12.1f}k{fs*bits/br:>10.0f}배")
-
-print()
-print("n_q를 늘리면 bitrate가 선형으로 는다 — 품질과 bandwidth의 직접 교환이다.")
-print("frame rate f를 낮추면 같은 n_q로도 bitrate가 준다 —")
-print("다만 시간 해상도를 잃어 transient(전이음 — 북소리처럼 짧고 급한 소리)가 뭉개진다.")
 ```
+
+n_q를 늘리면 bitrate가 선형으로 는다 — 품질과 bandwidth의 직접 교환이다.  
+frame rate f를 낮추면 같은 n_q로도 bitrate가 준다 —
+다만 시간 해상도를 잃어 transient(전이음 — 북소리처럼 짧고 급한 소리)가 뭉개진다.
 
 ::: {.key-concept}
 이 식이 [7.2의 language modeling](../07_language/02_language_models.qmd)과 만나는 지점이 중요하다.
@@ -668,14 +689,14 @@ autoregressive Transformer를 그대로 쓸 수 있다. 다만 token이 frame당
 
 RVQ의 출력은 **정수 index 열**이다. 그 순간 오디오는 language model이 다룰 수 있는 것이 된다.
 
+codec token의 규모 — 1초 오디오가 token 몇 개인가
+
 ```{python}
 #| label: tokens
 #| code-fold: false
 
 import numpy as np
 
-print("codec token의 규모 — 1초 오디오가 token 몇 개인가")
-print()
 print(f"{'설정':<30} {'frame/초':>10} {'단계':>6} {'token/초':>10} "
       f"{'bitrate':>11}")
 print("-" * 74)
@@ -686,45 +707,50 @@ for nm, fps, ns, k in [("여기 ② (hop 128, 6단계)", SR/HOP, 6, K),
     tok = fps*ns
     br = tok*np.log2(k)/1000
     print(f"{nm:<30} {fps:>10.0f} {ns:>6} {tok:>10.0f} {br:>9.1f}k")
-print()
-print("**비교: 텍스트는 초당 3~5 token이다.**")
-print(f"  오디오 token은 그보다 **100배 이상** 많다.")
-print("  그래서 오디오 LM은 sequence 길이가 곧바로 문제가 된다 (7.14의 KV cache).")
-print()
-print("**다단계 구조가 또 다른 문제를 만든다.**")
-for s in ["한 시점에 token이 S개다 — sequence를 어떻게 펼칠 것인가?",
-          "  **flatten(평탄화)**: 시간x단계를 일렬로 → sequence가 S배 길어진다",
-          "  **병렬 head**: 한 step에 S개를 동시에 → 단계 간 의존을 잃는다",
-          "  **delay pattern**: 단계마다 한 step씩 밀어 넣는다 (MusicGen)",
-          "  **계층**: 1단계만 autoregressive로, 나머지는 조건부로 (VALL-E)"]:
-    print(f"  · {s}")
-print()
-print("**semantic token vs acoustic token**")
-print(f"{'구분':<16} {'무엇에서':<28} {'담는 것'}")
-print("-" * 72)
-for a, b, c in [
-    ("semantic token(의미 토큰)", "**self-supervised 표현의 clustering** (8.5)", "음운·내용. 화자 정보가 적다"),
-    ("acoustic token(음향 토큰)", "**codec RVQ**", "화자·음색·녹음 환경까지 전부"),
-]:
-    print(f"{a:<16} {b:<28} {c}")
-print()
-print("[8.5](05_ssl_speech.qmd)에서 만든 k-means code가 바로 semantic token이다.")
-print(f"  거기서 phoneme purity 0.87을 쟀다 — 내용은 담고 화자는 덜 담는다.")
-print()
-print("**둘을 나누는 이유**")
-for s in ["semantic token으로 **무엇을 말할지**를 먼저 정한다 (긴 문맥, 적은 token)",
-          "acoustic token으로 **어떻게 들릴지**를 채운다 (짧은 문맥, 많은 token)",
-          "  대본을 먼저 쓰고, 그 다음에 목소리를 입히는 순서다",
-          "AudioLM이 이 2단계 구조를 제안했고 이후 표준이 됐다",
-          "**voice cloning**이 여기서 나온다 — 의미는 텍스트에서, 음향은 reference 음성에서",
-          "  ([8.7](07_tts.qmd)의 zero-shot TTS가 이 구조다)"]:
-    print(f"  · {s}")
-print()
-print("**codec이 LLM 시대에 다시 중요해진 이유가 이것이다.**")
-print("  압축률이 아니라 **'token으로 만들 수 있는가'**가 설계 기준이 됐다.")
-print("  DAC 같은 최신 codec이 codebook 사용률을 중시하는 것도 같은 맥락이다 —")
-print("  안 쓰이는 code는 LM vocabulary에서 낭비다.")
 ```
+
+**비교: 텍스트는 초당 3\~5 token이다.**
+
+오디오 token은 그보다 **100배 이상** 많다.  
+그래서 오디오 LM은 sequence 길이가 곧바로 문제가 된다 (7.14의 KV cache).
+
+**다단계 구조가 또 다른 문제를 만든다.**
+
+- 한 시점에 token이 S개다 — sequence를 어떻게 펼칠 것인가?
+- **flatten(평탄화)**: 시간x단계를 일렬로 → sequence가 S배 길어진다
+- **병렬 head**: 한 step에 S개를 동시에 → 단계 간 의존을 잃는다
+- **delay pattern**: 단계마다 한 step씩 밀어 넣는다 (MusicGen)
+- **계층**: 1단계만 autoregressive로, 나머지는 조건부로 (VALL-E)
+
+```{python}
+#| label: tokens-2
+#| code-fold: false
+
+print("**semantic token vs acoustic token**")
+```
+
+| 구분 | 무엇에서 | 담는 것 |
+|---|---|---|
+| semantic token(의미 토큰) | **self-supervised 표현의 clustering** (8.5) | 음운·내용. 화자 정보가 적다 |
+| acoustic token(음향 토큰) | **codec RVQ** | 화자·음색·녹음 환경까지 전부 |
+
+[8.5](05_ssl_speech.qmd)에서 만든 k-means code가 바로 semantic token이다.  
+거기서 phoneme purity 0.87을 쟀다 — 내용은 담고 화자는 덜 담는다.
+
+**둘을 나누는 이유**
+
+- semantic token으로 **무엇을 말할지**를 먼저 정한다 (긴 문맥, 적은 token)
+- acoustic token으로 **어떻게 들릴지**를 채운다 (짧은 문맥, 많은 token)
+- 대본을 먼저 쓰고, 그 다음에 목소리를 입히는 순서다
+- AudioLM이 이 2단계 구조를 제안했고 이후 표준이 됐다
+- **voice cloning**이 여기서 나온다 — 의미는 텍스트에서, 음향은 reference 음성에서
+- ([8.7](07_tts.qmd)의 zero-shot TTS가 이 구조다)
+
+**codec이 LLM 시대에 다시 중요해진 이유가 이것이다.**
+
+압축률이 아니라 **'token으로 만들 수 있는가'**가 설계 기준이 됐다.  
+DAC 같은 최신 codec이 codebook 사용률을 중시하는 것도 같은 맥락이다 —
+안 쓰이는 code는 LM vocabulary에서 낭비다.
 
 ---
 
