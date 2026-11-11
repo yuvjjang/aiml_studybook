@@ -91,12 +91,12 @@ g0 = np.random.default_rng(0)
 MUSIC = [music_clip(g0) for _ in range(50)]
 SPEECH = [speech_clip(g0) for _ in range(50)]
 PHRASE = int(4*0.25*FPS)          # 4음 x 0.25초 = frame 수
-
-print(f"음악 풍 {len(MUSIC)}개 / 음성 풍 {len(SPEECH)}개, 각 4초")
-print(f"  frame {FPS:.0f}/초, phrase 주기 = {PHRASE} frame (1.0초)")
-print()
-print("**음악 쪽에만 1초 주기의 반복이 심어져 있다.** 그것이 뒤에서 쓰인다.")
 ```
+
+음악 풍 `{python} f'{len(MUSIC)}'`개 / 음성 풍 `{python} f'{len(SPEECH)}'`개, 각 4초
+frame `{python} f'{FPS:.0f}'`/초, phrase 주기 = `{python} f'{PHRASE}'` frame (1.0초)
+
+**음악 쪽에만 1초 주기의 반복이 심어져 있다.** 그것이 뒤에서 쓰인다.
 
 ```{python}
 #| label: tokens
@@ -131,12 +131,11 @@ CEN_T = kmeans_fast((FIT - MU_)/SD_, K, seed=0)
 
 def toks(x):
     return nearest((logmel(x).T - MU_)/SD_, CEN_T)
-
-
-print(f"log-mel frame을 k-means로 이산화 — vocabulary {K}")
-print(f"  (8.8의 RVQ 1단계와 같은 구조. 여기서는 단계 하나만 쓴다)")
-print(f"  4초 clip 하나 = {len(toks(MUSIC[0]))} token")
 ```
+
+log-mel frame을 k-means로 이산화 — vocabulary `{python} f'{K}'`
+(8.8의 RVQ 1단계와 같은 구조. 여기서는 단계 하나만 쓴다)  
+4초 clip 하나 = `{python} f'{len(toks(MUSIC[0]))}'` token
 
 ---
 
@@ -144,14 +143,14 @@ print(f"  4초 clip 하나 = {len(toks(MUSIC[0]))} token")
 
 먼저 규모를 본다. 오디오 LM의 첫 번째 벽은 **sequence 길이**다.
 
+codec token으로 오디오를 만들 때의 sequence 길이
+
 ```{python}
 #| label: length
 #| code-fold: false
 
 import numpy as np
 
-print("codec token으로 오디오를 만들 때의 sequence 길이")
-print()
 print(f"{'길이':<12} {'frame/초':>9} {'RVQ 단계':>9} {'flatten token 수':>16} "
       f"{'attention 비용(상대)':>20}")
 print("-" * 70)
@@ -163,15 +162,20 @@ for lbl, sec, fps, ns in [("발화 10초", 10, 75, 8),
     n = int(sec*fps*ns)
     LEN.append((lbl, n))
     print(f"{lbl:<12} {fps:>9} {ns:>9} {n:>16,} {n**2/1e9:>19.1f}G")
-print()
-print("**텍스트와 비교하면** — 3분 노래의 token 수가")
 n3 = [l for l in LEN if l[0] == "노래 3분"][0][1]
-print(f"  {n3:,}개다. 같은 길이의 텍스트라면 책 한 권 분량이다.")
-print("  attention은 길이의 제곱이므로 이대로는 감당이 안 된다 (7.14).")
-print()
-print("**그래서 '한 시점의 여러 token'을 어떻게 펼치느냐가 설계 문제가 된다.**")
-print()
 S, T = 8, 75*30
+```
+
+**텍스트와 비교하면** — 3분 노래의 token 수가
+`{python} f'{n3:,}'`개다. 같은 길이의 텍스트라면 책 한 권 분량이다.  
+attention은 길이의 제곱이므로 이대로는 감당이 안 된다 (7.14).
+
+**그래서 '한 시점의 여러 token'을 어떻게 펼치느냐가 설계 문제가 된다.**
+
+```{python}
+#| label: length-2
+#| code-fold: false
+
 print(f"{'배치 전략':<22} {'sequence 길이':>14} {'단계 간 의존':>14} {'비고'}")
 print("-" * 74)
 for a, n, dep, c in [
@@ -181,26 +185,25 @@ for a, n, dep, c in [
     ("계층 (coarse→fine)", f"{T} + {T*(S-1)}", "부분", "1단계만 AR, 나머지는 조건부"),
 ]:
     print(f"{a:<22} {str(n):>14} {dep:>14}  {c}")
-print()
-print("**MusicGen이 쓰는 delay pattern이 절충의 좋은 예다.** 합창에서 파트마다 한 박자씩 늦게 들어가는 돌림노래 같은 배치다.")
-for s in ["단계 s의 token을 s step만큼 뒤로 민다",
-          "그러면 한 step에서 **이미 생성된 앞 단계 token을 볼 수 있다**",
-          f"sequence는 {T*S:,} 대신 {T+S:,} — flatten의 {(T+S)/(T*S):.1%}다",
-          "완전한 의존은 아니지만 병렬 head보다 낫다"]:
-    print(f"  · {s}")
-print()
-print("**계층 구조는 다른 축으로 자른다** (AudioLM의 방식)")
-print(f"{'단계':<16} {'token 종류':<20} {'초당':>8} {'담는 것'}")
-print("-" * 68)
-for a, b, c, d in [("1단계", "semantic token (8.5)", "25~50", "무엇을 말/연주하는가"),
-                   ("2단계", "거친 acoustic token", "150", "음색·화자의 큰 틀"),
-                   ("3단계", "세밀한 acoustic token", "600", "세부 — 조건부로 채운다")]:
-    print(f"{a:<16} {b:<20} {c:>8} {d}")
-print()
-print("  **긴 문맥이 필요한 것은 1단계뿐이다.** 3분이 semantic token으로는 "
-      f"{180*35:,}개 정도다.")
-print("  뒤 단계는 짧은 문맥만 보면 되므로 비용이 감당 가능해진다.")
 ```
+
+**MusicGen이 쓰는 delay pattern이 절충의 좋은 예다.** 합창에서 파트마다 한 박자씩 늦게 들어가는 돌림노래 같은 배치다.
+
+- 단계 s의 token을 s step만큼 뒤로 민다
+- 그러면 한 step에서 **이미 생성된 앞 단계 token을 볼 수 있다**
+- sequence는 `{python} f'{T * S:,}'` 대신 `{python} f'{T + S:,}'` — flatten의 `{python} f'{(T + S) / (T * S):.1%}'`다
+- 완전한 의존은 아니지만 병렬 head보다 낫다
+
+**계층 구조는 다른 축으로 자른다** (AudioLM의 방식)
+
+| 단계 | token 종류 | 초당 | 담는 것 |
+|---|---|---|---|
+| 1단계 | semantic token (8.5) | 25\~50 | 무엇을 말/연주하는가 |
+| 2단계 | 거친 acoustic token | 150 | 음색·화자의 큰 틀 |
+| 3단계 | 세밀한 acoustic token | 600 | 세부 — 조건부로 채운다 |
+
+**긴 문맥이 필요한 것은 1단계뿐이다.** 3분이 semantic token으로는 `{python} f'{180 * 35:,}'`개 정도다.  
+뒤 단계는 짧은 문맥만 보면 되므로 비용이 감당 가능해진다.
 
 ---
 
@@ -260,38 +263,43 @@ for lag in [1, 10, 31, 62, PHRASE, 2*PHRASE]:
              "(한 음 길이)" if lag == 31 else "")
     print(f"{lag:>12} {AC_REAL[lag-1]:>11.3f} {AC_GEN[lag-1]:>13.3f} "
           f"{AC_SPE[lag-1]:>11.3f}  {note_}")
-print()
 base_r = float(np.median(AC_REAL[40:]))
 base_g = float(np.median(AC_GEN[40:]))
 peak = int(np.argmax(AC_REAL[20:])) + 21
-print(f"긴 lag의 기준선: 실제 {base_r:.3f} / 생성 {base_g:.3f}")
-print(f"phrase 주기에서의 초과분: 실제 **{AC_REAL[PHRASE-1]-base_r:+.3f}** / "
-      f"생성 **{AC_GEN[PHRASE-1]-base_g:+.3f}**")
-print(f"실제 음악의 자기일치율 최대 peak(lag>20): **{peak} frame** "
-      f"= {peak/FPS:.2f}초")
-print()
-print("**실제 음악에는 phrase 주기에 뚜렷한 봉우리가 있다.**")
-print("  1초 전 token과 지금 token이 같을 확률이 기준선의 "
-      f"{AC_REAL[PHRASE-1]/base_r:.0f}배다.")
-print()
-print("**3-gram 생성에는 그 봉우리가 없다.** 초과분이 사실상 0이다.")
-for s in ["3-gram은 **직전 2 frame**만 본다 — 1초 전은 문맥에 없다",
-          "국소 통계(음색, 음의 이어짐)는 그럴듯하게 만든다",
-          "그런데 **같은 phrase를 다시 연주하는 것**은 못 한다",
-          "들으면 '음악 같은 소리인데 곡이 아닌' 것이 이 차이다 — 단어는 자연스러운데 줄거리가 없는 글과 같다"]:
-    print(f"  · {s}")
-print()
-print("**필요한 문맥 길이를 계산해 보면**")
+```
+
+긴 lag의 기준선: 실제 `{python} f'{base_r:.3f}'` / 생성 `{python} f'{base_g:.3f}'`
+phrase 주기에서의 초과분: 실제 **`{python} f'{AC_REAL[PHRASE - 1] - base_r:+.3f}'`** / 생성 **`{python} f'{AC_GEN[PHRASE - 1] - base_g:+.3f}'`**
+실제 음악의 자기일치율 최대 peak(lag>20): **`{python} f'{peak}'` frame** = `{python} f'{peak / FPS:.2f}'`초
+
+**실제 음악에는 phrase 주기에 뚜렷한 봉우리가 있다.**
+
+1초 전 token과 지금 token이 같을 확률이 기준선의 `{python} f'{AC_REAL[PHRASE - 1] / base_r:.0f}'`배다.
+
+**3-gram 생성에는 그 봉우리가 없다.** 초과분이 사실상 0이다.
+
+- 3-gram은 **직전 2 frame**만 본다 — 1초 전은 문맥에 없다
+- 국소 통계(음색, 음의 이어짐)는 그럴듯하게 만든다
+- 그런데 **같은 phrase를 다시 연주하는 것**은 못 한다
+- 들으면 '음악 같은 소리인데 곡이 아닌' 것이 이 차이다 — 단어는 자연스러운데 줄거리가 없는 글과 같다
+
+**필요한 문맥 길이를 계산해 보면**
+
+```{python}
+#| label: structure-2
+#| code-fold: false
+
 print(f"{'구조':<20} {'시간':>8} {'semantic token(35/s)':>20} {'acoustic token(600/s)':>22}")
 print("-" * 74)
 for a, sec in [("motif", 1), ("phrase(악구)", 4), ("마디 묶음", 8),
                ("절-후렴 구조", 30), ("곡 전체", 180)]:
     print(f"{a:<20} {sec:>7}초 {int(sec*35):>20,} {int(sec*600):>22,}")
-print()
-print("**절-후렴 구조를 보려면 acoustic token 18,000개를 문맥에 넣어야 한다.**")
-print("  semantic token이면 1,050개다 — 그래서 계층 구조가 필요하다 (G8.9.1).")
-print("  long context attention(7.14)과 오디오 LM이 같은 문제를 푸는 셈이다.")
 ```
+
+**절-후렴 구조를 보려면 acoustic token 18,000개를 문맥에 넣어야 한다.**
+
+semantic token이면 1,050개다 — 그래서 계층 구조가 필요하다 (G8.9.1).  
+long context attention(7.14)과 오디오 LM이 같은 문제를 푸는 셈이다.
 
 ```{python}
 #| label: fig-structure
@@ -415,32 +423,44 @@ for w in [0.0, 1.0, 2.0, 3.0, 5.0, 8.0]:
                 float(np.mean(ent))))
     print(f"{w:>11.1f} {np.mean(acc):>17.3f} {np.mean(div):>12.3f} "
           f"{np.mean(ent):>14.2f}")
-print()
 w0, w1, w8 = CFG[0], CFG[1], CFG[-1]
-print(f"**w=0 (조건 무시)에서 {w1[0]:.0f}로 갈 때는 효과가 뚜렷하다** — "
-      f"분류 정확도 {w0[1]:.3f} → {w1[1]:.3f}.")
-print()
-print(f"**그런데 w를 더 키워도 아무 일도 일어나지 않는다.**")
-print(f"  정확도 {w1[1]:.3f} → {w8[1]:.3f}, "
-      f"다양성 {w1[2]:.3f} → {w8[2]:.3f}.")
-print("  **교과서적인 '충실도↑ 다양성↓' trade-off가 재현되지 않았다.**")
-print()
 
 # 왜 그런가 — 조건부와 무조건부가 얼마나 다른지 직접 잰다
 ctxs = list(M_MUS.keys())[:400]
 kl = []
+```
+
+**w=0 (조건 무시)에서 `{python} f'{w1[0]:.0f}'`로 갈 때는 효과가 뚜렷하다** — 분류 정확도 `{python} f'{w0[1]:.3f}'` → `{python} f'{w1[1]:.3f}'`.
+
+**그런데 w를 더 키워도 아무 일도 일어나지 않는다.**
+
+정확도 `{python} f'{w1[1]:.3f}'` → `{python} f'{w8[1]:.3f}'`, 다양성 `{python} f'{w1[2]:.3f}'` → `{python} f'{w8[2]:.3f}'`.
+
+**교과서적인 '충실도↑ 다양성↓' trade-off가 재현되지 않았다.**
+
+```{python}
+#| label: cfg-2
+#| code-fold: false
+
 for ctx in ctxs:
     p = M_MUS[ctx]/M_MUS[ctx].sum()
     q = M_UNC[ctx]/M_UNC[ctx].sum()
     kl.append(float((p*np.log(p/q)).sum()))
 agree = float(np.mean([M_MUS[c].argmax() == M_UNC[c].argmax() for c in ctxs]))
-print("진단 ① — 조건부와 무조건부가 한 step에서 얼마나 다른가")
-print(f"  KL(p(x|c) || p(x)) 평균 = {np.mean(kl):.3f} nats")
-print(f"  최빈 token이 일치하는 문맥 비율 = {agree:.3f}")
-print()
-print("  **차이가 아주 작다.** 그러면 (w-1)을 곱해도 밀어낼 것이 별로 없다 — 0에 무엇을 곱해도 0이다.")
-print()
-print("진단 ② — guidance가 실제로 분포를 뾰족하게 만드는가")
+```
+
+진단 ① — 조건부와 무조건부가 한 step에서 얼마나 다른가
+KL(p(x|c) || p(x)) 평균 = `{python} f'{np.mean(kl):.3f}'` nats
+최빈 token이 일치하는 문맥 비율 = `{python} f'{agree:.3f}'`
+
+**차이가 아주 작다.** 그러면 (w-1)을 곱해도 밀어낼 것이 별로 없다 — 0에 무엇을 곱해도 0이다.
+
+진단 ② — guidance가 실제로 분포를 뾰족하게 만드는가
+
+```{python}
+#| label: cfg-3
+#| code-fold: false
+
 print(f"{'w':>6} {'다음 token 분포의 평균 entropy (bits)':>36}")
 print("-" * 46)
 for w in [1.0, 2.0, 5.0, 8.0]:
@@ -454,33 +474,28 @@ for w in [1.0, 2.0, 5.0, 8.0]:
         pp = pr[pr > 1e-12]
         es.append(float(-(pp*np.log2(pp)).sum()))
     print(f"{w:>6.1f} {np.mean(es):>36.3f}")
-print()
-print("**두 진단이 같은 곳을 가리킨다.**")
-for s in ["한 step의 조건부-무조건부 차이가 KL "
-          f"{np.mean(kl):.3f} nats로 아주 작다",
-          "그래서 w를 8까지 올려도 분포가 거의 뾰족해지지 않는다 "
-          "→ **다양성이 안 줄어든다**",
-          "한편 분류 지표는 token 250개의 증거가 쌓여 w=1에서 이미 saturation된다 "
-          "→ **충실도 향상도 안 보인다**",
-          "**즉 trade-off의 양쪽 끝이 모두 이 설정에서는 안 보인다.**",
-          "  CFG가 작동하지 않는다는 뜻이 아니라, **이 실험으로는 못 잰다**는 뜻이다"]:
-    print(f"  · {s}")
-print()
-print("**어디서 재야 보이는가**")
-for s in ["조건이 **모호할 때** — '잔잔한 piano' 같은 텍스트는 "
-          "무조건부와 훨씬 가깝고, guidance가 실제로 분포를 바꾼다",
-          "diffusion 모델에서는 연속 score field를 밀어내므로 성질이 또 다르다 (6.5)",
-          "지표도 saturation되지 않는 것을 써야 한다 — "
-          "분류 정확도 대신 **CLAP 정합성 점수**처럼 연속적인 것"]:
-    print(f"  · {s}")
-print()
-print("**실제 오디오 생성에서 보고되는 guidance의 대가**")
-for s in ["과하면 **똑같은 것만 만든다** — prompt가 같으면 결과도 거의 같다",
-          "음악에서는 **화성이 단조로워지고** 리듬이 기계적이 된다",
-          "텍스트-오디오 정합성 점수는 오르는데 사람 평가는 떨어지는 구간이 있다",
-          "**7.12에서 본 것과 같은 구조다** — 지표를 밀면 지표만 오른다"]:
-    print(f"  · {s}")
 ```
+
+**두 진단이 같은 곳을 가리킨다.**
+
+- 한 step의 조건부-무조건부 차이가 KL `{python} f'{np.mean(kl):.3f}'` nats로 아주 작다
+- 그래서 w를 8까지 올려도 분포가 거의 뾰족해지지 않는다 → **다양성이 안 줄어든다**
+- 한편 분류 지표는 token 250개의 증거가 쌓여 w=1에서 이미 saturation된다 → **충실도 향상도 안 보인다**
+- **즉 trade-off의 양쪽 끝이 모두 이 설정에서는 안 보인다.**
+- CFG가 작동하지 않는다는 뜻이 아니라, **이 실험으로는 못 잰다**는 뜻이다
+
+**어디서 재야 보이는가**
+
+- 조건이 **모호할 때** — '잔잔한 piano' 같은 텍스트는 무조건부와 훨씬 가깝고, guidance가 실제로 분포를 바꾼다
+- diffusion 모델에서는 연속 score field를 밀어내므로 성질이 또 다르다 (6.5)
+- 지표도 saturation되지 않는 것을 써야 한다 — 분류 정확도 대신 **CLAP 정합성 점수**처럼 연속적인 것
+
+**실제 오디오 생성에서 보고되는 guidance의 대가**
+
+- 과하면 **똑같은 것만 만든다** — prompt가 같으면 결과도 거의 같다
+- 음악에서는 **화성이 단조로워지고** 리듬이 기계적이 된다
+- 텍스트-오디오 정합성 점수는 오르는데 사람 평가는 떨어지는 구간이 있다
+- **7.12에서 본 것과 같은 구조다** — 지표를 밀면 지표만 오른다
 
 ---
 
@@ -535,14 +550,18 @@ for nm, E in CASES:
     v = frechet(REF, E)
     FAD.append((nm, v))
     print(f"{nm:<32} {v:>10.2f}")
-print()
 same, diff = FAD[0][1], FAD[1][1]
-print(f"**같은 분포끼리는 {same:.1f}, 다른 종류의 소리는 {diff:.0f}** — "
-      f"{diff/same:.0f}배 차이다.")
-print("  열화(noise·low-pass)도 크기 순서대로 잡아낸다. 지표로서 작동한다.")
-print()
-print("**그런데 함정이 있다.** 같은 분포끼리 재도 0이 나오지 않는다.")
-print()
+```
+
+**같은 분포끼리는 `{python} f'{same:.1f}'`, 다른 종류의 소리는 `{python} f'{diff:.0f}'`** — `{python} f'{diff / same:.0f}'`배 차이다.  
+열화(noise·low-pass)도 크기 순서대로 잡아낸다. 지표로서 작동한다.
+
+**그런데 함정이 있다.** 같은 분포끼리 재도 0이 나오지 않는다.
+
+```{python}
+#| label: fad-2
+#| code-fold: false
+
 print(f"{'clip 수':>8} {'같은 분포끼리의 FAD':>22}")
 print("-" * 34)
 SAMPLE = []
@@ -550,52 +569,48 @@ for k in [3, 5, 10, 15, 25]:
     v = frechet(embed(MUSIC[:k]), embed(MUSIC[25:25 + k]))
     SAMPLE.append((k, v))
     print(f"{k:>8} {v:>22.2f}")
-print()
 s3, s25 = SAMPLE[0][1], SAMPLE[-1][1]
-print(f"**clip 3개면 {s3:.0f}, 25개면 {s25:.1f}다.** 같은 분포인데도.")
-print("  (표본이 적을 때는 값 자체도 크게 흔들린다 — 위 표가 단조롭지 않다)")
-print("  covariance 추정이 표본 수에 bias되어 있기 때문이다 —")
-print("  차원이 높을수록 심해진다 (여기서는 embedding이 "
-      f"{REF.shape[1]}차원).")
-print("  사람 3명의 키를 재고 '이 나라 사람들의 키 분포'를 말하는 것과 같다.")
-print()
-print("**그래서 FAD를 읽을 때 지켜야 할 것**")
-for s in ["**표본 수를 맞추지 않은 FAD 비교는 무의미하다** — 위 표가 그 이유다",
-          "논문마다 embedding 모델이 다르면 값을 비교할 수 없다 (VGGish vs PANN vs CLAP)",
-          "절대값이 아니라 **같은 설정에서의 상대 비교**로만 쓴다",
-          "지각과 완전히 일치하지도 않는다 — 8.8에서 SNR이 그랬던 것처럼",
-          "**사람 평가(MOS)와 텍스트 정합성을 함께 본다** (8.7, 7.13)"]:
-    print(f"  · {s}")
-print()
-print(f"{'지표':<22} {'무엇을 재나':<28} {'한계'}")
-print("-" * 74)
-for a, b, c in [
-    ("FAD", "생성 분포 vs 실제 분포", "표본 수·embedding에 민감"),
-    ("CLAP 점수", "텍스트-오디오 정합성", "CLAP이 못 보는 축은 못 잰다"),
-    ("MOS / MUSHRA", "사람의 절대·상대 평가", "비싸고 느리다 (8.7)"),
-    ("음악성 지표", "조성·박자 일관성", "장르마다 기준이 다르다"),
-    ("**다양성**", "같은 prompt의 결과 분산", "**거의 보고되지 않는다**"),
-]:
-    print(f"{a:<22} {b:<28} {c}")
-print()
-print("**마지막 줄이 중요하다.** FAD는 분포를 재므로 다양성 collapse에 반응해야")
-print("  하지만, 실제로는 prompt별 다양성을 따로 보고하는 논문이 드물다.")
-print("  G8.9.3의 guidance 대가가 그래서 잘 안 보인다.")
 ```
+
+**clip 3개면 `{python} f'{s3:.0f}'`, 25개면 `{python} f'{s25:.1f}'`다.** 같은 분포인데도.  
+(표본이 적을 때는 값 자체도 크게 흔들린다 — 위 표가 단조롭지 않다)  
+covariance 추정이 표본 수에 bias되어 있기 때문이다 —
+차원이 높을수록 심해진다 (여기서는 embedding이 `{python} f'{REF.shape[1]}'`차원).  
+사람 3명의 키를 재고 '이 나라 사람들의 키 분포'를 말하는 것과 같다.
+
+**그래서 FAD를 읽을 때 지켜야 할 것**
+
+- **표본 수를 맞추지 않은 FAD 비교는 무의미하다** — 위 표가 그 이유다
+- 논문마다 embedding 모델이 다르면 값을 비교할 수 없다 (VGGish vs PANN vs CLAP)
+- 절대값이 아니라 **같은 설정에서의 상대 비교**로만 쓴다
+- 지각과 완전히 일치하지도 않는다 — 8.8에서 SNR이 그랬던 것처럼
+- **사람 평가(MOS)와 텍스트 정합성을 함께 본다** (8.7, 7.13)
+
+| 지표 | 무엇을 재나 | 한계 |
+|---|---|---|
+| FAD | 생성 분포 vs 실제 분포 | 표본 수·embedding에 민감 |
+| CLAP 점수 | 텍스트-오디오 정합성 | CLAP이 못 보는 축은 못 잰다 |
+| MOS / MUSHRA | 사람의 절대·상대 평가 | 비싸고 느리다 (8.7) |
+| 음악성 지표 | 조성·박자 일관성 | 장르마다 기준이 다르다 |
+| **다양성** | 같은 prompt의 결과 분산 | **거의 보고되지 않는다** |
+
+**마지막 줄이 중요하다.** FAD는 분포를 재므로 다양성 collapse에 반응해야
+하지만, 실제로는 prompt별 다양성을 따로 보고하는 논문이 드물다.  
+G8.9.3의 guidance 대가가 그래서 잘 안 보인다.
 
 ---
 
 ## 실시간 음성 대화
 
+음성 대화의 latency 예산 — 사람이 어색함을 느끼기 전까지
+
+자연스러운 대화의 응답 간격: 약 200 ms
+500 ms를 넘으면 '느리다'고 느끼기 시작한다
+
 ```{python}
 #| label: duplex
 #| code-fold: false
 
-print("음성 대화의 latency 예산 — 사람이 어색함을 느끼기 전까지")
-print()
-print("  자연스러운 대화의 응답 간격: 약 200 ms")
-print("  500 ms를 넘으면 '느리다'고 느끼기 시작한다")
-print()
 print(f"{'구성':<26} {'latency (ms)':>12} {'비고'}")
 print("-" * 64)
 casc = [("VAD로 발화 끝 판정", 200, "**끝났는지 기다려야 한다**"),
@@ -608,31 +623,37 @@ for a, ms, c in casc:
     tot += ms
     print(f"{a:<26} {ms:>12} {c}")
 print(f"{'합계 (cascade)':<26} {tot:>12}")
-print()
-print(f"**{tot} ms다.** 목표의 {tot/200:.0f}배다. 통역사를 두 명 거쳐 대화하는 셈이다.")
-print()
-print("**end-to-end 음성-음성 모델이 줄이는 것**")
+```
+
+**`{python} f'{tot}'` ms다.** 목표의 `{python} f'{tot / 200:.0f}'`배다. 통역사를 두 명 거쳐 대화하는 셈이다.
+
+**end-to-end 음성-음성 모델이 줄이는 것**
+
+```{python}
+#| label: duplex-2
+#| code-fold: false
+
 for a, b in [("텍스트 왕복 제거", "ASR·TTS의 latency와 오류가 사라진다"),
              ("발화 끝을 기다리지 않음", "**barge-in(끼어들기)**이 가능해진다"),
              ("paralinguistic(준언어) 정보 보존", "억양·웃음·망설임이 텍스트에서 지워지지 않는다"),
              ("**full-duplex(전이중)**", "듣기와 말하기를 동시에 — 사람의 대화 구조 (무전기가 아니라 전화)")]:
     print(f"  · **{a}** — {b}")
-print()
-print("**대신 잃는 것**")
-for s in ["텍스트 중간 표현이 없어 **무엇을 들었는지 검증하기 어렵다** (7.15)",
-          "도구 호출·검색 같은 텍스트 기반 기능과 결합이 까다롭다",
-          "학습 데이터가 훨씬 적다 — 대화 음성은 transcription보다 구하기 어렵다",
-          "안전 filter를 어디에 걸지가 새 문제가 된다"]:
-    print(f"  · {s}")
-print()
-print("**full-duplex 모델의 구조적 요구**")
-for s in ["입력 stream과 출력 stream을 **동시에** 다뤄야 한다",
-          "  → 시간축을 공유하는 두 token 열을 interleave(번갈아 끼워 넣기)하는 방식이 쓰인다",
-          "'지금 말할 차례인가'를 모델이 스스로 판단해야 한다 (turn-taking)",
-          "침묵도 **생성해야 하는 token**이다 — 아무것도 안 하는 것이 기본 상태",
-          "그래서 8.6의 VAD가 모델 안으로 들어온 셈이다"]:
-    print(f"  · {s}")
 ```
+
+**대신 잃는 것**
+
+- 텍스트 중간 표현이 없어 **무엇을 들었는지 검증하기 어렵다** (7.15)
+- 도구 호출·검색 같은 텍스트 기반 기능과 결합이 까다롭다
+- 학습 데이터가 훨씬 적다 — 대화 음성은 transcription보다 구하기 어렵다
+- 안전 filter를 어디에 걸지가 새 문제가 된다
+
+**full-duplex 모델의 구조적 요구**
+
+- 입력 stream과 출력 stream을 **동시에** 다뤄야 한다
+- → 시간축을 공유하는 두 token 열을 interleave(번갈아 끼워 넣기)하는 방식이 쓰인다
+- '지금 말할 차례인가'를 모델이 스스로 판단해야 한다 (turn-taking)
+- 침묵도 **생성해야 하는 token**이다 — 아무것도 안 하는 것이 기본 상태
+- 그래서 8.6의 VAD가 모델 안으로 들어온 셈이다
 
 ---
 
