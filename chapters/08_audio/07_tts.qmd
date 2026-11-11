@@ -154,15 +154,13 @@ def build(n, seed):
 
 
 TR, TE = build(120, 0), build(30, 1)
-print(f"문장 하나 ({len(TEXT)} phoneme)를 prosody만 바꿔 "
-      f"학습 {len(TR)}회 / test {len(TE)}회 발음")
-print(f"  F0 {min(u[3] for u in TR):.0f}~{max(u[3] for u in TR):.0f} Hz, "
-      f"속도 0.75~1.35배, mel {NMEL}대역")
-print(f"  발화 길이 {min(u[0].shape[1] for u in TR)}~"
-      f"{max(u[0].shape[1] for u in TR)} frame")
-print()
-print("**텍스트는 전부 같다. 음성은 전부 다르다.** 이것이 TTS의 조건이다.")
 ```
+
+문장 하나 (`{python} f'{len(TEXT)}'` phoneme)를 prosody만 바꿔 학습 `{python} f'{len(TR)}'`회 / test `{python} f'{len(TE)}'`회 발음
+F0 `{python} f'{min((u[3] for u in TR)):.0f}'`\~`{python} f'{max((u[3] for u in TR)):.0f}'` Hz, 속도 0.75\~1.35배, mel `{python} f'{NMEL}'`대역
+발화 길이 `{python} f'{min((u[0].shape[1] for u in TR))}'`\~`{python} f'{max((u[0].shape[1] for u in TR))}'` frame
+
+**텍스트는 전부 같다. 음성은 전부 다르다.** 이것이 TTS의 조건이다.
 
 ---
 
@@ -195,32 +193,39 @@ for v in groups.values():
 FLOOR = within/n_tot
 allf = np.concatenate([M.T for M, *_ in TR])
 TOTAL = float(np.mean((allf - allf.mean(0))**2))
+```
 
-print(f"(phoneme, 위치) group {len(groups)}개로 나눠 group 내 분산을 잰다")
-print()
+(phoneme, 위치) group `{python} f'{len(groups)}'`개로 나눠 group 내 분산을 잰다
+
+```{python}
+#| label: floor-2
+#| code-fold: false
+
 print(f"{'':<32} {'값':>10}")
 print("-" * 46)
 print(f"{'전체 분산':<32} {TOTAL:>10.3f}")
 print(f"{'group 내 분산 (= MSE 하한)':<32} {FLOOR:>10.3f}")
 print(f"{'phoneme·위치로 설명되는 비율':<32} {1 - FLOOR/TOTAL:>10.1%}")
-print()
-print(f"**{FLOOR/TOTAL:.1%}는 텍스트가 설명하지 못한다.**")
-print("  같은 phoneme을 같은 위치에서 발음해도 그만큼 달라진다는 뜻이다 —")
-print("  F0와 속도만 바꿨을 뿐인데도.")
-print()
-print("**MSE로 학습하는 모델은 이 하한 아래로 못 간다.**")
-print("  그리고 하한에 도달한다는 것은 **평균을 낸다**는 뜻이다.")
-print("  여러 정답의 평균은 어느 정답도 아니다 — 이것이 **over-smoothing**(과평활화)이다.")
-print("  여러 사람의 얼굴 사진을 겹쳐 평균 내면 아무도 아닌 흐릿한 얼굴이 나오는 것과 같다.")
-print()
-print("실제 음성에서는 설명 못 하는 비율이 훨씬 크다:")
-for s in ["화자 (성별·나이·성도 길이) — 여기서는 아예 고정했다",
-          "감정과 발화 스타일",
-          "강조, 휴지, 말버릇",
-          "녹음 환경",
-          "**그래서 조건을 더 주거나, 생성 모델로 가거나 둘 중 하나다**"]:
-    print(f"  · {s}")
 ```
+
+**`{python} f'{FLOOR / TOTAL:.1%}'`는 텍스트가 설명하지 못한다.**
+
+같은 phoneme을 같은 위치에서 발음해도 그만큼 달라진다는 뜻이다 —
+F0와 속도만 바꿨을 뿐인데도.
+
+**MSE로 학습하는 모델은 이 하한 아래로 못 간다.**
+
+그리고 하한에 도달한다는 것은 **평균을 낸다**는 뜻이다.  
+여러 정답의 평균은 어느 정답도 아니다 — 이것이 **over-smoothing**(과평활화)이다.  
+여러 사람의 얼굴 사진을 겹쳐 평균 내면 아무도 아닌 흐릿한 얼굴이 나오는 것과 같다.
+
+실제 음성에서는 설명 못 하는 비율이 훨씬 크다:
+
+- 화자 (성별·나이·성도 길이) — 여기서는 아예 고정했다
+- 감정과 발화 스타일
+- 강조, 휴지, 말버릇
+- 녹음 환경
+- **그래서 조건을 더 주거나, 생성 모델로 가거나 둘 중 하나다**
 
 ---
 
@@ -258,10 +263,14 @@ def train_reg(use_f0, seed=0):
     nn.train(m, X, Y, loss="mse", opt=nn.Optimizer("adam", lr=3e-3),
              steps=1200, batch_size=512, lr=3e-3, schedule="cosine", seed=1)
     return m
+```
 
+저주파 mel 대역 `{python} f'{int(LOW.sum())}'`개(<800 Hz)에서 harmonic 대비(contrast)를 함께 본다
 
-print(f"저주파 mel 대역 {int(LOW.sum())}개(<800 Hz)에서 harmonic 대비(contrast)를 함께 본다")
-print()
+```{python}
+#| label: variance-2
+#| code-fold: false
+
 print(f"{'입력':<24} {'test MSE':>11} {'하한 대비':>10} "
       f"{'저역 대비':>10} {'정답 대비':>10}")
 print("-" * 70)
@@ -279,34 +288,33 @@ for use_f0, nm in [(False, "phoneme + 위치"), (True, "phoneme + 위치 + **F0*
     RES[use_f0] = (mse, cp, ct)
     print(f"{nm:<24} {mse:>11.3f} {mse/FLOOR:>10.2f}x {cp:>10.3f} "
           f"{ct:>10.3f}")
-print()
 a, b = RES[False], RES[True]
-print(f"**F0를 주지 않으면 MSE가 하한의 {a[0]/FLOOR:.2f}배 — 거의 하한에 붙어 있다.**")
-print("  모델이 할 수 있는 최선을 하고 있고, 그 최선이 **평균 내기**다.")
-print()
-print(f"**F0를 주면 {b[0]/FLOOR:.2f}배로 내려간다 — 하한을 뚫는다.**")
-print("  하한이 '텍스트만 알 때'의 것이었기 때문이다. 조건이 늘면 하한도 내려간다.")
-print()
-print(f"**over-smoothing은 저역 대비에서 보인다** — "
-      f"{a[1]:.3f} → {b[1]:.3f} (정답 {a[2]:.3f}).")
-print(f"  F0 conditioning이 정답까지의 간극을 "
-      f"{(b[1]-a[1])/(a[2]-a[1]):.0%} 메웠다.")
-print("  저주파에서 harmonic이 뭉개지는 것이 '웅얼거리는' 합성음의 정체다.")
-print()
-print("**FastSpeech 2의 variance adaptor가 이 실험이다.**")
-print(f"{'예측하는 것':<16} {'왜 필요한가':<32} {'inference 시 제어'}")
-print("-" * 74)
-for p_, w_, c_ in [
-    ("duration", "phoneme을 몇 frame으로 늘릴지", "**말 속도**"),
-    ("pitch (F0)", "위에서 잰 그것", "**억양·감정**"),
-    ("에너지", "frame별 크기", "강조"),
-]:
-    print(f"{p_:<16} {w_:<32} {c_}")
-print()
-print("**학습 때는 정답 값을 쓰고(teacher forcing), inference 때는 예측값을 쓴다.**")
-print("  그래서 예측기의 오차가 그대로 음질에 반영된다 —")
-print("  특히 duration이 틀리면 리듬이 무너져 곧바로 들린다.")
 ```
+
+**F0를 주지 않으면 MSE가 하한의 `{python} f'{a[0] / FLOOR:.2f}'`배 — 거의 하한에 붙어 있다.**
+
+모델이 할 수 있는 최선을 하고 있고, 그 최선이 **평균 내기**다.
+
+**F0를 주면 `{python} f'{b[0] / FLOOR:.2f}'`배로 내려간다 — 하한을 뚫는다.**
+
+하한이 '텍스트만 알 때'의 것이었기 때문이다. 조건이 늘면 하한도 내려간다.
+
+**over-smoothing은 저역 대비에서 보인다** — `{python} f'{a[1]:.3f}'` → `{python} f'{b[1]:.3f}'` (정답 `{python} f'{a[2]:.3f}'`).  
+F0 conditioning이 정답까지의 간극을 `{python} f'{(b[1] - a[1]) / (a[2] - a[1]):.0%}'` 메웠다.  
+저주파에서 harmonic이 뭉개지는 것이 '웅얼거리는' 합성음의 정체다.
+
+**FastSpeech 2의 variance adaptor가 이 실험이다.**
+
+| 예측하는 것 | 왜 필요한가 | inference 시 제어 |
+|---|---|---|
+| duration | phoneme을 몇 frame으로 늘릴지 | **말 속도** |
+| pitch (F0) | 위에서 잰 그것 | **억양·감정** |
+| 에너지 | frame별 크기 | 강조 |
+
+**학습 때는 정답 값을 쓰고(teacher forcing), inference 때는 예측값을 쓴다.**
+
+그래서 예측기의 오차가 그대로 음질에 반영된다 —
+특히 duration이 틀리면 리듬이 무너져 곧바로 들린다.
 
 ```{python}
 #| label: fig-oversmooth
@@ -367,35 +375,35 @@ phoneme열과 mel frame의 대응을 어떻게 정하는가. TTS의 역사는 �
 | **non-autoregressive + length regulator** | **명시적 duration**을 예측해 늘린다 | FastSpeech 2 |
 | **MAS**(monotonic alignment search — 단조 alignment 탐색) | alignment를 latent 변수로 두고 dynamic programming | Glow-TTS, VITS |
 
+Tacotron 계열의 attention alignment 실패 — 왜 생기는가
+
+- attention은 원리적으로 **어디든 볼 수 있다**. 그런데 TTS alignment는 **단조**다 (텍스트를 앞에서 뒤로 읽어야 한다)
+- ([8.4](04_ctc_rnnt.qmd)에서 attention ASR이 겪은 것과 같은 문제)
+- autoregressive라 한 번 어긋나면 **그 뒤가 전부 어긋난다**
+- 실제 증상: 단어 건너뜀, 같은 구절 반복, 문장 중간에서 멈춤 — 낭독하다 줄을 놓친 사람처럼
+- 긴 문장·희귀 문자·반복 구절에서 특히 자주 난다
+
+완화 기법들 (전부 '단조성을 강제하자'는 같은 아이디어)
+
+| 기법 | 무엇을 하는가 |
+|---|---|
+| location-sensitive | 이전 attention 위치를 입력으로 준다 |
+| forward attention | 뒤로 가는 transition을 금지한다 |
+| GMM attention | 단조 증가하는 가우시안 중심 |
+| guided attention loss | 대각선에서 벗어나면 벌점 |
+| **alignment를 아예 없앤다** | duration을 예측한다 → FastSpeech |
+
+**length regulator(길이 조절기)는 alignment를 문제에서 빼 버린다.**
+
+phoneme별 duration d를 예측하고, encoder 출력을 d번 복제한다.  
+frame 수가 미리 정해지므로 **전부 병렬로** 만들 수 있다.
+
 ```{python}
 #| label: alignment
 #| code-fold: false
 
 import numpy as np
 
-print("Tacotron 계열의 attention alignment 실패 — 왜 생기는가")
-print()
-for s in ["attention은 원리적으로 **어디든 볼 수 있다**. 그런데 TTS alignment는 **단조**다 (텍스트를 앞에서 뒤로 읽어야 한다)",
-          "  ([8.4](04_ctc_rnnt.qmd)에서 attention ASR이 겪은 것과 같은 문제)",
-          "autoregressive라 한 번 어긋나면 **그 뒤가 전부 어긋난다**",
-          "실제 증상: 단어 건너뜀, 같은 구절 반복, 문장 중간에서 멈춤 — 낭독하다 줄을 놓친 사람처럼",
-          "긴 문장·희귀 문자·반복 구절에서 특히 자주 난다"]:
-    print(f"  · {s}")
-print()
-print("완화 기법들 (전부 '단조성을 강제하자'는 같은 아이디어)")
-print(f"{'기법':<24} {'무엇을 하는가'}")
-print("-" * 62)
-for a_, b_ in [("location-sensitive", "이전 attention 위치를 입력으로 준다"),
-               ("forward attention", "뒤로 가는 transition을 금지한다"),
-               ("GMM attention", "단조 증가하는 가우시안 중심"),
-               ("guided attention loss", "대각선에서 벗어나면 벌점"),
-               ("**alignment를 아예 없앤다**", "duration을 예측한다 → FastSpeech")]:
-    print(f"{a_:<24} {b_}")
-print()
-print("**length regulator(길이 조절기)는 alignment를 문제에서 빼 버린다.**")
-print("  phoneme별 duration d를 예측하고, encoder 출력을 d번 복제한다.")
-print("  frame 수가 미리 정해지므로 **전부 병렬로** 만들 수 있다.")
-print()
 print(f"{'':<4}{'축':<20} {'autoregressive (Tacotron 2)':<28} {'non-autoregressive (FastSpeech 2)'}")
 print("-" * 86)
 for a_, b_, c_ in [
@@ -406,13 +414,15 @@ for a_, b_, c_ in [
     ("duration label", "필요 없다", "**필요하다** — forced alignment(8.3)나 MAS로"),
 ]:
     print(f"{'':<4}{a_:<20} {b_:<28} {c_}")
-print()
-print("**마지막 줄이 8.3과 이어진다.**")
-print("  FastSpeech는 duration label이 필요하고, 그것을 만드는 것이 forced alignment다.")
-print("  초기 FastSpeech는 **Tacotron의 attention에서** duration을 뽑아 썼다 (distillation).")
-print("  MAS는 그 의존을 없앤다 — alignment를 latent 변수로 두고 학습 중에 dynamic programming으로 찾는다.")
-print("  **[8.3](03_classical_speech.qmd)의 Viterbi alignment와 같은 algorithm이다.**")
 ```
+
+**마지막 줄이 8.3과 이어진다.**
+
+FastSpeech는 duration label이 필요하고, 그것을 만드는 것이 forced alignment다.  
+초기 FastSpeech는 **Tacotron의 attention에서** duration을 뽑아 썼다 (distillation).  
+MAS는 그 의존을 없앤다 — alignment를 latent 변수로 두고 학습 중에 dynamic programming으로 찾는다.
+
+**[8.3](03_classical_speech.qmd)의 Viterbi alignment와 같은 algorithm이다.**
 
 ---
 
@@ -434,8 +444,14 @@ import numpy as np
 
 x = TE[0][4]
 S = np.abs(audio.stft(x, N_FFT, HOP))
-print(f"선형 bin {S.shape[0]}개 → mel N개 → pseudo-inverse로 선형 복원")
-print()
+```
+
+선형 bin `{python} f'{S.shape[0]}'`개 → mel N개 → pseudo-inverse로 선형 복원
+
+```{python}
+#| label: melinv-2
+#| code-fold: false
+
 print(f"{'mel 대역 수':>10} {'filterbank rank':>15} {'복원 상대 오차':>16}")
 print("-" * 44)
 MELINV = []
@@ -445,20 +461,21 @@ for nm in [20, 40, 80, 128, 200]:
     e = float(np.linalg.norm(rec - S)/np.linalg.norm(S))
     MELINV.append((nm, int(np.linalg.matrix_rank(fb)), e))
     print(f"{nm:>10} {int(np.linalg.matrix_rank(fb)):>15} {e:>16.4f}")
-print()
 m80 = [r for r in MELINV if r[0] == 80][0]
-print(f"**표준값인 80대역에서 상대 오차 {m80[2]:.1%}다.**")
-print(f"  {S.shape[0]}차원을 {m80[0]}차원으로 눌렀으니 되돌아올 리가 없다.")
-print("  대역을 늘리면 줄지만, 200대역이어도 완전히는 안 된다 —")
-print("  triangular filter가 겹쳐 있어 rank가 대역 수보다 작기 때문이다.")
-print()
-print("**그래서 vocoder는 '역변환'이 아니라 '생성'이다.** 흐린 사진을 선명하게 만드는 것은 복원이 아니라 그럴듯한 세부를 지어내는 일이다.")
-for s in ["잃어버린 세부를 **그럴듯하게 채워 넣어야** 한다",
-          "그 채워 넣기가 학습으로 배우는 부분이다 (8.8)",
-          "mel 대역을 늘리면 vocoder가 쉬워지지만 acoustic model이 어려워진다",
-          "  80은 그 절충으로 자리 잡은 값이다"]:
-    print(f"  · {s}")
 ```
+
+**표준값인 80대역에서 상대 오차 `{python} f'{m80[2]:.1%}'`다.**
+
+`{python} f'{S.shape[0]}'`차원을 `{python} f'{m80[0]}'`차원으로 눌렀으니 되돌아올 리가 없다.  
+대역을 늘리면 줄지만, 200대역이어도 완전히는 안 된다 —
+triangular filter가 겹쳐 있어 rank가 대역 수보다 작기 때문이다.
+
+**그래서 vocoder는 '역변환'이 아니라 '생성'이다.** 흐린 사진을 선명하게 만드는 것은 복원이 아니라 그럴듯한 세부를 지어내는 일이다.
+
+- 잃어버린 세부를 **그럴듯하게 채워 넣어야** 한다
+- 그 채워 넣기가 학습으로 배우는 부분이다 (8.8)
+- mel 대역을 늘리면 vocoder가 쉬워지지만 acoustic model이 어려워진다
+- 80은 그 절충으로 자리 잡은 값이다
 
 ---
 
@@ -511,10 +528,15 @@ tr = istft(Sx)
 L0 = min(len(tr), len(x))
 true_err = float(np.linalg.norm(tr[E:L0-E] - x[E:L0-E]) /
                  np.linalg.norm(x[E:L0-E]))
-print(f"먼저 확인 — **참 위상**을 알면 waveform이 완벽히 돌아온다 "
-      f"(상대 오차 {true_err:.6f}).")
-print("  즉 잃은 것은 위상뿐이고, 문제는 그것을 되찾는 것이다.")
-print()
+```
+
+먼저 확인 — **참 위상**을 알면 waveform이 완벽히 돌아온다 (상대 오차 `{python} f'{true_err:.6f}'`).  
+즉 잃은 것은 위상뿐이고, 문제는 그것을 되찾는 것이다.
+
+```{python}
+#| label: griffinlim-2
+#| code-fold: false
+
 print(f"{'GL 반복':>8} {'spectrum 수렴 오차':>20} {'waveform 상대 오차':>18}")
 print("-" * 48)
 GL = []
@@ -528,38 +550,36 @@ for ni in [0, 1, 5, 20, 60, 150]:
     wf = float(np.linalg.norm(y[E:L-E] - x[E:L-E])/np.linalg.norm(x[E:L-E]))
     GL.append((ni, sc, wf))
     print(f"{ni:>8} {sc:>20.4f} {wf:>18.4f}")
-print()
 g0, gl = GL[0], GL[-1]
-print(f"**크기는 맞춰 간다** — spectrum 수렴 오차 {g0[1]:.3f} → {gl[1]:.3f}.")
-print(f"  그런데 **150번을 돌려도 {gl[1]:.3f}**다. 0으로 가지 않는다.")
-print()
-print(f"**그리고 waveform은 전혀 맞지 않는다** — 상대 오차가 {gl[2]:.2f}로 "
-      f"내내 1을 넘는다.")
-print("  1을 넘는다는 것은 '무음을 내는 것보다 원본과 멀다'는 뜻이다.")
-print()
-print("**두 사실이 모순이 아니다.**")
-for s in ["Griffin-Lim은 **magnitude spectrogram을 맞추는** 문제를 푼다",
-          "위상이 다르면 크기가 같아도 waveform은 완전히 다르다 "
-          "([8.1](01_fourier_stft.qmd)에서 잰 그대로)",
-          "귀는 위상에 둔감하므로 **어느 정도는 들을 만하다**",
-          "그러나 완전히 일관된 위상이 아니라서 특유의 **금속성 잔향**이 남는다",
-          f"그리고 수렴이 느리다 — 20회에서 {GL[3][1]:.3f}, "
-          f"150회를 더 돌려도 {gl[1]:.3f}다"]:
-    print(f"  · {s}")
-print()
-print("**왜 0으로 수렴하지 않는가**")
-for s in ["임의의 크기 행렬이 **어떤 신호의 STFT라는 보장이 없다**",
-          "  중첩된 frame들이 서로 모순되는 크기를 요구할 수 있다",
-          "그런 '일관되지 않은' 크기에는 정확한 해가 아예 없다",
-          "GL은 그 모순을 최소화하는 지점에 멈춘다 (alternating projection — 두 조건을 번갈아 만족시키기)",
-          "**mel에서 복원한 크기는 더 심하게 비일관적이다** (G8.7.3의 오차 위에)"]:
-    print(f"  · {s}")
-print()
-print("**이것이 신경망 vocoder가 필요한 이유다.**")
-print("  Griffin-Lim: 크기만 맞추는 **최적화**. 위상은 아무렇게나 시작한다.")
-print("  neural vocoder: mel → waveform 대응을 **학습**한다. 위상을 만들어 낸다.")
-print("  다음 장의 주제다.")
 ```
+
+**크기는 맞춰 간다** — spectrum 수렴 오차 `{python} f'{g0[1]:.3f}'` → `{python} f'{gl[1]:.3f}'`.  
+그런데 **150번을 돌려도 `{python} f'{gl[1]:.3f}'`**다. 0으로 가지 않는다.
+
+**그리고 waveform은 전혀 맞지 않는다** — 상대 오차가 `{python} f'{gl[2]:.2f}'`로 내내 1을 넘는다.  
+1을 넘는다는 것은 '무음을 내는 것보다 원본과 멀다'는 뜻이다.
+
+**두 사실이 모순이 아니다.**
+
+- Griffin-Lim은 **magnitude spectrogram을 맞추는** 문제를 푼다
+- 위상이 다르면 크기가 같아도 waveform은 완전히 다르다 ([8.1](01_fourier_stft.qmd)에서 잰 그대로)
+- 귀는 위상에 둔감하므로 **어느 정도는 들을 만하다**
+- 그러나 완전히 일관된 위상이 아니라서 특유의 **금속성 잔향**이 남는다
+- 그리고 수렴이 느리다 — 20회에서 `{python} f'{GL[3][1]:.3f}'`, 150회를 더 돌려도 `{python} f'{gl[1]:.3f}'`다
+
+**왜 0으로 수렴하지 않는가**
+
+- 임의의 크기 행렬이 **어떤 신호의 STFT라는 보장이 없다**
+- 중첩된 frame들이 서로 모순되는 크기를 요구할 수 있다
+- 그런 '일관되지 않은' 크기에는 정확한 해가 아예 없다
+- GL은 그 모순을 최소화하는 지점에 멈춘다 (alternating projection — 두 조건을 번갈아 만족시키기)
+- **mel에서 복원한 크기는 더 심하게 비일관적이다** (G8.7.3의 오차 위에)
+
+**이것이 신경망 vocoder가 필요한 이유다.**
+
+Griffin-Lim: 크기만 맞추는 **최적화**. 위상은 아무렇게나 시작한다.  
+neural vocoder: mel → waveform 대응을 **학습**한다. 위상을 만들어 낸다.  
+다음 장의 주제다.
 
 ```{python}
 #| label: fig-vocoder
