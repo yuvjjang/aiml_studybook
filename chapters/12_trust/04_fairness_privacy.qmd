@@ -64,35 +64,36 @@ def rates(s, y, thr):
     fn = float((~p & (y == 1)).sum()); tn = float((~p & (y == 0)).sum())
     return dict(sel=float(p.mean()), tpr=tp/max(tp+fn, 1), fpr=fp/max(fp+tn, 1),
                 ppv=tp/max(tp+fp, 1))
+```
 
+**bias(편향)는 어디서 들어오는가** — 모델이 아니라 pipeline 전체다
 
-print("**bias(편향)는 어디서 들어오는가** — 모델이 아니라 pipeline 전체다")
-print()
-print(f"{'출처':<14} {'무엇':<34} {'이 실험에서'}")
-print("-" * 78)
-for a, b, c in [
-    ("역사적", "과거 데이터가 과거의 차별을 담음", "—"),
-    ("sampling", "집단마다 표본 수가 다름", "**B가 25%**"),
-    ("측정", "같은 개념을 집단마다 다르게 잼", "**B의 feature 잡음 2.6배**"),
-    ("집계", "한 모델로 이질적 집단을 다룸", "**단일 모델**"),
-    ("배포", "예측이 현실을 바꿔 feedback", "—"),
-]:
-    print(f"{a:<14} {b:<34} {c}")
-print()
-print("이 실험은 sampling·측정·집계 bias만 심었다. 그것만으로도 충분하다.")
-print()
+| 출처 | 무엇 | 이 실험에서 |
+|---|---|---|
+| 역사적 | 과거 데이터가 과거의 차별을 담음 | — |
+| sampling | 집단마다 표본 수가 다름 | **B가 25%** |
+| 측정 | 같은 개념을 집단마다 다르게 잼 | **B의 feature 잡음 2.6배** |
+| 집계 | 한 모델로 이질적 집단을 다룸 | **단일 모델** |
+| 배포 | 예측이 현실을 바꿔 feedback | — |
+
+이 실험은 sampling·측정·집계 bias만 심었다. 그것만으로도 충분하다.
+
+```{python}
+#| label: setup-2
+#| code-fold: false
+
 print(f"{'집단':<8} {'표본 수':>9} {'base rate':>9} {'AUC':>9}")
 print("-" * 40)
 for m, nm in [(mA, "A (다수)"), (mB, "B (소수)")]:
     print(f"{nm:<8} {m.sum():>9} {yte[m].mean():>9.4f} "
           f"{auc(SC[m], yte[m]):>9.4f}")
-print()
-print(f"**같은 모델인데 AUC가 {auc(SC[mA], yte[mA]):.4f} vs "
-      f"{auc(SC[mB], yte[mB]):.4f}다.**")
-print("  차별 의도가 아니라 **측정 품질의 차이**가 만든 격차다. 한쪽 집단만 흐린 사진으로 찍힌 셈이다.")
-print("  집단 feature(X[:,2])를 모델에서 빼도 사라지지 않는다 —")
-print("  다른 feature들이 그것을 대신 담고 있다 ([12.0](00_interpretability.qmd)의 proxy feature).")
 ```
+
+**같은 모델인데 AUC가 `{python} f'{auc(SC[mA], yte[mA]):.4f}'` vs `{python} f'{auc(SC[mB], yte[mB]):.4f}'`다.**
+
+차별 의도가 아니라 **측정 품질의 차이**가 만든 격차다. 한쪽 집단만 흐린 사진으로 찍힌 셈이다.  
+집단 feature(X[:,2])를 모델에서 빼도 사라지지 않는다 —
+다른 feature들이 그것을 대신 담고 있다 ([12.0](00_interpretability.qmd)의 proxy feature).
 
 ```{python}
 #| label: fig-roc
@@ -204,10 +205,15 @@ for nm, ta, tb in STRAT:
           " ".join(f"{v:>9.4f}" for v in
                    [ra["sel"], rb["sel"], ra["tpr"], rb["tpr"],
                     ra["fpr"], rb["fpr"], ra["ppv"], rb["ppv"], acc]))
-print()
-print("각 전략이 **맞춘 지표**와 **어긋난 지표**")
-print()
 KEY = {"sel": "선택률", "tpr": "TPR", "fpr": "FPR", "ppv": "PPV"}
+```
+
+각 전략이 **맞춘 지표**와 **어긋난 지표**
+
+```{python}
+#| label: impossibility-2
+#| code-fold: false
+
 for nm, ta, tb, ra, rb, acc in ROWS:
     gaps = {k: abs(ra[k]-rb[k]) for k in KEY}
     ok = [KEY[k] for k, v in gaps.items() if v < 0.01]
@@ -215,31 +221,21 @@ for nm, ta, tb, ra, rb, acc in ROWS:
                  reverse=True)
     print(f"  {nm:<26} 맞춤: {', '.join(ok) if ok else '없음':<14} "
           f"어긋남: " + ", ".join(f"{k} {v:.3f}" for v, k in bad))
-print()
 dp_, eo_, pp_ = ROWS[1], ROWS[2], ROWS[3]
-print("**어떤 전략도 전부를 맞추지 못한다.** 정리가 말한 그대로다.")
-print(f"  demographic parity를 맞추면 PPV가 "
-      f"{abs(dp_[3]['ppv']-dp_[4]['ppv']):.3f} 어긋난다")
-print(f"  equal opportunity를 맞춰도 PPV는 여전히 "
-      f"{abs(eo_[3]['ppv']-eo_[4]['ppv']):.3f} 어긋난다")
-print(f"  PPV를 맞추면 **FPR이 {abs(pp_[3]['fpr']-pp_[4]['fpr']):.3f} "
-      f"어긋난다** — threshold가 {pp_[2]:.3f}까지 내려간다")
-print(f"    그 결과 B의 {pp_[4]['sel']:.1%}를 선택하게 된다. "
-      f"**정책으로서 무의미하다**")
-print()
-for s in ["**근본 원인은 base rate의 차이**다 — "
-          f"A {yte[mA].mean():.3f} vs B {yte[mB].mean():.3f}",
-          "base rate가 같으면 이 충돌은 사라진다. "
-          "그런데 base rate 차이는 대개 **역사적 불평등의 결과**다",
-          "**즉 이것은 알고리즘 문제가 아니라 사회 문제가 수식에 비친 것**이다",
-          "그러므로 '공정한 모델을 만들어 주세요' 는 완결된 요구가 아니다 — "
-          "**어떤 fairness인지 먼저 정해야 한다**",
-          "그 선택은 기술적 판단이 아니라 **정책적 판단**이고, "
-          "엔지니어가 혼자 내려서는 안 된다",
-          "엔지니어의 일은 **선택지와 대가를 정확히 제시하는 것**이다 — "
-          "위 표가 정확히 그것이다"]:
-    print(f"  · {s}")
 ```
+
+**어떤 전략도 전부를 맞추지 못한다.** 정리가 말한 그대로다.  
+demographic parity를 맞추면 PPV가 `{python} f'{abs(dp_[3]['ppv'] - dp_[4]['ppv']):.3f}'` 어긋난다
+equal opportunity를 맞춰도 PPV는 여전히 `{python} f'{abs(eo_[3]['ppv'] - eo_[4]['ppv']):.3f}'` 어긋난다
+PPV를 맞추면 **FPR이 `{python} f'{abs(pp_[3]['fpr'] - pp_[4]['fpr']):.3f}'` 어긋난다** — threshold가 `{python} f'{pp_[2]:.3f}'`까지 내려간다
+그 결과 B의 `{python} f'{pp_[4]['sel']:.1%}'`를 선택하게 된다. **정책으로서 무의미하다**
+
+- **근본 원인은 base rate의 차이**다 — A `{python} f'{yte[mA].mean():.3f}'` vs B `{python} f'{yte[mB].mean():.3f}'`
+- base rate가 같으면 이 충돌은 사라진다. 그런데 base rate 차이는 대개 **역사적 불평등의 결과**다
+- **즉 이것은 알고리즘 문제가 아니라 사회 문제가 수식에 비친 것**이다
+- 그러므로 '공정한 모델을 만들어 주세요' 는 완결된 요구가 아니다 — **어떤 fairness인지 먼저 정해야 한다**
+- 그 선택은 기술적 판단이 아니라 **정책적 판단**이고, 엔지니어가 혼자 내려서는 안 된다
+- 엔지니어의 일은 **선택지와 대가를 정확히 제시하는 것**이다 — 위 표가 정확히 그것이다
 
 ```{python}
 #| label: fig-impossible
@@ -265,45 +261,36 @@ viz.fig_defaults(fig, "하나를 0으로 만들면 다른 것이 커진다", hei
 fig
 ```
 
+**fairness-정확도 trade-off의 실제 크기**
+
 ```{python}
 #| label: mitigation
 #| code-fold: false
 
-print("**fairness-정확도 trade-off의 실제 크기**")
-print()
 base_acc = ROWS[0][5]
 print(f"{'전략':<26} {'정확도':>9} {'기준 대비':>10}")
 print("-" * 48)
 for nm, ta, tb, ra, rb, acc in ROWS:
     print(f"{nm:<26} {acc:>9.4f} {acc-base_acc:>+10.4f}")
-print()
 worst = min(ROWS, key=lambda r: r[5])
-print(f"**가장 비싼 전략도 정확도 loss가 {base_acc-worst[5]:.4f} "
-      f"({(base_acc-worst[5])/base_acc:.1%})다.**")
-for s in ["'fairness는 정확도를 크게 희생한다'는 통념이 "
-          "**항상 맞지는 않는다**",
-          "특히 **post-processing(후처리 — 학습이 끝난 모델의 출력만 손보기, 여기서는 집단별 threshold)**은 값싸다 — "
-          "모델을 다시 학습할 필요가 없다",
-          "다만 집단별 threshold는 **법적으로 문제가 될 수 있다** — "
-          "protected attribute(보호 속성 — 성별·인종처럼 차별 근거로 쓰면 안 되는 속성)를 명시적으로 쓰기 때문",
-          "그래서 학습 중 완화(constrained optimization, adversarial debiasing)나 "
-          "pre-processing(전처리 — reweighting, resampling)을 쓰기도 한다"]:
-    print(f"  · {s}")
-print()
-print(f"{'시점':<16} {'방법':<40} {'장점':<20} {'단점'}")
-print("-" * 100)
-for a, b, c, e in [
-    ("pre-processing", "reweighting·resampling·feature 변환", "모델 무관", "효과가 간접적"),
-    ("학습 중", "constrained optimization, adversarial debiasing", "직접적", "재학습 필요, 불안정"),
-    ("post-processing", "집단별 threshold", "**값싸고 정확**", "protected attribute를 명시적으로 씀"),
-    ("데이터", "소수 집단 데이터 확충", "**근본 해결**", "가장 느리고 비쌈"),
-]:
-    print(f"{a:<16} {b:<40} {c:<20} {e}")
-print()
-print("  마지막 줄이 진짜 해법이다 — 이 실험의 격차는 "
-      "**B의 측정 품질이 나빠서** 생겼다.")
-print("  threshold를 어떻게 옮겨도 없는 정보가 생기지는 않는다. 흐린 사진은 기준을 바꿔도 선명해지지 않는다.")
 ```
+
+**가장 비싼 전략도 정확도 loss가 `{python} f'{base_acc - worst[5]:.4f}'` (`{python} f'{(base_acc - worst[5]) / base_acc:.1%}'`)다.**
+
+- 'fairness는 정확도를 크게 희생한다'는 통념이 **항상 맞지는 않는다**
+- 특히 **post-processing(후처리 — 학습이 끝난 모델의 출력만 손보기, 여기서는 집단별 threshold)**은 값싸다 — 모델을 다시 학습할 필요가 없다
+- 다만 집단별 threshold는 **법적으로 문제가 될 수 있다** — protected attribute(보호 속성 — 성별·인종처럼 차별 근거로 쓰면 안 되는 속성)를 명시적으로 쓰기 때문
+- 그래서 학습 중 완화(constrained optimization, adversarial debiasing)나 pre-processing(전처리 — reweighting, resampling)을 쓰기도 한다
+
+| 시점 | 방법 | 장점 | 단점 |
+|---|---|---|---|
+| pre-processing | reweighting·resampling·feature 변환 | 모델 무관 | 효과가 간접적 |
+| 학습 중 | constrained optimization, adversarial debiasing | 직접적 | 재학습 필요, 불안정 |
+| post-processing | 집단별 threshold | **값싸고 정확** | protected attribute를 명시적으로 씀 |
+| 데이터 | 소수 집단 데이터 확충 | **근본 해결** | 가장 느리고 비쌈 |
+
+마지막 줄이 진짜 해법이다 — 이 실험의 격차는 **B의 측정 품질이 나빠서** 생겼다.  
+threshold를 어떻게 옮겨도 없는 정보가 생기지는 않는다. 흐린 사진은 기준을 바꿔도 선명해지지 않는다.
 
 ---
 
@@ -317,6 +304,8 @@ print("  threshold를 어떻게 옮겨도 없는 정보가 생기지는 않는�
 원리는 단순하다. **모델은 본 적 있는 데이터에서 loss가 더 낮다.**
 시험지를 미리 본 학생은 그 문제만 유난히 술술 푼다 — 그 "유난히"를 잡아내는 것이다.
 
+공격: 표본별 loss에 threshold를 걸어 '학습에 쓰였다'를 맞힌다
+
 ```{python}
 #| label: mia
 #| code-fold: false
@@ -326,8 +315,6 @@ from src import nn
 
 Xin, yin, _ = pop(3000, 20)
 Xout, yout, _ = pop(3000, 21)
-print("공격: 표본별 loss에 threshold를 걸어 '학습에 쓰였다'를 맞힌다")
-print()
 print(f"{'학습 표본':>9} {'step':>6} {'학습 정확도':>11} {'시험 정확도':>11} "
       f"{'overfitting 격차':>12} {'공격 AUC':>10}")
 print("-" * 64)
@@ -346,26 +333,18 @@ for n, steps in [(3000, 800), (3000, 4000), (800, 4000), (250, 4000)]:
     MIA.append((n, steps, tr_a, te_a, tr_a - te_a, a))
     print(f"{n:>9} {steps:>6} {tr_a:>11.4f} {te_a:>11.4f} {tr_a-te_a:>12.4f} "
           f"{a:>10.4f}")
-print()
 lo_, hi_ = MIA[0], MIA[2]
-print(f"**공격 성공률이 overfitting과 함께 오른다** — "
-      f"AUC {lo_[5]:.4f} → {hi_[5]:.4f}.")
-print(f"  overfitting 격차 {lo_[4]:.3f} → {hi_[4]:.3f}와 나란히 움직인다.")
-print()
-for s in ["**overfitting은 generalization 문제이자 privacy 문제다** — "
-          "두 축이 같은 원인을 공유한다",
-          "AUC 0.75는 '완전히 노출'은 아니지만 "
-          "**충분히 위험**하다 — 의료·금융 맥락에서 "
-          "'이 사람이 이 질병 dataset에 있었다'만으로도 피해가 된다",
-          "더 강한 공격들이 있다 — **shadow model**(그림자 모델 — 같은 분포로 여러 모델을 "
-          "학습해 공격 분류기를 만드는 것), 난이도를 보정한 공격(LiRA)",
-          "그리고 생성 모델에서는 **training data extraction**(학습 데이터 추출)까지 간다 — "
-          "LLM이 학습 문서를 그대로 뱉는 사례",
-          "**deduplication(중복 제거)이 첫 번째 방어**다. 여러 번 본 문서일수록 외운다",
-          "regularization·early stopping도 도움이 되지만 **보장은 아니다**. "
-          "보장을 원하면 다음 절"]:
-    print(f"  · {s}")
 ```
+
+**공격 성공률이 overfitting과 함께 오른다** — AUC `{python} f'{lo_[5]:.4f}'` → `{python} f'{hi_[5]:.4f}'`.  
+overfitting 격차 `{python} f'{lo_[4]:.3f}'` → `{python} f'{hi_[4]:.3f}'`와 나란히 움직인다.
+
+- **overfitting은 generalization 문제이자 privacy 문제다** — 두 축이 같은 원인을 공유한다
+- AUC 0.75는 '완전히 노출'은 아니지만 **충분히 위험**하다 — 의료·금융 맥락에서 '이 사람이 이 질병 dataset에 있었다'만으로도 피해가 된다
+- 더 강한 공격들이 있다 — **shadow model**(그림자 모델 — 같은 분포로 여러 모델을 학습해 공격 분류기를 만드는 것), 난이도를 보정한 공격(LiRA)
+- 그리고 생성 모델에서는 **training data extraction**(학습 데이터 추출)까지 간다 — LLM이 학습 문서를 그대로 뱉는 사례
+- **deduplication(중복 제거)이 첫 번째 방어**다. 여러 번 본 문서일수록 외운다
+- regularization·early stopping도 도움이 되지만 **보장은 아니다**. 보장을 원하면 다음 절
 
 ---
 
@@ -433,8 +412,14 @@ def ev(W, X=Xv, y=yv, gg=gv):
 
 
 NTR = 1500
-print(f"n={NTR}, batch 256, 600 step. seed 5개 평균.")
-print()
+```
+
+n=`{python} f'{NTR}'`, batch 256, 600 step. seed 5개 평균.
+
+```{python}
+#| label: dp-2
+#| code-fold: false
+
 print(f"{'σ':>7} {'ε (δ=1e-5)':>12} {'전체':>9} {'A (다수)':>10} "
       f"{'B (소수)':>10} {'격차':>8}")
 print("-" * 62)
@@ -446,16 +431,24 @@ for sig in [0.0, 8.0, 16.0, 32.0, 64.0]:
     DP.append((sig, e, *rs))
     print(f"{('없음' if sig==0 else f'{sig:.0f}'):>7} {e:>12} {rs[0]:>9.4f} "
           f"{rs[1]:>10.4f} {rs[2]:>10.4f} {rs[1]-rs[2]:>8.4f}")
-print(f"  (다수 예측 기준선 {max(yv.mean(), 1-yv.mean()):.4f})")
-print()
 n0, n32, n64 = DP[0], DP[3], DP[4]
-print("**utility(유용성 — 여기서는 정확도) 비용은 명확하다.**")
-print(f"  ε≈{n32[1]} (σ=32): 전체 정확도 {n0[2]:.4f} → {n32[2]:.4f} "
-      f"({n32[2]-n0[2]:+.4f})")
+```
+
+(다수 예측 기준선 `{python} f'{max(yv.mean(), 1 - yv.mean()):.4f}'`)
+
+**utility(유용성 — 여기서는 정확도) 비용은 명확하다.**
+
+ε≈`{python} f'{n32[1]}'` (σ=32): 전체 정확도 `{python} f'{n0[2]:.4f}'` → `{python} f'{n32[2]:.4f}'` (`{python} f'{n32[2] - n0[2]:+.4f}'`)
+
+```{python}
+#| label: dp-3
+#| code-fold: false
+
 print(f"  ε≈{n64[1]} (σ=64): {n0[2]:.4f} → {n64[2]:.4f} "
       f"({n64[2]-n0[2]:+.4f})")
-print(f"  실용적인 ε은 대개 1~10이다. 그 구간에서 이미 값을 치른다.")
 ```
+
+실용적인 ε은 대개 1\~10이다. 그 구간에서 이미 값을 치른다.
 
 문헌에는 더 강한 주장이 있다 —
 **DP가 소수 집단에 불균등하게 손해를 입힌다**(Bagdasaryan 등, 2019).
@@ -463,14 +456,14 @@ gradient clipping과 잡음이 드문 패턴의 신호를 먼저 지운다는 �
 
 이 실험에서는 **재현되지 않았다.**
 
+DP의 불균등 영향 — 집단별 정확도 손실을 나란히 본다 (seed 5개 평균)
+
 ```{python}
 #| label: dp-disparate
 #| code-fold: false
 
 import numpy as np
 
-print("DP의 불균등 영향 — 집단별 정확도 손실을 나란히 본다 (seed 5개 평균)")
-print()
 print(f"{'σ':>7} {'ε':>10} {'A 손실':>9} {'B 손실':>9} {'B/A 배율':>10} "
       f"{'격차':>9}")
 print("-" * 60)
@@ -480,34 +473,23 @@ for sig, e, tot, aA, aB in DP[1:]:
     ratio = lB/lA if abs(lA) > 1e-6 else float("nan")
     print(f"{sig:>7.0f} {e:>10} {lA:>9.4f} {lB:>9.4f} "
           f"{ratio:>10.2f} {aA-aB:>9.4f}")
-print()
 g0 = base[3]-base[4]
 g_last = DP[-1][3]-DP[-1][4]
-print(f"**집단 격차가 거의 안 움직인다** — DP 없이 {g0:.4f}, "
-      f"σ=64에서 {g_last:.4f}.")
-print(f"  두 집단이 비슷한 비율로 함께 나빠진다 "
-      f"(σ=32에서 A {base[3]-DP[3][3]:.4f} vs B {base[4]-DP[3][4]:.4f}).")
-print()
-print("**단일 seed로 봤을 때는 불균등해 보였다.** 그것이 함정이었다.")
-print("  seed 하나에서는 σ=32의 손실이 A 0.010 vs B 0.034로 나왔다.")
-print("  seed 5개를 평균하니 사라졌다 — "
-      "**[11.0](../11_systems/00_reproducibility.qmd)의 seed 분산 문제**가")
-print("  여기서 그대로 반복된다. 소수 집단은 표본이 적어 분산이 더 크다.")
-print()
-for s in ["**왜 재현되지 않았는가**: 이 모델은 softmax regression이다 — "
-          f"parameter가 {(D+1)*KC}개인 선형 모델",
-          "선형 경계는 두 집단이 **같은 parameter를 공유**한다. "
-          "소수 집단만 담당하는 parameter가 없으니 잡음도 고르게 퍼진다",
-          "문헌의 결과는 **overparameterized(과매개변수 — 데이터보다 parameter가 훨씬 많은) 신경망**에서 나온 것이다. "
-          "거기서는 드문 패턴이 소수의 parameter에 담기고, "
-          "clipping이 그 신호를 먼저 자른다",
-          "**그러므로 '재현 실패'가 '문헌이 틀렸다'는 아니다** — "
-          "성립 조건이 다르다는 뜻이다",
-          "실무 함의는 분명하다 — "
-          "**DP를 도입하면 집단별 성능을 반드시 따로 재야 한다.** "
-          "전체 정확도만 보면 놓친다"]:
-    print(f"  · {s}")
 ```
+
+**집단 격차가 거의 안 움직인다** — DP 없이 `{python} f'{g0:.4f}'`, σ=64에서 `{python} f'{g_last:.4f}'`.  
+두 집단이 비슷한 비율로 함께 나빠진다 (σ=32에서 A `{python} f'{base[3] - DP[3][3]:.4f}'` vs B `{python} f'{base[4] - DP[3][4]:.4f}'`).
+
+**단일 seed로 봤을 때는 불균등해 보였다.** 그것이 함정이었다.  
+seed 하나에서는 σ=32의 손실이 A 0.010 vs B 0.034로 나왔다.  
+seed 5개를 평균하니 사라졌다 — **[11.0](../11_systems/00_reproducibility.qmd)의 seed 분산 문제**가
+여기서 그대로 반복된다. 소수 집단은 표본이 적어 분산이 더 크다.
+
+- **왜 재현되지 않았는가**: 이 모델은 softmax regression이다 — parameter가 `{python} f'{(D + 1) * KC}'`개인 선형 모델
+- 선형 경계는 두 집단이 **같은 parameter를 공유**한다. 소수 집단만 담당하는 parameter가 없으니 잡음도 고르게 퍼진다
+- 문헌의 결과는 **overparameterized(과매개변수 — 데이터보다 parameter가 훨씬 많은) 신경망**에서 나온 것이다. 거기서는 드문 패턴이 소수의 parameter에 담기고, clipping이 그 신호를 먼저 자른다
+- **그러므로 '재현 실패'가 '문헌이 틀렸다'는 아니다** — 성립 조건이 다르다는 뜻이다
+- 실무 함의는 분명하다 — **DP를 도입하면 집단별 성능을 반드시 따로 재야 한다.** 전체 정확도만 보면 놓친다
 
 ```{python}
 #| label: fig-dp
