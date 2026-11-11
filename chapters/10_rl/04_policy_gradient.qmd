@@ -94,14 +94,14 @@ for _ in range(3000):
 
 # 표 형태 softmax의 정확한 policy gradient: g*(s,a) = d(s)·π(a|s)·A(s,a)
 G_STAR = d_vis[:, None]*PI0*A_PI
-
-print(f"참 A^π 범위 [{A_PI[OK].min():+.4f}, {A_PI[OK].max():+.4f}]")
-print(f"정확한 policy gradient ‖g*‖ = {np.linalg.norm(G_STAR):.6f}")
-print(f"시작 policy의 참 성능 J = {V_PI[START]:.5f}")
-print()
-print("**이 정확한 g\\*가 이 장의 채점 기준이다.**")
-print("  표본으로 만든 추정기가 여기서 얼마나 벗어나는지를 잰다.")
 ```
+
+참 A\^π 범위 [`{python} f'{A_PI[OK].min():+.4f}'`, `{python} f'{A_PI[OK].max():+.4f}'`]
+정확한 policy gradient ‖g\*‖ = `{python} f'{np.linalg.norm(G_STAR):.6f}'`
+시작 policy의 참 성능 J = `{python} f'{V_PI[START]:.5f}'`
+
+**이 정확한 g\\\*가 이 장의 채점 기준이다.**  
+표본으로 만든 추정기가 여기서 얼마나 벗어나는지를 잰다.
 
 ---
 
@@ -158,9 +158,14 @@ def grad_from(tr, weights):
 
 TRS = [rollout(np.random.default_rng(s)) for s in range(6000)]
 CBASE = float(np.mean([mc_returns(tr)[0] for tr in TRS[:1000]]))
+```
 
-print(f"episode {len(TRS)}개로 gradient 추정기를 비교한다")
-print()
+episode `{python} f'{len(TRS)}'`개로 gradient 추정기를 비교한다
+
+```{python}
+#| label: baseline-2
+#| code-fold: false
+
 print(f"{'추정기':<24} {'‖E[ĝ]−g*‖':>12} {'그 값의 표준오차':>16} "
       f"{'평균 variance':>12} {'감소':>8}")
 print("-" * 78)
@@ -180,30 +185,39 @@ for nm, wf in [
     BL.append((nm, float(np.linalg.norm(m - G_STAR)), se, float(v[OK].mean())))
     print(f"{nm:<24} {BL[-1][1]:>12.6f} {se:>16.6f} {BL[-1][3]:>12.7f} "
           f"{base_var/BL[-1][3]:>8.1f}x")
-print()
-print("**① 기댓값은 셋 다 같다.**")
+```
+
+**① 기댓값은 셋 다 같다.**
+
+```{python}
+#| label: baseline-3
+#| code-fold: false
+
 for nm, bias, se, var in BL:
     print(f"  {nm:<24} 편차 {bias:.6f} vs 표준오차 {se:.6f} "
           f"({bias/se:.1f}σ)")
-print("  편차가 각 추정기의 표준오차 규모 안에 있다 — 이론대로다.")
-print()
-print(f"**② variance는 {base_var/BL[-1][3]:.0f}배 줄었다.**")
-print(f"  {BL[0][3]:.6f} → {BL[2][3]:.6f}")
-print()
-print("**③ 상수 baseline만으로도 거의 다 얻는다.**")
-print(f"  상수 {BL[1][3]:.6f} vs V^π {BL[2][3]:.6f} — "
-      f"차이가 {abs(BL[1][3]-BL[2][3])/BL[2][3]:.1%}뿐이다.")
-for s in ["variance의 대부분은 **return의 절대 크기**에서 온다 — "
-          "모든 상태의 G가 −0.8 근처면 그 −0.8이 잡음을 키운다",
-          "빼기만 하면 되므로 **batch 평균을 빼는 것**이 실무의 기본기다",
-          "$V^\\pi$를 쓰면 상태별로 맞춰 빼므로 조금 더 낫다 — "
-          "이것이 **critic(비평자)**의 역할",
-          "**baseline은 bias를 만들지 않는다.** "
-          "critic이 틀려도 policy gradient는 여전히 unbiased다",
-          "그래서 A2C의 critic은 '정확할 필요'가 아니라 "
-          "'variance를 줄일 만큼만 맞으면' 된다"]:
-    print(f"  · {s}")
 ```
+
+편차가 각 추정기의 표준오차 규모 안에 있다 — 이론대로다.
+
+**② variance는 `{python} f'{base_var / BL[-1][3]:.0f}'`배 줄었다.**
+
+```{python}
+#| label: baseline-4
+#| code-fold: false
+
+print(f"  {BL[0][3]:.6f} → {BL[2][3]:.6f}")
+```
+
+**③ 상수 baseline만으로도 거의 다 얻는다.**
+
+상수 `{python} f'{BL[1][3]:.6f}'` vs V\^π `{python} f'{BL[2][3]:.6f}'` — 차이가 `{python} f'{abs(BL[1][3] - BL[2][3]) / BL[2][3]:.1%}'`뿐이다.
+
+- variance의 대부분은 **return의 절대 크기**에서 온다 — 모든 상태의 G가 −0.8 근처면 그 −0.8이 잡음을 키운다
+- 빼기만 하면 되므로 **batch 평균을 빼는 것**이 실무의 기본기다
+- \$V\^\\pi\$를 쓰면 상태별로 맞춰 빼므로 조금 더 낫다 — 이것이 **critic(비평자)**의 역할
+- **baseline은 bias를 만들지 않는다.** critic이 틀려도 policy gradient는 여전히 unbiased다
+- 그래서 A2C의 critic은 '정확할 필요'가 아니라 'variance를 줄일 만큼만 맞으면' 된다
 
 ---
 
@@ -221,6 +235,9 @@ $\delta_t$는 TD error, $\hat{V}$는 critic이 추정한 가치다. $\lambda=0$�
 
 **중요한 것은 $\hat{V}$가 어차피 baseline이라 $\lambda=1$에서는 bias가 없다는 점이다.**
 critic이 틀리면 그 bias는 $\lambda<1$에서만 들어온다. 얼마나 들어오는지 잰다.
+
+critic 품질을 바꿔 가며 GAE λ를 sweep한다 (V̂ = c·V\^π)  
+c=1이면 완벽한 critic, c=0이면 critic이 없는 것과 같다
 
 ```{python}
 #| label: gae
@@ -243,9 +260,6 @@ def gae_adv(tr, Vh, lam):
 
 LAMS = [0.0, 0.5, 0.9, 0.95, 0.99, 1.0]
 SUB = TRS[:3000]
-print("critic 품질을 바꿔 가며 GAE λ를 sweep한다 (V̂ = c·V^π)")
-print("  c=1이면 완벽한 critic, c=0이면 critic이 없는 것과 같다")
-print()
 GAE = {}
 for c in [1.0, 0.6, 0.0]:
     Vh = c*V_PI
@@ -261,25 +275,28 @@ for c in [1.0, 0.6, 0.0]:
         print(f"    {lam:>6.2f} {bias:>16.6f} {rows[-1][2]:>12.7f} "
               f"{rmse:>12.6f}")
     GAE[c] = rows
-print()
-print("**λ가 커지면 bias가 줄고 variance가 는다 — 교과서 그대로다.**")
+```
+
+**λ가 커지면 bias가 줄고 variance가 는다 — 교과서 그대로다.**
+
+```{python}
+#| label: gae-2
+#| code-fold: false
+
 for c in [1.0, 0.6, 0.0]:
     r = GAE[c]
     best = min(r, key=lambda x: x[3])
     print(f"  c={c}: bias {r[0][1]:.4f}→{r[-1][1]:.4f}, "
           f"variance {r[0][2]:.5f}→{r[-1][2]:.5f}, **최적 λ = {best[0]}**")
-print()
-print("**최적 λ가 critic 품질에 따라 움직인다.**")
-for s in [f"완벽한 critic(c=1)이면 λ=0이 최선 — bootstrap에 bias가 없으니 "
-          "variance만 줄이면 된다",
-          "critic이 나빠질수록 최적 λ가 1 쪽으로 밀린다 — "
-          "틀린 $\\hat{V}$를 덜 믿는 것이다. 믿을 만한 조언자면 많이 듣고, 아니면 직접 겪은 결과를 본다",
-          "**실무의 λ=0.95는 'critic이 어느 정도만 맞다'는 가정**이다",
-          "critic을 잘 학습시킬수록 λ를 낮춰도 되고, 그러면 variance가 준다",
-          "[10.2](02_model_free.qmd) G10.2.2의 n-step 문제와 같은 절충 — "
-          "거기서는 α가, 여기서는 critic 품질이 최적점을 옮긴다"]:
-    print(f"  · {s}")
 ```
+
+**최적 λ가 critic 품질에 따라 움직인다.**
+
+- 완벽한 critic(c=1)이면 λ=0이 최선 — bootstrap에 bias가 없으니 variance만 줄이면 된다
+- critic이 나빠질수록 최적 λ가 1 쪽으로 밀린다 — 틀린 \$\\hat{V}\$를 덜 믿는 것이다. 믿을 만한 조언자면 많이 듣고, 아니면 직접 겪은 결과를 본다
+- **실무의 λ=0.95는 'critic이 어느 정도만 맞다'는 가정**이다
+- critic을 잘 학습시킬수록 λ를 낮춰도 되고, 그러면 variance가 준다
+- [10.2](02_model_free.qmd) G10.2.2의 n-step 문제와 같은 절충 — 거기서는 α가, 여기서는 critic 품질이 최적점을 옮긴다
 
 ```{python}
 #| label: fig-gae
@@ -349,8 +366,14 @@ $r_t$는 "새 policy가 그 행동을 옛 policy보다 몇 배나 더 하려 하
 import numpy as np
 
 eps = 0.2
-print(f"clipping된 목적함수의 모양 (ε={eps})")
-print()
+```
+
+clipping된 목적함수의 모양 (ε=`{python} f'{eps}'`)
+
+```{python}
+#| label: clip-shape-2
+#| code-fold: false
+
 print(f"{'ratio r':>8} {'A>0: 목적':>12} {'기울기':>8}   {'A<0: 목적':>12} "
       f"{'기울기':>8}")
 print("-" * 60)
@@ -363,17 +386,14 @@ for r in [0.5, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.5]:
         out += [obj, grad]
     print(f"{r:>8.2f} {out[0]:>12.3f} {out[1]:>8.1f}   "
           f"{out[2]:>12.3f} {out[3]:>8.1f}")
-print()
-print("**비대칭이 핵심이다.**")
-for s in [f"A>0일 때는 위로만 막힌다 (r > {1+eps}) — "
-          "좋은 행동이라도 확률을 너무 올리지 말라",
-          f"A<0일 때는 아래로만 막힌다 (r < {1-eps}) — "
-          "나쁜 행동이라도 확률을 너무 내리지 말라",
-          "반대 방향은 **막지 않는다** — 실수를 되돌리는 길은 열어 둔다",
-          "min을 쓴 이유가 이것이다. 단순히 clip만 하면 "
-          "되돌아오는 gradient까지 0이 된다"]:
-    print(f"  · {s}")
 ```
+
+**비대칭이 핵심이다.**
+
+- A>0일 때는 위로만 막힌다 (r > `{python} f'{1 + eps}'`) — 좋은 행동이라도 확률을 너무 올리지 말라
+- A<0일 때는 아래로만 막힌다 (r < `{python} f'{1 - eps}'`) — 나쁜 행동이라도 확률을 너무 내리지 말라
+- 반대 방향은 **막지 않는다** — 실수를 되돌리는 길은 열어 둔다
+- min을 쓴 이유가 이것이다. 단순히 clip만 하면 되돌아오는 gradient까지 0이 된다
 
 **이제 실제로 무슨 일이 생기는지 본다.** 한 batch로 epoch(같은 batch를 한 바퀴 다시 쓰는 것)을 늘려 가며,
 policy가 얼마나 움직이고 **참 성능**이 어떻게 되는지 잰다 (참 $J$는 DP로 정확히 계산).
@@ -442,9 +462,15 @@ def update(th0, S, A, ADV, pi_old, clip, n_epochs, lr=30.0):
 
 J0 = J_of(TH0)
 VH = 0.5*V_PI                                  # 덜 학습된 critic
-print(f"batch 8 episode, critic V̂=0.5·V^π, seed 40개. 시작 J = {J0:.5f}")
-print("  KL = 옛 policy와 새 policy가 얼마나 달라졌나 (0이면 같음)")
-print()
+```
+
+batch 8 episode, critic V̂=0.5·V\^π, seed 40개. 시작 J = `{python} f'{J0:.5f}'`
+KL = 옛 policy와 새 policy가 얼마나 달라졌나 (0이면 같음)
+
+```{python}
+#| label: ppo-epochs-2
+#| code-fold: false
+
 print(f"{'epoch':>5} {'clip 없음 ΔJ':>13} {'clip 없음 KL':>12} "
       f"{'ε=0.2 ΔJ':>12} {'ε=0.2 KL':>11} {'clip된 비율':>10}")
 print("-" * 68)
@@ -463,24 +489,28 @@ for ne in [1, 2, 5, 10, 20, 40, 80]:
     print(f"{ne:>5} {EPOCHS[-1][1]:>+13.5f} {EPOCHS[-1][2]:>12.5f} "
           f"{EPOCHS[-1][3]:>+12.5f} {EPOCHS[-1][4]:>11.5f} "
           f"{EPOCHS[-1][5]:>10.3f}")
-print()
 uc_peak = max(EPOCHS, key=lambda e: e[1])
 last = EPOCHS[-1]
-print("**① clipping은 policy 이동을 확실히 억제한다.**")
-print(f"  80 epoch에서 KL: clip 없음 {last[2]:.3f} vs ε=0.2 {last[4]:.3f} — "
-      f"**{last[2]/last[4]:.0f}배**")
-print()
-print("**② clipping 없이 오래 돌리면 over-optimization(과최적화)이 보인다.**")
-print(f"  참 J 증가분이 {uc_peak[0]} epoch에서 {uc_peak[1]:+.5f}로 정점을 찍고,")
-print(f"  80 epoch에서 {last[1]:+.5f}로 떨어진다.")
-print()
-print("**③ 그런데 이 한 번의 갱신만 보면 clipping이 손해다.**")
-print(f"  80 epoch: clip 없음 {last[1]:+.5f} vs ε=0.2 {last[3]:+.5f}")
-print("  surrogate objective(대리 목적 — 진짜 J 대신 최적화하는 근사식)를 많이 밀어붙이는 쪽이 이 batch에서는 더 이득이었다.")
-print("  **한 번의 갱신으로는 PPO의 값어치가 안 보인다** — 다음 실험이 필요하다.")
 ```
 
+**① clipping은 policy 이동을 확실히 억제한다.**
+
+80 epoch에서 KL: clip 없음 `{python} f'{last[2]:.3f}'` vs ε=0.2 `{python} f'{last[4]:.3f}'` — **`{python} f'{last[2] / last[4]:.0f}'`배**
+
+**② clipping 없이 오래 돌리면 over-optimization(과최적화)이 보인다.**
+
+참 J 증가분이 `{python} f'{uc_peak[0]}'` epoch에서 `{python} f'{uc_peak[1]:+.5f}'`로 정점을 찍고,
+80 epoch에서 `{python} f'{last[1]:+.5f}'`로 떨어진다.
+
+**③ 그런데 이 한 번의 갱신만 보면 clipping이 손해다.**
+
+80 epoch: clip 없음 `{python} f'{last[1]:+.5f}'` vs ε=0.2 `{python} f'{last[3]:+.5f}'`
+surrogate objective(대리 목적 — 진짜 J 대신 최적화하는 근사식)를 많이 밀어붙이는 쪽이 이 batch에서는 더 이득이었다.  
+**한 번의 갱신으로는 PPO의 값어치가 안 보인다** — 다음 실험이 필요하다.
+
 **clipping의 값어치는 반복에서 나온다.** 매 iteration마다 새로 모으고 갱신하기를 60번 한다.
+
+60 iteration 반복 학습 (iteration당 8 episode · 10 epoch, seed 20개)
 
 ```{python}
 #| label: ppo-iters
@@ -521,8 +551,6 @@ def run(clip, n_iter=60, n_ep=8, n_epochs=10, lr=30.0, seed=0, ent=0.0):
     return np.array(Js), float(-(p*np.log(p + 1e-12)).sum(1).mean())
 
 
-print("60 iteration 반복 학습 (iteration당 8 episode · 10 epoch, seed 20개)")
-print()
 print(f"{'설정':<16} {'최종 J':>10} {'최고 J':>10} {'최종−최고':>11} "
       f"{'최종 entropy':>13}")
 print("-" * 64)
@@ -538,35 +566,31 @@ for nm, kw in [("clipping 없음", dict(clip=None)),
     CURVES[nm] = Js.mean(0)
     print(f"{nm:<16} {Js[:, -1].mean():>10.5f} {Js.max(1).mean():>10.5f} "
           f"{(Js[:, -1] - Js.max(1)).mean():>+11.5f} {np.mean(Es):>13.4f}")
-print()
-print("**여기서 갈린다.**")
-print("  '최종−최고'가 **정점을 찍고 얼마나 무너졌는지**를 말한다.")
-print("  clipping 없음: −0.371 — 최고점에서 크게 붕괴한다.")
-print("  ε=0.1: −0.094 — 거의 유지한다.")
-print()
-for s in ["clipping 없이 한 batch를 쥐어짜면 **그 batch에 overfitting**한다",
-          "그렇게 이동한 policy로 다음 batch를 모으면 데이터가 나빠지고, "
-          "그 나쁜 데이터로 또 크게 이동한다 — **악순환**",
-          "[10.0](00_mdp.qmd) G10.0.3의 distribution shift가 학습 안에서 폭주하는 것이다",
-          "clipping은 그 이동에 제동을 걸어 **다음 batch가 여전히 쓸 만하도록** 지킨다",
-          "최종 entropy에도 나타난다 — clipping 없음은 0.462로 policy가 굳었고, "
-          "ε=0.1은 0.698로 탐색 여지를 남겼다"]:
-    print(f"  · {s}")
-print()
-print("**TRPO와 PPO의 관계**")
-print()
-print(f"{'':<14} {'제약 방식':<30} {'대가'}")
-print("-" * 70)
-for a, b, c in [
-    ("TRPO", "KL(old‖new) ≤ δ를 **명시적 제약**", "2차 근사·conjugate gradient — 무겁다"),
-    ("PPO-clip", "ratio를 구간에 가둬 **간접적으로**", "1차 방법으로 충분 — 가볍다"),
-    ("PPO-penalty", "KL 항을 loss에 더한다", "β 조율이 까다롭다"),
-]:
-    print(f"{a:<14} {b:<30} {c}")
-print()
-print("  **PPO가 이긴 이유는 정확성이 아니라 구현 난이도였다.**")
-print("  [10.5](05_rl_for_llm.qmd)의 RLHF가 PPO를 쓰는 것도 같은 이유다.")
 ```
+
+**여기서 갈린다.**
+
+'최종−최고'가 **정점을 찍고 얼마나 무너졌는지**를 말한다.  
+clipping 없음: −0.371 — 최고점에서 크게 붕괴한다.  
+ε=0.1: −0.094 — 거의 유지한다.
+
+- clipping 없이 한 batch를 쥐어짜면 **그 batch에 overfitting**한다
+- 그렇게 이동한 policy로 다음 batch를 모으면 데이터가 나빠지고, 그 나쁜 데이터로 또 크게 이동한다 — **악순환**
+- [10.0](00_mdp.qmd) G10.0.3의 distribution shift가 학습 안에서 폭주하는 것이다
+- clipping은 그 이동에 제동을 걸어 **다음 batch가 여전히 쓸 만하도록** 지킨다
+- 최종 entropy에도 나타난다 — clipping 없음은 0.462로 policy가 굳었고, ε=0.1은 0.698로 탐색 여지를 남겼다
+
+**TRPO와 PPO의 관계**
+
+|  | 제약 방식 | 대가 |
+|---|---|---|
+| TRPO | KL(old‖new) ≤ δ를 **명시적 제약** | 2차 근사·conjugate gradient — 무겁다 |
+| PPO-clip | ratio를 구간에 가둬 **간접적으로** | 1차 방법으로 충분 — 가볍다 |
+| PPO-penalty | KL 항을 loss에 더한다 | β 조율이 까다롭다 |
+
+**PPO가 이긴 이유는 정확성이 아니라 구현 난이도였다.**
+
+[10.5](05_rl_for_llm.qmd)의 RLHF가 PPO를 쓰는 것도 같은 이유다.
 
 ```{python}
 #| label: fig-ppo
@@ -605,6 +629,8 @@ $$L = L^{\text{CLIP}} + c_1 L^{\text{VF}} + c_2\,\mathcal{H}[\pi_\theta]$$
 
 $L^{\text{VF}}$는 critic의 가치 loss다. 계수 $c_2$를 sweep해 본다.
 
+entropy bonus 계수 sweep (PPO ε=0.2, seed 12개)
+
 ```{python}
 #| label: entropy
 #| code-fold: false
@@ -612,9 +638,14 @@ $L^{\text{VF}}$는 critic의 가치 loss다. 계수 $c_2$를 sweep해 본다.
 import numpy as np
 
 HMAX = float(np.log(gw.nA))
-print(f"entropy bonus 계수 sweep (PPO ε=0.2, seed 12개)")
-print(f"  균등 policy의 entropy = {HMAX:.4f}")
-print()
+```
+
+균등 policy의 entropy = `{python} f'{HMAX:.4f}'`
+
+```{python}
+#| label: entropy-2
+#| code-fold: false
+
 print(f"{'계수 c₂':>9} {'최종 J':>11} {'최종 entropy':>14} {'균등 대비':>10}")
 print("-" * 48)
 ENT = []
@@ -626,46 +657,36 @@ for ec in [0.0, 0.001, 0.01, 0.05, 0.2]:
     ENT.append((ec, float(np.mean(Js)), float(np.mean(Es))))
     print(f"{ec:>9} {ENT[-1][1]:>11.5f} {ENT[-1][2]:>14.4f} "
           f"{ENT[-1][2]/HMAX:>10.3f}")
-print()
-print("**정직하게: 이 환경에서 entropy bonus는 도움이 되지 않았다.**")
-print(f"  계수를 올릴수록 최종 J가 {ENT[0][1]:.4f} → {ENT[-1][1]:.4f}로 "
-      "단조 감소한다.")
-print(f"  entropy는 {ENT[0][2]:.3f} → {ENT[-1][2]:.3f}로 오르긴 한다 — "
-      "의도한 효과는 있다.")
-print()
-print("**왜 도움이 안 되나**")
-for s in ["이 GridWorld는 **탐색이 어려운 문제가 아니다** — "
-          "상태 29개에 보상이 그리 sparse하지 않다",
-          "softmax policy 자체가 이미 stochastic하고, "
-          "clipping이 entropy를 0.643으로 유지해 준다 (G10.4.3)",
-          "즉 **막을 병이 없는데 약을 쓴 것**이다. 부작용만 남는다",
-          "entropy bonus가 필요한 곳은 "
-          "**보상이 sparse하고 깊은 탐색이 필요한** 문제다 "
-          "([10.0](00_mdp.qmd) G10.0.4의 마지막 논의)",
-          "**hyperparameter의 값어치는 문제에 딸려 있다** — "
-          "[10.3](03_deep_rl.qmd)의 experience replay와 같은 교훈"]:
-    print(f"  · {s}")
-print()
-print("**PPO 구현 detail이 성능을 좌우한다는 실증 연구**")
-for s in ["같은 'PPO'라도 구현마다 성능이 크게 다르다는 것이 여러 번 보고됐다",
-          "deterministic인 것들: **advantage normalization**, 관측 normalization, learning rate decay, "
-          "gradient clipping, value loss clipping",
-          "이 장의 실험도 advantage를 표준화했다 (`ADV = (ADV−mean)/std`) — "
-          "안 하면 learning rate 조율이 훨씬 예민해진다",
-          "**'algorithm'과 '구현'의 경계가 흐리다**는 것이 이 분야의 특징이다",
-          "논문의 algorithm 상자만 읽고 재현하려 하면 대개 실패한다"]:
-    print(f"  · {s}")
-print()
-print("**critic 없는 최근 변형 — GRPO 예고**")
-for s in ["critic을 학습시키는 것 자체가 비용이고 불안정의 원인이다",
-          "같은 prompt에 응답을 여러 개 뽑아 **그 group의 평균을 baseline으로** 쓰면?",
-          "그러면 critic 없이도 advantage를 만들 수 있다 — "
-          "G10.4.1에서 본 **상수 baseline이 거의 다 얻는다**는 결과가 근거다",
-          "이것이 GRPO(group relative policy optimization)이고, LLM처럼 한 상태(prompt)에서 "
-          "여러 trajectory를 값싸게 뽑을 수 있을 때 특히 유리하다",
-          "[10.5](05_rl_for_llm.qmd)에서 다룬다"]:
-    print(f"  · {s}")
 ```
+
+**정직하게: 이 환경에서 entropy bonus는 도움이 되지 않았다.**
+
+계수를 올릴수록 최종 J가 `{python} f'{ENT[0][1]:.4f}'` → `{python} f'{ENT[-1][1]:.4f}'`로 단조 감소한다.  
+entropy는 `{python} f'{ENT[0][2]:.3f}'` → `{python} f'{ENT[-1][2]:.3f}'`로 오르긴 한다 — 의도한 효과는 있다.
+
+**왜 도움이 안 되나**
+
+- 이 GridWorld는 **탐색이 어려운 문제가 아니다** — 상태 29개에 보상이 그리 sparse하지 않다
+- softmax policy 자체가 이미 stochastic하고, clipping이 entropy를 0.643으로 유지해 준다 (G10.4.3)
+- 즉 **막을 병이 없는데 약을 쓴 것**이다. 부작용만 남는다
+- entropy bonus가 필요한 곳은 **보상이 sparse하고 깊은 탐색이 필요한** 문제다 ([10.0](00_mdp.qmd) G10.0.4의 마지막 논의)
+- **hyperparameter의 값어치는 문제에 딸려 있다** — [10.3](03_deep_rl.qmd)의 experience replay와 같은 교훈
+
+**PPO 구현 detail이 성능을 좌우한다는 실증 연구**
+
+- 같은 'PPO'라도 구현마다 성능이 크게 다르다는 것이 여러 번 보고됐다
+- deterministic인 것들: **advantage normalization**, 관측 normalization, learning rate decay, gradient clipping, value loss clipping
+- 이 장의 실험도 advantage를 표준화했다 (`ADV = (ADV−mean)/std`) — 안 하면 learning rate 조율이 훨씬 예민해진다
+- **'algorithm'과 '구현'의 경계가 흐리다**는 것이 이 분야의 특징이다
+- 논문의 algorithm 상자만 읽고 재현하려 하면 대개 실패한다
+
+**critic 없는 최근 변형 — GRPO 예고**
+
+- critic을 학습시키는 것 자체가 비용이고 불안정의 원인이다
+- 같은 prompt에 응답을 여러 개 뽑아 **그 group의 평균을 baseline으로** 쓰면?
+- 그러면 critic 없이도 advantage를 만들 수 있다 — G10.4.1에서 본 **상수 baseline이 거의 다 얻는다**는 결과가 근거다
+- 이것이 GRPO(group relative policy optimization)이고, LLM처럼 한 상태(prompt)에서 여러 trajectory를 값싸게 뽑을 수 있을 때 특히 유리하다
+- [10.5](05_rl_for_llm.qmd)에서 다룬다
 
 ---
 
@@ -835,7 +856,13 @@ grad_logpi = np.eye(2)[a] - pi                       # softmax: e_a − π
 
 w = (grad_logpi**2).sum(1)
 b_star = (w * G).mean() / w.mean()
-print(f"참 gradient {true_grad}")
+```
+
+참 gradient `{python} f'{true_grad}'`
+
+```{python}
+#| label: ex-pg-baseline-2
+
 for name, b in [("baseline 없음", 0.0), ("평균 return", pi @ mu), ("최적 b*", b_star)]:
     g = (G - b)[:, None] * grad_logpi
     print(f"{name:<12} b={b:5.2f}   평균 {g.mean(0).round(3)}   분산 합 {g.var(0).sum():.3f}")
@@ -879,8 +906,9 @@ print(f"λ=0:  max|Â − δ|       = {np.abs(A0 - delta).max():.1e}")
 
 V_other = rng.normal(size=T + 1); V_other[T] = 0.0
 A1_other, _ = gae(V_other, 1.0)
-print(f"critic 교체 후 λ=1 차이 = 정확히 V̂ 차이?  {np.allclose(A1 - A1_other, V_other[:T] - V_hat[:T])}")
 ```
+
+critic 교체 후 λ=1 차이 = 정확히 V̂ 차이? `{python} f'{np.allclose(A1 - A1_other, V_other[:T] - V_hat[:T])}'`
 :::
 
 ## 요약
