@@ -51,12 +51,16 @@ def clip(shape, d, g, speed=0.9, noise=0.03):
         im = np.exp(-r*r/12.0) if shape == 0 else np.exp(-(r - 3.0)**2/2.0)
         F[t] = im + 0.25*np.cos(0.7*XX + ph) + g.normal(0, noise, (R, R))
     return F
+```
 
+clip 하나 = `{python} f'{T}'` frame x `{python} f'{R}'`x`{python} f'{R}'` = `{python} f'{T * R * R:,}'` pixel
 
-print(f"clip 하나 = {T} frame x {R}x{R} = {T*R*R:,} pixel")
-print()
-print("**실제 video의 규모 감각**")
-print()
+**실제 video의 규모 감각**
+
+```{python}
+#| label: data-2
+#| code-fold: false
+
 print(f"{'대상':<24} {'pixel 수':>16} {'이미지 대비':>12}")
 print("-" * 56)
 one = 224*224*3
@@ -65,14 +69,14 @@ for nm, n in [("224px 이미지 1장", one),
               ("10초 30fps 1080p", 300*1920*1080*3),
               ("1시간 1080p", 108000*1920*1080*3)]:
     print(f"{nm:<24} {n:>16,} {n/one:>11,.0f}배")
-print()
-print("**이 숫자가 video 설계의 모든 제약을 만든다.**")
-for s in ["decoding(압축 영상을 pixel로 푸는 것) 비용 — 학습 중 병목이 GPU가 아니라 **CPU decoding**인 경우가 흔하다",
-          "저장·전송 — 원본을 그대로 두는 것은 대개 불가능하다",
-          "메모리 — spatiotemporal attention은 frame 수의 제곱 ([9.6](06_video_models.qmd))",
-          "그래서 **무엇을 버릴지**가 첫 번째 설계 결정이 된다"]:
-    print(f"  · {s}")
 ```
+
+**이 숫자가 video 설계의 모든 제약을 만든다.**
+
+- decoding(압축 영상을 pixel로 푸는 것) 비용 — 학습 중 병목이 GPU가 아니라 **CPU decoding**인 경우가 흔하다
+- 저장·전송 — 원본을 그대로 두는 것은 대개 불가능하다
+- 메모리 — spatiotemporal attention은 frame 수의 제곱 ([9.6](06_video_models.qmd))
+- 그래서 **무엇을 버릴지**가 첫 번째 설계 결정이 된다
 
 ---
 
@@ -83,15 +87,15 @@ keyframe 하나를 온전히 저장하고, 나머지는 **차이만** 저장한�
 
 얼마나 중복적인지, 그리고 그것이 무엇에 딸린 값인지 재 보자.
 
+frame당 이동량을 바꿔 가며 — 인접 frame이 얼마나 닮았는가
+차분 에너지 = 인접 frame을 뺀 값의 크기, interpolation 오차 = 앞뒤 frame 평균으로 가운데를 복원했을 때의 오차
+
 ```{python}
 #| label: redundancy
 #| code-fold: false
 
 import numpy as np
 
-print("frame당 이동량을 바꿔 가며 — 인접 frame이 얼마나 닮았는가")
-print("  차분 에너지 = 인접 frame을 뺀 값의 크기, interpolation 오차 = 앞뒤 frame 평균으로 가운데를 복원했을 때의 오차")
-print()
 print(f"{'frame당 이동':>12} {'인접 cosine':>12} {'차분 에너지':>12} "
       f"{'interp 오차':>11}")
 print("-" * 52)
@@ -112,23 +116,21 @@ for sp in [0.1, 0.25, 0.5, 1.0, 2.0]:
     RED.append((sp, float(np.mean(cs)), float(np.mean(ms)), float(np.mean(itp))))
     print(f"{sp:>12.2f} {RED[-1][1]:>12.4f} {RED[-1][2]:>12.4f} "
           f"{RED[-1][3]:>11.4f}")
-print()
 slow, fast = RED[0], RED[-1]
-print("**redundancy는 'video의 성질'이 아니라 '이동량의 함수'다.**")
-print(f"  frame당 0.1px: 인접 cosine {slow[1]:.4f}, "
-      f"버릴 frame을 interpolation으로 복원한 오차 {slow[3]:.4f}")
-print(f"  frame당 2.0px: 인접 cosine {fast[1]:.4f}, interpolation 오차 {fast[3]:.4f} "
-      f"({fast[3]/slow[3]:.0f}배)")
-print()
-print("**실사 영상은 대부분 왼쪽 끝에 가깝다.**")
-for s in ["30fps에서 화면을 3초에 가로지르는 물체는 frame당 약 2px 이동한다",
-          "대부분의 장면은 그보다 훨씬 느리다 — 배경은 아예 안 움직인다",
-          "그래서 **frame을 절반 버려도 잃는 것이 거의 없다**",
-          "이것이 frame sampling(전체 중 몇 장만 골라 쓰기)이 정당화되는 근거다 — 다음 절",
-          "반대로 **빠른 동작·장면 전환**에서는 이 가정이 깨진다 — "
-          "그래서 codec은 장면 전환마다 keyframe을 강제로 넣는다"]:
-    print(f"  · {s}")
 ```
+
+**redundancy는 'video의 성질'이 아니라 '이동량의 함수'다.**
+
+frame당 0.1px: 인접 cosine `{python} f'{slow[1]:.4f}'`, 버릴 frame을 interpolation으로 복원한 오차 `{python} f'{slow[3]:.4f}'`
+frame당 2.0px: 인접 cosine `{python} f'{fast[1]:.4f}'`, interpolation 오차 `{python} f'{fast[3]:.4f}'` (`{python} f'{fast[3] / slow[3]:.0f}'`배)
+
+**실사 영상은 대부분 왼쪽 끝에 가깝다.**
+
+- 30fps에서 화면을 3초에 가로지르는 물체는 frame당 약 2px 이동한다
+- 대부분의 장면은 그보다 훨씬 느리다 — 배경은 아예 안 움직인다
+- 그래서 **frame을 절반 버려도 잃는 것이 거의 없다**
+- 이것이 frame sampling(전체 중 몇 장만 골라 쓰기)이 정당화되는 근거다 — 다음 절
+- 반대로 **빠른 동작·장면 전환**에서는 이 가정이 깨진다 — 그래서 codec은 장면 전환마다 keyframe을 강제로 넣는다
 
 ```{python}
 #| label: fig-redundancy
@@ -169,6 +171,8 @@ fig
 
 같은 clip으로 두 과제를 푼다 — 모양(static)과 운동 방향(temporal).
 sampling 전략만 바꿔 가며 linear probe([9.3](03_ssl_vision.qmd))를 학습시킨다.
+
+sampling 전략별 — static 과제와 temporal 과제
 
 ```{python}
 #| label: sampling
@@ -215,8 +219,6 @@ STRAT = [("1 frame (가운데)", [T//2]),
          ("8 frame dense(앞부분)", list(range(8))),
          ("32 frame 전부", list(range(T)))]
 SAMP = []
-print("sampling 전략별 — static 과제와 temporal 과제")
-print()
 print(f"{'전략':<20} {'frame':>7} {'모양 (static)':>13} {'방향 (temporal)':>15}")
 print("-" * 54)
 for nm, idx in STRAT:
@@ -224,34 +226,33 @@ for nm, idx in STRAT:
     b = probe(Ftr[:, idx], dtr, Fte[:, idx], dte, 4)
     SAMP.append((nm, len(idx), a, b))
     print(f"{nm:<20} {len(idx):>7} {a:>13.4f} {b:>15.4f}")
-print()
 one = SAMP[0]; two = SAMP[1]; adj = SAMP[2]; allf = SAMP[-1]
-print(f"**static 과제는 1 frame에서 끝난다** — {one[2]:.4f}.")
-print(f"  frame을 32장 다 줘도 {allf[2]:.4f}로 **오히려 떨어진다**.")
-print("  차원만 32배가 되고 새 정보는 없으니, overfitting만 는다.")
-print()
-print(f"**temporal 과제는 1 frame으로 {one[3]:.4f}밖에 안 된다** (무작위 0.25).")
-print(f"  2 frame만 줘도 {two[3]:.4f}로 뛴다.")
-print(f"  {allf[1]} frame을 다 줘도 {allf[3]:.4f} — 2장에서 거의 다 얻었다.")
-print()
-print("**간격도 중요하다.**")
-print(f"  양끝 2 frame {two[3]:.4f} vs 인접 2 frame {adj[3]:.4f}")
-print("  인접 frame은 거의 같으므로 (G9.5.1), 움직임이 잘 안 보인다.")
-print("  **몇 장을 보느냐보다 얼마나 벌려서 보느냐가 중요할 수 있다.**")
-print()
-print("**sampling 전략의 지형**")
-print()
-print(f"{'전략':<18} {'방식':<30} {'쓰이는 곳'}")
-print("-" * 74)
-for a, b, c in [
-    ("dense (밀집)", "연속 구간을 통째로", "짧고 빠른 동작, 3D CNN"),
-    ("uniform (균등)", "전체를 고르게 n장", "가장 흔한 기본값"),
-    ("segment (TSN)", "n구간으로 나눠 각 1장 무작위", "긴 영상, 학습 시 augmentation 효과"),
-    ("keyframe 기반", "장면 전환·큰 변화 지점", "편집된 영상, 요약"),
-    ("adaptive (적응적)", "모델이 볼 frame을 고른다", "긴 영상 이해"),
-]:
-    print(f"{a:<18} {b:<30} {c}")
 ```
+
+**static 과제는 1 frame에서 끝난다** — `{python} f'{one[2]:.4f}'`.  
+frame을 32장 다 줘도 `{python} f'{allf[2]:.4f}'`로 **오히려 떨어진다**.  
+차원만 32배가 되고 새 정보는 없으니, overfitting만 는다.
+
+**temporal 과제는 1 frame으로 `{python} f'{one[3]:.4f}'`밖에 안 된다** (무작위 0.25).  
+2 frame만 줘도 `{python} f'{two[3]:.4f}'`로 뛴다.  
+`{python} f'{allf[1]}'` frame을 다 줘도 `{python} f'{allf[3]:.4f}'` — 2장에서 거의 다 얻었다.
+
+**간격도 중요하다.**
+
+양끝 2 frame `{python} f'{two[3]:.4f}'` vs 인접 2 frame `{python} f'{adj[3]:.4f}'`
+인접 frame은 거의 같으므로 (G9.5.1), 움직임이 잘 안 보인다.
+
+**몇 장을 보느냐보다 얼마나 벌려서 보느냐가 중요할 수 있다.**
+
+**sampling 전략의 지형**
+
+| 전략 | 방식 | 쓰이는 곳 |
+|---|---|---|
+| dense (밀집) | 연속 구간을 통째로 | 짧고 빠른 동작, 3D CNN |
+| uniform (균등) | 전체를 고르게 n장 | 가장 흔한 기본값 |
+| segment (TSN) | n구간으로 나눠 각 1장 무작위 | 긴 영상, 학습 시 augmentation 효과 |
+| keyframe 기반 | 장면 전환·큰 변화 지점 | 편집된 영상, 요약 |
+| adaptive (적응적) | 모델이 볼 frame을 고른다 | 긴 영상 이해 |
 
 ```{python}
 #| label: fig-sampling
@@ -346,10 +347,15 @@ I1 = base[16:80, 16:80]
 lam0 = lk(I1, I1)[2]
 thr = np.nanpercentile(lam0, 70)
 good = lam0 > thr
-print(f"structure tensor의 작은 eigenvalue(두 방향 모두 기울기가 있는 정도) 상위 30% pixel만 '믿을 만하다'고 본다 "
-      f"({good.mean():.1%})")
-print("  나머지 70%는 평평하거나 한 방향 edge — **aperture problem 영역**이다.")
-print()
+```
+
+structure tensor의 작은 eigenvalue(두 방향 모두 기울기가 있는 정도) 상위 30% pixel만 '믿을 만하다'고 본다 (`{python} f'{good.mean():.1%}'`)  
+나머지 70%는 평평하거나 한 방향 edge — **aperture problem 영역**이다.
+
+```{python}
+#| label: flow-2
+#| code-fold: false
+
 print(f"{'변위 s(px)':>10} {'전체 pixel':>11} {'조건 좋은 곳':>13} "
       f"{'1/4 축소 층':>13}")
 print("-" * 50)
@@ -365,36 +371,41 @@ for s in [1, 2, 3, 4, 6, 8]:
     e_c = float(np.nanmean(np.abs(uc[gc]*4 + s)))
     FLOW.append((s, e_all, e_good, e_c))
     print(f"{s:>10} {e_all:>11.3f} {e_good:>13.3f} {e_c:>13.3f}")
-print()
 f1 = FLOW[0]
-print("**① aperture problem은 실제로 측정된다.**")
-print(f"  변위 1px에서 전체 평균 오차 {f1[1]:.3f} vs "
-      f"조건 좋은 곳 {f1[2]:.3f} — {f1[1]/f1[2]:.1f}배 차이.")
-print("  그래서 실무에서는 **믿을 만한 점만 골라 tracking한다** "
-      "(Shi-Tomasi의 'good features to track').")
-print()
-print("**② 변위가 커지면 무너진다.**")
 big = FLOW[-1]
-print(f"  1px에서 {f1[2]:.3f}이던 오차가 {big[0]}px에서 {big[2]:.3f}가 된다.")
-for s in ["Taylor 1차 전개는 **작은 변위**에서만 유효하다",
-          "물체가 창(9px)보다 많이 움직이면 $I_t$가 같은 점의 변화가 아니게 된다",
-          "이것이 optical flow가 **빠른 움직임에 약한** 근본 이유다"]:
-    print(f"  · {s}")
-print()
 cross = next((f for f in FLOW if f[3] < f[2]), None)
-print("**③ 해법은 해상도를 낮추는 것이다.**")
-print("  1/4로 줄이면 8px 변위가 2px 변위가 된다 — 가정이 다시 성립한다. 멀리서 보면 큰 움직임도 작게 보이는 것과 같다.")
+```
+
+**① aperture problem은 실제로 측정된다.**
+
+변위 1px에서 전체 평균 오차 `{python} f'{f1[1]:.3f}'` vs 조건 좋은 곳 `{python} f'{f1[2]:.3f}'` — `{python} f'{f1[1] / f1[2]:.1f}'`배 차이.  
+그래서 실무에서는 **믿을 만한 점만 골라 tracking한다** (Shi-Tomasi의 'good features to track').
+
+**② 변위가 커지면 무너진다.**
+
+1px에서 `{python} f'{f1[2]:.3f}'`이던 오차가 `{python} f'{big[0]}'`px에서 `{python} f'{big[2]:.3f}'`가 된다.
+
+- Taylor 1차 전개는 **작은 변위**에서만 유효하다
+- 물체가 창(9px)보다 많이 움직이면 \$I_t\$가 같은 점의 변화가 아니게 된다
+- 이것이 optical flow가 **빠른 움직임에 약한** 근본 이유다
+
+**③ 해법은 해상도를 낮추는 것이다.**
+
+1/4로 줄이면 8px 변위가 2px 변위가 된다 — 가정이 다시 성립한다. 멀리서 보면 큰 움직임도 작게 보이는 것과 같다.
+
+```{python}
+#| label: flow-3
+#| code-fold: false
+
 if cross:
     print(f"  변위 {cross[0]}px부터 거친 층({cross[3]:.3f})이 "
           f"원본 층({cross[2]:.3f})을 앞선다.")
-for s in ["이것이 **coarse-to-fine pyramid**(거친 것에서 세밀한 것으로)의 아이디어다 — "
-          "거친 층에서 큰 움직임을 잡고, 세밀한 층에서 다듬는다",
-          "[9.0](00_image_basics.qmd)에서 만든 Gaussian pyramid가 그대로 쓰인다",
-          "대가: 거친 층은 **작은 물체를 잃는다** — 표의 1px 열을 보라",
-          "**RAFT** 등 신경망 optical flow는 이 절충을 학습으로 대체했다 — "
-          "모든 변위 후보의 correlation volume(모든 위치 쌍의 닮은 정도 표)을 만들고 반복 갱신한다"]:
-    print(f"  · {s}")
 ```
+
+- 이것이 **coarse-to-fine pyramid**(거친 것에서 세밀한 것으로)의 아이디어다 — 거친 층에서 큰 움직임을 잡고, 세밀한 층에서 다듬는다
+- [9.0](00_image_basics.qmd)에서 만든 Gaussian pyramid가 그대로 쓰인다
+- 대가: 거친 층은 **작은 물체를 잃는다** — 표의 1px 열을 보라
+- **RAFT** 등 신경망 optical flow는 이 절충을 학습으로 대체했다 — 모든 변위 후보의 correlation volume(모든 위치 쌍의 닮은 정도 표)을 만들고 반복 갱신한다
 
 ```{python}
 #| label: fig-flow
