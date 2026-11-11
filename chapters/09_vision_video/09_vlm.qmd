@@ -33,6 +33,8 @@ VLM에서 이미지는 **token 몇 개**가 된다.
 그 token들은 언어 token과 같은 sequence에 들어가므로, LLM의 context(context — 한 번에 읽을 수 있는 분량)를 그만큼 먹는다.
 회의 시간이 정해져 있는데 사진 한 장을 말로 설명하는 데 절반을 쓰는 셈이다.
 
+해상도와 visual token 수 (ViT patch 14 기준)
+
 ```{python}
 #| label: budget
 #| code-fold: false
@@ -40,8 +42,6 @@ VLM에서 이미지는 **token 몇 개**가 된다.
 import sys; sys.path.append("../..")
 import numpy as np
 
-print("해상도와 visual token 수 (ViT patch 14 기준)")
-print()
 print(f"{'구성':<26} {'격자':>9} {'visual token':>12} {'context 대비':>12} "
       f"{'LLM 연산 배수':>14}")
 print("-" * 74)
@@ -59,36 +59,30 @@ for nm, res, tiles in [("336px 단일", 336, 1), ("448px 단일", 448, 1),
     BUD.append((nm, res, n, n/CTX, cost))
     print(f"{nm:<26} {f'{res//14}x{res//14}':>9} {n:>12,} {n/CTX:>11.1%} "
           f"{cost:>13.1f}배")
-print()
 one, big = BUD[0], BUD[-1]
-print("**이미지 한 장이 context의 상당 부분을 먹는다.**")
-print(f"  336px 단일: token {one[2]}개 — 4096 context의 {one[3]:.1%}")
-print(f"  AnyRes 3x3: token {big[2]:,}개 — {big[3]:.1%}. "
-      "**한 장으로 이미 이 기준을 넘는다.**")
-print("  (4096은 비교를 위해 잡은 기준값이다. 실제 모델의 context 길이는 "
-      "수천에서 수십만 token까지 다양하다.)")
-print()
-print("**그래서 두 방향의 압력이 생긴다**")
-print()
-print(f"{'요구':<22} {'왜':<32} {'수단'}")
-print("-" * 76)
-for a, b, c in [
-    ("token을 늘려라", "작은 글자·세부를 보려면 해상도가 필요", "AnyRes tiling, 고해상 encoder"),
-    ("token을 줄여라", "context·연산·비용", "Q-Former, pooling, token merging"),
-    ("", "다중 이미지·video면 더 절박", "frame당 token 수를 줄인다"),
-]:
-    print(f"{a:<22} {b:<32} {c}")
-print()
-print("**AnyRes가 하는 일**")
-for s in ["원본을 tile로 잘라 각각 encoder에 넣고, 축소한 전체 이미지를 하나 더 넣는다",
-          "**세부는 tile이, 전체 맥락은 축소본이** 담당한다 — 지도책의 전국 지도 한 장과 지역별 상세 지도들",
-          "positional embedding interpolation 문제([9.2](02_vit.qmd))를 피하는 방법이기도 하다 — "
-          "encoder는 늘 336px만 본다",
-          "대가: token 수가 tile 수만큼 곱해진다",
-          "OCR·문서·차트 이해가 이 방식으로 크게 좋아졌다 — 거기서는 "
-          "**해상도가 곧 성능**이다"]:
-    print(f"  · {s}")
 ```
+
+**이미지 한 장이 context의 상당 부분을 먹는다.**
+
+336px 단일: token `{python} f'{one[2]}'`개 — 4096 context의 `{python} f'{one[3]:.1%}'`
+AnyRes 3x3: token `{python} f'{big[2]:,}'`개 — `{python} f'{big[3]:.1%}'`. **한 장으로 이미 이 기준을 넘는다.**  
+(4096은 비교를 위해 잡은 기준값이다. 실제 모델의 context 길이는 수천에서 수십만 token까지 다양하다.)
+
+**그래서 두 방향의 압력이 생긴다**
+
+| 요구 | 왜 | 수단 |
+|---|---|---|
+| token을 늘려라 | 작은 글자·세부를 보려면 해상도가 필요 | AnyRes tiling, 고해상 encoder |
+| token을 줄여라 | context·연산·비용 | Q-Former, pooling, token merging |
+|  | 다중 이미지·video면 더 절박 | frame당 token 수를 줄인다 |
+
+**AnyRes가 하는 일**
+
+- 원본을 tile로 잘라 각각 encoder에 넣고, 축소한 전체 이미지를 하나 더 넣는다
+- **세부는 tile이, 전체 맥락은 축소본이** 담당한다 — 지도책의 전국 지도 한 장과 지역별 상세 지도들
+- positional embedding interpolation 문제([9.2](02_vit.qmd))를 피하는 방법이기도 하다 — encoder는 늘 336px만 본다
+- 대가: token 수가 tile 수만큼 곱해진다
+- OCR·문서·차트 이해가 이 방식으로 크게 좋아졌다 — 거기서는 **해상도가 곧 성능**이다
 
 ---
 
@@ -183,13 +177,13 @@ Xtr, Ptr, Ntr, Rtr = dataset(4000, g0)
 Xte, Pte, Nte, Rte = dataset(1500, g0)
 Etr, Ete = encode(Xtr, True), encode(Xte, True)
 mtr, mte = Rtr >= 0, Rte >= 0
-
-print(f"학습 {len(Xtr):,}장면 / 평가 {len(Xte):,}장면")
-print(f"  격자 {G}x{G} = visual token {NPOS}개, 물체 {NT}종, 장면당 2~5개")
-print(f"  좌우 질문이 성립하는 장면: 평가셋 {mte.sum()}개")
-print()
-print("무작위 baseline — 존재 0.500(유형별) / 개수 0.250 / 좌우 0.500")
 ```
+
+학습 `{python} f'{len(Xtr):,}'`장면 / 평가 `{python} f'{len(Xte):,}'`장면
+격자 `{python} f'{G}'`x`{python} f'{G}'` = visual token `{python} f'{NPOS}'`개, 물체 `{python} f'{NT}'`종, 장면당 2\~5개
+좌우 질문이 성립하는 장면: 평가셋 `{python} f'{mte.sum()}'`개
+
+무작위 baseline — 존재 0.500(유형별) / 개수 0.250 / 좌우 0.500
 
 ---
 
@@ -197,6 +191,8 @@ print("무작위 baseline — 존재 0.500(유형별) / 개수 0.250 / 좌우 0.
 
 visual token 36개를 몇 개로 줄일 것인가.
 줄이는 방식마다 **잃는 것이 다르다**는 것이 요점이다.
+
+connector별 — 세 질문의 정확도
 
 ```{python}
 #| label: connector
@@ -212,8 +208,6 @@ def tile(E, side):
         len(E), side, b, side, b, E.shape[-1]).mean((2, 4)).reshape(len(E), -1)
 
 
-print("connector별 — 세 질문의 정확도")
-print()
 print(f"{'connector':<18} {'token':>6} {'차원':>7} {'존재':>9} {'개수':>9} {'좌우':>9}")
 print("-" * 62)
 CONN = []
@@ -227,35 +221,35 @@ for nm, fn, k in [("전체 token", lambda E: E.reshape(len(E), -1), NPOS),
          probe(A[mtr], Rtr[mtr], B[mte], Rte[mte], 2))
     CONN.append(r)
     print(f"{nm:<18} {k:>6} {r[2]:>7} {r[3]:>9.4f} {r[4]:>9.4f} {r[5]:>9.4f}")
-print()
 full, pool = CONN[0], CONN[-1]
-print("**① 존재는 압축에 강하다.**")
-print(f"  token 36개 {full[3]:.4f} → 1개 {pool[3]:.4f}. 거의 그대로다.")
-print("  '무엇이 있나'는 집합 질문이라, 평균에 다 남는다.")
-print()
-print("**② 좌우 관계는 완전히 사라진다.**")
-print(f"  token 36개 {full[5]:.4f} → 1개 {pool[5]:.4f} — **무작위(0.5)와 같다.**")
-print("  평균을 내는 순간 '어디에 있었나'가 지워지기 때문이다. "
-      "교실 사진을 '평균 얼굴' 하나로 요약하면 누가 왔는지는 알아도 누가 어디 앉았는지는 모른다.")
-print()
-print("**③ 개수는 셋 다 못 센다.**")
-print(f"  가장 좋은 것이 {max(c[4] for c in CONN):.4f} — 무작위 0.25보다는 "
-      "낫지만 형편없다.")
-for s in ["개수를 세려면 셀마다 **'물체가 있다/없다'로 자른 뒤 더해야** 한다",
-          "선형 모델은 그 자르기(threshold)를 못 한다 — 흐릿한 점수를 그냥 합칠 뿐. "
-          "'사람 같음 0.6 + 0.7 + 0.4'를 더하면 1.7이지, 몇 명인지가 아니다",
-          "**실제 VLM의 개수 세기 실패도 비슷한 구조일 수 있다** — "
-          "언어모델이 visual token의 부드러운 집계를 읽는다",
-          "이 실험에서는 token 수를 바꿔도 개수 정확도가 낮은 채로 남는다 (위 표)"]:
-    print(f"  · {s}")
-print()
-print("**④ 그리고 token이 많다고 늘 좋지도 않다.**")
 best_rel = max(CONN, key=lambda c: c[5])
-print(f"  좌우 최고는 {best_rel[0]}({best_rel[5]:.4f})로 "
-      f"전체 token({full[5]:.4f})보다 낫다.")
-print(f"  전체 token은 차원이 {full[2]}이라 이 데이터 양에서 overfitting한다.")
-print("  **적당히 줄이는 것이 실제로 도움이 되는 구간이 있다.**")
 ```
+
+**① 존재는 압축에 강하다.**
+
+token 36개 `{python} f'{full[3]:.4f}'` → 1개 `{python} f'{pool[3]:.4f}'`. 거의 그대로다.  
+'무엇이 있나'는 집합 질문이라, 평균에 다 남는다.
+
+**② 좌우 관계는 완전히 사라진다.**
+
+token 36개 `{python} f'{full[5]:.4f}'` → 1개 `{python} f'{pool[5]:.4f}'` — **무작위(0.5)와 같다.**  
+평균을 내는 순간 '어디에 있었나'가 지워지기 때문이다. 교실 사진을 '평균 얼굴' 하나로 요약하면 누가 왔는지는 알아도 누가 어디 앉았는지는 모른다.
+
+**③ 개수는 셋 다 못 센다.**
+
+가장 좋은 것이 `{python} f'{max((c[4] for c in CONN)):.4f}'` — 무작위 0.25보다는 낫지만 형편없다.
+
+- 개수를 세려면 셀마다 **'물체가 있다/없다'로 자른 뒤 더해야** 한다
+- 선형 모델은 그 자르기(threshold)를 못 한다 — 흐릿한 점수를 그냥 합칠 뿐. '사람 같음 0.6 + 0.7 + 0.4'를 더하면 1.7이지, 몇 명인지가 아니다
+- **실제 VLM의 개수 세기 실패도 비슷한 구조일 수 있다** — 언어모델이 visual token의 부드러운 집계를 읽는다
+- 이 실험에서는 token 수를 바꿔도 개수 정확도가 낮은 채로 남는다 (위 표)
+
+**④ 그리고 token이 많다고 늘 좋지도 않다.**
+
+좌우 최고는 `{python} f'{best_rel[0]}'`(`{python} f'{best_rel[5]:.4f}'`)로 전체 token(`{python} f'{full[5]:.4f}'`)보다 낫다.  
+전체 token은 차원이 `{python} f'{full[2]}'`이라 이 데이터 양에서 overfitting한다.
+
+**적당히 줄이는 것이 실제로 도움이 되는 구간이 있다.**
 
 ```{python}
 #| label: fig-connector
@@ -297,6 +291,8 @@ query를 아무리 늘려도 "왼쪽"을 알 수 없다. 이름표 없이 뒤섞
 
 직접 확인해 보자 — 같은 Q-Former를 위치 정보 있을 때와 없을 때로.
 
+Q-Former query 수와 positional embedding
+
 ```{python}
 #| label: qformer
 #| code-fold: false
@@ -332,8 +328,6 @@ def qformer(Xa, ya, Xb, yb, k=4, ncls=2, steps=800, lr=0.3, seed=0):
 
 
 Ntr_, Nte_ = encode(Xtr, False), encode(Xte, False)     # 위치 없는 token
-print("Q-Former query 수와 positional embedding")
-print()
 print(f"{'query':>6} | {'좌우: 위치 없음':>15} {'좌우: 위치 있음':>15} | "
       f"{'개수: 위치 없음':>15} {'개수: 위치 있음':>15}")
 print("-" * 76)
@@ -345,43 +339,41 @@ for k in [1, 2, 4, 8]:
     d_ = qformer(Etr, Ntr-2, Ete, Nte-2, k=k, ncls=4)
     QF.append((k, a, b_, c, d_))
     print(f"{k:>6} | {a:>15.4f} {b_:>15.4f} | {c:>15.4f} {d_:>15.4f}")
-print()
 lo, hi = QF[0], QF[-1]
-print("**위치 정보가 없으면 query를 8배로 늘려도 우연 수준이다.**")
-print(f"  query 1개 {lo[1]:.4f} → 8개 {hi[1]:.4f}. 무작위가 0.5다.")
-print()
-print("**위치를 주면 query 수가 곧바로 성능이 된다.**")
-print(f"  query 1개 {lo[2]:.4f} → 8개 {hi[2]:.4f}.")
-for s in ["query 하나는 **가중 평균 하나**뿐이라 두 물체의 상대 위치를 못 만든다",
-          "query가 여러 개면 '0번을 찾는 query'와 '1번을 찾는 query'로 나뉠 수 있다",
-          "그리고 각각이 **위치 좌표를 함께 집어 오면** 비교가 가능해진다",
-          "**두 조건이 모두 필요하다** — 위치 정보와 충분한 query 수"]:
-    print(f"  · {s}")
-print()
-print("**개수는 위치와 무관하다** — "
-      f"위치 없음 {hi[3]:.4f} vs 있음 {hi[4]:.4f}.")
-print("  당연하다. 개수는 위치를 안 봐도 되는 질문이다.")
-print("  못 세는 이유는 다른 데 있다 (G9.9.2의 ③).")
-print()
-print("**이것이 connector 논쟁의 실체다**")
-print()
-print(f"{'모듈':<24} {'visual token':<16} {'공간 정보':<22} {'실무 평가'}")
-print("-" * 84)
-for a, b, c, d in [
-    ("linear projection (LLaVA)", "encoder 그대로", "**patch 순서로 보존**", "단순하고 강하다"),
-    ("Q-Former (BLIP-2)", "고정 k개", "query·위치 설계에 딸림", "압축은 좋지만 손실"),
-    ("cross-attention (Flamingo)", "LLM 안에서 참조", "LLM 층마다 접근", "구조 변경이 크다"),
-    ("pooling·token merging", "가변", "**뭉갠 만큼 잃는다**", "video에서 불가피"),
-]:
-    print(f"{a:<24} {b:<16} {c:<22} {d}")
-print()
-print("**LLaVA의 '그냥 projection'이 널리 쓰이게 된 이유 하나가 여기 보인다.**")
-for s in ["connector가 token을 줄이지 않으니 **encoder가 준 위치와 세부가 그대로 넘어간다**",
-          "대가는 token 수(G9.9.1)인데, context가 길어지면서 그 대가가 싸졌다",
-          "Q-Former는 token이 비쌌던 시기의 해법이었다",
-          "지금도 **video**에서는 압축이 필수다 — frame 수만큼 곱해지니까"]:
-    print(f"  · {s}")
 ```
+
+**위치 정보가 없으면 query를 8배로 늘려도 우연 수준이다.**
+
+query 1개 `{python} f'{lo[1]:.4f}'` → 8개 `{python} f'{hi[1]:.4f}'`. 무작위가 0.5다.
+
+**위치를 주면 query 수가 곧바로 성능이 된다.**
+
+query 1개 `{python} f'{lo[2]:.4f}'` → 8개 `{python} f'{hi[2]:.4f}'`.
+
+- query 하나는 **가중 평균 하나**뿐이라 두 물체의 상대 위치를 못 만든다
+- query가 여러 개면 '0번을 찾는 query'와 '1번을 찾는 query'로 나뉠 수 있다
+- 그리고 각각이 **위치 좌표를 함께 집어 오면** 비교가 가능해진다
+- **두 조건이 모두 필요하다** — 위치 정보와 충분한 query 수
+
+**개수는 위치와 무관하다** — 위치 없음 `{python} f'{hi[3]:.4f}'` vs 있음 `{python} f'{hi[4]:.4f}'`.  
+당연하다. 개수는 위치를 안 봐도 되는 질문이다.  
+못 세는 이유는 다른 데 있다 (G9.9.2의 ③).
+
+**이것이 connector 논쟁의 실체다**
+
+| 모듈 | visual token | 공간 정보 | 실무 평가 |
+|---|---|---|---|
+| linear projection (LLaVA) | encoder 그대로 | **patch 순서로 보존** | 단순하고 강하다 |
+| Q-Former (BLIP-2) | 고정 k개 | query·위치 설계에 딸림 | 압축은 좋지만 손실 |
+| cross-attention (Flamingo) | LLM 안에서 참조 | LLM 층마다 접근 | 구조 변경이 크다 |
+| pooling·token merging | 가변 | **뭉갠 만큼 잃는다** | video에서 불가피 |
+
+**LLaVA의 '그냥 projection'이 널리 쓰이게 된 이유 하나가 여기 보인다.**
+
+- connector가 token을 줄이지 않으니 **encoder가 준 위치와 세부가 그대로 넘어간다**
+- 대가는 token 수(G9.9.1)인데, context가 길어지면서 그 대가가 싸졌다
+- Q-Former는 token이 비쌌던 시기의 해법이었다
+- 지금도 **video**에서는 압축이 필수다 — frame 수만큼 곱해지니까
 
 ```{python}
 #| label: fig-qformer
@@ -437,6 +429,8 @@ VLM의 가장 유명한 실패는 **object hallucination**(물체 환각)이다.
 
 학습 데이터에만 bias를 넣고, **평가는 bias 없는 데이터**로 한다.
 
+학습에만 co-occurrence bias를 넣고, bias 없는 데이터로 평가한다
+
 ```{python}
 #| label: hallucination
 #| code-fold: false
@@ -455,8 +449,6 @@ pv_c = 1/(1 + np.exp(-(((Ete.mean(1) - mu2)/sd2) @ W2 + b2)))
 sel = (Pte[:, 0] == 1) & (Pte[:, 1] == 0)      # 0은 있고 1은 없다
 oth = (Pte[:, 0] == 0) & (Pte[:, 1] == 0)      # 둘 다 없다
 
-print("학습에만 co-occurrence bias를 넣고, bias 없는 데이터로 평가한다")
-print()
 print(f"{'학습 데이터':<22} {'전체 정확도':>11} {'0 있음 → 1 환각':>16} "
       f"{'0 없음 → 1 환각':>16}")
 print("-" * 70)
@@ -467,37 +459,34 @@ for nm, a, pv in [("co-occurrence bias 90%", acc_b, pv_b),
          float((pv[oth, 1] > 0.5).mean()))
     HAL.append(r)
     print(f"{nm:<22} {r[1]:>11.4f} {r[2]:>16.4f} {r[3]:>16.4f}")
-print(f"  (평가 표본: 0만 있는 장면 {sel.sum()}개, 둘 다 없는 장면 {oth.sum()}개)")
-print()
 bi, ctl = HAL
-print("**bias 학습 모델은 0번을 보면 1번을 hallucination한다.**")
-print(f"  0번이 있을 때 {bi[2]:.4f} vs 없을 때 {bi[3]:.4f} — "
-      f"차이 {bi[2]-bi[3]:.4f}")
-print(f"  대조군은 {ctl[2]:.4f} vs {ctl[3]:.4f} — 차이 {ctl[2]-ctl[3]:.4f}")
-print(f"  **조건부 격차가 {(bi[2]-bi[3])/max(ctl[2]-ctl[3],1e-9):.0f}배**로 벌어졌다.")
-print()
-print(f"**그런데 전체 정확도는 {bi[1]:.4f} vs {ctl[1]:.4f}로 거의 같다.**")
-for s in ["hallucination은 **평균 정확도에 잘 안 잡힌다** — 특정 조건에서만 터지니까",
-          "그래서 POPE 같은 benchmark는 **'없는 물체'를 골라 물어본다**",
-          "특히 '**자주 함께 나오는 물체**'를 물어보는 항목이 결정적이다",
-          "무작위로 없는 물체를 고르면 쉽고, 공동 출현하는 것을 고르면 어렵다",
-          "[9.1](01_vision_tasks.qmd)·[9.7](07_tracking.qmd)에서 본 것과 같은 교훈 — "
-          "**평균 지표는 조건부 실패를 감춘다**"]:
-    print(f"  · {s}")
-print()
-print("**hallucination의 다른 원인들**")
-print()
-print(f"{'원인':<24} {'설명':<34} {'대처'}")
-print("-" * 82)
-for a, b_, c in [
-    ("언어 prior(사전지식) 우세", "LLM이 이미지보다 문장 확률을 따른다", "시각 신호 가중, contrastive decoding"),
-    ("co-occurrence bias", "함께 나온 것을 함께 답한다 (위 실험)", "데이터 균형, 부정 예시"),
-    ("instruction 데이터의 bias", "'있다'로 답하는 예가 더 많다", "부정 응답 데이터 추가"),
-    ("시각 정보 손실", "connector에서 뭉개짐 (G9.9.2~3)", "token·해상도 늘리기"),
-    ("긴 응답의 drift", "뒤로 갈수록 이미지에서 멀어진다", "짧게 답하게, 근거 요구"),
-]:
-    print(f"{a:<24} {b_:<34} {c}")
 ```
+
+(평가 표본: 0만 있는 장면 `{python} f'{sel.sum()}'`개, 둘 다 없는 장면 `{python} f'{oth.sum()}'`개)
+
+**bias 학습 모델은 0번을 보면 1번을 hallucination한다.**
+
+0번이 있을 때 `{python} f'{bi[2]:.4f}'` vs 없을 때 `{python} f'{bi[3]:.4f}'` — 차이 `{python} f'{bi[2] - bi[3]:.4f}'`
+대조군은 `{python} f'{ctl[2]:.4f}'` vs `{python} f'{ctl[3]:.4f}'` — 차이 `{python} f'{ctl[2] - ctl[3]:.4f}'`
+**조건부 격차가 `{python} f'{(bi[2] - bi[3]) / max(ctl[2] - ctl[3], 1e-09):.0f}'`배**로 벌어졌다.
+
+**그런데 전체 정확도는 `{python} f'{bi[1]:.4f}'` vs `{python} f'{ctl[1]:.4f}'`로 거의 같다.**
+
+- hallucination은 **평균 정확도에 잘 안 잡힌다** — 특정 조건에서만 터지니까
+- 그래서 POPE 같은 benchmark는 **'없는 물체'를 골라 물어본다**
+- 특히 '**자주 함께 나오는 물체**'를 물어보는 항목이 결정적이다
+- 무작위로 없는 물체를 고르면 쉽고, 공동 출현하는 것을 고르면 어렵다
+- [9.1](01_vision_tasks.qmd)·[9.7](07_tracking.qmd)에서 본 것과 같은 교훈 — **평균 지표는 조건부 실패를 감춘다**
+
+**hallucination의 다른 원인들**
+
+| 원인 | 설명 | 대처 |
+|---|---|---|
+| 언어 prior(사전지식) 우세 | LLM이 이미지보다 문장 확률을 따른다 | 시각 신호 가중, contrastive decoding |
+| co-occurrence bias | 함께 나온 것을 함께 답한다 (위 실험) | 데이터 균형, 부정 예시 |
+| instruction 데이터의 bias | '있다'로 답하는 예가 더 많다 | 부정 응답 데이터 추가 |
+| 시각 정보 손실 | connector에서 뭉개짐 (G9.9.2\~3) | token·해상도 늘리기 |
+| 긴 응답의 drift | 뒤로 갈수록 이미지에서 멀어진다 | 짧게 답하게, 근거 요구 |
 
 ---
 
