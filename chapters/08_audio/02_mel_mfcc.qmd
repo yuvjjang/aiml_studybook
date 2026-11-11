@@ -55,9 +55,14 @@ from src import audio
 SR, N_FFT, HOP = 16000, 512, 160
 N_MELS = 40
 FB, CENTERS, FREQS = audio.mel_filterbank(N_MELS, N_FFT, SR)
+```
 
-print(f"mel filterbank {N_MELS}개, 0~{SR//2} Hz, n_fft={N_FFT}")
-print()
+mel filterbank `{python} f'{N_MELS}'`개, 0\~`{python} f'{SR // 2}'` Hz, n_fft=`{python} f'{N_FFT}'`
+
+```{python}
+#| label: filterbank-2
+#| code-fold: false
+
 print(f"{'filter':>6} {'중심 Hz':>10} {'bandwidth Hz':>12} {'FFT bin 수':>11}")
 print("-" * 42)
 BW = []
@@ -67,29 +72,27 @@ for i in range(N_MELS):
     BW.append(bw)
     if i in (0, 4, 9, 19, 29, 39):
         print(f"{i:>6} {CENTERS[i]:>10.0f} {bw:>11.0f} {len(nz):>11}")
-print()
-print(f"**1 kHz 아래에 filter {(CENTERS < 1000).sum()}개, "
-      f"4 kHz 위에 {(CENTERS > 4000).sum()}개.**")
-print(f"  bandwidth는 {BW[0]:.0f} Hz에서 {BW[-1]:.0f} Hz로 "
-      f"{BW[-1]/BW[0]:.0f}배 넓어진다.")
-print()
-print("**즉 저주파에 해상도를 몰아준다.** 저주파는 촘촘한 체, 고주파는 성긴 체로 거르는 셈이다. 그런데 왜 그것이 옳은가?")
-print()
-print(f"{'무엇이 어디 있는가':<26} {'주파수 대역'}")
-print("-" * 60)
-for a, b in [("모음의 F1", "약 250 ~ 900 Hz"),
-             ("모음의 F2 — 모음 구별의 핵심", "약 800 ~ 2,500 Hz"),
-             ("F3, 비음·유음 단서", "약 2,200 ~ 3,500 Hz"),
-             ("치찰음(/s/, /ʃ/)의 에너지", "4,000 Hz 이상"),
-             ("음높이 F0", "약 80 ~ 350 Hz")]:
-    print(f"{a:<26} {b}")
-print()
-print("**phoneme을 구별하는 정보는 대부분 3 kHz 아래에 있다.**")
 n_lo = int((CENTERS < 3000).sum())
-print(f"  mel filterbank는 {N_MELS}개 중 {n_lo}개({n_lo/N_MELS:.0%})를 그곳에 놓는다.")
-print(f"  선형으로 {N_MELS}개를 놓으면 3 kHz 아래에는 "
-      f"{int(3000/(SR/2)*N_MELS)}개뿐이다.")
 ```
+
+**1 kHz 아래에 filter `{python} f'{(CENTERS < 1000).sum()}'`개, 4 kHz 위에 `{python} f'{(CENTERS > 4000).sum()}'`개.**
+
+bandwidth는 `{python} f'{BW[0]:.0f}'` Hz에서 `{python} f'{BW[-1]:.0f}'` Hz로 `{python} f'{BW[-1] / BW[0]:.0f}'`배 넓어진다.
+
+**즉 저주파에 해상도를 몰아준다.** 저주파는 촘촘한 체, 고주파는 성긴 체로 거르는 셈이다. 그런데 왜 그것이 옳은가?
+
+| 무엇이 어디 있는가 | 주파수 대역 |
+|---|---|
+| 모음의 F1 | 약 250 \~ 900 Hz |
+| 모음의 F2 — 모음 구별의 핵심 | 약 800 \~ 2,500 Hz |
+| F3, 비음·유음 단서 | 약 2,200 \~ 3,500 Hz |
+| 치찰음(/s/, /ʃ/)의 에너지 | 4,000 Hz 이상 |
+| 음높이 F0 | 약 80 \~ 350 Hz |
+
+**phoneme을 구별하는 정보는 대부분 3 kHz 아래에 있다.**
+
+mel filterbank는 `{python} f'{N_MELS}'`개 중 `{python} f'{n_lo}'`개(`{python} f'{n_lo / N_MELS:.0%}'`)를 그곳에 놓는다.  
+선형으로 `{python} f'{N_MELS}'`개를 놓으면 3 kHz 아래에는 `{python} f'{int(3000 / (SR / 2) * N_MELS)}'`개뿐이다.
 
 ```{python}
 #| label: fig-filterbank
@@ -235,33 +238,38 @@ def pair_dists(d):
 
 
 dl, dm = pair_dists(lin), pair_dists(mel)
-print("모음 5개를 서로 비교한다 (standardization 후 RMS 거리 — scale 효과 제거)")
-print()
+```
+
+모음 5개를 서로 비교한다 (standardization 후 RMS 거리 — scale 효과 제거)
+
+```{python}
+#| label: melvalue-2
+#| code-fold: false
+
 print(f"{'표현':<26} {'차원':>7} {'모음쌍 평균 거리':>17} {'최소 거리':>12}")
 print("-" * 66)
 print(f"{'log 선형 spectrum':<26} {len(FREQS):>7} {dl.mean():>17.3f} "
       f"{dl.min():>12.3f}")
 print(f"{'log-mel spectrum':<26} {N_MELS:>7} {dm.mean():>17.3f} "
       f"{dm.min():>12.3f}")
-print()
-print(f"**차원은 {len(FREQS)/N_MELS:.1f}배 줄었는데 변별 거리는 "
-      f"{dm.mean()/dl.mean():.2f}배로 커졌다.**")
-print(f"  가장 헷갈리는 모음쌍의 거리도 {dl.min():.3f} → {dm.min():.3f}로 늘었다.")
-print()
-print("**왜 줄였는데 좋아지는가**")
-for s in ["선형 spectrum의 257개 bin 중 절반 이상이 **4 kHz 위**다 — "
-          "모음 구별에 거의 안 쓰인다",
-          "그 bin들은 harmonic 잔결(F0에 따라 흔들리는 값)로 채워져 있다",
-          "  → **화자가 바뀌면 통째로 달라지는** 성분이다",
-          "mel은 그것을 넓은 대역으로 평균해 지워 버린다",
-          "동시에 F1·F2 대역에는 해상도를 남긴다"]:
-    print(f"  · {s}")
-print()
-print("**즉 mel은 압축이 아니라 선택이다.** 버릴 축을 고르는 일이다.")
-print()
-print("주의: 이 실험은 합성 모음이고 화자 변이·noise가 없다.")
-print("  실제 이득의 크기는 데이터에 따라 다르다. 여기서 확인한 것은 **방향**이다.")
 ```
+
+**차원은 `{python} f'{len(FREQS) / N_MELS:.1f}'`배 줄었는데 변별 거리는 `{python} f'{dm.mean() / dl.mean():.2f}'`배로 커졌다.**
+
+가장 헷갈리는 모음쌍의 거리도 `{python} f'{dl.min():.3f}'` → `{python} f'{dm.min():.3f}'`로 늘었다.
+
+**왜 줄였는데 좋아지는가**
+
+- 선형 spectrum의 257개 bin 중 절반 이상이 **4 kHz 위**다 — 모음 구별에 거의 안 쓰인다
+- 그 bin들은 harmonic 잔결(F0에 따라 흔들리는 값)로 채워져 있다
+- → **화자가 바뀌면 통째로 달라지는** 성분이다
+- mel은 그것을 넓은 대역으로 평균해 지워 버린다
+- 동시에 F1·F2 대역에는 해상도를 남긴다
+
+**즉 mel은 압축이 아니라 선택이다.** 버릴 축을 고르는 일이다.
+
+주의: 이 실험은 합성 모음이고 화자 변이·noise가 없다.  
+실제 이득의 크기는 데이터에 따라 다르다. 여기서 확인한 것은 **방향**이다.
 
 ---
 
@@ -292,6 +300,8 @@ $$c[n] = \mathcal{F}^{-1}\{\log|X(f)|\}$$
 
 ## G8.2.3 — source와 filter를 실제로 분리한다
 
+① cepstrum의 높은 quefrency 봉우리 = pitch 주기
+
 ```{python}
 #| label: cepstrum
 #| code-fold: false
@@ -301,8 +311,6 @@ import numpy as np
 from src import audio
 
 NW = 1024
-print("① cepstrum의 높은 quefrency 봉우리 = pitch 주기")
-print()
 print(f"{'참 F0':>8} {'참 주기':>10} {'cepstrum peak':>14} {'추정 F0':>10} "
       f"{'오차':>9}")
 print("-" * 58)
@@ -316,9 +324,15 @@ for f0 in [90, 120, 140, 160, 200, 260]:
     PITCH.append((f0, p/SR*1000, est))
     print(f"{f0:>8} {1000/f0:>9.2f}ms {p/SR*1000:>13.2f}ms {est:>10.1f} "
           f"{est - f0:>+9.1f}")
-print()
 bad = [p for p in PITCH if abs(p[2] - p[0]) > 5]
-print("**대부분 정확하다** — spectrum의 harmonic 간격이 cepstrum에서는 봉우리 하나가 된다.")
+```
+
+**대부분 정확하다** — spectrum의 harmonic 간격이 cepstrum에서는 봉우리 하나가 된다.
+
+```{python}
+#| label: cepstrum-2
+#| code-fold: false
+
 if bad:
     b = bad[0]
     print(f"**그런데 F0={b[0]}에서 {b[2]:.0f} Hz로 틀렸다 — "
@@ -338,6 +352,9 @@ else:
 낮은 quefrency만 남기면 **envelope**, 즉 성도 filter가 나온다.
 이것을 **liftering**(리프터링 — filtering의 철자를 뒤섞은 이름, cepstrum 위에서 자르는 것)이라 한다. 지형도에서 잔물결을 지우고 큰 언덕만 남기는 것이다.
 얼마나 남겨야 하는가? **정답을 알고 있으므로 정확히 잴 수 있다.**
+
+lifter 길이별 envelope 오차 (모음 5개 평균, 낮을수록 좋다)  
+※ cell 뒤의 \*는 lifter가 **pitch 주기를 넘었다**는 표시
 
 ```{python}
 #| label: lifter
@@ -364,9 +381,6 @@ def envelope_rmse(nm, f0, L):
 
 
 LS = [4, 8, 13, 20, 30, 50, 80, 120, 200]
-print("lifter 길이별 envelope 오차 (모음 5개 평균, 낮을수록 좋다)")
-print("  ※ cell 뒤의 *는 lifter가 **pitch 주기를 넘었다**는 표시")
-print()
 print(f"{'F0':>6} {'주기(sample)':>11} " +
       " ".join(f"{'L=' + str(L):>8}" for L in LS) + f" {'lifter 없음':>12}")
 print("-" * 104)
@@ -379,14 +393,19 @@ for f0 in [100, 140, 200, 300]:
     cells = " ".join(f"{v:>7.3f}{'*' if L > per else ' '}"
                      for L, v in zip(LS, row))
     print(f"{f0:>6} {per:>11.0f} {cells} {raw:>12.3f}")
-print()
-print("**세 가지가 한꺼번에 읽힌다.**")
-print()
-print("① **liftering이 없으면 쓸 수 없다.**")
-print(f"   오른쪽 끝 열이 {LIFT[100][2]:.2f}~{LIFT[300][2]:.2f} — "
-       "harmonic 잔결이 그대로 남는다.")
-print()
-print("② **lifter가 pitch 주기를 넘으면 무너진다** (별표 붙은 칸).")
+```
+
+**세 가지가 한꺼번에 읽힌다.**
+
+① **liftering이 없으면 쓸 수 없다.**  
+오른쪽 끝 열이 `{python} f'{LIFT[100][2]:.2f}'`\~`{python} f'{LIFT[300][2]:.2f}'` — harmonic 잔결이 그대로 남는다.
+
+② **lifter가 pitch 주기를 넘으면 무너진다** (별표 붙은 칸).
+
+```{python}
+#| label: lifter-2
+#| code-fold: false
+
 for f0 in [100, 140, 300]:
     per, row, _ = LIFT[f0]
     over = [(L, v) for L, v in zip(LS, row) if L > per]
@@ -394,9 +413,16 @@ for f0 in [100, 140, 300]:
     print(f"   F0={f0} (주기 {per:.0f}): "
           f"주기 아래 최선 {min(v for _, v in under):.3f} → "
           f"주기 위 최악 {max(v for _, v in over):.3f}")
-print("   당연하다 — 주기를 넘으면 **source 성분을 envelope에 끌어들이는 것**이다.")
-print()
-print("③ **상한이 pitch 주기와 함께 낮아진다.**")
+```
+
+당연하다 — 주기를 넘으면 **source 성분을 envelope에 끌어들이는 것**이다.
+
+③ **상한이 pitch 주기와 함께 낮아진다.**
+
+```{python}
+#| label: lifter-3
+#| code-fold: false
+
 print(f"{'F0':>6} {'주기(sample)':>11} {'주기 이하 최선 L':>17} {'그 오차':>10} "
       f"{'L=80 일 때':>12}")
 print("-" * 62)
@@ -406,21 +432,17 @@ for f0 in [100, 140, 200, 300]:
     bl, bv = min(under, key=lambda t: t[1])
     v80 = row[LS.index(80)]
     print(f"{f0:>6} {per:>11.0f} {bl:>17} {bv:>10.3f} {v80:>12.3f}")
-print()
-print("   같은 L=80이 F0=140에서는 최선(0.403)이고 "
-      "F0=300에서는 붕괴(2.378)다.")
-print("   최선의 L 자체는 이 격자에서 단조롭지 않다 — "
-      "확실한 것은 **상한**이 주기라는 것이다.")
-print()
-print("**이것이 cepstrum envelope 추정의 근본 한계다.**")
-for s in ["고음일수록 상한이 낮아 envelope을 거칠게밖에 못 잰다 "
-          "(아동·고음 화자에서 문제가 된다)",
-          "formant가 가까이 붙어 있으면 하나로 뭉개진다",
-          "그래서 [8.3](03_classical_speech.qmd)의 **LPC**가 병행해 쓰였다 — "
-          "성도를 all-pole filter로 **모형화**해서 푸는 방식이다",
-          "신경망은 이 분리를 명시적으로 하지 않고 **필요하면 스스로 배운다**"]:
-    print(f"  · {s}")
 ```
+
+같은 L=80이 F0=140에서는 최선(0.403)이고 F0=300에서는 붕괴(2.378)다.  
+최선의 L 자체는 이 격자에서 단조롭지 않다 — 확실한 것은 **상한**이 주기라는 것이다.
+
+**이것이 cepstrum envelope 추정의 근본 한계다.**
+
+- 고음일수록 상한이 낮아 envelope을 거칠게밖에 못 잰다 (아동·고음 화자에서 문제가 된다)
+- formant가 가까이 붙어 있으면 하나로 뭉개진다
+- 그래서 [8.3](03_classical_speech.qmd)의 **LPC**가 병행해 쓰였다 — 성도를 all-pole filter로 **모형화**해서 푸는 방식이다
+- 신경망은 이 분리를 명시적으로 하지 않고 **필요하면 스스로 배운다**
 
 ---
 
@@ -474,11 +496,16 @@ for _ in range(20):
     chunks.append(audio.log_mel(y/np.max(np.abs(y)), SR, N_FFT, HOP, fb=FB))
 F = np.concatenate(chunks, axis=1)
 C = dct(F, type=2, axis=0, norm="ortho")
+```
 
-print(f"frame {F.shape[1]:,}개 (무작위 모음 60 + fricative 20), mel 대역 {N_MELS}개")
-print()
-print("앞 n개 계수만 남기고 log-mel을 복원해 본다")
-print()
+frame `{python} f'{F.shape[1]:,}'`개 (무작위 모음 60 + fricative 20), mel 대역 `{python} f'{N_MELS}'`개
+
+앞 n개 계수만 남기고 log-mel을 복원해 본다
+
+```{python}
+#| label: ncoef-2
+#| code-fold: false
+
 print(f"{'계수 수':>8} {'재구성 RMSE':>13} {'설명된 분산':>13}")
 print("-" * 38)
 NC = []
@@ -490,20 +517,19 @@ for n in [1, 2, 4, 8, 13, 20, 26, 40]:
     var = float(1 - np.sum((rec - F)**2)/np.sum((F - F.mean())**2))
     NC.append((n, rmse, var))
     print(f"{n:>8} {rmse:>13.4f} {var:>13.4f}")
-print()
 n13 = [r for r in NC if r[0] == 13][0]
 n26 = [r for r in NC if r[0] == 26][0]
-print(f"**13개로 분산의 {n13[2]:.1%}를 설명한다.** "
-      f"26개로 늘려도 {n26[2]:.1%}다.")
-print("  나머지는 harmonic 잔결 — **화자·음높이 정보이지 phoneme 정보가 아니다.**")
-print()
-print("**13이라는 숫자의 출처는 셋이 겹친 것이다.**")
-for s in ["위 표처럼 envelope은 십여 개면 거의 재현된다",
-          "GMM-HMM 시절에는 **차원이 곧 비용**이었다 (8.3)",
-          "높은 계수는 F0에 따라 흔들려 화자 간 일반화를 방해했다",
-          "관례적으로 계수 0(에너지)을 빼거나 따로 두고 1~12를 쓴다"]:
-    print(f"  · {s}")
 ```
+
+**13개로 분산의 `{python} f'{n13[2]:.1%}'`를 설명한다.** 26개로 늘려도 `{python} f'{n26[2]:.1%}'`다.  
+나머지는 harmonic 잔결 — **화자·음높이 정보이지 phoneme 정보가 아니다.**
+
+**13이라는 숫자의 출처는 셋이 겹친 것이다.**
+
+- 위 표처럼 envelope은 십여 개면 거의 재현된다
+- GMM-HMM 시절에는 **차원이 곧 비용**이었다 (8.3)
+- 높은 계수는 F0에 따라 흔들려 화자 간 일반화를 방해했다
+- 관례적으로 계수 0(에너지)을 빼거나 따로 두고 1\~12를 쓴다
 
 ---
 
@@ -539,50 +565,46 @@ print(f"{'log-mel':<20} {N_MELS:>6} {offdiag_mean(R_mel):>18.3f} "
       f"{eff_dim(R_mel):>12.2f}")
 print(f"{'MFCC (13)':<20} {13:>6} {offdiag_mean(R_mfcc):>18.3f} "
       f"{eff_dim(R_mfcc):>13.2f}")
-print()
-print(f"**인접한 mel 대역끼리의 상관은 {adj:.3f}다.** "
-      "triangular filter가 겹치니 당연하다.")
-print(f"  DCT를 걸면 off-diagonal(비대각 — 서로 다른 차원 사이의) 상관이 {offdiag_mean(R_mel):.3f} → "
-      f"{offdiag_mean(R_mfcc):.3f}로 떨어진다.")
-print()
-print("**그래서 이것이 왜 중요했는가**")
-print()
-print(f"{'시대':<16} {'모델':<26} {'상관된 입력이 문제인가'}")
-print("-" * 76)
-for a, b, c in [
-    ("1980~2010", "GMM-HMM, **diagonal covariance**", "**치명적** — 상관을 표현할 수 없다"),
-    ("~2015", "DNN-HMM", "덜 문제. 그래도 관례로 MFCC 사용"),
-    ("2016~", "CNN / Transformer", "**문제 아님** — 상관을 스스로 쓴다"),
-]:
-    print(f"{a:<16} {b:<26} {c}")
-print()
-print("**DCT는 diagonal covariance(대각 공분산 — 각 차원을 서로 독립으로 보는 가정) 가정을 살리기 위한 장치였다.**")
-print("  GMM이 각 차원을 독립으로 다뤄야 했으므로, 입력을 미리 decorrelation(탈상관)시켜 준 것이다.")
-print("  각 축을 따로만 볼 수 있는 근시안적 모델을 위해, 축을 미리 돌려 준 셈이다.")
-print("  그 제약이 사라지자 DCT도 사라졌다.")
-print()
-print("**그리고 DCT는 손해도 끼친다.**")
 v13 = [r for r in NC if r[0] == 13][0]
-for s in [f"잘라내는 순간 **정보를 버린다** "
-          f"(위 표: 13개면 분산의 {1-v13[2]:.1%} 손실)",
-          "**locality(국소성)를 깬다** — mel 대역 하나의 변화가 모든 계수에 퍼진다",
-          "  CNN은 주파수 축의 국소 pattern을 보는데, DCT 후에는 그 축이 없다",
-          "noise에 강해지지도 않는다 — noise도 함께 변환될 뿐이다"]:
-    print(f"  · {s}")
-print()
-print("**현재의 표준**")
-print(f"{'입력':<28} {'쓰는 곳'}")
-print("-" * 66)
-for a, b in [("log-mel spectrogram", "**대부분의 ASR·TTS** (Whisper, Tacotron 계열)"),
-             ("raw waveform", "wav2vec 2.0, SincNet — front-end까지 학습 (8.5)"),
-             ("MFCC", "가벼운 embedded 기기, 화자 인식 일부, 고전 pipeline"),
-             ("학습형 filterbank", "LEAF 등 — mel을 초기값으로 두고 fine-tuning")]:
-    print(f"{a:<28} {b}")
-print()
-print("**log-mel이 남은 이유는 '충분히 좋고 충분히 싸서'다.**")
-print("  raw waveform 학습이 더 나은 경우가 있지만, 데이터와 연산이 많이 필요하다.")
-print("  log-mel은 **공짜로 얻는 좋은 inductive bias(귀납 편향 — 모델에 미리 심어 주는 유용한 가정)**다.")
 ```
+
+**인접한 mel 대역끼리의 상관은 `{python} f'{adj:.3f}'`다.** triangular filter가 겹치니 당연하다.  
+DCT를 걸면 off-diagonal(비대각 — 서로 다른 차원 사이의) 상관이 `{python} f'{offdiag_mean(R_mel):.3f}'` → `{python} f'{offdiag_mean(R_mfcc):.3f}'`로 떨어진다.
+
+**그래서 이것이 왜 중요했는가**
+
+| 시대 | 모델 | 상관된 입력이 문제인가 |
+|---|---|---|
+| 1980\~2010 | GMM-HMM, **diagonal covariance** | **치명적** — 상관을 표현할 수 없다 |
+| \~2015 | DNN-HMM | 덜 문제. 그래도 관례로 MFCC 사용 |
+| 2016\~ | CNN / Transformer | **문제 아님** — 상관을 스스로 쓴다 |
+
+**DCT는 diagonal covariance(대각 공분산 — 각 차원을 서로 독립으로 보는 가정) 가정을 살리기 위한 장치였다.**
+
+GMM이 각 차원을 독립으로 다뤄야 했으므로, 입력을 미리 decorrelation(탈상관)시켜 준 것이다.  
+각 축을 따로만 볼 수 있는 근시안적 모델을 위해, 축을 미리 돌려 준 셈이다.  
+그 제약이 사라지자 DCT도 사라졌다.
+
+**그리고 DCT는 손해도 끼친다.**
+
+- 잘라내는 순간 **정보를 버린다** (위 표: 13개면 분산의 `{python} f'{1 - v13[2]:.1%}'` 손실)
+- **locality(국소성)를 깬다** — mel 대역 하나의 변화가 모든 계수에 퍼진다
+- CNN은 주파수 축의 국소 pattern을 보는데, DCT 후에는 그 축이 없다
+- noise에 강해지지도 않는다 — noise도 함께 변환될 뿐이다
+
+**현재의 표준**
+
+| 입력 | 쓰는 곳 |
+|---|---|
+| log-mel spectrogram | **대부분의 ASR·TTS** (Whisper, Tacotron 계열) |
+| raw waveform | wav2vec 2.0, SincNet — front-end까지 학습 (8.5) |
+| MFCC | 가벼운 embedded 기기, 화자 인식 일부, 고전 pipeline |
+| 학습형 filterbank | LEAF 등 — mel을 초기값으로 두고 fine-tuning |
+
+**log-mel이 남은 이유는 '충분히 좋고 충분히 싸서'다.**
+
+raw waveform 학습이 더 나은 경우가 있지만, 데이터와 연산이 많이 필요하다.  
+log-mel은 **공짜로 얻는 좋은 inductive bias(귀납 편향 — 모델에 미리 심어 주는 유용한 가정)**다.
 
 ```{python}
 #| label: fig-mfcc
@@ -662,27 +684,38 @@ def mf(x):
 
 
 M_clean, M_ch = mf(u), mf(u_ch)
-print(f"발화: 모음 {len(labs)}개 연결 ({' '.join(labs)}), "
-      f"frame {M_clean.shape[1]}개")
-print("channel: 300~3400 Hz band-pass (전화 회선 흉내)")
-print()
+```
+
+발화: 모음 `{python} f'{len(labs)}'`개 연결 (`{python} f'{' '.join(labs)}'`), frame `{python} f'{M_clean.shape[1]}'`개
+channel: 300\~3400 Hz band-pass (전화 회선 흉내)
+
+```{python}
+#| label: cmvn-2
+#| code-fold: false
+
 print(f"{'조건':<24} {'깨끗한 것과의 RMSE':>22}")
 print("-" * 50)
 r0 = float(np.sqrt(np.mean((M_clean - M_ch)**2)))
 r1 = float(np.sqrt(np.mean((audio.cmvn(M_clean) - audio.cmvn(M_ch))**2)))
 print(f"{'그대로':<24} {r0:>22.4f}")
 print(f"{'CMN 적용':<24} {r1:>22.4f}")
-print()
-print(f"**channel이 만든 왜곡이 {r0/r1:.0f}분의 1로 줄었다.**")
-print()
 d = M_ch - M_clean
 ratio = float(np.mean(d.std(1)/(np.abs(d.mean(1)) + 1e-9)))
-print(f"완전히 지워지지는 않는 이유: channel 효과가 정확히 상수는 아니다.")
-print(f"  frame별 차이의 (표준편차 / 평균 크기) = {ratio:.2f}")
-print("  0이면 순수한 상수 이동이고, CMN으로 완전히 지워진다.")
-print()
-print("**중요한 것은 phoneme 정보가 살아남는가다.**")
 seg_len = M_clean.shape[1]//len(labs)
+```
+
+**channel이 만든 왜곡이 `{python} f'{r0 / r1:.0f}'`분의 1로 줄었다.**
+
+완전히 지워지지는 않는 이유: channel 효과가 정확히 상수는 아니다.  
+frame별 차이의 (표준편차 / 평균 크기) = `{python} f'{ratio:.2f}'`
+0이면 순수한 상수 이동이고, CMN으로 완전히 지워진다.
+
+**중요한 것은 phoneme 정보가 살아남는가다.**
+
+```{python}
+#| label: cmvn-3
+#| code-fold: false
+
 print()
 print(f"{'조건':<16} {'같은 모음 거리':>15} {'다른 모음 거리':>15} {'비':>8}")
 print("-" * 58)
@@ -696,25 +729,22 @@ for tag, Mx in [("CMN 없음", M_ch), ("CMN 적용", audio.cmvn(M_ch))]:
             (within if labs[i] == labs[j] else between).append(dd)
     print(f"{tag:<16} {np.mean(within):>15.3f} {np.mean(between):>15.3f} "
           f"{np.mean(between)/max(np.mean(within), 1e-9):>8.1f}")
-print()
-print("**변별비가 그대로다.** CMN은 발화 전체에 같은 상수를 빼므로,")
-print("  발화 **안에서의** 차이는 한 치도 건드리지 않는다.")
-print("  잃는 것은 '이 발화 전체가 어떤 톤인가'뿐이다 — channel이 대부분 거기 있다.")
-print()
-print(f"{'normalization':<20} {'무엇을 지우는가':<28} {'주의'}")
-print("-" * 78)
-for a, b, c in [
-    ("CMN", "channel·마이크 (덧셈 성분)", "발화가 짧으면 phoneme 정보까지 지운다"),
-    ("CVN (분산까지)", "gain·dynamic 차이", "짧은 발화에서 불안정"),
-    ("PCEN", "느린 배경 변화 (곱셈)", "원거리 마이크에서 효과적"),
-    ("SpecAugment", "(normalization 아님) augmentation", "시간·주파수 masking (8.5)"),
-]:
-    print(f"{a:<20} {b:<28} {c}")
-print()
-print("**실무 함정**: online 인식에서는 미래 frame을 못 본다.")
-print("  전체 평균 대신 **running mean(누적 평균)**이나 moving average를 쓰고,")
-print("  그러면 발화 앞부분의 normalization이 부정확해진다 — streaming의 고전적 문제다.")
 ```
+
+**변별비가 그대로다.** CMN은 발화 전체에 같은 상수를 빼므로,
+발화 **안에서의** 차이는 한 치도 건드리지 않는다.  
+잃는 것은 '이 발화 전체가 어떤 톤인가'뿐이다 — channel이 대부분 거기 있다.
+
+| normalization | 무엇을 지우는가 | 주의 |
+|---|---|---|
+| CMN | channel·마이크 (덧셈 성분) | 발화가 짧으면 phoneme 정보까지 지운다 |
+| CVN (분산까지) | gain·dynamic 차이 | 짧은 발화에서 불안정 |
+| PCEN | 느린 배경 변화 (곱셈) | 원거리 마이크에서 효과적 |
+| SpecAugment | (normalization 아님) augmentation | 시간·주파수 masking (8.5) |
+
+**실무 함정**: online 인식에서는 미래 frame을 못 본다.  
+전체 평균 대신 **running mean(누적 평균)**이나 moving average를 쓰고,
+그러면 발화 앞부분의 normalization이 부정확해진다 — streaming의 고전적 문제다.
 
 ---
 
@@ -736,9 +766,14 @@ from src import audio
 
 D1 = audio.deltas(M_clean)
 D2 = audio.deltas(D1)
-print(f"MFCC {M_clean.shape[0]} + Δ {D1.shape[0]} + ΔΔ {D2.shape[0]} "
-      f"= {M_clean.shape[0]*3} 차원 — 고전 ASR의 표준 입력")
-print()
+```
+
+MFCC `{python} f'{M_clean.shape[0]}'` + Δ `{python} f'{D1.shape[0]}'` + ΔΔ `{python} f'{D2.shape[0]}'` = `{python} f'{M_clean.shape[0] * 3}'` 차원 — 고전 ASR의 표준 입력
+
+```{python}
+#| label: deltas-2
+#| code-fold: false
+
 print(f"{'feature':<12} {'frame 간 autocorrelation(lag 1)':>30} {'해석'}")
 print("-" * 66)
 for nm, X in [("MFCC", M_clean), ("Δ", D1), ("ΔΔ", D2)]:
@@ -747,17 +782,17 @@ for nm, X in [("MFCC", M_clean), ("Δ", D1), ("ΔΔ", D2)]:
     note = ("느리게 변한다 (정적 정보)" if ac > 0.9 else
             "빠르게 변한다 (전이 정보)")
     print(f"{nm:<12} {ac:>30.3f}  {note}")
-print()
-print("**Δ는 MFCC보다 훨씬 빨리 변한다** — 다른 시간 scale의 정보다.")
-print()
-print("**지금은 왜 잘 안 쓰는가**")
-for s in ["Δ는 **고정 kernel 1차원 convolution**이다 — CNN이 학습으로 대신한다",
-          "Transformer는 attention으로 임의의 시간 관계를 본다",
-          "HMM은 frame을 conditionally independent(조건부 독립)로 가정했기 때문에 (8.3)",
-          "  **문맥을 feature에 직접 넣어 주는 것 외에 방법이 없었다**",
-          "그 가정이 사라지자 Δ도 필요 없어졌다"]:
-    print(f"  · {s}")
 ```
+
+**Δ는 MFCC보다 훨씬 빨리 변한다** — 다른 시간 scale의 정보다.
+
+**지금은 왜 잘 안 쓰는가**
+
+- Δ는 **고정 kernel 1차원 convolution**이다 — CNN이 학습으로 대신한다
+- Transformer는 attention으로 임의의 시간 관계를 본다
+- HMM은 frame을 conditionally independent(조건부 독립)로 가정했기 때문에 (8.3)
+- **문맥을 feature에 직접 넣어 주는 것 외에 방법이 없었다**
+- 그 가정이 사라지자 Δ도 필요 없어졌다
 
 ---
 
@@ -863,8 +898,9 @@ widths = np.diff(edges)[:-1]
 
 for i in [0, 1, 2, 37, 38, 39]:
     print(f"filter {i:>2}   중심 {centers[i]:7.1f} Hz   폭 {widths[i]:6.1f} Hz")
-print(f"마지막/처음 폭 비 = {widths[-1] / widths[0]:.1f}")
 ```
+
+마지막/처음 폭 비 = `{python} f'{widths[-1] / widths[0]:.1f}'`
 :::
 
 ## 요약
