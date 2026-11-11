@@ -102,9 +102,15 @@ PAPERS = [
 
 FIELDS = ["기초", "sequence", "언어", "alignment", "생성", "비전", "오디오",
           "효율", "RL", "해석"]
-print(f"이 지도에 실린 논문 {len(PAPERS)}편, 분야 {len(FIELDS)}개")
-print(f"연도 범위 {min(p[0] for p in PAPERS)}–{max(p[0] for p in PAPERS)}")
-print()
+```
+
+이 지도에 실린 논문 `{python} f'{len(PAPERS)}'`편, 분야 `{python} f'{len(FIELDS)}'`개
+연도 범위 `{python} f'{min((p[0] for p in PAPERS))}'`–`{python} f'{max((p[0] for p in PAPERS))}'`
+
+```{python}
+#| label: papers-2
+#| code-fold: false
+
 print(f"{'분야':<10} {'편수':>5} {'연도 범위':>12}   대표작")
 print("-" * 70)
 for f in FIELDS:
@@ -112,16 +118,21 @@ for f in FIELDS:
     yrs = [p[0] for p in ps]
     print(f"{f:<10} {len(ps):>5} {min(yrs)}–{max(yrs):>7}   "
           + ", ".join(p[2] for p in ps[:3]))
-print()
 import collections
 by_year = collections.Counter(p[0] for p in PAPERS)
 peak = max(by_year.items(), key=lambda t: t[1])
-print(f"**가장 밀집한 해는 {peak[0]}년 ({peak[1]}편)** — "
-      f"{', '.join(p[2] for p in PAPERS if p[0]==peak[0])}")
-recent = sum(1 for p in PAPERS if p[0] >= 2020)
-print(f"**{recent}편({recent/len(PAPERS):.0%})이 2020년 이후**다. "
-      f"이 분야의 시간 감각이 그렇다.")
 ```
+
+**가장 밀집한 해는 `{python} f'{peak[0]}'`년 (`{python} f'{peak[1]}'`편)** — `{python} f'{', '.join((p[2] for p in PAPERS if p[0] == peak[0]))}'`
+
+```{python}
+#| label: papers-3
+#| code-fold: false
+
+recent = sum(1 for p in PAPERS if p[0] >= 2020)
+```
+
+**`{python} f'{recent}'`편(`{python} f'{recent / len(PAPERS):.0%}'`)이 2020년 이후**다. 이 분야의 시간 감각이 그렇다.
 
 ---
 
@@ -212,6 +223,8 @@ fig
 
 전부 읽을 필요는 없다. 목표를 정하고 최소 경로로 가는 편이 낫다.
 
+목표별 최소 읽기 경로 (연도 순)
+
 ```{python}
 #| label: paths
 #| code-fold: false
@@ -236,8 +249,6 @@ PATHS = {
         "Sparse Autoencoders"],
 }
 INFO = {p[2]: p for p in PAPERS}
-print("목표별 최소 읽기 경로 (연도 순)")
-print()
 for goal, names in PATHS.items():
     ns = sorted(names, key=lambda n: INFO[n][0])
     yrs = [INFO[n][0] for n in ns]
@@ -249,12 +260,12 @@ for goal, names in PATHS.items():
 allp = set()
 for v in PATHS.values():
     allp |= set(v)
-print(f"여섯 경로가 함께 덮는 논문 {len(allp)}편 / 전체 {len(PAPERS)}편")
 core = [n for n in allp if sum(n in v for v in PATHS.values()) >= 2]
-print(f"**둘 이상의 경로에 등장하는 논문**: "
-      f"{', '.join(sorted(core, key=lambda n: INFO[n][0]))}")
-print("  어느 방향으로 가든 통과하게 되는 길목이다.")
 ```
+
+여섯 경로가 함께 덮는 논문 `{python} f'{len(allp)}'`편 / 전체 `{python} f'{len(PAPERS)}'`편
+**둘 이상의 경로에 등장하는 논문**: `{python} f'{', '.join(sorted(core, key=lambda n: INFO[n][0]))}'`
+어느 방향으로 가든 통과하게 되는 길목이다.
 
 ```{python}
 #| label: fig-paths
