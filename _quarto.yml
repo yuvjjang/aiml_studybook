@@ -16,6 +16,7 @@ book:
     background: dark
   chapters:
     - index.qmd
+    - setup.qmd
     - part: "Part 0: 수학·컴퓨팅 기초"
       chapters:
         - chapters/00_foundations/00_linear_algebra.qmd

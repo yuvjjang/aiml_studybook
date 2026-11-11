@@ -1,0 +1,164 @@
+---
+title: "실습 환경 만들기"
+subtitle: "이 책의 코드를 내 컴퓨터에서 돌리고, 고치고, 실제 도구로 넘어가기"
+number-sections: false
+---
+
+각 장 끝의 **직접 해보기**는 코드를 고쳐서 다시 돌려 보는 과제다.
+그러려면 먼저 이 책의 코드가 내 컴퓨터에서 돌아야 한다.
+이 페이지는 그 준비를 한 번에 끝내기 위한 것이다.
+
+환경은 두 단계로 나뉜다.
+
+| 단계 | 무엇을 돌리나 | 필요한 것 |
+|---|---|---|
+| **1. 책의 코드** | 본문의 모든 그래픽과 실험, "직접 해보기", 연습 문제의 코드 | Python, NumPy·SciPy·Plotly. 노트북 CPU로 충분하다 |
+| **2. 실제 도구** | 장 끝 "실제 도구로" 절의 PyTorch·Hugging Face 코드 | 별도 환경에 PyTorch 설치. 일부는 GPU가 필요하다 |
+
+1단계만으로 이 책의 실험은 전부 따라 할 수 있다. 2단계는 배운 것을 실제 library로 옮길 때 필요하다.
+
+## 1. 책의 코드를 받아 설치한다
+
+Python 3.12와 [Quarto](https://quarto.org/docs/get-started/) 1.10에서 확인했다. Git도 필요하다.
+
+**Windows (PowerShell)**
+
+```powershell
+git clone https://github.com/yuvjjang/aiml_studybook.git
+cd aiml_studybook
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
+venv\Scripts\python -m ipykernel install --user --name ai-ml-study
+copy .env.example .env
+```
+
+**macOS / Linux**
+
+```bash
+git clone https://github.com/yuvjjang/aiml_studybook.git
+cd aiml_studybook
+python -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/python -m ipykernel install --user --name ai-ml-study
+cp .env.example .env
+```
+
+다섯째 줄은 이 가상환경을 `ai-ml-study` 라는 이름의 Jupyter kernel로 등록한다.
+모든 장이 이 이름의 kernel을 찾으므로 빠뜨리면 안 된다.
+
+## 2. 코드를 복사해 붙여넣기만 하면 안 되는 이유
+
+본문의 "코드 보기"로 나오는 코드를 빈 notebook에 붙여넣으면 대개 첫 줄에서 멈춘다. 이유는 둘이다.
+
+**첫째, 코드가 이 저장소의 `src/` 모듈을 쓴다.** 거의 모든 장의 첫 청크가 이렇게 시작한다.
+
+```python
+import sys; sys.path.append("../..")
+from src import viz, nn
+```
+
+`"../.."` 는 "지금 폴더에서 두 단계 위"를 뜻한다.
+장 파일이 `chapters/07_language/` 같은 폴더에 있으니 두 단계 위가 저장소의 맨 위 폴더이고, `src/` 가 거기에 있다.
+그래서 **코드는 그 장의 폴더에서 실행해야 한다.** 다른 곳에서 돌리면 `src` 를 찾지 못한다.
+
+**둘째, 한 장의 청크들은 변수를 이어 쓴다.** 뒤의 청크는 앞의 청크가 만든 데이터와 모델을 그대로 쓴다.
+그래서 **위에서부터 순서대로** 돌려야 한다. 중간 청크 하나만 떼어 돌릴 수는 없다.
+
+## 3. 돌리는 방법
+
+### 방법 가 — notebook으로 바꿔서 돌린다 (권장)
+
+장 하나를 Jupyter notebook으로 변환한 뒤 그 자리에서 연다.
+
+```bash
+cd chapters/07_language
+quarto convert 06_finetuning_peft.qmd        # 같은 폴더에 06_finetuning_peft.ipynb 가 생긴다
+../../venv/bin/jupyter lab 06_finetuning_peft.ipynb
+```
+
+Windows에서는 마지막 줄이 `..\..\venv\Scripts\jupyter lab 06_finetuning_peft.ipynb` 다.
+kernel은 `ai-ml-study` 를 고른다.
+
+- notebook이 장 폴더 안에 있으므로 `"../.."` 가 그대로 맞는다.
+- 셀을 위에서부터 차례로 실행하고, 고치고 싶은 셀을 고친 뒤 **그 셀과 그 아래 셀**을 다시 실행한다.
+- 본문 문장 속의 계산값은 notebook에서는 `` `{python} f"{A0:.3f}"` `` 같은 코드 글자 그대로 보인다. 값이 궁금하면 그 식을 셀에 넣어 실행하면 된다.
+- 변환된 `.ipynb` 는 사본이다. 책의 원본은 `.qmd` 이고, notebook을 고쳐도 책은 바뀌지 않는다.
+
+### 방법 나 — 장을 고치고 그 장만 다시 렌더한다
+
+`.qmd` 파일을 편집기로 직접 고친 뒤 그 장만 렌더한다.
+
+```powershell
+.\scripts\render-check.ps1 chapters\07_language\06_finetuning_peft.qmd     # Windows
+```
+```bash
+./scripts/render-check.sh chapters/07_language/06_finetuning_peft.qmd      # macOS / Linux
+```
+
+결과는 `_site/chapters/07_language/06_finetuning_peft.html` 에 생긴다. 브라우저로 열면 책과 같은 모양으로 보인다.
+장 전체를 다시 실행하므로 방법 가보다 느리다. 한 번에 수십 초에서 몇 분이 걸린다.
+원래대로 되돌리려면 `git checkout -- <고친 파일>` 을 쓴다.
+
+### 방법 다 — Colab 같은 hosted notebook
+
+원리는 같다. 저장소를 받고, 작업 폴더를 장의 폴더로 옮긴 뒤 청크를 차례로 붙여넣는다.
+
+```python
+!git clone https://github.com/yuvjjang/aiml_studybook.git
+%cd aiml_studybook/chapters/07_language
+```
+
+이 방법은 이 책을 만들면서 따로 시험하지 않았다. NumPy·SciPy·Plotly 버전이 `requirements.txt` 의 하한보다 낮으면 `!pip install -r ../../requirements.txt` 로 맞춘다.
+
+## 4. 제대로 설치됐는지 확인한다
+
+**코드를 고치기 전에, 먼저 그대로 돌려서 책에 실린 출력과 같은지 본다.**
+
+이 책의 합성 데이터와 난수는 전부 seed가 고정되어 있다.
+그래서 같은 코드를 돌리면 책에 실린 표와 같은 숫자가 나와야 한다.
+소수점 끝자리의 작은 차이는 library 버전이나 CPU에 따라 생길 수 있지만, 숫자가 눈에 띄게 다르다면 설치나 실행 순서에 문제가 있는 것이다.
+
+이 확인을 건너뛰면, 나중에 결과가 달라졌을 때 내가 고친 것 때문인지 환경 때문인지 구분할 수 없다.
+
+## 5. "직접 해보기"를 하는 순서
+
+1. **예측을 먼저 적는다.** "rank를 키우면 망각이 늘 것이다"처럼 한 문장이면 된다.
+2. **한 번에 하나만 바꾼다.** 둘을 같이 바꾸면 어느 쪽 때문인지 알 수 없다.
+3. 바꾼 청크와 **그 아래 청크를 전부** 다시 돌린다. 위 청크의 변수를 바꿨는데 아래를 다시 돌리지 않으면 옛 결과가 남는다.
+4. 예측과 비교한다. 틀렸다면 그 지점이 이해가 비어 있던 곳이다.
+5. seed를 바꿔 두세 번 더 돌려 본다. 한 번의 결과가 우연인지 확인하는 가장 싼 방법이다 ([11.0 재현성](chapters/11_systems/00_reproducibility.qmd)).
+
+## 6. 실제 도구용 환경을 따로 만든다
+
+이 책의 본문 코드는 PyTorch를 쓰지 않는다. 빌드할 때마다 같은 그림이 나오도록 의존성을 NumPy·SciPy·Plotly로 제한했기 때문이다.
+대신 장 끝의 **실제 도구로** 절이, 그 장에서 NumPy로 만든 것을 PyTorch·Hugging Face로는 어떻게 쓰는지 보여 준다
+(예: [7.6 fine-tuning과 PEFT](chapters/07_language/06_finetuning_peft.qmd)).
+
+이 코드는 책의 가상환경과 **별도의 환경**에서 돌린다.
+
+```bash
+python -m venv venv-torch
+venv-torch/bin/pip install torch transformers peft          # Windows: venv-torch\Scripts\pip
+```
+
+GPU가 있으면 [pytorch.org](https://pytorch.org/get-started/locally/) 의 안내대로 자기 CUDA 버전에 맞는 `torch` 를 설치한다.
+
+**이 절의 코드를 읽을 때 알아 둘 것**
+
+- **책을 빌드할 때 실행되지 않는다.** 본문의 NumPy 코드와 달리, 여기 적힌 출력은 빌드가 보증하지 않는다.
+  그래서 블록마다 **어떤 버전에서 직접 돌려 확인했는지**, 확인하지 못한 부분이 있으면 **무엇을 확인하지 못했는지**를 적어 둔다.
+- **library의 API는 바뀐다.** 적힌 버전과 다르면 함수 이름이나 인자가 다를 수 있다. 그때는 그 library의 공식 문서가 기준이다.
+- **모델과 데이터를 내려받는다.** 처음 실행할 때 수백 MB 이상을 받는 블록이 있다. 모델마다 license가 다르다 ([A.3](chapters/13_appendix/03_resources.qmd)).
+
+**어디까지가 내 컴퓨터에서 되는가**
+
+| 하려는 일 | 필요한 것 |
+|---|---|
+| 층 하나를 직접 구현해 확인하기 | CPU로 충분 |
+| 1억 parameter 안팎의 작은 모델을 수십 step 학습하기 | CPU로 가능 (수십 초에서 몇 분) |
+| 4 bit quantization(`bitsandbytes`)으로 모델 올리기 | CUDA GPU |
+| 수십억 parameter 모델의 fine-tuning | GPU 메모리 수 GB에서 수십 GB. 계산법은 [7.6](chapters/07_language/06_finetuning_peft.qmd) |
+
+---
+
+**다음**: [0.0 선형대수](chapters/00_foundations/00_linear_algebra.qmd)

@@ -80,6 +80,7 @@ def build_quarto_yml():
         "    background: dark",
         "  chapters:",
         "    - index.qmd",
+        "    - setup.qmd",
     ]
     for part in PARTS:
         lines.append(f'    - part: "{part["title"]}"')
