@@ -157,13 +157,13 @@ EX = [stack(feats(x)) for x, _ in TESTU]
 LY = [[O2I[p] for p, _ in l if p != "_"] for _, l in LAB]
 EY = [[O2I[p] for p, _ in l if p != "_"] for _, l in TESTU]
 D = UX[0].shape[1]
-
-print(f"label **없는** 발화 {len(UX)}개 ({sum(x.shape[0] for x in UX):,} frame)")
-print(f"label 있는 발화 {len(LX)}개, test {len(EX)}개")
-print(f"입력 {D}차원 (MFCC 13 x 문맥 9 frame)")
-print()
-print("phoneme label(UPH)은 **평가할 때만** 쓴다 — 학습에는 절대 넣지 않는다.")
 ```
+
+label **없는** 발화 `{python} f'{len(UX)}'`개 (`{python} f'{sum((x.shape[0] for x in UX)):,}'` frame)  
+label 있는 발화 `{python} f'{len(LX)}'`개, test `{python} f'{len(EX)}'`개
+입력 `{python} f'{D}'`차원 (MFCC 13 x 문맥 9 frame)
+
+phoneme label(UPH)은 **평가할 때만** 쓴다 — 학습에는 절대 넣지 않는다.
 
 ```{python}
 #| label: regression
@@ -216,31 +216,36 @@ P_, T_ = np.concatenate(P_), np.concatenate(T_)
 ratio = float(np.mean(P_.std(0)/(T_.std(0) + 1e-9)))
 mse_pred = float(np.mean((P_ - T_)**2))
 mse_mean = float(np.mean((T_.mean(0) - T_)**2))
+```
 
-print("mask된 frame의 MFCC를 직접 regression했을 때")
-print()
+mask된 frame의 MFCC를 직접 regression했을 때
+
+```{python}
+#| label: regression-2
+#| code-fold: false
+
 print(f"{'지표':<40} {'값':>10}")
 print("-" * 54)
 print(f"{'예측 표준편차 / 정답 표준편차':<40} {ratio:>10.3f}")
 print(f"{'MSE (모델)':<40} {mse_pred:>10.3f}")
 print(f"{'MSE (항상 전체 평균을 예측)':<40} {mse_mean:>10.3f}")
 print(f"{'비율':<40} {mse_pred/mse_mean:>10.3f}")
-print()
-print(f"**흔히 말하는 '평균으로 collapse'는 여기서 일어나지 않았다** — "
-      f"예측 분산이 정답의 {ratio:.0%}이고,")
-print(f"  MSE도 평균 예측 대비 {mse_pred/mse_mean:.0%}로 실제 정보를 담고 있다.")
-print("  (collapse란 모델이 무엇을 넣어도 뭉뚱그린 평균값만 내놓게 되는 것 — 흐릿한 사진처럼.)")
-print()
-print("**합성 음성이라 이웃 frame으로 mask 구간이 상당히 예측되기 때문이다.**")
-print("  실제 음성에서는 화자·noise 성분이 예측 불가능해서 그 부분이 평균으로 눌린다.")
-print()
-print("그런데 collapse가 없어도 **regression 목표에는 구조적 문제가 남는다.**")
-for s in ["MSE는 **지각적으로 중요한 차이와 중요하지 않은 차이를 구별하지 않는다**",
-          "  화자 feature(F0, 성도 길이)의 오차와 phoneme 오차가 같은 무게로 들어간다",
-          "예측 가능한 성분(에너지 envelope)에 loss가 지배되어 음운 정보는 뒷전이 된다",
-          "**그래서 목표를 이산화한다** — 무엇을 맞힐지 고르는 것이 곧 무엇을 배울지 고르는 것"]:
-    print(f"  · {s}")
 ```
+
+**흔히 말하는 '평균으로 collapse'는 여기서 일어나지 않았다** — 예측 분산이 정답의 `{python} f'{ratio:.0%}'`이고,
+MSE도 평균 예측 대비 `{python} f'{mse_pred / mse_mean:.0%}'`로 실제 정보를 담고 있다.  
+(collapse란 모델이 무엇을 넣어도 뭉뚱그린 평균값만 내놓게 되는 것 — 흐릿한 사진처럼.)
+
+**합성 음성이라 이웃 frame으로 mask 구간이 상당히 예측되기 때문이다.**
+
+실제 음성에서는 화자·noise 성분이 예측 불가능해서 그 부분이 평균으로 눌린다.
+
+그런데 collapse가 없어도 **regression 목표에는 구조적 문제가 남는다.**
+
+- MSE는 **지각적으로 중요한 차이와 중요하지 않은 차이를 구별하지 않는다**
+- 화자 feature(F0, 성도 길이)의 오차와 phoneme 오차가 같은 무게로 들어간다
+- 예측 가능한 성분(에너지 envelope)에 loss가 지배되어 음운 정보는 뒷전이 된다
+- **그래서 목표를 이산화한다** — 무엇을 맞힐지 고르는 것이 곧 무엇을 배울지 고르는 것
 
 ---
 
@@ -306,18 +311,30 @@ def nmi(codes, phones):
 
 C0 = assign(Xall, CEN0)
 p0, n0 = purity(C0, Yph), nmi(C0, Yph)
-print(f"MFCC에 k-means (code {K}개) — phoneme label은 쓰지 않았다")
-print()
+```
+
+MFCC에 k-means (code `{python} f'{K}'`개) — phoneme label은 쓰지 않았다
+
+```{python}
+#| label: kmeans-2
+#| code-fold: false
+
 print(f"{'지표':<28} {'값':>10}")
 print("-" * 42)
 print(f"{'phoneme purity(순도)':<28} {p0:>10.4f}")
 print(f"{'NMI (normalized mutual information)':<28} {n0:>10.4f}")
 print(f"{'가장 흔한 phoneme만 찍었다면':<28} "
       f"{float(np.bincount(Yph).max()/len(Yph)):>10.4f}")
-print()
-print("purity = 각 code 안에서 가장 많은 phoneme이 차지하는 비율의 평균, NMI = code와 phoneme이 얼마나 같은 정보를 담는가 (0~1)")
-print()
-print("code별로 어떤 phoneme이 몰려 있는지 (상위 6개 code)")
+```
+
+purity = 각 code 안에서 가장 많은 phoneme이 차지하는 비율의 평균, NMI = code와 phoneme이 얼마나 같은 정보를 담는가 (0\~1)
+
+code별로 어떤 phoneme이 몰려 있는지 (상위 6개 code)
+
+```{python}
+#| label: kmeans-3
+#| code-fold: false
+
 print(f"{'code':>6} {'frame 수':>10} {'최빈 phoneme':>12} {'그 비율':>9}")
 print("-" * 40)
 for k in np.argsort(-np.bincount(C0, minlength=K))[:6]:
@@ -325,11 +342,12 @@ for k in np.argsort(-np.bincount(C0, minlength=K))[:6]:
     cnt = np.bincount(Yph[m])
     print(f"{k:>6} {int(m.sum()):>10,} {PHONES[int(cnt.argmax())]:>12} "
           f"{cnt.max()/m.sum():>9.3f}")
-print()
-print(f"**label 없이 만든 code가 phoneme과 {p0:.0%} 맞는다.**")
-print("  '음성에는 이산 단위가 없다'는 문제를 **일단 통계로 만들어 낸 것**이다.")
-print("  이 pseudo-label을 목표로 삼으면 분류 문제가 되고, 텍스트와 같은 틀이 된다.")
 ```
+
+**label 없이 만든 code가 phoneme과 `{python} f'{p0:.0%}'` 맞는다.**
+
+'음성에는 이산 단위가 없다'는 문제를 **일단 통계로 만들어 낸 것**이다.  
+이 pseudo-label을 목표로 삼으면 분류 문제가 되고, 텍스트와 같은 틀이 된다.
 
 ---
 
@@ -361,6 +379,8 @@ label을 만드는 쪽과 label로 배우는 쪽이 **같은 모델**이라는 �
 차이는 각 단계가 무엇을 최적화하는지 **보장이 없다**는 점이다.
 k-means는 목적함수를 단조 감소시키지만, 이 큰 순환에는 그런 정리가 없다 —
 경험적으로 2~3 round에서 이득이 멈춘다는 것이 알려져 있을 뿐이다.
+
+mask 비율 35%, 구간 3 frame. loss는 **mask된 위치에만** 건다.
 
 ```{python}
 #| label: pretrain
@@ -406,8 +426,6 @@ _, CEN1, _ = clustering.kmeans(H[sub2], K, n_iter=25, seed=0)
 C1 = assign(H, CEN1)
 p1, n1 = purity(C1, Yph), nmi(C1, Yph)
 
-print("mask 비율 35%, 구간 3 frame. loss는 **mask된 위치에만** 건다.")
-print()
 print(f"{'clustering 대상':<32} {'phoneme purity':>14} {'NMI':>9}")
 print("-" * 58)
 print(f"{'1차: MFCC raw feature':<32} {p0:>14.4f} {n0:>9.4f}")
@@ -422,10 +440,10 @@ if p1 > p0:
 else:
     print(f"**이 설정에서는 반복이 code를 개선하지 못했다** "
           f"({p0:.4f} → {p1:.4f}).")
-print()
-print("실제 HuBERT는 이 반복을 2~3회 돌리고, 회차마다 code 수를 늘린다.")
-print("  1차 100 code(MFCC) → 2차 500 code(6층 표현) → 3차(9층 표현) 식이다.")
 ```
+
+실제 HuBERT는 이 반복을 2\~3회 돌리고, 회차마다 code 수를 늘린다.  
+1차 100 code(MFCC) → 2차 500 code(6층 표현) → 3차(9층 표현) 식이다.
 
 ---
 
@@ -549,9 +567,14 @@ def perr(m):
 
 
 SEEDS = [0, 1, 2]
-print(f"seed {len(SEEDS)}개의 평균과 범위로 보고한다 "
-      f"(7.13에서 배운 대로 — 값 하나로는 아무것도 말할 수 없다)")
-print()
+```
+
+seed `{python} f'{len(SEEDS)}'`개의 평균과 범위로 보고한다 (7.13에서 배운 대로 — 값 하나로는 아무것도 말할 수 없다)
+
+```{python}
+#| label: label-efficiency-2
+#| code-fold: false
+
 print(f"{'transcription 발화':>18} {'무작위 초기화':>22} {'pretraining 후':>22} {'차이(평균)':>12}")
 print("-" * 72)
 EFF = []
@@ -563,27 +586,41 @@ for n_lab in [3, 5, 10, 25, 50]:
     print(f"{n_lab:>18} {np.mean(a):>10.3f} [{np.min(a):.3f}~{np.max(a):.3f}] "
           f"{np.mean(b):>10.3f} [{np.min(b):.3f}~{np.max(b):.3f}] "
           f"{np.mean(b)-np.mean(a):>+12.3f}")
-print()
 wins = sum(1 for e in EFF if e[4] < e[1])
 big = [e for e in EFF if e[1] - e[4] > 0.1]
-print(f"**{len(EFF)}개 설정 중 pretraining이 이긴 것은 {wins}개다.**")
+```
+
+**`{python} f'{len(EFF)}'`개 설정 중 pretraining이 이긴 것은 `{python} f'{wins}'`개다.**
+
+```{python}
+#| label: label-efficiency-3
+#| code-fold: false
+
 if big:
     print("  transcription이 적을수록 격차가 크다:")
     for e in big:
         print(f"    {e[0]:>2}발화: {e[1]:.3f} → {e[4]:.3f} "
               f"({(e[1]-e[4])/e[1]:.0%} 감소)")
-print()
-print("**label efficiency 주장이 이 작은 규모에서도 재현된다.**")
-print()
-print("**다만 seed 간 범위를 보라.** 예를 들어 10발화의 pretraining 구간이")
 te10 = [e for e in EFF if e[0] == 10]
+```
+
+**label efficiency 주장이 이 작은 규모에서도 재현된다.**
+
+**다만 seed 간 범위를 보라.** 예를 들어 10발화의 pretraining 구간이
+
+```{python}
+#| label: label-efficiency-4
+#| code-fold: false
+
 if te10:
     e = te10[0]
     print(f"  [{e[5]:.3f}~{e[6]:.3f}]이다 — 폭이 평균 차이만큼 넓다.")
-print("  실제로 이 실험을 처음 seed 하나로 돌렸을 때는 **반대 결론**이 나왔다.")
-print("  [7.13](../07_language/13_evaluation.qmd)에서 잰 그대로다 —")
-print("  **값 하나로는 방향조차 알 수 없다.**")
 ```
+
+실제로 이 실험을 처음 seed 하나로 돌렸을 때는 **반대 결론**이 나왔다.  
+[7.13](../07_language/13_evaluation.qmd)에서 잰 그대로다 —
+
+**값 하나로는 방향조차 알 수 없다.**
 
 ---
 
@@ -626,65 +663,71 @@ for li, nm in [(0, "pretraining encoder 1층"), (1, "pretraining encoder 2층")]
     v = probe(f, ph)
     PR.append((nm, v))
     print(f"{nm:<30} {f[0].shape[1]:>6} {v:>26.4f}")
-print()
-print(f"**세 표현의 probe 성능이 거의 같다** "
-      f"({raw_p:.4f} / {PR[1][1]:.4f} / {PR[2][1]:.4f}).")
-print("  raw MFCC만으로도 phoneme 정보가 이미 선형으로 거의 다 읽힌다.")
-print()
-print("**그러면 pretraining이 준 것은 '더 많은 phoneme 정보'가 아니다.**")
-print("  frame 단위 정보량은 그대로인데 label efficiency는 크게 좋아졌다.")
-print()
-print("남는 설명은 **최적화**다.")
-for s in ["CTC는 frame 분류가 아니라 **alignment를 포함한 sequence 문제**다 (8.4)",
-          "  transcription 3개로 그 지형을 무작위 초기값에서 찾아가는 것은 어렵다",
-          "pretraining된 가중치는 이미 **음운 구조로 조직된 hidden 공간**을 준다",
-          "  CTC head는 그 위에 얇은 decision boundary만 얹으면 된다",
-          "**즉 여기서 전이된 것은 정보가 아니라 초기값의 질이다** — 같은 지도를 줘도 출발점이 목적지 근처면 빨리 닿는다",
-          "실제 대규모 모델에서는 두 가지가 함께 온다 — "
-          "정보(긴 문맥·화자 불변성)와 초기값 모두"]:
-    print(f"  · {s}")
-print()
-print("**frame probe가 좋아지지 않았다고 pretraining이 무용한 것은 아니다.**")
-print("  이것이 SUPERB 같은 frozen(얼린) 표현 평가의 한계이기도 하다 —")
-print("  fine-tuning에서 오는 이득을 probe가 놓칠 수 있다.")
-print()
-print("**그래도 이 실험은 실제 조건과 크게 다르다**")
-print(f"{'축':<20} {'여기':<26} {'실제 (wav2vec 2.0 등)'}")
-print("-" * 74)
-for a, b, c in [
-    ("phoneme 수", f"{len(PHONES)}개, 합성", "40~50개, 실제 발화"),
-    ("화자 변이", "F0만 다르다", "성도·억양·속도·감정"),
-    ("channel 변이", "없다", "마이크·거리·잔향·codec"),
-    ("raw feature의 충분성", f"linear probe **{raw_p:.2f}**", "훨씬 낮다 — 배울 것이 많다"),
-    ("encoder", "dense 2층, 문맥 ±40ms", "Transformer 12~48층, 발화 전체"),
-    ("pretraining 데이터", "250 발화 (약 8분)", "**53,000~1,000,000 시간**"),
-    ("pretraining 목표", "MFCC k-means code", "학습된 codebook + contrastive loss"),
-]:
-    print(f"{a:<20} {b:<26} {c}")
-print()
-print("**네 번째 줄이 이 장의 결과를 제한한다.**")
-print(f"  여기서는 frame 정보의 간극이 {1-raw_p:.1%}밖에 없어서,")
-print("  pretraining이 '정보'로 기여할 여지가 처음부터 거의 없었다.")
-print("  실제 음성에서는 그 간극이 크고, 그래서 이득의 성격도 다르다.")
-print()
-print("**그리고 규모가 본질이다.**")
-for s in ["Transformer는 발화 전체를 보고 **긴 문맥 의존**을 학습한다 — "
-          "±40ms window로는 배울 수 없는 것",
-          "53,000시간에서 배우는 것은 phoneme 경계가 아니라 **음성이라는 신호의 구조**다",
-          "그 규모에서만 화자·channel 불변성이 나온다",
-          "**작은 규모의 self-supervised 실험이 음성일 때 잘 안 되는 것은 알려진 사실이다**"]:
-    print(f"  · {s}")
-print()
-print("**이 장에서 재현된 것 세 가지**")
-print(f"  · k-means code가 phoneme과 {p0:.0%} 맞는다 — 이산 단위를 통계로 만들 수 있다")
+```
+
+**세 표현의 probe 성능이 거의 같다** (`{python} f'{raw_p:.4f}'` / `{python} f'{PR[1][1]:.4f}'` / `{python} f'{PR[2][1]:.4f}'`).  
+raw MFCC만으로도 phoneme 정보가 이미 선형으로 거의 다 읽힌다.
+
+**그러면 pretraining이 준 것은 '더 많은 phoneme 정보'가 아니다.**
+
+frame 단위 정보량은 그대로인데 label efficiency는 크게 좋아졌다.
+
+남는 설명은 **최적화**다.
+
+- CTC는 frame 분류가 아니라 **alignment를 포함한 sequence 문제**다 (8.4)
+- transcription 3개로 그 지형을 무작위 초기값에서 찾아가는 것은 어렵다
+- pretraining된 가중치는 이미 **음운 구조로 조직된 hidden 공간**을 준다
+- CTC head는 그 위에 얇은 decision boundary만 얹으면 된다
+- **즉 여기서 전이된 것은 정보가 아니라 초기값의 질이다** — 같은 지도를 줘도 출발점이 목적지 근처면 빨리 닿는다
+- 실제 대규모 모델에서는 두 가지가 함께 온다 — 정보(긴 문맥·화자 불변성)와 초기값 모두
+
+**frame probe가 좋아지지 않았다고 pretraining이 무용한 것은 아니다.**
+
+이것이 SUPERB 같은 frozen(얼린) 표현 평가의 한계이기도 하다 —
+fine-tuning에서 오는 이득을 probe가 놓칠 수 있다.
+
+**그래도 이 실험은 실제 조건과 크게 다르다**
+
+| 축 | 여기 | 실제 (wav2vec 2.0 등) |
+|---|---|---|
+| phoneme 수 | `{python} f'{len(PHONES)}'`개, 합성 | 40\~50개, 실제 발화 |
+| 화자 변이 | F0만 다르다 | 성도·억양·속도·감정 |
+| channel 변이 | 없다 | 마이크·거리·잔향·codec |
+| raw feature의 충분성 | linear probe **`{python} f'{raw_p:.2f}'`** | 훨씬 낮다 — 배울 것이 많다 |
+| encoder | dense 2층, 문맥 ±40ms | Transformer 12\~48층, 발화 전체 |
+| pretraining 데이터 | 250 발화 (약 8분) | **53,000\~1,000,000 시간** |
+| pretraining 목표 | MFCC k-means code | 학습된 codebook + contrastive loss |
+
+**네 번째 줄이 이 장의 결과를 제한한다.**
+
+여기서는 frame 정보의 간극이 `{python} f'{1 - raw_p:.1%}'`밖에 없어서,
+pretraining이 '정보'로 기여할 여지가 처음부터 거의 없었다.  
+실제 음성에서는 그 간극이 크고, 그래서 이득의 성격도 다르다.
+
+**그리고 규모가 본질이다.**
+
+- Transformer는 발화 전체를 보고 **긴 문맥 의존**을 학습한다 — ±40ms window로는 배울 수 없는 것
+- 53,000시간에서 배우는 것은 phoneme 경계가 아니라 **음성이라는 신호의 구조**다
+- 그 규모에서만 화자·channel 불변성이 나온다
+- **작은 규모의 self-supervised 실험이 음성일 때 잘 안 되는 것은 알려진 사실이다**
+
+**이 장에서 재현된 것 세 가지**
+
+- k-means code가 phoneme과 `{python} f'{p0:.0%}'` 맞는다 — 이산 단위를 통계로 만들 수 있다
+
+```{python}
+#| label: probe-2
+#| code-fold: false
+
 if p1 > p0:
     print(f"  · 학습된 표현으로 다시 clustering하면 {p0:.4f} → {p1:.4f} "
           f"(HuBERT iterative refinement)")
-print("  · transcription이 적을 때 pretraining이 실제로 크게 돕는다")
-print()
-print("**재현되지 않은 것 하나** — pretraining이 frame 단위 표현을 개선한다는 부분.")
-print("  이 규모에서는 개선할 여지가 없었고, 이득은 다른 경로로 왔다.")
 ```
+
+- transcription이 적을 때 pretraining이 실제로 크게 돕는다
+
+**재현되지 않은 것 하나** — pretraining이 frame 단위 표현을 개선한다는 부분.  
+이 규모에서는 개선할 여지가 없었고, 이득은 다른 경로로 왔다.
 
 ---
 
