@@ -630,8 +630,8 @@ fig.show()
 AP를 손으로 적분하라. 코드 결과와 같은가?
 
 **③ Hungarian matching을 바꾼다**
-`hungarian` 의 비용 행렬에서 classification 항과 위치 항의 가중치를 바꾸면
-matching이 어떻게 달라지는가? DETR의 학습 안정성과 어떤 관계인가.
+`hungarian` 의 비용 `C = -(iou(dets, gt) + 0.5*scores[:, None])` 에서 점수 항의 가중치 0.5를 0과 2로 바꿔 보라.
+혼잡 장면의 결과가 어떻게 달라지는가? 위치와 점수 중 어느 쪽을 더 믿느냐가 matching을 어떻게 바꾸는가.
 :::
 
 ## 요약
