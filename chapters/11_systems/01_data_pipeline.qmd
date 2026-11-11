@@ -79,9 +79,14 @@ def pipeline(n_batch=200, t_compute=1.0, t_load=3.0, workers=1):
 
 
 C, LOAD = 1.0, 3.0
-print(f"batch당 accelerator 계산 {C}, worker 하나의 loading {LOAD} "
-      f"→ 이론상 {LOAD/C:.0f}개 worker에서 saturation(포화)")
-print()
+```
+
+batch당 accelerator 계산 `{python} f'{C}'`, worker 하나의 loading `{python} f'{LOAD}'` → 이론상 `{python} f'{LOAD / C:.0f}'`개 worker에서 saturation(포화)
+
+```{python}
+#| label: pipeline-2
+#| code-fold: false
+
 print(f"{'worker 수':>9} {'총 시간':>10} {'accelerator idle':>16} {'utilization':>11} "
       f"{'이론 min(1, wc/l)':>18}")
 print("-" * 60)
@@ -91,27 +96,24 @@ for w in [1, 2, 3, 4, 6, 8, 12]:
     util = 1 - idle/tot
     PIPE.append((w, tot, util, min(1.0, w*C/LOAD)))
     print(f"{w:>9} {tot:>10.1f} {idle:>16.1f} {util:>11.3f} {min(1,w*C/LOAD):>18.3f}")
-print()
-print("**측정이 이론과 정확히 맞는다** (마지막 0.985는 첫 batch를 기다린 예열분).")
-for s in ["worker 1개: utilization 0.333 — **accelerator가 3분의 2를 논다**",
-          "worker 3개에서 saturation하고, 그 뒤로는 늘려도 **아무 이득이 없다**",
-          "이것이 'worker를 늘렸는데 안 빨라져요'의 정체다 — 이미 saturation한 것",
-          "반대로 saturation 전이면 worker 하나가 그대로 throughput이 된다"]:
-    print(f"  · {s}")
-print()
-print("**bottleneck(병목)이 어디인지 먼저 판별해야 한다**")
-print()
-print(f"{'관찰':<28} {'bottleneck':<16} {'처방'}")
-print("-" * 74)
-for a, b, c in [
-    ("accelerator 사용률이 낮다", "입력 pipeline", "worker·prefetch(미리 읽어 두기)·형식"),
-    ("worker를 늘려도 그대로", "**단일 worker의 대역폭**", "decoding 비용, disk·network"),
-    ("CPU가 100%", "전처리 연산", "accelerator로 offload, 사전 계산"),
-    ("첫 epoch만 느리다", "cache miss", "정상 — page cache가 데워진다"),
-    ("주기적으로 멈춘다", "shuffle buffer 재충전 / checkpoint", "buffer·저장 주기 조정"),
-]:
-    print(f"{a:<28} {b:<16} {c}")
 ```
+
+**측정이 이론과 정확히 맞는다** (마지막 0.985는 첫 batch를 기다린 예열분).
+
+- worker 1개: utilization 0.333 — **accelerator가 3분의 2를 논다**
+- worker 3개에서 saturation하고, 그 뒤로는 늘려도 **아무 이득이 없다**
+- 이것이 'worker를 늘렸는데 안 빨라져요'의 정체다 — 이미 saturation한 것
+- 반대로 saturation 전이면 worker 하나가 그대로 throughput이 된다
+
+**bottleneck(병목)이 어디인지 먼저 판별해야 한다**
+
+| 관찰 | bottleneck | 처방 |
+|---|---|---|
+| accelerator 사용률이 낮다 | 입력 pipeline | worker·prefetch(미리 읽어 두기)·형식 |
+| worker를 늘려도 그대로 | **단일 worker의 대역폭** | decoding 비용, disk·network |
+| CPU가 100% | 전처리 연산 | accelerator로 offload, 사전 계산 |
+| 첫 epoch만 느리다 | cache miss | 정상 — page cache가 데워진다 |
+| 주기적으로 멈춘다 | shuffle buffer 재충전 / checkpoint | buffer·저장 주기 조정 |
 
 ```{python}
 #| label: fig-pipeline
@@ -181,9 +183,15 @@ def stream_shuffle(x, B, rng):
 
 HMAX = float(np.log(K))
 BS = 128
-print(f"class {K}개로 정렬된 {N}개를 streaming shuffle한다 (batch {BS})")
-print("  batch label entropy = 한 batch 안에 label이 얼마나 고르게 섞였나 (클수록 잘 섞임)")
-print()
+```
+
+class `{python} f'{K}'`개로 정렬된 `{python} f'{N}'`개를 streaming shuffle한다 (batch `{python} f'{BS}'`)  
+batch label entropy = 한 batch 안에 label이 얼마나 고르게 섞였나 (클수록 잘 섞임)
+
+```{python}
+#| label: shuffle-2
+#| code-fold: false
+
 print(f"{'buffer B':>8} {'데이터 대비':>11} {'batch label entropy':>18} "
       f"{'균등 대비':>10} {'label 자기상관':>14}")
 print("-" * 66)
@@ -199,39 +207,32 @@ for B in [1, 64, 256, 1024, 4096, 20000]:
     SHUF.append((B, float(np.mean(Hs)), ac))
     print(f"{B:>8} {B/N:>11.1%} {np.mean(Hs):>18.4f} "
           f"{np.mean(Hs)/HMAX:>10.3f} {ac:>14.4f}")
-print()
-print(f"  (완전히 섞였을 때의 batch entropy = {HMAX:.4f})")
-print()
 b4 = [s for s in SHUF if s[0] == 4096][0]
 b1k = [s for s in SHUF if s[0] == 1024][0]
-print("**buffer가 데이터의 상당 비율이어야 섞인다.**")
-print(f"  B={b1k[0]} (데이터의 {b1k[0]/N:.0%}): 균등 대비 {b1k[1]/HMAX:.1%} — "
-      "거의 안 섞였다")
-print(f"  B={b4[0]} (데이터의 {b4[0]/N:.0%}): {b4[1]/HMAX:.1%} — 아직 부족하다")
-print()
-for s in ["buffer는 **국소적으로만** 섞는다 — 멀리 떨어진 sample은 절대 안 만난다",
-          "label autocorrelation(자기상관 — 이웃한 sample의 label이 얼마나 닮았나)이 그것을 보여 준다 — "
-          f"B=1024에서도 {b1k[2]:.3f}로 여전히 강하게 상관돼 있다",
-          "**해법은 buffer를 키우는 것이 아니라 저장 단계에서 섞는 것**이다",
-          "shard를 만들 때 무작위로 배분하고, 학습 때 **shard 순서를 섞고**, "
-          "그 위에 buffer shuffle을 얹는다 — 3단 구조",
-          "정렬된 채로 저장해 놓고 buffer로 해결하려 하면 "
-          "**메모리를 다 써도 안 된다**"]:
-    print(f"  · {s}")
-print()
-print("**shuffle의 3단 구조**")
-print()
-print(f"{'단계':<20} {'무엇을 섞나':<28} {'비용'}")
-print("-" * 68)
-for a, b, c in [
-    ("저장 시 무작위 배분", "전역 — 어떤 sample도 만날 수 있다", "한 번, offline"),
-    ("shard 순서 shuffle", "shard 단위", "거의 공짜"),
-    ("shard 내 buffer shuffle", "국소 — buffer 크기만큼", "메모리 B개"),
-]:
-    print(f"{a:<20} {b:<28} {c}")
-print()
-print("  **첫 줄을 건너뛰면 나머지 둘로는 못 메운다.**")
 ```
+
+(완전히 섞였을 때의 batch entropy = `{python} f'{HMAX:.4f}'`)
+
+**buffer가 데이터의 상당 비율이어야 섞인다.**
+
+B=`{python} f'{b1k[0]}'` (데이터의 `{python} f'{b1k[0] / N:.0%}'`): 균등 대비 `{python} f'{b1k[1] / HMAX:.1%}'` — 거의 안 섞였다
+B=`{python} f'{b4[0]}'` (데이터의 `{python} f'{b4[0] / N:.0%}'`): `{python} f'{b4[1] / HMAX:.1%}'` — 아직 부족하다
+
+- buffer는 **국소적으로만** 섞는다 — 멀리 떨어진 sample은 절대 안 만난다
+- label autocorrelation(자기상관 — 이웃한 sample의 label이 얼마나 닮았나)이 그것을 보여 준다 — B=1024에서도 `{python} f'{b1k[2]:.3f}'`로 여전히 강하게 상관돼 있다
+- **해법은 buffer를 키우는 것이 아니라 저장 단계에서 섞는 것**이다
+- shard를 만들 때 무작위로 배분하고, 학습 때 **shard 순서를 섞고**, 그 위에 buffer shuffle을 얹는다 — 3단 구조
+- 정렬된 채로 저장해 놓고 buffer로 해결하려 하면 **메모리를 다 써도 안 된다**
+
+**shuffle의 3단 구조**
+
+| 단계 | 무엇을 섞나 | 비용 |
+|---|---|---|
+| 저장 시 무작위 배분 | 전역 — 어떤 sample도 만날 수 있다 | 한 번, offline |
+| shard 순서 shuffle | shard 단위 | 거의 공짜 |
+| shard 내 buffer shuffle | 국소 — buffer 크기만큼 | 메모리 B개 |
+
+**첫 줄을 건너뛰면 나머지 둘로는 못 메운다.**
 
 ```{python}
 #| label: fig-shuffle
@@ -298,10 +299,14 @@ def timeit(f, rep=3):
         r = f()
         ts.append(time.perf_counter() - s)
     return min(ts), r
+```
 
+같은 `{python} f'{N_}'`x`{python} f'{D_}'` 배열, 형식만 바꿔서
 
-print(f"같은 {N_}x{D_} 배열, 형식만 바꿔서")
-print()
+```{python}
+#| label: formats-2
+#| code-fold: false
+
 print(f"{'형식':<20} {'잡음 MB':>9} {'현실 데이터 MB':>14} {'encoding s':>10} "
       f"{'decoding s':>10}")
 print("-" * 68)
@@ -327,29 +332,31 @@ dc, _ = timeit(lambda: np.array([[float(v) for v in l.split(",")]
                                  for l in csv_str.split("\n")]), 1)
 print(f"{'CSV text':<20} {'—':>9} {len(blob)/1e6:>14.2f} {ec:>10.4f} "
       f"{dc:>10.4f}")
-print()
 f32 = FMT[0]
 z6 = FMT[3]
-print("**① 압축률은 형식이 아니라 데이터의 성질이다.**")
-print(f"  잡음: {f32[1]:.2f}MB → zlib(6) {z6[1]:.2f}MB "
-      f"({(1-z6[1]/f32[1])*100:.0f}% 절감)")
-print(f"  현실 데이터: {f32[2]:.2f}MB → {z6[2]:.2f}MB "
-      f"({(1-z6[2]/f32[2])*100:.0f}% 절감)")
-print("  무작위 실수는 **거의 안 줄어든다** — entropy가 이미 최대라서다. 압축은 반복을 찾아 줄이는 것인데 잡음에는 반복이 없다")
-print()
-print("**② precision(정밀도 — 소수를 몇 자리까지 저장하나)을 낮추는 것이 압축보다 확실하다.**")
-print(f"  float16: 무조건 절반 ({f32[2]:.2f} → {FMT[1][2]:.2f}MB), "
-      f"encoding도 더 빠르다")
-print("  대신 되돌릴 수 없다 — 저장용으로는 대개 괜찮고, 원본은 따로 둔다")
-print()
-print("**③ text 형식의 decoding 비용이 압도적이다.**")
-print(f"  CSV decoding {dc:.4f}s vs npy {f32[4]:.4f}s — "
-      f"**{dc/f32[4]:.0f}배**")
-print("  parsing(글자를 숫자로 읽어 들이기)은 CPU를 먹고, 그 CPU가 바로 G11.1.1의 worker다")
-print("  **CSV로 학습하면 worker를 아무리 늘려도 못 따라간다**")
 ```
 
+**① 압축률은 형식이 아니라 데이터의 성질이다.**
+
+잡음: `{python} f'{f32[1]:.2f}'`MB → zlib(6) `{python} f'{z6[1]:.2f}'`MB (`{python} f'{(1 - z6[1] / f32[1]) * 100:.0f}'`% 절감)  
+현실 데이터: `{python} f'{f32[2]:.2f}'`MB → `{python} f'{z6[2]:.2f}'`MB (`{python} f'{(1 - z6[2] / f32[2]) * 100:.0f}'`% 절감)  
+무작위 실수는 **거의 안 줄어든다** — entropy가 이미 최대라서다. 압축은 반복을 찾아 줄이는 것인데 잡음에는 반복이 없다
+
+**② precision(정밀도 — 소수를 몇 자리까지 저장하나)을 낮추는 것이 압축보다 확실하다.**
+
+float16: 무조건 절반 (`{python} f'{f32[2]:.2f}'` → `{python} f'{FMT[1][2]:.2f}'`MB), encoding도 더 빠르다
+대신 되돌릴 수 없다 — 저장용으로는 대개 괜찮고, 원본은 따로 둔다
+
+**③ text 형식의 decoding 비용이 압도적이다.**
+
+CSV decoding `{python} f'{dc:.4f}'`s vs npy `{python} f'{f32[4]:.4f}'`s — **`{python} f'{dc / f32[4]:.0f}'`배**
+parsing(글자를 숫자로 읽어 들이기)은 CPU를 먹고, 그 CPU가 바로 G11.1.1의 worker다
+
+**CSV로 학습하면 worker를 아무리 늘려도 못 따라간다**
+
 **그리고 네 번째 축이 있다 — 무엇을 읽을 것인가.**
+
+20,000 x 200 표에서 일부만 읽을 때 (같은 데이터, layout만 다름)
 
 ```{python}
 #| label: layout
@@ -369,8 +376,6 @@ def bench(f, rep=20):
         time.perf_counter()))() for _ in range(rep))
 
 
-print("20,000 x 200 표에서 일부만 읽을 때 (같은 데이터, layout만 다름)")
-print()
 print(f"{'layout':<18} {'1열':>10} {'5열':>10} {'전체':>10} {'전체/1열':>10}")
 print("-" * 62)
 LAY = []
@@ -381,24 +386,19 @@ for nm, A in [("row-major (C order)", ROW), ("column-major (F order)", COL)]:
     LAY.append((nm, t1, t5, ta))
     print(f"{nm:<18} {t1*1e3:>9.3f}ms {t5*1e3:>9.3f}ms {ta*1e3:>9.3f}ms "
           f"{ta/t1:>10.1f}")
-print()
 r, c = LAY
-print(f"**한 열만 읽을 때 column-major가 {r[1]/c[1]:.1f}배 빠르다.**")
-print(f"  전체 대비 비율을 보라 — row-major {r[3]/r[1]:.0f}배, "
-      f"column-major {c[3]/c[1]:.0f}배")
-print("  column-major면 필요한 열만 **연속으로** 읽고 나머지는 아예 건드리지 않는다. "
-      "전화번호부에서 이름 열만 훑는 것과 명함을 한 장씩 다 읽는 것의 차이다")
-print()
-for s in ["이것이 **Parquet 같은 columnar(열 지향) 형식**의 근거다",
-          "feature 200개 중 8개만 쓰는 실험이면 I/O가 25분의 1로 준다",
-          "반대로 **record 전체를 늘 읽는다면** row-oriented(행 지향)가 낫다 — "
-          "이미지·오디오 같은 것",
-          "**WebDataset·TFRecord가 row-oriented인 이유**가 이것이다 — "
-          "sample 하나를 통째로 쓴다",
-          "표 형태 feature는 columnar, 미디어는 row-oriented — "
-          "**접근 pattern이 형식을 정한다**"]:
-    print(f"  · {s}")
 ```
+
+**한 열만 읽을 때 column-major가 `{python} f'{r[1] / c[1]:.1f}'`배 빠르다.**
+
+전체 대비 비율을 보라 — row-major `{python} f'{r[3] / r[1]:.0f}'`배, column-major `{python} f'{c[3] / c[1]:.0f}'`배
+column-major면 필요한 열만 **연속으로** 읽고 나머지는 아예 건드리지 않는다. 전화번호부에서 이름 열만 훑는 것과 명함을 한 장씩 다 읽는 것의 차이다
+
+- 이것이 **Parquet 같은 columnar(열 지향) 형식**의 근거다
+- feature 200개 중 8개만 쓰는 실험이면 I/O가 25분의 1로 준다
+- 반대로 **record 전체를 늘 읽는다면** row-oriented(행 지향)가 낫다 — 이미지·오디오 같은 것
+- **WebDataset·TFRecord가 row-oriented인 이유**가 이것이다 — sample 하나를 통째로 쓴다
+- 표 형태 feature는 columnar, 미디어는 row-oriented — **접근 pattern이 형식을 정한다**
 
 ---
 
@@ -432,11 +432,16 @@ X[i_drift, 2] += 6.0
 BAD = np.zeros(M, bool)
 for idx in (i_null, i_range, i_dup, i_drift):
     BAD[idx] = True
+```
 
-print(f"record {M}개에 결함을 주입했다 — 불량 {BAD.sum()}개 ({BAD.mean():.1%})")
-print("  결측 2% / 범위 초과 1% / 중복 3% / 분포 drift(표류 — 분포가 슬며시 이동) 5%")
-print("  precision = 걸린 것 중 진짜 불량 비율, recall = 전체 불량 중 잡은 비율")
-print()
+record `{python} f'{M}'`개에 결함을 주입했다 — 불량 `{python} f'{BAD.sum()}'`개 (`{python} f'{BAD.mean():.1%}'`)  
+결측 2% / 범위 초과 1% / 중복 3% / 분포 drift(표류 — 분포가 슬며시 이동) 5%
+precision = 걸린 것 중 진짜 불량 비율, recall = 전체 불량 중 잡은 비율
+
+```{python}
+#| label: gates-2
+#| code-fold: false
+
 print(f"{'검사':<22} {'새로 걸림':>10} {'그중 진짜':>10} {'precision':>9} "
       f"{'누적 recall':>12}")
 print("-" * 68)
@@ -458,14 +463,18 @@ for nm, mask in [
                   float((caught & BAD).sum()/BAD.sum())))
     print(f"{nm:<22} {new.sum():>10} {int((new & BAD).sum()):>10} "
           f"{prec:>9.3f} {GATES[-1][4]:>12.3f}")
-print()
-print(f"**최종 recall {GATES[-1][4]:.1%}** — "
-      f"불량의 {1-GATES[-1][4]:.0%}가 통과했다.")
-print(f"  정상인데 버린 것은 {int((caught & ~BAD).sum())}개 "
-      f"({(caught & ~BAD).sum()/(~BAD).sum():.2%}) — precision은 높다")
-print()
-print("**놓친 것은 대부분 분포 drift다.** 왜 안 잡혔는지가 중요하다.")
 ```
+
+**최종 recall `{python} f'{GATES[-1][4]:.1%}'`** — 불량의 `{python} f'{1 - GATES[-1][4]:.0%}'`가 통과했다.  
+정상인데 버린 것은 `{python} f'{int((caught & ~BAD).sum())}'`개 (`{python} f'{(caught & ~BAD).sum() / (~BAD).sum():.2%}'`) — precision은 높다
+
+**놓친 것은 대부분 분포 drift다.** 왜 안 잡혔는지가 중요하다.
+
+**오염된 데이터로 낸 통계는 그 오염을 못 잡는다**
+
+열 2의 통계: 오염 전 μ=`{python} f'{CLEAN_MU[2]:+.3f}'` σ=`{python} f'{CLEAN_SD[2]:.3f}'`
+오염 후 μ=`{python} f'{X[:, 2].mean():+.3f}'` σ=`{python} f'{X[:, 2].std():.3f}'`
+drift가 평균을 끌고 가고 표준편차를 부풀렸다 — **outlier(이상치)가 정상 범위 안으로 들어온다**. 부정행위자 점수까지 넣어 반 평균을 내면 부정행위가 정상으로 보이는 것과 같다
 
 ```{python}
 #| label: contaminated-stats
@@ -473,13 +482,6 @@ print("**놓친 것은 대부분 분포 drift다.** 왜 안 잡혔는지가 중�
 
 import numpy as np
 
-print("**오염된 데이터로 낸 통계는 그 오염을 못 잡는다**")
-print()
-print(f"  열 2의 통계: 오염 전 μ={CLEAN_MU[2]:+.3f} σ={CLEAN_SD[2]:.3f}")
-print(f"                오염 후 μ={X[:, 2].mean():+.3f} σ={X[:, 2].std():.3f}")
-print("  drift가 평균을 끌고 가고 표준편차를 부풀렸다 — "
-      "**outlier(이상치)가 정상 범위 안으로 들어온다**. 부정행위자 점수까지 넣어 반 평균을 내면 부정행위가 정상으로 보이는 것과 같다")
-print()
 DMASK = np.zeros(M, bool); DMASK[i_drift] = True     # drift만 따로 본다
 CLEANR = ~BAD                                        # 결함이 전혀 없는 record
 print(f"{'기준':<26} {'threshold':>9} {'drift 검출':>13} {'정상 오탐':>10}")
@@ -494,37 +496,32 @@ for nm, mu, sd in [("자기 통계 (오염된 batch)", X.mean(0), X.std(0)),
         fp = float((m & CLEANR).sum()/CLEANR.sum())
         DRIFT.append((nm, thr, rec, fp))
         print(f"{nm:<26} {thr:>9} {rec:>13.1%} {fp:>10.2%}")
-print()
 a4 = [d for d in DRIFT if d[0].startswith("자기") and d[1] == 4][0]
 b4 = [d for d in DRIFT if d[0].startswith("기준") and d[1] == 4][0]
-print(f"**|z|>4에서 자기 통계는 {a4[2]:.1%}, 기준 snapshot은 {b4[2]:.1%}를 잡는다.**")
-print(f"  {b4[2]/a4[2]:.1f}배 차이다. 같은 검사, 같은 threshold인데.")
-print()
-for s in ["오염이 통계에 섞이면 **오염이 정상으로 보이게 된다** — 자기 참조의 함정",
-          "그래서 validation은 **고정된 기준 snapshot**과 비교해야 한다",
-          "그 snapshot 자체를 언제 갱신할지가 다음 문제다 — "
-          "진짜 분포 변화와 사고를 구별해야 한다",
-          "실무에서는 **기준을 version으로 관리**하고 갱신 시 사람이 승인한다",
-          "[11.0](00_reproducibility.qmd)의 '경로는 version이 아니다'가 "
-          "여기서도 그대로다"]:
-    print(f"  · {s}")
-print()
-print("**data contract(데이터 계약)라는 관점**")
-print()
-print(f"{'항목':<20} {'무엇을 약속하나'}")
-print("-" * 62)
-for a, b in [
-    ("schema", "열 이름·type·필수 여부"),
-    ("값의 범위", "허용 구간, 허용 category 집합"),
-    ("결측률 상한", "'이 열의 결측은 1%를 넘지 않는다'"),
-    ("분포", "기준 snapshot 대비 허용 이동폭"),
-    ("freshness(신선도)", "'최근 24시간 내 데이터가 있다'"),
-    ("lineage(lineage)", "이 데이터가 어디서 왔는지"),
-]:
-    print(f"{a:<20} {b}")
-print()
-print("  약속을 어기면 **pipeline이 멈춰야** 한다. 조용히 통과하면 안 된다.")
 ```
+
+**|z|>4에서 자기 통계는 `{python} f'{a4[2]:.1%}'`, 기준 snapshot은 `{python} f'{b4[2]:.1%}'`를 잡는다.**
+
+`{python} f'{b4[2] / a4[2]:.1f}'`배 차이다. 같은 검사, 같은 threshold인데.
+
+- 오염이 통계에 섞이면 **오염이 정상으로 보이게 된다** — 자기 참조의 함정
+- 그래서 validation은 **고정된 기준 snapshot**과 비교해야 한다
+- 그 snapshot 자체를 언제 갱신할지가 다음 문제다 — 진짜 분포 변화와 사고를 구별해야 한다
+- 실무에서는 **기준을 version으로 관리**하고 갱신 시 사람이 승인한다
+- [11.0](00_reproducibility.qmd)의 '경로는 version이 아니다'가 여기서도 그대로다
+
+**data contract(데이터 계약)라는 관점**
+
+| 항목 | 무엇을 약속하나 |
+|---|---|
+| schema | 열 이름·type·필수 여부 |
+| 값의 범위 | 허용 구간, 허용 category 집합 |
+| 결측률 상한 | '이 열의 결측은 1%를 넘지 않는다' |
+| 분포 | 기준 snapshot 대비 허용 이동폭 |
+| freshness(신선도) | '최근 24시간 내 데이터가 있다' |
+| lineage(lineage) | 이 데이터가 어디서 왔는지 |
+
+약속을 어기면 **pipeline이 멈춰야** 한다. 조용히 통과하면 안 된다.
 
 ```{python}
 #| label: fig-gates
@@ -588,11 +585,16 @@ model = nn.MLP([8, 32, 32, 3], out_activation="softmax", seed=0)
 nn.train(model, (Ztr - MU)/SD, ytr, loss="softmax_ce",
          opt=nn.Optimizer("adam", lr=0.01), steps=600, batch_size=64, seed=0)
 BASE = float((model.predict((Zte - MU)/SD).argmax(1) == yte).mean())
+```
 
-print(f"feature scale이 {SCALE.min()}~{SCALE.max()}로 제각각인 데이터")
-print(f"  학습과 **동일한** normalization으로 serving: 정확도 {BASE:.4f} (baseline)")
-print(f"  무작위 추측 = {1/3:.4f}")
-print()
+feature scale이 `{python} f'{SCALE.min()}'`\~`{python} f'{SCALE.max()}'`로 제각각인 데이터
+학습과 **동일한** normalization으로 serving: 정확도 `{python} f'{BASE:.4f}'` (baseline)  
+무작위 추측 = `{python} f'{1 / 3:.4f}'`
+
+```{python}
+#| label: skew-2
+#| code-fold: false
+
 print(f"{'serving 쪽에서 벌어진 일':<34} {'정확도':>9} {'손실':>9}")
 print("-" * 56)
 SKEW = []
@@ -607,28 +609,25 @@ for nm, Xs in [
     a = float((model.predict(Xs).argmax(1) == yte).mean())
     SKEW.append((nm, a, BASE - a))
     print(f"{nm:<34} {a:>9.4f} {BASE-a:>+9.4f}")
-print()
 forgot = [s for s in SKEW if "잊음" in s[0]][0]
 recomp = SKEW[0]
 miss = SKEW[-1]
-print(f"**① normalization을 잊으면 치명적이다** — "
-      f"{BASE:.4f} → {forgot[1]:.4f} ({forgot[2]:+.4f}).")
-print(f"  무작위 추측({1/3:.3f}) 수준으로 떨어진다. "
-      "feature scale이 100배 넘게 차이 나니 당연하다")
-print()
-print(f"**② 그런데 μ·σ를 serving batch로 다시 계산한 것은 "
-      f"거의 안 아프다** ({recomp[2]:+.4f}).")
-for s in ["serving 데이터의 분포가 학습과 **같기 때문**이다",
-          "그래서 이 실수는 **test에서 안 잡힌다** — "
-          "분포가 바뀌는 날 조용히 터진다",
-          "가장 위험한 skew는 '지금은 괜찮아 보이는' 것이다"]:
-    print(f"  · {s}")
-print()
-print(f"**③ 결측을 0으로 채운 것도 거의 안 아프다** ({miss[2]:+.4f}).")
-print("  normalization된 공간에서 **0은 곧 학습 평균**이기 때문이다 — "
-      "우연히 옳은 imputation(대치 — 빈칸 채우기)을 한 셈")
-print("  raw값 공간에서 0으로 채웠다면 완전히 다른 결과가 나온다")
 ```
+
+**① normalization을 잊으면 치명적이다** — `{python} f'{BASE:.4f}'` → `{python} f'{forgot[1]:.4f}'` (`{python} f'{forgot[2]:+.4f}'`).  
+무작위 추측(`{python} f'{1 / 3:.3f}'`) 수준으로 떨어진다. feature scale이 100배 넘게 차이 나니 당연하다
+
+**② 그런데 μ·σ를 serving batch로 다시 계산한 것은 거의 안 아프다** (`{python} f'{recomp[2]:+.4f}'`).
+
+- serving 데이터의 분포가 학습과 **같기 때문**이다
+- 그래서 이 실수는 **test에서 안 잡힌다** — 분포가 바뀌는 날 조용히 터진다
+- 가장 위험한 skew는 '지금은 괜찮아 보이는' 것이다
+
+**③ 결측을 0으로 채운 것도 거의 안 아프다** (`{python} f'{miss[2]:+.4f}'`).  
+normalization된 공간에서 **0은 곧 학습 평균**이기 때문이다 — 우연히 옳은 imputation(대치 — 빈칸 채우기)을 한 셈
+raw값 공간에서 0으로 채웠다면 완전히 다른 결과가 나온다
+
+serving 쪽 μ가 학습 μ에서 조금씩 어긋날 때 (σ 단위)
 
 ```{python}
 #| label: skew-drift
@@ -636,8 +635,6 @@ print("  raw값 공간에서 0으로 채웠다면 완전히 다른 결과가 나
 
 import numpy as np
 
-print("serving 쪽 μ가 학습 μ에서 조금씩 어긋날 때 (σ 단위)")
-print()
 print(f"{'δ (σ 배수)':>11} {'정확도':>9} {'손실':>9}")
 print("-" * 32)
 DRIFTC = []
@@ -645,36 +642,32 @@ for d in [0.0, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]:
     a = float((model.predict((Zte - (MU + d*SD))/SD).argmax(1) == yte).mean())
     DRIFTC.append((d, a))
     print(f"{d:>11.2f} {a:>9.4f} {BASE-a:>+9.4f}")
-print()
 small = [x for x in DRIFTC if x[0] == 0.1][0]
 big = [x for x in DRIFTC if x[0] == 1.0][0]
-print(f"**작은 어긋남은 거의 안 보인다** — δ=0.1σ에서 {BASE-small[1]:+.4f}.")
-print(f"**그런데 δ=1σ가 되면 {BASE-big[1]:+.4f}다.**")
-for s in ["즉 skew는 **서서히 나빠지다가 어느 순간 무너진다**",
-          "monitoring 없이는 그 진행을 못 본다 — "
-          "[11.6](06_monitoring.qmd)의 주제",
-          "**feature store**의 해법은 단순하다 — "
-          "학습과 serving이 **같은 코드로 같은 값**을 읽게 한다",
-          "feature 정의를 한 곳에 두고, 계산 결과를 저장해 양쪽이 조회한다",
-          "그러면 '두 번 구현했다'는 문제 자체가 사라진다"]:
-    print(f"  · {s}")
-print()
-print("**feature store가 실제로 푸는 것들**")
-print()
-print(f"{'문제':<24} {'feature store의 답'}")
-print("-" * 66)
-for a, b in [
-    ("학습/serving 구현 중복", "정의를 한 번만 쓴다"),
-    ("시점 누수(time-travel leakage)", "**그 시점에 알 수 있던 값**만 조회"),
-    ("재계산 비용", "미리 계산해 저장, 조회는 싸게"),
-    ("팀 간 중복 작업", "feature catalog로 공유"),
-    ("lineage 추적", "어떤 모델이 어떤 feature version을 썼는지"),
-]:
-    print(f"{a:<24} {b}")
-print()
-print("  두 번째 줄이 가장 자주 사고를 낸다 —")
-print("  **미래의 정보로 과거를 예측하면** 검증 성능이 실전보다 훨씬 좋게 나온다 — 내일 신문을 보고 오늘 주가를 맞히는 셈이다.")
 ```
+
+**작은 어긋남은 거의 안 보인다** — δ=0.1σ에서 `{python} f'{BASE - small[1]:+.4f}'`.
+
+**그런데 δ=1σ가 되면 `{python} f'{BASE - big[1]:+.4f}'`다.**
+
+- 즉 skew는 **서서히 나빠지다가 어느 순간 무너진다**
+- monitoring 없이는 그 진행을 못 본다 — [11.6](06_monitoring.qmd)의 주제
+- **feature store**의 해법은 단순하다 — 학습과 serving이 **같은 코드로 같은 값**을 읽게 한다
+- feature 정의를 한 곳에 두고, 계산 결과를 저장해 양쪽이 조회한다
+- 그러면 '두 번 구현했다'는 문제 자체가 사라진다
+
+**feature store가 실제로 푸는 것들**
+
+| 문제 | feature store의 답 |
+|---|---|
+| 학습/serving 구현 중복 | 정의를 한 번만 쓴다 |
+| 시점 누수(time-travel leakage) | **그 시점에 알 수 있던 값**만 조회 |
+| 재계산 비용 | 미리 계산해 저장, 조회는 싸게 |
+| 팀 간 중복 작업 | feature catalog로 공유 |
+| lineage 추적 | 어떤 모델이 어떤 feature version을 썼는지 |
+
+두 번째 줄이 가장 자주 사고를 낸다 —
+**미래의 정보로 과거를 예측하면** 검증 성능이 실전보다 훨씬 좋게 나온다 — 내일 신문을 보고 오늘 주가를 맞히는 셈이다.
 
 ---
 
@@ -685,59 +678,45 @@ print("  **미래의 정보로 과거를 예측하면** 검증 성능이 실전�
 #| code-fold: false
 
 print("**batch vs streaming**")
-print()
-print(f"{'':<14} {'batch (Lambda의 batch 층)':<28} {'streaming (속도 층)'}")
-print("-" * 74)
-for a, b, c in [
-    ("지연", "시간~일", "초~분"),
-    ("정확성", "**완전** (전체 재계산 가능)", "근사 (늦게 온 event)"),
-    ("복잡도", "낮다", "높다 (상태, watermark)"),
-    ("재처리", "쉽다", "어렵다"),
-]:
-    print(f"{a:<14} {b:<28} {c}")
-print()
-print("  **Lambda architecture**는 둘을 다 돌려 합친다 — 정확하지만 logic이 두 벌이다.")
-print("  **Kappa architecture**는 streaming만 두고 재처리로 batch를 대신한다 — "
-      "logic은 한 벌이지만 streaming engine에 많이 의존한다.")
-print("  [11.0](00_reproducibility.qmd)의 '두 번 구현하면 어긋난다'가 "
-      "여기서도 판단 기준이 된다.")
-print()
-print("**tokenize: 미리 할 것인가 그때 할 것인가**")
-print()
-print(f"{'방식':<18} {'장점':<30} {'단점'}")
-print("-" * 72)
-for a, b, c in [
-    ("사전 tokenize", "학습 중 CPU 부담 없음", "tokenizer 바꾸면 전부 재처리"),
-    ("online tokenize", "유연, 저장 공간 절약", "**worker CPU를 먹는다** (G11.1.1)"),
-    ("사전 + packing", "고정 길이 chunk로 미리 묶음", "문서 경계가 흐려진다"),
-]:
-    print(f"{a:<18} {b:<30} {c}")
-print()
-print("  대규모 pretraining은 대개 첫째다 — tokenize가 worker bottleneck이 되기 때문.")
-print()
-print("**labeling과 개인정보**")
-for s in ["label 품질은 **모델 성능의 상한**이다 — "
-          "[11.0](00_reproducibility.qmd)의 잡음 논의와 같은 구조",
-          "복수 labeler + 일치도(kappa — 우연히 맞을 확률을 뺀 일치 정도) 측정이 기본, "
-          "불일치 항목은 재검토 queue로",
-          "**active learning**(능동 학습) — 모델이 헷갈리는 것부터 labeling해 예산을 아낀다",
-          "개인정보는 **수집 단계에서** 처리해야 한다 — "
-          "학습 데이터에 들어간 뒤에는 지우기 어렵다",
-          "pseudonymization(가명화)·masking·접근 통제, 그리고 **어떤 모델이 어떤 데이터를 봤는지**의 lineage"]:
-    print(f"  · {s}")
-print()
-print("**lineage(계보 — 데이터가 어디서 와서 어디로 갔는지의 족보)가 있으면 사고 대응이 달라진다**")
-print()
-print(f"{'질문':<34} {'lineage 없이':<16} {'lineage 있으면'}")
-print("-" * 72)
-for a, b, c in [
-    ("이 예측이 왜 이상한가", "추측", "입력 feature version까지 역추적"),
-    ("오염된 원본이 어디까지 퍼졌나", "전수 조사", "영향받은 산출물 목록"),
-    ("이 모델을 재학습하려면", "기억에 의존", "정확한 입력 snapshot"),
-    ("삭제 요청이 왔다", "**대응 불가**", "포함된 dataset·모델 식별"),
-]:
-    print(f"{a:<34} {b:<16} {c}")
 ```
+
+|  | batch (Lambda의 batch 층) | streaming (속도 층) |
+|---|---|---|
+| 지연 | 시간\~일 | 초\~분 |
+| 정확성 | **완전** (전체 재계산 가능) | 근사 (늦게 온 event) |
+| 복잡도 | 낮다 | 높다 (상태, watermark) |
+| 재처리 | 쉽다 | 어렵다 |
+
+**Lambda architecture**는 둘을 다 돌려 합친다 — 정확하지만 logic이 두 벌이다.  
+**Kappa architecture**는 streaming만 두고 재처리로 batch를 대신한다 — logic은 한 벌이지만 streaming engine에 많이 의존한다.  
+[11.0](00_reproducibility.qmd)의 '두 번 구현하면 어긋난다'가 여기서도 판단 기준이 된다.
+
+**tokenize: 미리 할 것인가 그때 할 것인가**
+
+| 방식 | 장점 | 단점 |
+|---|---|---|
+| 사전 tokenize | 학습 중 CPU 부담 없음 | tokenizer 바꾸면 전부 재처리 |
+| online tokenize | 유연, 저장 공간 절약 | **worker CPU를 먹는다** (G11.1.1) |
+| 사전 + packing | 고정 길이 chunk로 미리 묶음 | 문서 경계가 흐려진다 |
+
+대규모 pretraining은 대개 첫째다 — tokenize가 worker bottleneck이 되기 때문.
+
+**labeling과 개인정보**
+
+- label 품질은 **모델 성능의 상한**이다 — [11.0](00_reproducibility.qmd)의 잡음 논의와 같은 구조
+- 복수 labeler + 일치도(kappa — 우연히 맞을 확률을 뺀 일치 정도) 측정이 기본, 불일치 항목은 재검토 queue로
+- **active learning**(능동 학습) — 모델이 헷갈리는 것부터 labeling해 예산을 아낀다
+- 개인정보는 **수집 단계에서** 처리해야 한다 — 학습 데이터에 들어간 뒤에는 지우기 어렵다
+- pseudonymization(가명화)·masking·접근 통제, 그리고 **어떤 모델이 어떤 데이터를 봤는지**의 lineage
+
+**lineage(계보 — 데이터가 어디서 와서 어디로 갔는지의 족보)가 있으면 사고 대응이 달라진다**
+
+| 질문 | lineage 없이 | lineage 있으면 |
+|---|---|---|
+| 이 예측이 왜 이상한가 | 추측 | 입력 feature version까지 역추적 |
+| 오염된 원본이 어디까지 퍼졌나 | 전수 조사 | 영향받은 산출물 목록 |
+| 이 모델을 재학습하려면 | 기억에 의존 | 정확한 입력 snapshot |
+| 삭제 요청이 왔다 | **대응 불가** | 포함된 dataset·모델 식별 |
 
 ---
 
