@@ -15,29 +15,26 @@ jupyter: ai-ml-study
 이 부록은 그 **영문 용어와 한국어 번역어의 대응표**다.
 다른 한국어 자료를 읽을 때 "이게 그 말이었구나" 하고 이어 붙이는 용도다.
 
+**이 책의 용어 원칙**
+
+| 원칙 | 예 | 이유 |
+|---|---|---|
+| 기술 용어는 영문 그대로 | gradient, embedding, attention | 번역어가 자료마다 달라 검색·코드와 어긋난다 |
+| 첫 등장에 한국어 뜻을 괄호로 | calibration(캘리브레이션 — 말한 확률이 실제와 맞는 것) | 영문만으로는 뜻이 안 잡힌다 |
+| 고등학교 수학 용어는 한국어 | 행렬, 벡터, 확률, 평균, 분산, 미분, 기울기 | 이미 아는 말을 굳이 바꾸지 않는다 |
+| 고유명사·기호는 원문대로 | Transformer, ReLU, logit, softmax | 코드와 일치해야 한다 |
+| 한국어 조사는 영어 발음대로 붙인다 | gradient를, loss가, ensemble은 | 읽히는 대로 쓴다 |
+| 맥락에 따라 다르게 | inference → 통계에서는 추정, 배포에서는 모델 실행 | 같은 단어, 다른 뜻 |
+
+영문을 그대로 쓰면 저절로 풀리는 문제가 하나 있다 —
+**normalization과 regularization이 한국어로는 둘 다 '정규화'**가 되는 문제.  
+영문으로 두면 두 단어가 다른 단어라는 것이 그대로 보인다.
+
 ```{python}
 #| label: principles
 #| code-fold: false
 
 import sys; sys.path.append("../..")
-
-print("**이 책의 용어 원칙**")
-print()
-print(f"{'원칙':<30} {'예':<44} {'이유'}")
-print("-" * 110)
-for a, b, c in [
-    ("기술 용어는 영문 그대로", "gradient, embedding, attention", "번역어가 자료마다 달라 검색·코드와 어긋난다"),
-    ("첫 등장에 한국어 뜻을 괄호로", "calibration(캘리브레이션 — 말한 확률이 실제와 맞는 것)", "영문만으로는 뜻이 안 잡힌다"),
-    ("고등학교 수학 용어는 한국어", "행렬, 벡터, 확률, 평균, 분산, 미분, 기울기", "이미 아는 말을 굳이 바꾸지 않는다"),
-    ("고유명사·기호는 원문대로", "Transformer, ReLU, logit, softmax", "코드와 일치해야 한다"),
-    ("한국어 조사는 영어 발음대로 붙인다", "gradient를, loss가, ensemble은", "읽히는 대로 쓴다"),
-    ("맥락에 따라 다르게", "inference → 통계에서는 추정, 배포에서는 모델 실행", "같은 단어, 다른 뜻"),
-]:
-    print(f"{a:<30} {b:<44} {c}")
-print()
-print("  영문을 그대로 쓰면 저절로 풀리는 문제가 하나 있다 —")
-print("  **normalization과 regularization이 한국어로는 둘 다 '정규화'**가 되는 문제.")
-print("  영문으로 두면 두 단어가 다른 단어라는 것이 그대로 보인다.")
 ```
 
 ---
@@ -190,17 +187,22 @@ TERMS = [
 
 CATS = ["수학·통계", "ML 일반", "딥러닝", "Transformer", "생성",
         "오디오", "비전", "시스템", "신뢰"]
-print(f"수록 용어 {len(TERMS)}개, 분류 {len(CATS)}개")
-print()
+```
+
+수록 용어 `{python} f'{len(TERMS)}'`개, 분류 `{python} f'{len(CATS)}'`개
+
+```{python}
+#| label: terms-2
+#| code-fold: false
+
 print(f"{'분류':<12} {'개수':>6}")
 print("-" * 22)
 for c in CATS:
     print(f"{c:<12} {sum(1 for t in TERMS if t[0]==c):>6}")
-print()
 noted = sum(1 for t in TERMS if t[3])
-print(f"주석이 붙은 용어 {noted}개 ({noted/len(TERMS):.0%}) — "
-      f"번역이 흔들리거나 혼동되기 쉬운 것들이다.")
 ```
+
+주석이 붙은 용어 `{python} f'{noted}'`개 (`{python} f'{noted / len(TERMS):.0%}'`) — 번역이 흔들리거나 혼동되기 쉬운 것들이다.
 
 ```{python}
 #| label: fig-glossary
