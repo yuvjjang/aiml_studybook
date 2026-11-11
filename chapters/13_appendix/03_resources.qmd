@@ -13,14 +13,14 @@ jupyter: ai-ml-study
 이 책의 열세 Part를 쓰면서 가장 많이 배운 순간은 언제나
 **결과가 예상과 다르게 나왔을 때**였다. 그건 돌려 봐야만 생긴다.
 
+**이 책의 구성을 한 번에** — 어디로 돌아갈지 정할 때 쓰라
+
 ```{python}
 #| label: setup
 #| code-fold: false
 
 import sys; sys.path.append("../..")
 
-print("**이 책의 구성을 한 번에** — 어디로 돌아갈지 정할 때 쓰라")
-print()
 # 커리큘럼이 단일 진실 원천이다 — 손으로 적지 않고 읽어 온다
 sys.path.append("../../scripts")
 import curriculum
@@ -53,13 +53,15 @@ for n, t, c, k in PARTS:
 print("-" * 88)
 TOTAL = sum(p[3] for p in PARTS)
 print(f"{'합계':>5} {'':<18} {TOTAL:>4}")
-print()
-print("  **순서대로 읽을 필요는 없다.** 아래 경로들을 참고하라.")
 ```
+
+**순서대로 읽을 필요는 없다.** 아래 경로들을 참고하라.
 
 ---
 
 ## G13.3.1 — 목표별 학습 경로
+
+목표별 최소 경로 (Part 번호)
 
 ```{python}
 #| label: paths
@@ -75,8 +77,6 @@ ROUTES = {
 }
 NAME = {p[0]: p[1] for p in PARTS}
 SIZE = {p[0]: p[3] for p in PARTS}
-print("목표별 최소 경로 (Part 번호)")
-print()
 for g, ps in ROUTES.items():
     ch = sum(SIZE[p] for p in ps)
     print(f"**{g}**")
@@ -89,14 +89,21 @@ for ps in ROUTES.values():
     for p in ps:
         cnt[p] = cnt.get(p, 0) + 1
 top = sorted(cnt.items(), key=lambda t: -t[1])[:4]
-print("**여러 경로가 공통으로 지나는 Part**")
+```
+
+**여러 경로가 공통으로 지나는 Part**
+
+```{python}
+#| label: paths-2
+#| code-fold: false
+
 for p, c in top:
     print(f"    Part {p} {NAME[p]:<20} {c}/{len(ROUTES)}개 경로")
-print()
-print("  **Part 3(딥러닝 기초)이 거의 모든 길의 관문**이고, Part 5가 그다음이다.")
-print("  Part 11·12가 세 경로에 들어간 것은 이 책의 편향이 아니라")
-print("  **실무에서 실제로 사고가 나는 곳**이 거기이기 때문이다.")
 ```
+
+**Part 3(딥러닝 기초)이 거의 모든 길의 관문**이고, Part 5가 그다음이다.  
+Part 11·12가 세 경로에 들어간 것은 이 책의 편향이 아니라
+**실무에서 실제로 사고가 나는 곳**이 거기이기 때문이다.
 
 ```{python}
 #| label: fig-routes
@@ -234,6 +241,8 @@ fig
 
 ## 직접 만들어 볼 것들
 
+난이도별 프로젝트 — 각각 이 책의 어느 장과 짝인지 함께 적었다
+
 ```{python}
 #| label: projects
 #| code-fold: false
@@ -253,30 +262,23 @@ PROJ = [
     ("고급", "작은 모델의 circuit 찾기", "12.1", "patching·ablation을 손으로"),
     ("고급", "drift monitoring 시스템", "11.6", "alert threshold의 현실"),
 ]
-print("난이도별 프로젝트 — 각각 이 책의 어느 장과 짝인지 함께 적었다")
-print()
 print(f"{'난이도':<6} {'프로젝트':<34} {'관련 장':>8}   {'무엇을 배우나'}")
 print("-" * 92)
 for a, b, c, d in PROJ:
     print(f"{a:<6} {b:<34} {c:>8}   {d}")
-print()
 import collections
 cc = collections.Counter(p[0] for p in PROJ)
-print(f"  입문 {cc['입문']}개 / 중급 {cc['중급']}개 / 고급 {cc['고급']}개")
-print()
-print("**프로젝트를 고르는 원칙**")
-for s in ["**끝까지 갈 수 있는 크기**로 자르라 — "
-          "미완성 프로젝트 열 개보다 완성한 하나가 낫다",
-          "**평가를 먼저 설계하라.** 무엇이 성공인지 정하지 않으면 "
-          "언제 끝났는지도 모른다 (이 책의 4번 원칙)",
-          "**재현부터 시작하라** — 남의 결과를 똑같이 내 보는 것이 "
-          "새 아이디어보다 많이 가르친다",
-          "**결과가 예상과 다르면 그게 본론**이다. "
-          "Part 12에서 세 번이나 그랬다",
-          "기록을 남겨라 — seed, 버전, 실패한 시도까지 "
-          "([11.0](../11_systems/00_reproducibility.qmd))"]:
-    print(f"  · {s}")
 ```
+
+입문 `{python} f'{cc['입문']}'`개 / 중급 `{python} f'{cc['중급']}'`개 / 고급 `{python} f'{cc['고급']}'`개
+
+**프로젝트를 고르는 원칙**
+
+- **끝까지 갈 수 있는 크기**로 자르라 — 미완성 프로젝트 열 개보다 완성한 하나가 낫다
+- **평가를 먼저 설계하라.** 무엇이 성공인지 정하지 않으면 언제 끝났는지도 모른다 (이 책의 4번 원칙)
+- **재현부터 시작하라** — 남의 결과를 똑같이 내 보는 것이 새 아이디어보다 많이 가르친다
+- **결과가 예상과 다르면 그게 본론**이다. Part 12에서 세 번이나 그랬다
+- 기록을 남겨라 — seed, 버전, 실패한 시도까지 ([11.0](../11_systems/00_reproducibility.qmd))
 
 ---
 
