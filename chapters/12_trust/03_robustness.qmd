@@ -93,21 +93,18 @@ def pgd(m, X, y, eps, steps=10, seed=0):
 M = make(0)
 nn.train(M, Xtr, ytr, loss="softmax_ce", opt=nn.Optimizer("adam", lr=0.002),
          steps=3000, batch_size=128, seed=0)
-print(f"기준 모델 — 학습 정확도 {acc(M, Xtr, ytr):.4f}, "
-      f"시험 정확도 {acc(M, Xte, yte):.4f}")
-print()
-print("**세 종류의 distribution shift를 구분한다** — 처방이 다르다")
-print()
-print(f"{'종류':<22} {'무엇이 바뀌나':<22} {'예':<24} {'대응'}")
-print("-" * 94)
-for a, b, c, e in [
-    ("covariate shift", "P(x)만 — 입력의 분포", "카메라·조명이 바뀜", "recalibration·reweighting"),
-    ("label shift", "P(y)만 — 정답의 비율", "질병 유행률 변화", "prior(사전확률) 보정"),
-    ("concept shift", "P(y|x) — 입력↔정답 관계", "사기 수법이 바뀜", "**재학습 (11.6)**"),
-    ("adversarial shift", "공격자가 고른 x", "의도적 회피", "**adversarial training**"),
-]:
-    print(f"{a:<22} {b:<22} {c:<24} {e}")
 ```
+
+기준 모델 — 학습 정확도 `{python} f'{acc(M, Xtr, ytr):.4f}'`, 시험 정확도 `{python} f'{acc(M, Xte, yte):.4f}'`
+
+**세 종류의 distribution shift를 구분한다** — 처방이 다르다
+
+| 종류 | 무엇이 바뀌나 | 예 | 대응 |
+|---|---|---|---|
+| covariate shift | P(x)만 — 입력의 분포 | 카메라·조명이 바뀜 | recalibration·reweighting |
+| label shift | P(y)만 — 정답의 비율 | 질병 유행률 변화 | prior(사전확률) 보정 |
+| concept shift | P(y\|x) — 입력↔정답 관계 | 사기 수법이 바뀜 | **재학습 (11.6)** |
+| adversarial shift | 공격자가 고른 x | 의도적 회피 | **adversarial training** |
 
 ---
 
@@ -138,8 +135,14 @@ import numpy as np
 
 xn = float(np.linalg.norm(Xte, axis=1).mean())
 g = np.random.default_rng(5)
-print(f"입력의 평균 L2 norm {xn:.2f} — perturbation 크기를 이것과 견준다")
-print()
+```
+
+입력의 평균 L2 norm `{python} f'{xn:.2f}'` — perturbation 크기를 이것과 견준다
+
+```{python}
+#| label: attack-2
+#| code-fold: false
+
 print(f"{'ε':>6} {'상대 L2':>9} {'FGSM':>9} {'PGD-10':>9} "
       f"{'같은 크기 무작위 잡음':>20}")
 print("-" * 58)
@@ -154,30 +157,21 @@ for eps in [0.0, 0.01, 0.02, 0.04, 0.08, 0.15]:
     rel = eps*np.sqrt(S*S)/xn
     ATT.append((eps, rel, a_f, a_p, a_r))
     print(f"{eps:>6.2f} {rel:>8.1%} {a_f:>9.4f} {a_p:>9.4f} {a_r:>20.4f}")
-print()
 e2 = [a for a in ATT if a[0] == 0.02][0]
 e4 = [a for a in ATT if a[0] == 0.04][0]
-print("**같은 크기인데 결과가 완전히 다르다.**")
-print(f"  ε=0.02 (입력 norm의 {e2[1]:.1%}): "
-      f"PGD {e2[3]:.4f} vs 무작위 잡음 {e2[4]:.4f}")
-print(f"  ε=0.04 (norm의 {e4[1]:.1%}): "
-      f"PGD {e4[3]:.4f} vs 무작위 잡음 {e4[4]:.4f}")
-print(f"  무작위 잡음은 ε=0.15 ({ATT[-1][1]:.1%})에서도 "
-      f"{ATT[-1][4]:.4f}로 멀쩡하다.")
-print()
-for s in ["**perturbation의 크기가 아니라 방향이 문제다** — "
-          "입력 공간 대부분의 방향은 무해하고, 극히 일부만 치명적이다",
-          "그 방향을 찾는 데 필요한 것은 **gradient 한 번**뿐이다",
-          "차원이 높을수록 공격에 유리하다 — "
-          f"L∞로 픽셀마다 ε씩 흔들면 L2로는 ε√d = ε×{int(np.sqrt(S*S))}가 된다. 작은 힘도 256곳에 나눠 주면 합은 크다",
-          "**PGD가 FGSM보다 일관되게 강하다** — "
-          f"ε=0.08에서 FGSM은 {[a for a in ATT if a[0]==0.08][0][2]:.4f}를 "
-          f"남기는데 PGD는 {[a for a in ATT if a[0]==0.08][0][3]:.4f}까지 "
-          "떨어뜨린다 (낮을수록 강한 공격)",
-          "그래서 robustness를 주장하려면 **PGD 같은 강한 공격으로 평가**해야 한다. "
-          "FGSM만으로 재면 과대평가된다"]:
-    print(f"  · {s}")
 ```
+
+**같은 크기인데 결과가 완전히 다르다.**
+
+ε=0.02 (입력 norm의 `{python} f'{e2[1]:.1%}'`): PGD `{python} f'{e2[3]:.4f}'` vs 무작위 잡음 `{python} f'{e2[4]:.4f}'`
+ε=0.04 (norm의 `{python} f'{e4[1]:.1%}'`): PGD `{python} f'{e4[3]:.4f}'` vs 무작위 잡음 `{python} f'{e4[4]:.4f}'`
+무작위 잡음은 ε=0.15 (`{python} f'{ATT[-1][1]:.1%}'`)에서도 `{python} f'{ATT[-1][4]:.4f}'`로 멀쩡하다.
+
+- **perturbation의 크기가 아니라 방향이 문제다** — 입력 공간 대부분의 방향은 무해하고, 극히 일부만 치명적이다
+- 그 방향을 찾는 데 필요한 것은 **gradient 한 번**뿐이다
+- 차원이 높을수록 공격에 유리하다 — L∞로 픽셀마다 ε씩 흔들면 L2로는 ε√d = ε×`{python} f'{int(np.sqrt(S * S))}'`가 된다. 작은 힘도 256곳에 나눠 주면 합은 크다
+- **PGD가 FGSM보다 일관되게 강하다** — ε=0.08에서 FGSM은 `{python} f'{[a for a in ATT if a[0] == 0.08][0][2]:.4f}'`를 남기는데 PGD는 `{python} f'{[a for a in ATT if a[0] == 0.08][0][3]:.4f}'`까지 떨어뜨린다 (낮을수록 강한 공격)
+- 그래서 robustness를 주장하려면 **PGD 같은 강한 공격으로 평가**해야 한다. FGSM만으로 재면 과대평가된다
 
 ```{python}
 #| label: fig-attack
@@ -274,16 +268,17 @@ for nm, m in [("일반 학습", M), ("adversarial 학습", MA)]:
     ADV.append((nm, acc(m, Xte, yte), *r))
     print(f"{nm:<18} {acc(m, Xte, yte):>13.4f} " +
           " ".join(f"{v:>13.4f}" for v in r))
-print()
 st, ad = ADV
-print(f"**robustness는 크게 올랐다** — ε=0.04에서 {st[3]:.4f} → {ad[3]:.4f}.")
-print(f"**그런데 깨끗한 정확도도 올랐다** — {st[1]:.4f} → {ad[1]:.4f} "
-      f"({ad[1]-st[1]:+.4f}).")
-print("  문헌의 '정확도-robustness trade-off'와 반대 방향이다. 원인을 확인한다.")
 ```
+
+**robustness는 크게 올랐다** — ε=0.04에서 `{python} f'{st[3]:.4f}'` → `{python} f'{ad[3]:.4f}'`.  
+**그런데 깨끗한 정확도도 올랐다** — `{python} f'{st[1]:.4f}'` → `{python} f'{ad[1]:.4f}'` (`{python} f'{ad[1] - st[1]:+.4f}'`).  
+문헌의 '정확도-robustness trade-off'와 반대 방향이다. 원인을 확인한다.
 
 trade-off가 안 나온 이유를 데이터 양으로 확인한다.
 **adversarial training이 regularization(overfitting을 막는 장치)으로 작동하고 있다면, 데이터가 늘수록 그 이득이 줄어야 한다.** 데이터가 충분하면 regularization은 할 일이 없어지기 때문이다.
+
+학습 데이터를 3배로 늘려 같은 비교를 반복한다
 
 ```{python}
 #| label: advtrain2
@@ -292,8 +287,6 @@ trade-off가 안 나온 이유를 데이터 양으로 확인한다.
 import numpy as np
 from src import nn
 
-print("학습 데이터를 3배로 늘려 같은 비교를 반복한다")
-print()
 print(f"{'학습 n':>8} {'일반 train':>11} {'일반 test':>10} {'adv test':>10} "
       f"{'차이':>9} {'일반 PGD.04':>12} {'adv PGD.04':>12}")
 print("-" * 78)
@@ -314,30 +307,22 @@ for N, Ms, MAs in [(8000, M, MA), (24000, None, None)]:
                  acc(MAs, pgd(MAs, Xte, yte, 0.04), yte)))
     print(f"{N:>8} {a_tr:>11.4f} {a_te:>10.4f} {b_te:>10.4f} "
           f"{b_te-a_te:>+9.4f} {SIZE[-1][4]:>12.4f} {SIZE[-1][5]:>12.4f}")
-print()
 s1, s2 = SIZE
-print("**가설이 확인된다 — 이득이 데이터와 함께 줄어든다.**")
-print(f"  n={s1[0]:,}  일반 학습이 train {s1[1]:.4f} vs test {s1[2]:.4f}로 "
-      f"overfitting ({s1[1]-s1[2]:.3f})")
-print(f"           adversarial training의 정확도 이득 {s1[3]-s1[2]:+.4f}")
-print(f"  n={s2[0]:,} overfitting이 {s1[1]-s1[2]:.3f} → {s2[1]-s2[2]:.3f}로 "
-      f"절반 아래로 줄고,")
-print(f"           정확도 이득도 {s1[3]-s1[2]:+.4f} → {s2[3]-s2[2]:+.4f}로 "
-      f"{(s2[3]-s2[2])/(s1[3]-s1[2]):.0%} 수준으로 줄었다")
-print()
-for s in ["**adversarial training의 정확도 이득은 robustness의 부산물이 아니라 regularization 효과다** — "
-          "PGD로 만든 입력이 강한 data augmentation처럼 작동한다",
-          "문헌의 trade-off는 **모델이 이미 데이터를 다 짜낸 영역**에서 나타난다. "
-          "이 실험은 아직 그 영역이 아니다",
-          "**교훈은 방법이 아니라 보고 방식에 있다** — "
-          "'adversarial training이 정확도를 올렸다'만 쓰면 오해를 부른다",
-          "overfitting 정도를 함께 보고해야 어느 영역의 결과인지 알 수 있다",
-          f"robustness 이득 자체는 확실하다 — 두 데이터 크기 모두에서 "
-          f"PGD 정확도가 {s1[4]:.3f}→{s1[5]:.3f}, {s2[4]:.3f}→{s2[5]:.3f}",
-          "**그리고 비용은 여전히 크다.** PGD-5를 매 step 돌리므로 "
-          "학습이 5~6배 느려진다"]:
-    print(f"  · {s}")
 ```
+
+**가설이 확인된다 — 이득이 데이터와 함께 줄어든다.**
+
+n=`{python} f'{s1[0]:,}'` 일반 학습이 train `{python} f'{s1[1]:.4f}'` vs test `{python} f'{s1[2]:.4f}'`로 overfitting (`{python} f'{s1[1] - s1[2]:.3f}'`)  
+adversarial training의 정확도 이득 `{python} f'{s1[3] - s1[2]:+.4f}'`
+n=`{python} f'{s2[0]:,}'` overfitting이 `{python} f'{s1[1] - s1[2]:.3f}'` → `{python} f'{s2[1] - s2[2]:.3f}'`로 절반 아래로 줄고,
+정확도 이득도 `{python} f'{s1[3] - s1[2]:+.4f}'` → `{python} f'{s2[3] - s2[2]:+.4f}'`로 `{python} f'{(s2[3] - s2[2]) / (s1[3] - s1[2]):.0%}'` 수준으로 줄었다
+
+- **adversarial training의 정확도 이득은 robustness의 부산물이 아니라 regularization 효과다** — PGD로 만든 입력이 강한 data augmentation처럼 작동한다
+- 문헌의 trade-off는 **모델이 이미 데이터를 다 짜낸 영역**에서 나타난다. 이 실험은 아직 그 영역이 아니다
+- **교훈은 방법이 아니라 보고 방식에 있다** — 'adversarial training이 정확도를 올렸다'만 쓰면 오해를 부른다
+- overfitting 정도를 함께 보고해야 어느 영역의 결과인지 알 수 있다
+- robustness 이득 자체는 확실하다 — 두 데이터 크기 모두에서 PGD 정확도가 `{python} f'{s1[4]:.3f}'`→`{python} f'{s1[5]:.3f}'`, `{python} f'{s2[4]:.3f}'`→`{python} f'{s2[5]:.3f}'`
+- **그리고 비용은 여전히 크다.** PGD-5를 매 step 돌리므로 학습이 5\~6배 느려진다
 
 ```{python}
 #| label: transfer
@@ -349,9 +334,15 @@ from src import nn
 MB = make(2)
 nn.train(MB, Xtr, ytr, loss="softmax_ce", opt=nn.Optimizer("adam", lr=0.002),
          steps=3000, batch_size=128, seed=2)
-print("transfer attack(전이 공격) — 모델 A로 만든 예제를 다른 모델에 던진다")
-print("  (공격자가 대상 모델의 gradient에 접근 못 하는 현실적 상황)")
-print()
+```
+
+transfer attack(전이 공격) — 모델 A로 만든 예제를 다른 모델에 던진다
+(공격자가 대상 모델의 gradient에 접근 못 하는 현실적 상황)
+
+```{python}
+#| label: transfer-2
+#| code-fold: false
+
 print(f"{'ε':>6} {'A 자신 (white-box)':>20} {'B — 다른 seed':>16} "
       f"{'adversarial 학습 모델':>17}")
 print("-" * 64)
@@ -361,22 +352,18 @@ for eps in [0.04, 0.08]:
     r = (eps, acc(M, Xa, yte), acc(MB, Xa, yte), acc(MA, Xa, yte))
     TR.append(r)
     print(f"{eps:>6.2f} {r[1]:>20.4f} {r[2]:>16.4f} {r[3]:>17.4f}")
-print(f"  (B의 깨끗한 정확도 {acc(MB, Xte, yte):.4f}, "
-      f"adversarial 학습 모델 {acc(MA, Xte, yte):.4f})")
-print()
 t8 = TR[-1]
-print(f"**전이가 실제로 일어난다** — ε=0.08에서 B가 "
-      f"{acc(MB, Xte, yte):.4f} → {t8[2]:.4f}로 떨어진다.")
-print(f"  다만 white-box(공격자가 모델 내부를 다 아는 경우, {t8[1]:.4f})보다는 훨씬 약하다.")
-print()
-for s in ["서로 다른 seed로 학습해도 **비슷한 취약 방향을 공유**한다 — "
-          "데이터와 구조가 같으니 배우는 non-robust feature(취약한 특성)도 비슷하다. 같은 교재로 배운 학생들은 같은 함정 문제에 걸린다",
-          "**그래서 '모델을 비공개로 두면 안전하다'는 방어가 안 된다**",
-          f"adversarial 학습 모델은 transfer attack에 {t8[3]:.4f}로 잘 버틴다",
-          "물리적 공격(스티커·프린트)이 성립하는 이유도 transferability(전이성)다 — "
-          "공격자는 대상 모델을 모른 채 surrogate model(대리 모델)로 만든다"]:
-    print(f"  · {s}")
 ```
+
+(B의 깨끗한 정확도 `{python} f'{acc(MB, Xte, yte):.4f}'`, adversarial 학습 모델 `{python} f'{acc(MA, Xte, yte):.4f}'`)
+
+**전이가 실제로 일어난다** — ε=0.08에서 B가 `{python} f'{acc(MB, Xte, yte):.4f}'` → `{python} f'{t8[2]:.4f}'`로 떨어진다.  
+다만 white-box(공격자가 모델 내부를 다 아는 경우, `{python} f'{t8[1]:.4f}'`)보다는 훨씬 약하다.
+
+- 서로 다른 seed로 학습해도 **비슷한 취약 방향을 공유**한다 — 데이터와 구조가 같으니 배우는 non-robust feature(취약한 특성)도 비슷하다. 같은 교재로 배운 학생들은 같은 함정 문제에 걸린다
+- **그래서 '모델을 비공개로 두면 안전하다'는 방어가 안 된다**
+- adversarial 학습 모델은 transfer attack에 `{python} f'{t8[3]:.4f}'`로 잘 버틴다
+- 물리적 공격(스티커·프린트)이 성립하는 이유도 transferability(전이성)다 — 공격자는 대상 모델을 모른 채 surrogate model(대리 모델)로 만든다
 
 ---
 
@@ -458,8 +445,14 @@ def scores(X):
 SI = scores(Xte)
 NAMES = list(SI)
 PIN = float(M.predict(Xte).max(1).mean())
-print("OOD 탐지 AUROC — 1.0 완벽, 0.5 무작위, **0.5 미만이면 방향이 반대**")
-print()
+```
+
+OOD 탐지 AUROC — 1.0 완벽, 0.5 무작위, **0.5 미만이면 방향이 반대**
+
+```{python}
+#| label: ood-2
+#| code-fold: false
+
 print(f"{'OOD 집합':<14} " + " ".join(f"{n:>14}" for n in NAMES)
       + f" {'모델 평균 confidence':>14}")
 print("-" * 78)
@@ -472,31 +465,28 @@ for onm, XO in OOD.items():
           + f" {M.predict(XO).max(1).mean():>14.4f}")
 print(f"{'(분포 내)':<14} " + " ".join(f"{'—':>14}" for _ in NAMES)
       + f" {PIN:>14.4f}")
-print()
 bad = [(o, AU[o][0]) for o in AU if AU[o][0] < 0.5]
-print(f"**최대 softmax가 {len(bad)}개 집합에서 0.5 미만이다** — "
-      f"무작위보다 나쁜 정도가 아니라 **방향이 반대**다.")
+```
+
+**최대 softmax가 `{python} f'{len(bad)}'`개 집합에서 0.5 미만이다** — 무작위보다 나쁜 정도가 아니라 **방향이 반대**다.
+
+```{python}
+#| label: ood-3
+#| code-fold: false
+
 for o, v in bad:
     print(f"  {o}: AUROC {v:.4f}, 모델 평균 confidence "
           f"{M.predict(OOD[o]).max(1).mean():.4f} (분포 내 {PIN:.4f})")
-print()
-print("  **모델이 처음 보는 입력에서 오히려 더 confident하다.**")
-print()
-for s in ["원인은 대비가 커질수록 logit이 커지기 때문이다 — "
-          "**신호가 강해 보이면 confident하다**, 그것이 배운 적 없는 신호라도. 목소리가 크면 맞는 말처럼 들리는 것과 같다",
-          "energy 점수는 logit 크기를 직접 쓰므로 **더 나쁘다** "
-          f"(대비 2배에서 {AU['대비 2배'][2]:.4f})",
-          "**Mahalanobis는 구조적 OOD에 강하다** — "
-          f"대비 2배 {AU['대비 2배'][3]:.4f}, 원 무늬 {AU['원 무늬'][3]:.4f}",
-          "그런데 **순수 잡음에는 약하다** "
-          f"({AU['순수 잡음'][3]:.4f}) — 잡음이 feature 공간에서 "
-          "class 중심 근처로 뭉개지기 때문",
-          "**어떤 점수도 네 집합 모두에서 통하지 않는다.** "
-          "OOD 탐지에 만능 점수는 없다",
-          "실무에서는 **예상되는 OOD 유형을 정하고 그에 맞는 점수를 고르고, "
-          "그 유형으로 검증**해야 한다"]:
-    print(f"  · {s}")
 ```
+
+**모델이 처음 보는 입력에서 오히려 더 confident하다.**
+
+- 원인은 대비가 커질수록 logit이 커지기 때문이다 — **신호가 강해 보이면 confident하다**, 그것이 배운 적 없는 신호라도. 목소리가 크면 맞는 말처럼 들리는 것과 같다
+- energy 점수는 logit 크기를 직접 쓰므로 **더 나쁘다** (대비 2배에서 `{python} f'{AU['대비 2배'][2]:.4f}'`)
+- **Mahalanobis는 구조적 OOD에 강하다** — 대비 2배 `{python} f'{AU['대비 2배'][3]:.4f}'`, 원 무늬 `{python} f'{AU['원 무늬'][3]:.4f}'`
+- 그런데 **순수 잡음에는 약하다** (`{python} f'{AU['순수 잡음'][3]:.4f}'`) — 잡음이 feature 공간에서 class 중심 근처로 뭉개지기 때문
+- **어떤 점수도 네 집합 모두에서 통하지 않는다.** OOD 탐지에 만능 점수는 없다
+- 실무에서는 **예상되는 OOD 유형을 정하고 그에 맞는 점수를 고르고, 그 유형으로 검증**해야 한다
 
 ```{python}
 #| label: fig-ood
@@ -535,6 +525,8 @@ adversarial example은 극적이지만 드물다.
 학습 데이터의 왼쪽 위 구석에 **class를 알려 주는 watermark**(watermark — 작은 표식)를 심는다.
 상관 강도 $\rho$를 바꿔 가며, 배포 환경에서 watermark가 사라졌을 때를 잰다.
 
+watermark는 학습 신호 중 가장 쉽게 읽히는 것이다 (2x2 블록의 위치)
+
 ```{python}
 #| label: shortcut
 #| code-fold: false
@@ -554,8 +546,6 @@ def shortcut(n, seed, rho, wm=2.2):
     return X.reshape(n, -1), lab
 
 
-print("watermark는 학습 신호 중 가장 쉽게 읽히는 것이다 (2x2 블록의 위치)")
-print()
 print(f"{'학습 상관 ρ':>11} {'학습 정확도':>11} {'배포 A: watermark 유지':>21} "
       f"{'배포 B: watermark 없음':>21} {'붕괴폭':>9}")
 print("-" * 80)
@@ -571,35 +561,25 @@ for rho in [0.0, 0.5, 0.8, 0.95, 1.0]:
     SC.append((rho, acc(m, Xs, ys), a_k, a_n, a_k - a_n))
     print(f"{rho:>11.2f} {SC[-1][1]:>11.4f} {a_k:>21.4f} {a_n:>21.4f} "
           f"{a_k-a_n:>9.4f}")
-print()
 z, one = SC[0], SC[-1]
-print("**ρ=1.0에서 모델은 watermark만 본다.**")
-print(f"  watermark가 있는 환경: {one[2]:.4f} — 완벽하다")
-print(f"  watermark가 없는 환경: **{one[3]:.4f}** — "
-       f"shortcut 없이 학습한 모델({z[3]:.4f})보다도 나쁘다")
-print(f"  붕괴폭 {one[4]:.4f}")
-print()
 h = SC[1]
-print(f"**절반만 맞는 shortcut도 쓴다.** ρ=0.5에서 "
-      f"watermark 환경 {h[2]:.4f} vs 없는 환경 {h[3]:.4f} "
-      f"(격차 {h[4]:+.4f}).")
-print(f"  이 모델의 watermark 없는 성능 {h[3]:.4f}는 "
-      f"shortcut 없이 배운 {z[3]:.4f}보다 낮다 — "
-      f"**shortcut에 쓴 용량만큼 진짜 feature를 덜 배웠다.**")
-print()
-for s in ["**i.i.d. test set으로는 이것을 절대 못 잡는다** — "
-          "test set에도 같은 상관이 있으니 정확도가 높게 나온다",
-          "실제 사례가 많다 — 폐렴 X선의 병원 표식, "
-          "피부암 사진의 자, 소 사진의 초원 배경",
-          "**진단법은 하나뿐이다: 상관이 깨진 환경에서 평가하기**",
-          "그래서 WILDS·ImageNet-A/R 같은 benchmark가 "
-          "**의도적으로 분포를 바꿔** 만들어진다",
-          "완화책: group DRO(group distributionally robust optimization — 가장 못하는 집단의 loss를 줄이기), reweighting(재가중), "
-          "shortcut feature 제거, data augmentation",
-          "**IRM 같은 domain generalization(도메인 일반화) 기법은 이론적으로는 매력적이지만 "
-          "실증적으로는 단순한 ERM(보통의 평균 loss 최소화)+reweighting을 크게 못 이긴다**는 결과가 많다"]:
-    print(f"  · {s}")
 ```
+
+**ρ=1.0에서 모델은 watermark만 본다.**
+
+watermark가 있는 환경: `{python} f'{one[2]:.4f}'` — 완벽하다
+watermark가 없는 환경: **`{python} f'{one[3]:.4f}'`** — shortcut 없이 학습한 모델(`{python} f'{z[3]:.4f}'`)보다도 나쁘다
+붕괴폭 `{python} f'{one[4]:.4f}'`
+
+**절반만 맞는 shortcut도 쓴다.** ρ=0.5에서 watermark 환경 `{python} f'{h[2]:.4f}'` vs 없는 환경 `{python} f'{h[3]:.4f}'` (격차 `{python} f'{h[4]:+.4f}'`).  
+이 모델의 watermark 없는 성능 `{python} f'{h[3]:.4f}'`는 shortcut 없이 배운 `{python} f'{z[3]:.4f}'`보다 낮다 — **shortcut에 쓴 용량만큼 진짜 feature를 덜 배웠다.**
+
+- **i.i.d. test set으로는 이것을 절대 못 잡는다** — test set에도 같은 상관이 있으니 정확도가 높게 나온다
+- 실제 사례가 많다 — 폐렴 X선의 병원 표식, 피부암 사진의 자, 소 사진의 초원 배경
+- **진단법은 하나뿐이다: 상관이 깨진 환경에서 평가하기**
+- 그래서 WILDS·ImageNet-A/R 같은 benchmark가 **의도적으로 분포를 바꿔** 만들어진다
+- 완화책: group DRO(group distributionally robust optimization — 가장 못하는 집단의 loss를 줄이기), reweighting(재가중), shortcut feature 제거, data augmentation
+- **IRM 같은 domain generalization(도메인 일반화) 기법은 이론적으로는 매력적이지만 실증적으로는 단순한 ERM(보통의 평균 loss 최소화)+reweighting을 크게 못 이긴다**는 결과가 많다
 
 ```{python}
 #| label: fig-shortcut
