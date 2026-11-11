@@ -16,6 +16,21 @@ threshold도, 기대loss 계산도, 사람에게 넘길 시점도 전부 틀어�
 그런데 현대 신경망은 대개 그렇지 않다. 그리고 이 장의 첫 실험이 보여주듯,
 **모델을 키우고 오래 학습시킬수록 더 나빠진다.**
 
+**먼저 두 종류의 uncertainty(불확실성)를 구분한다** — 이 장 전체가 이 구분 위에 선다
+
+|  | aleatoric (우연적) | epistemic (인식적) |
+|---|---|---|
+| 정체 | 데이터 자체의 잡음 | 모델이 몰라서 생기는 것 |
+| 예 | 같은 증상, 다른 진단 | 본 적 없는 유형의 환자 |
+| 비유 | 주사위 — 아무리 공부해도 못 맞힌다 | 안 배운 단원 — 공부하면 맞힌다 |
+| 줄이려면 | **줄일 수 없다** | 데이터를 더 모으면 준다 |
+| 나타나는 곳 | 겹치는 class 경계 | 데이터가 희박한 영역 |
+| 대응 | threshold·기대loss로 관리 | **수집하거나 거부한다** |
+
+이 둘을 섞으면 처방이 반대가 된다 —
+잡음 때문에 틀리는 것에는 데이터를 더 모아도 소용이 없고,
+모르는 영역에서 틀리는 것은 threshold를 올려도 해결되지 않는다.
+
 ```{python}
 #| label: setup
 #| code-fold: false
@@ -77,25 +92,6 @@ def logits(m, X):
 def softmax_T(z, T):
     z = z/T; z = z - z.max(1, keepdims=True)
     e = np.exp(z); return e/e.sum(1, keepdims=True)
-
-
-print("**먼저 두 종류의 uncertainty(불확실성)를 구분한다** — 이 장 전체가 이 구분 위에 선다")
-print()
-print(f"{'':<12} {'aleatoric (우연적)':<28} {'epistemic (인식적)'}")
-print("-" * 76)
-for a, b, c in [
-    ("정체", "데이터 자체의 잡음", "모델이 몰라서 생기는 것"),
-    ("예", "같은 증상, 다른 진단", "본 적 없는 유형의 환자"),
-    ("비유", "주사위 — 아무리 공부해도 못 맞힌다", "안 배운 단원 — 공부하면 맞힌다"),
-    ("줄이려면", "**줄일 수 없다**", "데이터를 더 모으면 준다"),
-    ("나타나는 곳", "겹치는 class 경계", "데이터가 희박한 영역"),
-    ("대응", "threshold·기대loss로 관리", "**수집하거나 거부한다**"),
-]:
-    print(f"{a:<12} {b:<28} {c}")
-print()
-print("  이 둘을 섞으면 처방이 반대가 된다 —")
-print("  잡음 때문에 틀리는 것에는 데이터를 더 모아도 소용이 없고,")
-print("  모르는 영역에서 틀리는 것은 threshold를 올려도 해결되지 않는다.")
 ```
 
 ---
@@ -116,6 +112,8 @@ $$
 
 같은 데이터에 크기와 학습량만 바꿔 가며 재 본다. 이 현상이 **overconfidence**(과신)다.
 
+모델 크기·학습량과 overconfidence
+
 ```{python}
 #| label: overconfidence
 #| code-fold: false
@@ -123,8 +121,6 @@ $$
 import numpy as np
 from src import nn
 
-print("모델 크기·학습량과 overconfidence")
-print()
 print(f"{'모델':<20} {'step':>6} {'정확도':>9} {'평균 confidence':>10} "
       f"{'ECE':>9} {'NLL':>8}   격차")
 print("-" * 78)
@@ -144,25 +140,21 @@ for nm, sz, st in [("작음 [16]", [D, 16, K], 1200),
     OVER.append((nm, st, a, c, ece(P, yte), nll(P, yte)))
     print(f"{nm:<20} {st:>6} {a:>9.4f} {c:>10.4f} {ece(P,yte):>9.4f} "
           f"{nll(P,yte):>8.4f}   {c-a:>+.4f}")
-print()
 s0, s3 = OVER[0], OVER[-1]
-print("**정확도는 거의 안 변하는데 confidence만 올라간다.**")
-print(f"  정확도 {s0[2]:.4f} → {s3[2]:.4f} ({s3[2]-s0[2]:+.4f})")
-print(f"  평균 confidence {s0[3]:.4f} → {s3[3]:.4f} ({s3[3]-s0[3]:+.4f})")
-print(f"  **ECE {s0[4]:.4f} → {s3[4]:.4f}** — {s3[4]/s0[4]:.1f}배")
-print(f"  NLL {s0[5]:.4f} → {s3[5]:.4f} — "
-      f"**log loss는 오히려 {s3[5]/s0[5]:.1f}배 나빠졌다**")
-print()
-for s in ["원인은 cross-entropy loss다 — "
-          "**이미 맞힌 예측의 confidence를 계속 밀어 올려도 loss가 계속 준다**",
-          "정확도가 saturation한 뒤에도 optimization은 멈추지 않고 logit을 키운다",
-          "그래서 **early stopping과 weight decay가 calibration에도 도움**이 된다 "
-          "— 정확도가 아니라 logit 크기를 억제하기 때문",
-          "**정확도로 모델을 고르면 이 문제가 안 보인다** — "
-          "네 모델의 정확도 차이는 0.03 이내인데 ECE는 9배 차이다",
-          "NLL(negative log-likelihood — 정답에 준 확률의 −log 평균)을 함께 봐야 한다. NLL은 정확도와 calibration을 동시에 벌한다"]:
-    print(f"  · {s}")
 ```
+
+**정확도는 거의 안 변하는데 confidence만 올라간다.**
+
+정확도 `{python} f'{s0[2]:.4f}'` → `{python} f'{s3[2]:.4f}'` (`{python} f'{s3[2] - s0[2]:+.4f}'`)  
+평균 confidence `{python} f'{s0[3]:.4f}'` → `{python} f'{s3[3]:.4f}'` (`{python} f'{s3[3] - s0[3]:+.4f}'`)  
+**ECE `{python} f'{s0[4]:.4f}'` → `{python} f'{s3[4]:.4f}'`** — `{python} f'{s3[4] / s0[4]:.1f}'`배
+NLL `{python} f'{s0[5]:.4f}'` → `{python} f'{s3[5]:.4f}'` — **log loss는 오히려 `{python} f'{s3[5] / s0[5]:.1f}'`배 나빠졌다**
+
+- 원인은 cross-entropy loss다 — **이미 맞힌 예측의 confidence를 계속 밀어 올려도 loss가 계속 준다**
+- 정확도가 saturation한 뒤에도 optimization은 멈추지 않고 logit을 키운다
+- 그래서 **early stopping과 weight decay가 calibration에도 도움**이 된다 — 정확도가 아니라 logit 크기를 억제하기 때문
+- **정확도로 모델을 고르면 이 문제가 안 보인다** — 네 모델의 정확도 차이는 0.03 이내인데 ECE는 9배 차이다
+- NLL(negative log-likelihood — 정답에 준 확률의 −log 평균)을 함께 봐야 한다. NLL은 정확도와 calibration을 동시에 벌한다
 
 ---
 
@@ -188,10 +180,15 @@ zv, zt = logits(M, Xva), logits(M, Xte)
 TS = np.linspace(0.5, 10.0, 96)
 NLLv = [nll(softmax_T(zv, T), yva) for T in TS]
 TBEST = float(TS[int(np.argmin(NLLv))])
+```
 
-print(f"validation set NLL을 최소화하는 temperature: **T* = {TBEST:.2f}**")
-print("  (T > 1이면 logit을 눌러 confidence를 낮춘다는 뜻)")
-print()
+validation set NLL을 최소화하는 temperature: **T\* = `{python} f'{TBEST:.2f}'`**
+(T > 1이면 logit을 눌러 confidence를 낮춘다는 뜻)
+
+```{python}
+#| label: temperature-2
+#| code-fold: false
+
 print(f"{'':<20} {'정확도':>9} {'평균 confidence':>10} {'ECE':>9} {'NLL':>8}")
 print("-" * 60)
 TEMP = []
@@ -201,22 +198,24 @@ for lbl, T in [("calibration 전 (T = 1)", 1.0), (f"calibration 후 (T = {TBEST:
                  float(P.max(1).mean()), ece(P, yte), nll(P, yte)))
     print(f"{lbl:<20} {(P.argmax(1)==yte).mean():>9.4f} {P.max(1).mean():>10.4f} "
           f"{ece(P,yte):>9.4f} {nll(P,yte):>8.4f}")
-print()
 b, a_ = TEMP
-print(f"**정확도가 소수점 이하까지 완전히 같다** ({b[2]:.4f} = {a_[2]:.4f}).")
-print(f"  ECE {b[4]:.4f} → {a_[4]:.4f} ({b[4]/a_[4]:.1f}배 개선)")
-print(f"  NLL {b[5]:.4f} → {a_[5]:.4f}")
-print()
-for s in ["**parameter 한 개다.** validation set 몇 천 개면 충분하고, 재학습이 필요 없다",
-          "그래서 **calibration은 거의 항상 해야 한다** — 비용이 사실상 0이다",
-          "다만 temperature scaling은 **전체 confidence 수준만 조절**한다 — "
-          "class별로 다르게 틀어진 경우는 못 고친다",
-          "그때는 Platt scaling(class별 선형)이나 "
-          "isotonic regression(단조 비모수 — 모양을 정하지 않고 순서만 지키는 곡선)을 쓴다",
-          "**중요한 한계**: calibration은 **validation set과 같은 분포**에서만 유효하다. "
-          "[11.6](../11_systems/06_monitoring.qmd)의 drift가 오면 다시 어긋난다"]:
-    print(f"  · {s}")
 ```
+
+**정확도가 소수점 이하까지 완전히 같다** (`{python} f'{b[2]:.4f}'` = `{python} f'{a_[2]:.4f}'`).  
+ECE `{python} f'{b[4]:.4f}'` → `{python} f'{a_[4]:.4f}'` (`{python} f'{b[4] / a_[4]:.1f}'`배 개선)
+
+```{python}
+#| label: temperature-3
+#| code-fold: false
+
+print(f"  NLL {b[5]:.4f} → {a_[5]:.4f}")
+```
+
+- **parameter 한 개다.** validation set 몇 천 개면 충분하고, 재학습이 필요 없다
+- 그래서 **calibration은 거의 항상 해야 한다** — 비용이 사실상 0이다
+- 다만 temperature scaling은 **전체 confidence 수준만 조절**한다 — class별로 다르게 틀어진 경우는 못 고친다
+- 그때는 Platt scaling(class별 선형)이나 isotonic regression(단조 비모수 — 모양을 정하지 않고 순서만 지키는 곡선)을 쓴다
+- **중요한 한계**: calibration은 **validation set과 같은 분포**에서만 유효하다. [11.6](../11_systems/06_monitoring.qmd)의 drift가 오면 다시 어긋난다
 
 ```{python}
 #| label: fig-reliability
@@ -291,9 +290,14 @@ T1 = float(TS[int(np.argmin([nll(softmax_T(Zv[0], T), yva) for T in TS]))])
 TE = float(TS[int(np.argmin([nll(np.mean([softmax_T(z, T) for z in Zv], 0), yva)
                              for T in TS]))])
 PENS = np.mean([softmax_T(z, 1.0) for z in Zt], 0)
+```
 
-print(f"단일 모델 T* = {T1:.2f},  ensemble T* = {TE:.2f}")
-print()
+단일 모델 T\* = `{python} f'{T1:.2f}'`, ensemble T\* = `{python} f'{TE:.2f}'`
+
+```{python}
+#| label: ensembles-2
+#| code-fold: false
+
 print(f"{'방법':<24} {'정확도':>9} {'평균 confidence':>10} {'ECE':>9} {'NLL':>8}")
 print("-" * 66)
 CMP = []
@@ -306,28 +310,20 @@ for lbl, P in [("단일 모델", softmax_T(Zt[0], 1.0)),
          ece(P, yte), nll(P, yte))
     CMP.append(r)
     print(f"{lbl:<24} {r[1]:>9.4f} {r[2]:>10.4f} {r[3]:>9.4f} {r[4]:>8.4f}")
-print()
 sing, temp, mc, ens, enst = CMP
-print("**두 축이 서로 다르게 움직인다.**")
-print(f"  **정확도**는 ensemble·MC dropout이 올린다 "
-      f"({sing[1]:.4f} → {ens[1]:.4f} / {mc[1]:.4f}). temperature는 못 올린다.")
-print(f"  **calibration**은 temperature가 고친다 (ECE {sing[3]:.4f} → {temp[3]:.4f}). "
-      f"ensemble만으로는 {ens[3]:.4f}에 그친다.")
-print(f"  **둘을 같이 쓰면** 정확도 {enst[1]:.4f}에 ECE {enst[3]:.4f} — "
-      f"NLL {enst[4]:.4f}.")
-print()
-for s in ["ensemble의 calibration 효과는 **부수적**이다 — "
-          "서로 다른 오답이 평균에서 상쇄되며 confidence가 조금 내려갈 뿐",
-          "구성원 각각이 overconfident하면 평균도 overconfident하다. "
-          f"실제로 ensemble ECE가 {ens[3]:.4f}로 남았다",
-          f"이 과제에서는 **MC dropout이 가장 좋은 NLL({mc[4]:.4f})**을 냈다 — "
-          "dropout이 regularization까지 하기 때문이다",
-          "다만 MC dropout은 **dropout률이라는 임의의 손잡이**에 결과가 달렸고, "
-          "Bayesian 근사라는 해석도 논쟁적이다",
-          "**실무 권고는 단순하다** — ensemble(또는 그냥 좋은 모델) + temperature scaling. "
-          "Bayesian 신경망의 복잡도를 감당할 이유가 대부분 없다"]:
-    print(f"  · {s}")
 ```
+
+**두 축이 서로 다르게 움직인다.**
+
+**정확도**는 ensemble·MC dropout이 올린다 (`{python} f'{sing[1]:.4f}'` → `{python} f'{ens[1]:.4f}'` / `{python} f'{mc[1]:.4f}'`). temperature는 못 올린다.  
+**calibration**은 temperature가 고친다 (ECE `{python} f'{sing[3]:.4f}'` → `{python} f'{temp[3]:.4f}'`). ensemble만으로는 `{python} f'{ens[3]:.4f}'`에 그친다.  
+**둘을 같이 쓰면** 정확도 `{python} f'{enst[1]:.4f}'`에 ECE `{python} f'{enst[3]:.4f}'` — NLL `{python} f'{enst[4]:.4f}'`.
+
+- ensemble의 calibration 효과는 **부수적**이다 — 서로 다른 오답이 평균에서 상쇄되며 confidence가 조금 내려갈 뿐
+- 구성원 각각이 overconfident하면 평균도 overconfident하다. 실제로 ensemble ECE가 `{python} f'{ens[3]:.4f}'`로 남았다
+- 이 과제에서는 **MC dropout이 가장 좋은 NLL(`{python} f'{mc[4]:.4f}'`)**을 냈다 — dropout이 regularization까지 하기 때문이다
+- 다만 MC dropout은 **dropout률이라는 임의의 손잡이**에 결과가 달렸고, Bayesian 근사라는 해석도 논쟁적이다
+- **실무 권고는 단순하다** — ensemble(또는 그냥 좋은 모델) + temperature scaling. Bayesian 신경망의 복잡도를 감당할 이유가 대부분 없다
 
 ---
 
@@ -343,6 +339,8 @@ $$
 $$
 
 구성원들이 **서로 다른 답**을 내면 epistemic, **다 같이 넓게** 답하면 aleatoric이다. 전문가 다섯 명이 제각각 다른 답을 하면 아직 모르는 문제고, 다섯 명이 똑같이 "반반이다"라고 하면 원래 운에 달린 문제다.
+
+영역별 uncertainty 분해 (구성원 5개)
 
 ```{python}
 #| label: decompose
@@ -394,8 +392,6 @@ VAR = np.array([np.exp(np.clip(m.predict(XG)[:, 1], -6, 4)) for m in GENS])
 ALEA = VAR.mean(0)
 EPIS = MU.var(0)
 
-print("영역별 uncertainty 분해 (구성원 5개)")
-print()
 print(f"{'영역':<28} {'aleatoric σ':>11} {'epistemic σ':>11} {'비율 E/A':>10}   진단")
 print("-" * 78)
 REG = []
@@ -409,19 +405,23 @@ for nm, lo, hi, exp in [
     a_ = float(np.sqrt(ALEA[m_].mean())); e_ = float(np.sqrt(EPIS[m_].mean()))
     REG.append((nm, a_, e_, e_/a_, exp))
     print(f"{nm:<28} {a_:>11.4f} {e_:>11.4f} {e_/a_:>10.2f}   {exp}")
-print()
 hole, noisy, extra = REG[1], REG[2], REG[3]
-print("**두 가지는 교과서대로 나온다.**")
-print(f"  데이터 구멍: epistemic/aleatoric = {hole[3]:.2f} — "
-      f"epistemic이 {hole[3]:.1f}배 크다. **구멍을 감지했다**")
-print(f"  잡음 영역: 비율 {noisy[3]:.2f} — aleatoric이 지배한다. "
-      f"**여기서는 데이터를 더 모아도 소용없다**")
-print()
-print("**그런데 하나는 실패한다.**")
-print(f"  extrapolation(외삽 — 데이터 범위 바깥) 영역(데이터 최댓값 4.0 바깥): 비율 {extra[3]:.2f}로 "
-      f"**epistemic이 안 커진다**.")
-print(f"  epistemic σ가 구멍에서 {hole[2]:.3f}였는데 extrapolation에서는 {extra[2]:.3f}다.")
-print()
+```
+
+**두 가지는 교과서대로 나온다.**
+
+데이터 구멍: epistemic/aleatoric = `{python} f'{hole[3]:.2f}'` — epistemic이 `{python} f'{hole[3]:.1f}'`배 크다. **구멍을 감지했다**
+잡음 영역: 비율 `{python} f'{noisy[3]:.2f}'` — aleatoric이 지배한다. **여기서는 데이터를 더 모아도 소용없다**
+
+**그런데 하나는 실패한다.**
+
+extrapolation(외삽 — 데이터 범위 바깥) 영역(데이터 최댓값 4.0 바깥): 비율 `{python} f'{extra[3]:.2f}'`로 **epistemic이 안 커진다**.  
+epistemic σ가 구멍에서 `{python} f'{hole[2]:.3f}'`였는데 extrapolation에서는 `{python} f'{extra[2]:.3f}'`다.
+
+```{python}
+#| label: decompose-2
+#| code-fold: false
+
 for s in ["원인은 구성원들이 **같은 방향으로 extrapolation**하기 때문이다 — "
           "구조와 loss가 같으니 데이터 밖에서도 비슷하게 행동한다. 같은 학교에서 같은 교재로 배운 전문가들은 안 배운 문제에도 비슷하게 틀린다",
           "**deep ensemble은 interpolation(내삽) 구멍은 잡지만 extrapolation은 못 잡는다**",
@@ -514,10 +514,15 @@ import numpy as np
 MC = ENS[0]
 PCA = MC.predict(Xva)          # calibration set
 PTE = MC.predict(Xte)
-print(f"기반 모델: 정확도 {(PTE.argmax(1)==yte).mean():.4f}, "
-      f"평균 confidence {PTE.max(1).mean():.4f}, ECE {ece(PTE, yte):.4f}")
-print("  **calibration이 엉망인 모델이다.** 그래도 coverage 보장은 성립한다.")
-print()
+```
+
+기반 모델: 정확도 `{python} f'{(PTE.argmax(1) == yte).mean():.4f}'`, 평균 confidence `{python} f'{PTE.max(1).mean():.4f}'`, ECE `{python} f'{ece(PTE, yte):.4f}'`
+**calibration이 엉망인 모델이다.** 그래도 coverage 보장은 성립한다.
+
+```{python}
+#| label: conformal-2
+#| code-fold: false
+
 print(f"{'α':>6} {'목표':>9} {'실제 coverage':>14} {'차이':>9} "
       f"{'평균 집합 크기':>15} {'단일 답 비율':>13}")
 print("-" * 74)
@@ -533,25 +538,31 @@ for a in [0.01, 0.05, 0.10, 0.20, 0.30]:
     CONF.append((a, cov, sz, one, q))
     print(f"{a:>6.2f} {1-a:>9.2f} {cov:>14.4f} {cov-(1-a):>+9.4f} "
           f"{sz:>15.3f} {one:>13.4f}")
-print()
 mx = max(abs(c[1]-(1-c[0])) for c in CONF)
-print(f"**모든 α에서 coverage가 목표를 지킨다** — 최대 편차 {mx:.4f}.")
-print("  모델의 confidence가 0.87인데 정확도가 0.62인 상황에서도 그렇다.")
-print("  **보장은 모델의 품질이 아니라 절차에서 온다.**")
-print()
 c10 = [c for c in CONF if c[0] == 0.10][0]
 c30 = [c for c in CONF if c[0] == 0.30][0]
-print("**대가는 집합의 크기다.**")
-print(f"  90% coverage를 원하면 평균 {c10[2]:.2f}개 class를 답해야 한다 "
-      f"(4개 중).")
-print(f"  단일 답으로 끝나는 경우는 {c10[3]:.1%}뿐이다.")
-print(f"  70%로 낮추면 집합이 {c30[2]:.2f}개로 줄고 단일 답이 {c30[3]:.1%}.")
-print()
-print("**그리고 여기에 결정적인 한계가 있다 — conditional coverage(conditional coverage)는 보장되지 않는다.**")
-print()
 a = 0.10
 q = float(np.quantile(scal, np.ceil((ncal+1)*(1-a))/ncal, method="higher"))
 S = (1 - PTE) <= q
+```
+
+**모든 α에서 coverage가 목표를 지킨다** — 최대 편차 `{python} f'{mx:.4f}'`.  
+모델의 confidence가 0.87인데 정확도가 0.62인 상황에서도 그렇다.
+
+**보장은 모델의 품질이 아니라 절차에서 온다.**
+
+**대가는 집합의 크기다.**
+
+90% coverage를 원하면 평균 `{python} f'{c10[2]:.2f}'`개 class를 답해야 한다 (4개 중).  
+단일 답으로 끝나는 경우는 `{python} f'{c10[3]:.1%}'`뿐이다.  
+70%로 낮추면 집합이 `{python} f'{c30[2]:.2f}'`개로 줄고 단일 답이 `{python} f'{c30[3]:.1%}'`.
+
+**그리고 여기에 결정적인 한계가 있다 — conditional coverage(conditional coverage)는 보장되지 않는다.**
+
+```{python}
+#| label: conformal-3
+#| code-fold: false
+
 print(f"  {'class':<8} {'coverage':>10} {'목표와 차이':>12} "
       f"{'평균 집합 크기':>15} {'표본 수':>9}")
 print("  " + "-"*58)
@@ -562,25 +573,17 @@ for k in range(K):
     COND.append((k, cv, float(S[mk].sum(1).mean()), int(mk.sum())))
     print(f"  {k:<8} {cv:>10.4f} {cv-0.9:>+12.4f} "
           f"{S[mk].sum(1).mean():>15.3f} {mk.sum():>9}")
-print()
 lo_ = min(COND, key=lambda t: t[1]); hi_ = max(COND, key=lambda t: t[1])
-print(f"  전체로는 {S[np.arange(len(yte)), yte].mean():.4f}로 90%를 지켰는데,")
-print(f"  **class {lo_[0]}은 {lo_[1]:.4f}, class {hi_[0]}은 {hi_[1]:.4f}** — "
-      f"{hi_[1]-lo_[1]:.3f} 차이.")
-print()
-for s in ["**marginal(주변부) 보장은 평균에 대한 보장**이다. "
-          "어떤 부분집단은 덜 cover된다. '전국 평균 강수 확률'이 맞아도 특정 지역은 틀릴 수 있다",
-          "이것이 실무에서 위험한 이유는 명확하다 — "
-          "**소수 집단이 체계적으로 덜 보호받을 수 있다** "
-          "([12.4](04_fairness_privacy.qmd))",
-          "완화책은 **집단별로 따로 calibration**하거나(Mondrian conformal), "
-          "적응형 점수(APS, RAPS)를 쓰는 것",
-          "또 하나의 전제는 **exchangeability**다 — "
-          "분포가 이동하면 보장이 깨진다. 시계열에는 그대로 못 쓴다",
-          "그래도 conformal의 값어치는 분명하다. "
-          "**'모델을 믿을 수 있는가'를 묻지 않고도 쓸 수 있는 드문 도구**다"]:
-    print(f"  · {s}")
 ```
+
+전체로는 `{python} f'{S[np.arange(len(yte)), yte].mean():.4f}'`로 90%를 지켰는데,
+**class `{python} f'{lo_[0]}'`은 `{python} f'{lo_[1]:.4f}'`, class `{python} f'{hi_[0]}'`은 `{python} f'{hi_[1]:.4f}'`** — `{python} f'{hi_[1] - lo_[1]:.3f}'` 차이.
+
+- **marginal(주변부) 보장은 평균에 대한 보장**이다. 어떤 부분집단은 덜 cover된다. '전국 평균 강수 확률'이 맞아도 특정 지역은 틀릴 수 있다
+- 이것이 실무에서 위험한 이유는 명확하다 — **소수 집단이 체계적으로 덜 보호받을 수 있다** ([12.4](04_fairness_privacy.qmd))
+- 완화책은 **집단별로 따로 calibration**하거나(Mondrian conformal), 적응형 점수(APS, RAPS)를 쓰는 것
+- 또 하나의 전제는 **exchangeability**다 — 분포가 이동하면 보장이 깨진다. 시계열에는 그대로 못 쓴다
+- 그래도 conformal의 값어치는 분명하다. **'모델을 믿을 수 있는가'를 묻지 않고도 쓸 수 있는 드문 도구**다
 
 ```{python}
 #| label: fig-conformal
@@ -627,6 +630,8 @@ confidence가 낮으면 사람에게 넘기고, 남은 것만 자동 처리한�
 
 무엇을 기준으로 넘길지가 문제다.
 
+coverage를 줄이면 (= confidence 없는 것을 거부하면) 정확도가 얼마나 오르나
+
 ```{python}
 #| label: selective
 #| code-fold: false
@@ -642,8 +647,6 @@ SCORES = {
     "ensemble 평균 confidence": (PE.max(1), PE),
     "ensemble 불일치만": (-PS.max(2).var(0), PE),
 }
-print("coverage를 줄이면 (= confidence 없는 것을 거부하면) 정확도가 얼마나 오르나")
-print()
 print(f"{'coverage':>9} " + " ".join(f"{k:>23}" for k in SCORES))
 print("-" * 106)
 RISK = {k: [] for k in SCORES}
@@ -655,35 +658,27 @@ for cov in [1.0, 0.8, 0.6, 0.4, 0.2]:
         v = float((P.argmax(1)[m_] == yte[m_]).mean())
         RISK[k].append((cov, v)); row.append(v)
     print(f"{cov:>9.0%} " + " ".join(f"{v:>23.4f}" for v in row))
-print()
 best = "ensemble 평균 confidence"
 b20 = RISK[best][-1][1]; b100 = RISK[best][0][1]
 s20 = RISK["최대 softmax (단일)"][-1][1]
 b60 = RISK[best][2][1]; d60 = RISK["ensemble 불일치만"][2][1]
 d20 = RISK["ensemble 불일치만"][-1][1]
-print(f"**거부는 잘 듣는다** — {best}로 20%만 답하면 "
-      f"정확도가 {b100:.4f} → {b20:.4f}.")
-print(f"  단일 모델 confidence로도 {s20:.4f}까지 간다.")
-print()
-print(f"**불일치만 쓰면 뒤지는데, 격차는 중간 coverage에서 가장 크다.**")
-print(f"  coverage 60%: 평균 confidence {b60:.4f} vs 불일치만 {d60:.4f} "
-      f"({b60-d60:+.4f})")
-print(f"  coverage 20%: {b20:.4f} vs {d20:.4f} "
-      f"({b20-d20:+.4f}) — 여기서는 거의 붙는다")
-print("  극단적으로 조이면 두 기준이 결국 같은 소수 사례를 남기기 때문이다.")
-print()
-for s in ["잡음 때문에 틀리는 사례(aleatoric)는 구성원들이 **사이좋게 같이 틀린다** — "
-          "불일치가 안 생긴다",
-          "그래서 **거부 기준으로는 전체 confidence가 낫다**. "
-          "불일치는 '데이터를 더 모을까'를 물을 때 쓴다",
-          "**두 지표는 다른 질문에 답한다** — "
-          "다시 aleatoric/epistemic 구분으로 돌아온다",
-          "실무에서는 **risk-coverage 곡선**을 그려 놓고 "
-          "사람의 처리 용량에 맞춰 운영점을 고른다",
-          "그리고 이 곡선은 배포 후 계속 다시 그려야 한다 — "
-          "[11.6](../11_systems/06_monitoring.qmd)"]:
-    print(f"  · {s}")
 ```
+
+**거부는 잘 듣는다** — `{python} f'{best}'`로 20%만 답하면 정확도가 `{python} f'{b100:.4f}'` → `{python} f'{b20:.4f}'`.  
+단일 모델 confidence로도 `{python} f'{s20:.4f}'`까지 간다.
+
+**불일치만 쓰면 뒤지는데, 격차는 중간 coverage에서 가장 크다.**
+
+coverage 60%: 평균 confidence `{python} f'{b60:.4f}'` vs 불일치만 `{python} f'{d60:.4f}'` (`{python} f'{b60 - d60:+.4f}'`)  
+coverage 20%: `{python} f'{b20:.4f}'` vs `{python} f'{d20:.4f}'` (`{python} f'{b20 - d20:+.4f}'`) — 여기서는 거의 붙는다
+극단적으로 조이면 두 기준이 결국 같은 소수 사례를 남기기 때문이다.
+
+- 잡음 때문에 틀리는 사례(aleatoric)는 구성원들이 **사이좋게 같이 틀린다** — 불일치가 안 생긴다
+- 그래서 **거부 기준으로는 전체 confidence가 낫다**. 불일치는 '데이터를 더 모을까'를 물을 때 쓴다
+- **두 지표는 다른 질문에 답한다** — 다시 aleatoric/epistemic 구분으로 돌아온다
+- 실무에서는 **risk-coverage 곡선**을 그려 놓고 사람의 처리 용량에 맞춰 운영점을 고른다
+- 그리고 이 곡선은 배포 후 계속 다시 그려야 한다 — [11.6](../11_systems/06_monitoring.qmd)
 
 ```{python}
 #| label: fig-risk
