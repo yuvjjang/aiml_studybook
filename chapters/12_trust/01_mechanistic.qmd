@@ -107,17 +107,17 @@ def loss_grads(p, idx, tgt):
     g["P"] += dr0.sum(0)
     np.add.at(g["E"], idx.ravel(), dr0.reshape(-1, DM))
     return ll, g
-
-
-print(f"attention 전용 2층 Transformer — vocabulary {V}, 길이 {L}, d_model {DM}, "
-      f"head {NH}개/층")
-print(f"  parameter {sum(v.size for v in init().values()):,}개")
-print("  MLP도 layer normalization도 없다 — **attention만 남긴다.**")
-print("  residual stream이 그대로 드러나 circuit을 추적할 수 있다.")
 ```
+
+attention 전용 2층 Transformer — vocabulary `{python} f'{V}'`, 길이 `{python} f'{L}'`, d_model `{python} f'{DM}'`, head `{python} f'{NH}'`개/층
+parameter `{python} f'{sum((v.size for v in init().values())):,}'`개
+MLP도 layer normalization도 없다 — **attention만 남긴다.**  
+residual stream이 그대로 드러나 circuit을 추적할 수 있다.
 
 backward를 직접 썼으니 먼저 맞는지부터 확인한다.
 여기서 한 가지를 짚고 간다 — **상대오차로 검사하면 잘못된 결론이 나온다.**
+
+gradient check — 해석적 vs 수치적 (central difference, eps=1e-5)
 
 ```{python}
 #| label: gradcheck
@@ -131,8 +131,6 @@ p0 = {k: gg.normal(0, 0.15, v.shape) for k, v in p0.items()}
 gi = gg.integers(0, V, (3, L)); gt = gg.integers(0, V, (3, L))
 _, GR = loss_grads(p0, gi, gt)
 
-print("gradient check — 해석적 vs 수치적 (central difference, eps=1e-5)")
-print()
 print(f"{'parameter':<9} {'절대오차':>12} {'gradient 크기':>16} {'상대오차':>12}")
 print("-" * 54)
 worst_abs = 0.0
@@ -152,18 +150,14 @@ for k in ["E", "P", "U", "Wq0", "Wk0", "Wv0", "Wo0",
     sc = max(np.abs(ana).max(), 1e-30)
     worst_abs = max(worst_abs, ae)
     print(f"{k:<9} {ae:>12.2e} {sc:>16.2e} {ae/sc:>12.2e}")
-print()
-print(f"**최악 절대오차 {worst_abs:.1e}** — central difference의 정밀도 한계 수준이다. 통과.")
-print()
-for s in ["**주의**: Wq·Wk의 gradient는 크기가 10⁻⁵ 수준으로 작다",
-          "초기값이 작으면 attention 점수가 거의 균일해 "
-          "query·key가 loss에 거의 영향을 안 주기 때문",
-          "여기에 **상대오차 기준을 들이대면 전부 '실패'로 나온다** — "
-          "finite difference의 잡음이 신호보다 크니까. 0.001g짜리 차이를 주방 저울로 재면 오차가 값보다 크다",
-          "**절대오차를 공통 scale과 비교해야 한다.** "
-          "이 함정에 걸리면 멀쩡한 구현을 몇 시간 뜯게 된다"]:
-    print(f"  · {s}")
 ```
+
+**최악 절대오차 `{python} f'{worst_abs:.1e}'`** — central difference의 정밀도 한계 수준이다. 통과.
+
+- **주의**: Wq·Wk의 gradient는 크기가 10⁻⁵ 수준으로 작다
+- 초기값이 작으면 attention 점수가 거의 균일해 query·key가 loss에 거의 영향을 안 주기 때문
+- 여기에 **상대오차 기준을 들이대면 전부 '실패'로 나온다** — finite difference의 잡음이 신호보다 크니까. 0.001g짜리 차이를 주방 저울로 재면 오차가 값보다 크다
+- **절대오차를 공통 scale과 비교해야 한다.** 이 함정에 걸리면 멀쩡한 구현을 몇 시간 뜯게 된다
 
 ---
 
@@ -224,9 +218,14 @@ for step in range(1, 1501):
         P[k] -= 3e-3*(mm/(1-0.9**step))/(np.sqrt(vv/(1-0.999**step))+1e-8)
     if step in EVAL:
         CURVE.append((step, acc_rep(P)))
+```
 
-print("학습 곡선 — 반복 구간 정확도")
-print()
+학습 곡선 — 반복 구간 정확도
+
+```{python}
+#| label: train-2
+#| code-fold: false
+
 print(f"{'step':>6} {'정확도':>9}   {'':<30}")
 for s, a in CURVE:
     if s in (0, 100, 180, 200, 220, 240, 260, 280, 300, 340, 500, 1000, 1500):
@@ -235,17 +234,15 @@ for s, a in CURVE:
 print()
 print(f"최종 반복 구간 정확도 {CURVE[-1][1]:.4f}  "
       f"(무작위 기대 {1/V:.4f})")
-print()
 lo = [a for s, a in CURVE if s == 200][0]
 hi = [a for s, a in CURVE if s == 300][0]
-print(f"**200 → 300 step 사이에 {lo:.3f} → {hi:.3f}로 뛴다.**")
-for s in ["매끄러운 개선이 아니라 **phase transition(상전이 — 물이 0°C에서 갑자기 어는 것처럼)**에 가깝다",
-          "circuit이 절반쯤 완성되면 절반쯤 맞는 게 아니라, "
-          "**두 조각이 맞물리는 순간 갑자기 된다**",
-          "실제 LLM의 in-context learning 능력도 학습 중 이런 급변으로 나타난다 — "
-          "induction head의 형성 시점과 일치한다는 것이 알려져 있다"]:
-    print(f"  · {s}")
 ```
+
+**200 → 300 step 사이에 `{python} f'{lo:.3f}'` → `{python} f'{hi:.3f}'`로 뛴다.**
+
+- 매끄러운 개선이 아니라 **phase transition(상전이 — 물이 0°C에서 갑자기 어는 것처럼)**에 가깝다
+- circuit이 절반쯤 완성되면 절반쯤 맞는 게 아니라, **두 조각이 맞물리는 순간 갑자기 된다**
+- 실제 LLM의 in-context learning 능력도 학습 중 이런 급변으로 나타난다 — induction head의 형성 시점과 일치한다는 것이 알려져 있다
 
 ```{python}
 #| label: fig-emerge
@@ -278,6 +275,8 @@ fig
 residual stream의 핵심 성질은 **모든 층이 같은 공간에 읽고 쓴다**는 것이다.
 그렇다면 중간 잔차를 그대로 unembedding(마지막에 단어 점수로 바꾸는 행렬)에 통과시켜 볼 수 있다 — **logit lens**(logit lens)다. 요리가 끝나기 전에 중간 단계마다 맛을 보는 셈이다.
 
+각 단계의 잔차를 그대로 U에 통과시킨다
+
 ```{python}
 #| label: lens
 #| code-fold: false
@@ -290,8 +289,6 @@ SEQ = np.concatenate([pre, pre], 1)
 TGT = np.concatenate([SEQ[:, 1:], g.integers(0, V, (500, 1))], 1)
 _, CC = forward(P, SEQ, cache=True)
 
-print("각 단계의 잔차를 그대로 U에 통과시킨다")
-print()
 print(f"{'단계':<26} {'반복 구간 정확도':>16} {'정답 logit 순위':>15}")
 print("-" * 60)
 LENS = []
@@ -303,27 +300,25 @@ for nm, key in [("r0 — embedding만", "r0"), ("r1 — 1층 통과 후", "r1"),
     rank = float((z > np.take_along_axis(z, t[..., None], -1)).sum(-1).mean())
     LENS.append((nm, a, rank))
     print(f"{nm:<26} {a:>16.4f} {rank:>15.2f}")
-print(f"  (순위 0 = 정답이 1등, 무작위 기대 {(V-1)/2:.1f})")
-print()
-print(f"**답이 마지막 층에서 한꺼번에 나타난다** — "
-      f"{LENS[1][1]:.4f}에서 {LENS[2][1]:.4f}로.")
-for s in [f"1층을 통과해도 정확도가 {LENS[0][1]:.3f} → {LENS[1][1]:.3f}로 "
-          f"**오히려 내려간다**",
-          "1층이 쓰는 것은 '답'이 아니라 **2층이 쓸 재료**이기 때문이다 — "
-          "unembedding으로 읽으면 잡음처럼 보인다. 손질한 재료를 맛보고 '요리가 이상하다'고 하는 격",
-          "이것이 logit lens의 한계다. **중간 층이 무의미해 보여도 무의미하지 않다**",
-          "tuned lens는 층마다 별도의 선형 사상을 학습해 "
-          "이 문제를 완화한다",
-          "실제 LLM에서는 logit lens가 잘 듣는 편인데, "
-          "**층이 깊고 잔차가 점진적으로 답에 수렴**하기 때문이다"]:
-    print(f"  · {s}")
 ```
+
+(순위 0 = 정답이 1등, 무작위 기대 `{python} f'{(V - 1) / 2:.1f}'`)
+
+**답이 마지막 층에서 한꺼번에 나타난다** — `{python} f'{LENS[1][1]:.4f}'`에서 `{python} f'{LENS[2][1]:.4f}'`로.
+
+- 1층을 통과해도 정확도가 `{python} f'{LENS[0][1]:.3f}'` → `{python} f'{LENS[1][1]:.3f}'`로 **오히려 내려간다**
+- 1층이 쓰는 것은 '답'이 아니라 **2층이 쓸 재료**이기 때문이다 — unembedding으로 읽으면 잡음처럼 보인다. 손질한 재료를 맛보고 '요리가 이상하다'고 하는 격
+- 이것이 logit lens의 한계다. **중간 층이 무의미해 보여도 무의미하지 않다**
+- tuned lens는 층마다 별도의 선형 사상을 학습해 이 문제를 완화한다
+- 실제 LLM에서는 logit lens가 잘 듣는 편인데, **층이 깊고 잔차가 점진적으로 답에 수렴**하기 때문이다
 
 ---
 
 ## circuit 찾기 ①: attention pattern을 읽는다
 
 가장 먼저 하는 일은 각 head가 **어디를 보는지** 세는 것이다.
+
+각 head의 attention offset 분포 — 두 번째 복사 구간에서 (500개 평균)
 
 ```{python}
 #| label: heads
@@ -332,8 +327,6 @@ for s in [f"1층을 통과해도 정확도가 {LENS[0][1]:.3f} → {LENS[1][1]:.
 import numpy as np
 
 rows = np.arange(HALF, L)                 # 두 번째 복사 구간
-print("각 head의 attention offset 분포 — 두 번째 복사 구간에서 (500개 평균)")
-print()
 print(f"{'head':<8} {'자기(0)':>9} {'직전(−1)':>10} {'induction(−11)':>14} "
       f"{'첫token':>8} {'나머지':>9}   pattern")
 print("-" * 74)
@@ -350,18 +343,17 @@ for l, c in [(0, CC["c1"]), (1, CC["c2"])]:
                "**previous-token pattern**" if prev > 0.4 else "분산됨")
         print(f"L{l}H{h:<5} {self_:>9.4f} {prev:>10.4f} {ind:>14.4f} "
               f"{first:>8.4f} {1-self_-prev-ind-first:>9.4f}   {lab}")
-print()
-print("**2층에 induction pattern을 가진 head가 둘 있다** "
-      f"(L1H0 {DIAG[(1,0)][2]:.3f}, L1H1 {DIAG[(1,1)][2]:.3f}).")
-print("**1층에는 clean previous-token head가 없다** — 둘 다 분산돼 있다.")
-print()
-print("여기까지가 'pattern 읽기'로 알 수 있는 전부다. 두 질문이 남는다.")
-for s in ["induction pattern을 가진 두 head가 **둘 다 실제로 쓰이는가**",
-          "1층이 previous-token head가 아니라면, **circuit 이야기가 틀린 것인가**"]:
-    print(f"  · {s}")
-print()
-print("**pattern만으로는 답할 수 없다. 개입해야 한다.**")
 ```
+
+**2층에 induction pattern을 가진 head가 둘 있다** (L1H0 `{python} f'{DIAG[1, 0][2]:.3f}'`, L1H1 `{python} f'{DIAG[1, 1][2]:.3f}'`).  
+**1층에는 clean previous-token head가 없다** — 둘 다 분산돼 있다.
+
+여기까지가 'pattern 읽기'로 알 수 있는 전부다. 두 질문이 남는다.
+
+- induction pattern을 가진 두 head가 **둘 다 실제로 쓰이는가**
+- 1층이 previous-token head가 아니라면, **circuit 이야기가 틀린 것인가**
+
+**pattern만으로는 답할 수 없다. 개입해야 한다.**
 
 ---
 
@@ -405,8 +397,14 @@ def run(pp, idx, kill=(), patch=None):
 
 ti, tt = batch(400, 999)
 BASE = float((run(P, ti)[0].argmax(-1) == tt)[:, REP].mean())
-print(f"ablation — 원본 정확도 {BASE:.4f}")
-print()
+```
+
+ablation — 원본 정확도 `{python} f'{BASE:.4f}'`
+
+```{python}
+#| label: ablate-2
+#| code-fold: false
+
 print(f"{'제거한 head':<12} {'induction':>10} {'정확도':>9} {'하락':>9}   판정")
 print("-" * 62)
 ABL = []
@@ -419,26 +417,20 @@ for kill, nm in [({(0, 0)}, "L0H0"), ({(0, 1)}, "L0H1"), ({(1, 0)}, "L1H0"),
                "기여함" if BASE-a > 0.05 else "**무관**")
     ABL.append((nm, a, BASE-a))
     print(f"{nm:<12} {pat:>10} {a:>9.4f} {BASE-a:>9.4f}   {verdict}")
-print()
 h10 = [x for x in ABL if x[0] == "L1H0"][0]
 h11 = [x for x in ABL if x[0] == "L1H1"][0]
-print("**이것이 이 장의 첫 번째 교훈이다.**")
-print(f"  L1H0은 induction pattern 질량이 {DIAG[(1,0)][2]:.3f}로 뚜렷한데, "
-      f"제거해도 정확도가 {h10[2]:+.4f}밖에 안 변한다.")
-print(f"  L1H1은 제거하면 {h11[1]:.4f} — "
-      f"무작위({1/V:.4f})로 떨어진다. **이 head 하나가 능력 전부다.**")
-print()
-for s in ["**attention pattern이 circuit을 증명하지 않는다.** "
-          "'induction head처럼 생긴 것'과 'induction을 수행하는 것'은 다르다",
-          "L1H0은 아마 학습 중 형성됐다가 L1H1에 밀려난 **잔재**다",
-          "이 분야에서 confirmation bias(확증 편향)가 위험한 이유가 이것이다 — "
-          "**찾던 pattern은 거의 항상 발견된다**",
-          "그래서 mechanistic interpretability의 표준 절차는 "
-          "**pattern 관찰 → causal intervention → 검증**의 순서를 강제한다",
-          f"1층도 확인된다 — 둘 다 지우면 {[x for x in ABL if x[0]=='1층 전체'][0][1]:.4f}로 "
-          f"무너진다. **1층은 circuit에 필수다**"]:
-    print(f"  · {s}")
 ```
+
+**이것이 이 장의 첫 번째 교훈이다.**
+
+L1H0은 induction pattern 질량이 `{python} f'{DIAG[1, 0][2]:.3f}'`로 뚜렷한데, 제거해도 정확도가 `{python} f'{h10[2]:+.4f}'`밖에 안 변한다.  
+L1H1은 제거하면 `{python} f'{h11[1]:.4f}'` — 무작위(`{python} f'{1 / V:.4f}'`)로 떨어진다. **이 head 하나가 능력 전부다.**
+
+- **attention pattern이 circuit을 증명하지 않는다.** 'induction head처럼 생긴 것'과 'induction을 수행하는 것'은 다르다
+- L1H0은 아마 학습 중 형성됐다가 L1H1에 밀려난 **잔재**다
+- 이 분야에서 confirmation bias(확증 편향)가 위험한 이유가 이것이다 — **찾던 pattern은 거의 항상 발견된다**
+- 그래서 mechanistic interpretability의 표준 절차는 **pattern 관찰 → causal intervention → 검증**의 순서를 강제한다
+- 1층도 확인된다 — 둘 다 지우면 `{python} f'{[x for x in ABL if x[0] == '1층 전체'][0][1]:.4f}'`로 무너진다. **1층은 circuit에 필수다**
 
 ---
 
@@ -448,6 +440,8 @@ for s in ["**attention pattern이 circuit을 증명하지 않는다.** "
 그렇다면 1층은 residual stream에 **무엇을** 쓰고 있을까.
 
 linear probe(선형 프로브 — 내부 활성값에서 특정 정보를 읽어 내는 작은 분류기)로 읽어 본다.
+residual stream에서 무엇을 선형으로 읽어낼 수 있나
+
 ```{python}
 #| label: probe
 #| code-fold: false
@@ -470,8 +464,6 @@ cur_tok = SEQ[:, 1:].ravel()
 X0 = CC["r0"][:, 1:].reshape(-1, DM)
 X1 = CC["r1"][:, 1:].reshape(-1, DM)
 
-print("residual stream에서 무엇을 선형으로 읽어낼 수 있나")
-print()
 print(f"{'읽어낼 것':<16} {'r0 (embedding)':>13} {'r1 (1층 후)':>14} {'변화'}")
 print("-" * 58)
 PR = []
@@ -479,31 +471,26 @@ for nm, y in [("현재 token", cur_tok), ("직전 token", prev_tok)]:
     a0 = linear_probe(X0, y); a1 = linear_probe(X1, y)
     PR.append((nm, a0, a1))
     print(f"{nm:<16} {a0:>13.4f} {a1:>14.4f} {a1-a0:>+10.4f}")
-print(f"  (무작위 {1/V:.4f})")
-print()
 pv = PR[1]
-print(f"**1층이 '직전 token' 정보를 잔차에 써 넣는다** — "
-      f"{pv[1]:.4f} → {pv[2]:.4f}.")
-for s in ["embedding 단계에서는 직전 token을 전혀 읽을 수 없다 "
-          f"({pv[1]:.4f}, 무작위 수준)",
-          "1층을 지나면 절반 가까이 읽힌다 — "
-          "**attention pattern이 분산돼 있어도 기능은 수행하고 있었다**",
-          "즉 교과서의 'previous-token head' 이야기가 **기능적으로는 맞다**. "
-          "다만 이 작은 모델에서는 head 하나에 깔끔히 국소화되지 않았을 뿐",
-          "**pattern 읽기와 probing이 서로 다른 것을 본다** — "
-          "pattern은 놓쳤고 probe는 찾았다",
-          "여러 도구를 겹쳐 써야 하는 이유다"]:
-    print(f"  · {s}")
-print()
-print("**그런데 probing에는 치명적인 한계가 있다.**")
-for s in ["probe가 읽어냈다는 것은 **정보가 거기 있다**는 뜻일 뿐이다",
-          "**모델이 그 정보를 쓴다는 뜻이 아니다** — 책상 위에 지도가 있다고 그 사람이 지도를 보고 길을 찾은 것은 아니다",
-          "충분히 강한 probe는 거의 무엇이든 찾아낸다 — "
-          "무작위 신경망의 활성에서도 상당한 정보가 읽힌다",
-          "그래서 probing 결과는 반드시 **causal intervention으로 확인**해야 한다",
-          "다음 절의 activation patching이 그 도구다"]:
-    print(f"  · {s}")
 ```
+
+(무작위 `{python} f'{1 / V:.4f}'`)
+
+**1층이 '직전 token' 정보를 잔차에 써 넣는다** — `{python} f'{pv[1]:.4f}'` → `{python} f'{pv[2]:.4f}'`.
+
+- embedding 단계에서는 직전 token을 전혀 읽을 수 없다 (`{python} f'{pv[1]:.4f}'`, 무작위 수준)
+- 1층을 지나면 절반 가까이 읽힌다 — **attention pattern이 분산돼 있어도 기능은 수행하고 있었다**
+- 즉 교과서의 'previous-token head' 이야기가 **기능적으로는 맞다**. 다만 이 작은 모델에서는 head 하나에 깔끔히 국소화되지 않았을 뿐
+- **pattern 읽기와 probing이 서로 다른 것을 본다** — pattern은 놓쳤고 probe는 찾았다
+- 여러 도구를 겹쳐 써야 하는 이유다
+
+**그런데 probing에는 치명적인 한계가 있다.**
+
+- probe가 읽어냈다는 것은 **정보가 거기 있다**는 뜻일 뿐이다
+- **모델이 그 정보를 쓴다는 뜻이 아니다** — 책상 위에 지도가 있다고 그 사람이 지도를 보고 길을 찾은 것은 아니다
+- 충분히 강한 probe는 거의 무엇이든 찾아낸다 — 무작위 신경망의 활성에서도 상당한 정보가 읽힌다
+- 그래서 probing 결과는 반드시 **causal intervention으로 확인**해야 한다
+- 다음 절의 activation patching이 그 도구다
 
 ---
 
@@ -543,44 +530,54 @@ def logit_diff(lg):
 lgc, RC = run(P, CLEAN)
 lgd, _ = run(P, CORR)
 DC, DK = logit_diff(lgc), logit_diff(lgd)
-print(f"관찰 위치 {QPOS}, induction head가 복사해 올 위치 {SRC}")
-print(f"  clean 실행 — logit 차 {DC:+.4f}, 위치 {QPOS} 정확도 "
-      f"{(lgc[:, QPOS].argmax(-1) == ANS).mean():.4f}")
-print(f"  corrupted 실행 — logit 차 {DK:+.4f}, 위치 {QPOS} 정확도 "
-      f"{(lgd[:, QPOS].argmax(-1) == ANS).mean():.4f}")
-print()
-print(f"  **token 하나를 바꾸자 정확도가 완전히 뒤집혔다.** "
-      f"모델이 corrupted token을 그대로 복사한다.")
-print()
 
 GRID = {}
+```
+
+관찰 위치 `{python} f'{QPOS}'`, induction head가 복사해 올 위치 `{python} f'{SRC}'`
+clean 실행 — logit 차 `{python} f'{DC:+.4f}'`, 위치 `{python} f'{QPOS}'` 정확도 `{python} f'{(lgc[:, QPOS].argmax(-1) == ANS).mean():.4f}'`
+corrupted 실행 — logit 차 `{python} f'{DK:+.4f}'`, 위치 `{python} f'{QPOS}'` 정확도 `{python} f'{(lgd[:, QPOS].argmax(-1) == ANS).mean():.4f}'`
+
+**token 하나를 바꾸자 정확도가 완전히 뒤집혔다.** 모델이 corrupted token을 그대로 복사한다.
+
+```{python}
+#| label: patch-2
+#| code-fold: false
+
 for site in ["r0", "r1", "r2"]:
     GRID[site] = [(logit_diff(run(P, CORR, patch=(site, pos, RC[site][:, pos]))[0])
                    - DK)/(DC - DK) for pos in range(L)]
+```
 
-print(f"이식 지점별 회복률 (총 {3*L}개 지점)")
-print()
+이식 지점별 회복률 (총 `{python} f'{3 * L}'`개 지점)
+
+```{python}
+#| label: patch-3
+#| code-fold: false
+
 print(f"  {'':>4}" + "".join(f"{i:>6}" for i in range(L)))
 for site in ["r0", "r1", "r2"]:
     print(f"  {site:>4}" + "".join(f"{v:>6.2f}" for v in GRID[site]))
-print()
 hits = [(s, i, v) for s, r in GRID.items() for i, v in enumerate(r) if v > 0.5]
-print(f"**회복률 50%를 넘는 지점이 {3*L}개 중 {len(hits)}개뿐이다.**")
+```
+
+**회복률 50%를 넘는 지점이 `{python} f'{3 * L}'`개 중 `{python} f'{len(hits)}'`개뿐이다.**
+
+```{python}
+#| label: patch-4
+#| code-fold: false
+
 for s_, i_, v_ in sorted(hits, key=lambda t: -t[2]):
     tag = ("← corrupted된 바로 그 위치" if i_ == SRC else
            "← 관찰 위치 (출력 직전)" if i_ == QPOS else "")
     print(f"    {s_} 위치 {i_:<3} 회복률 {v_:>7.1%}  {tag}")
-print()
-for s in [f"**patching이 circuit을 스스로 찾아냈다** — 위치 {SRC}가 원인이라고 "
-          "아무도 알려주지 않았는데",
-          "r0·r1 위치 5는 **원인 지점**이고, r2 위치 16은 **결과 지점**이다",
-          "나머지 지점은 전부 0 — 인과 경로가 **극도로 sparse**하다",
-          "r1 위치 5의 회복률이 100%를 살짝 넘는 것은 "
-          "이식이 clean 실행보다 조금 더 강한 신호를 넣기 때문이다",
-          "**이것이 ablation보다 나은 점**이다. ablation은 '없으면 망가진다'"
-          "만 말하지만, patching은 **정보가 어디서 어디로 흐르는지**를 말한다"]:
-    print(f"  · {s}")
 ```
+
+- **patching이 circuit을 스스로 찾아냈다** — 위치 `{python} f'{SRC}'`가 원인이라고 아무도 알려주지 않았는데
+- r0·r1 위치 5는 **원인 지점**이고, r2 위치 16은 **결과 지점**이다
+- 나머지 지점은 전부 0 — 인과 경로가 **극도로 sparse**하다
+- r1 위치 5의 회복률이 100%를 살짝 넘는 것은 이식이 clean 실행보다 조금 더 강한 신호를 넣기 때문이다
+- **이것이 ablation보다 나은 점**이다. ablation은 '없으면 망가진다'만 말하지만, patching은 **정보가 어디서 어디로 흐르는지**를 말한다
 
 ```{python}
 #| label: fig-patch
@@ -666,8 +663,14 @@ def toy(n_feat, m_dim, S, steps=3000, seed=0, lr=0.02):
 
 
 NF, MD = 20, 5
-print(f"feature {NF}개를 {MD}차원에 담게 한다 (중요도는 0.9^i로 감소)")
-print()
+```
+
+feature `{python} f'{NF}'`개를 `{python} f'{MD}'`차원에 담게 한다 (중요도는 0.9\^i로 감소)
+
+```{python}
+#| label: superposition-2
+#| code-fold: false
+
 print(f"{'sparsity':>8} {'표현된 feature':>12} {'평균 간섭':>11} {'최대 |W_i|':>11}   판정")
 print("-" * 60)
 SUP = []
@@ -682,22 +685,20 @@ for S in [1.0, 0.3, 0.1, 0.03, 0.01]:
     SUP.append((1-S, rep, intf, float(nrm.max())))
     verdict = "**superposition**" if rep > MD else "직교 (superposition 없음)"
     print(f"{1-S:>8.2f} {rep:>12} {intf:>11.4f} {nrm.max():>11.4f}   {verdict}")
-print(f"  (차원 수 {MD}. 표현된 feature가 이보다 많으면 superposition이다)")
-print()
 d0, d9 = SUP[0], SUP[-1]
-print(f"**sparsity가 {d0[0]:.2f}일 때는 정확히 {d0[1]}개** — 차원 수만큼만 담고 나머지는 버린다.")
-print(f"**sparsity {d9[0]:.2f}에서는 {d9[1]}개 전부를 담는다** — "
-      f"{MD}차원에 {NF}개를.")
-print(f"  대가는 간섭이다 — {d0[2]:.4f}에서 {d9[2]:.4f}로.")
-print()
-for s in ["feature가 sparse하면 **동시에 활성일 확률이 낮아** 간섭이 잘 안 드러난다",
-          "그래서 모델 입장에서는 겹쳐 담는 게 **이득**이다",
-          "**이것이 polysemantic neuron의 원인**이다 — "
-          "neuron은 feature가 아니라 여러 feature가 겹친 방향이다",
-          "그리고 이것이 'neuron을 하나씩 들여다보기'가 실패하는 이유다",
-          "**해석의 단위는 neuron이 아니라 방향**이어야 한다 — 다음 절의 SAE로 간다"]:
-    print(f"  · {s}")
 ```
+
+(차원 수 `{python} f'{MD}'`. 표현된 feature가 이보다 많으면 superposition이다)
+
+**sparsity가 `{python} f'{d0[0]:.2f}'`일 때는 정확히 `{python} f'{d0[1]}'`개** — 차원 수만큼만 담고 나머지는 버린다.  
+**sparsity `{python} f'{d9[0]:.2f}'`에서는 `{python} f'{d9[1]}'`개 전부를 담는다** — `{python} f'{MD}'`차원에 `{python} f'{NF}'`개를.  
+대가는 간섭이다 — `{python} f'{d0[2]:.4f}'`에서 `{python} f'{d9[2]:.4f}'`로.
+
+- feature가 sparse하면 **동시에 활성일 확률이 낮아** 간섭이 잘 안 드러난다
+- 그래서 모델 입장에서는 겹쳐 담는 게 **이득**이다
+- **이것이 polysemantic neuron의 원인**이다 — neuron은 feature가 아니라 여러 feature가 겹친 방향이다
+- 그리고 이것이 'neuron을 하나씩 들여다보기'가 실패하는 이유다
+- **해석의 단위는 neuron이 아니라 방향**이어야 한다 — 다음 절의 SAE로 간다
 
 ```{python}
 #| label: fig-super
@@ -796,9 +797,15 @@ Xt = g.random((8000, NF))*(g.random((8000, NF)) < S_)
 H = Xt@W                                     # superposition된 활성
 
 ND = 2*NF
-print(f"superposition된 {MD}차원 활성 (진짜 feature {int(LIVE.sum())}개가 겹쳐 있다)")
-print(f"dictionary 크기 {ND}로 펼쳐 되찾아 본다")
-print()
+```
+
+superposition된 `{python} f'{MD}'`차원 활성 (진짜 feature `{python} f'{int(LIVE.sum())}'`개가 겹쳐 있다)  
+dictionary 크기 `{python} f'{ND}'`로 펼쳐 되찾아 본다
+
+```{python}
+#| label: sae-2
+#| code-fold: false
+
 print(f"{'λ':>6} {'평균 활성 수':>12} {'reconstruction R²':>11} {'되찾은 feature':>12} "
       f"{'평균 정렬':>10}   판정")
 print("-" * 70)
@@ -818,31 +825,34 @@ for lam in [0.0, 0.03, 0.1, 0.3, 0.8]:
                "reconstruction collapse" if r2 < 0.9 else "")
     print(f"{lam:>6.2f} {l0:>12.2f} {r2:>11.4f} "
           f"{recov:>7}/{int(LIVE.sum()):<4} {align:>10.4f}   {verdict}")
-print("  (되찾은 feature = 진짜 feature 방향과 cosine 정렬 > 0.95인 dictionary 원소가 있는 것)")
-print()
 z0 = SAE[0]
 best = [s for s in SAE if s[3] == int(LIVE.sum()) and s[2] > 0.95]
-print(f"**λ=0이면 reconstruction은 완벽한데({z0[2]:.4f}) 되찾은 feature는 "
-      f"{z0[3]}/{int(LIVE.sum())}뿐이다.**")
-print(f"  평균 활성 개수가 {z0[1]:.1f} — dictionary 전체가 항상 켜져 있다.")
-print("  **overcomplete(과완비 — 입력보다 넓은) autoencoder는 sparsity 없이는 아무것도 분리하지 못한다.**")
+```
+
+(되찾은 feature = 진짜 feature 방향과 cosine 정렬 > 0.95인 dictionary 원소가 있는 것)
+
+**λ=0이면 reconstruction은 완벽한데(`{python} f'{z0[2]:.4f}'`) 되찾은 feature는 `{python} f'{z0[3]}'`/`{python} f'{int(LIVE.sum())}'`뿐이다.**
+
+평균 활성 개수가 `{python} f'{z0[1]:.1f}'` — dictionary 전체가 항상 켜져 있다.
+
+**overcomplete(과완비 — 입력보다 넓은) autoencoder는 sparsity 없이는 아무것도 분리하지 못한다.**
+
+```{python}
+#| label: sae-3
+#| code-fold: false
+
 if best:
     bb = best[0]
     print()
     print(f"**λ={bb[0]:.2f}에서 {bb[3]}개 전부를 되찾는다** — "
           f"평균 활성 {bb[1]:.2f}개, reconstruction R² {bb[2]:.4f}, 정렬 {bb[4]:.4f}.")
-print()
-for s in ["**sparsity가 해석가능성을 만든다** — reconstruction만으로는 부족하다",
-          "λ를 더 키우면 정렬은 좋아지지만 reconstruction이 무너진다 "
-          f"(λ=0.8에서 R² {SAE[-1][2]:.4f})",
-          "**이 절충이 실제 SAE 연구의 핵심 난제**다 — "
-          "L0(활성 개수)와 reconstruction loss의 Pareto 곡선을 놓고 다툰다",
-          "그리고 여기서는 **진짜 feature를 알고 있으니 채점이 가능**했다. "
-          "실제 LLM에서는 정답이 없다",
-          "**그래서 SAE feature의 '해석'은 사람이 예시를 보고 이름 붙이는 일**이 되고, "
-          "confirmation bias가 다시 들어온다"]:
-    print(f"  · {s}")
 ```
+
+- **sparsity가 해석가능성을 만든다** — reconstruction만으로는 부족하다
+- λ를 더 키우면 정렬은 좋아지지만 reconstruction이 무너진다 (λ=0.8에서 R² `{python} f'{SAE[-1][2]:.4f}'`)
+- **이 절충이 실제 SAE 연구의 핵심 난제**다 — L0(활성 개수)와 reconstruction loss의 Pareto 곡선을 놓고 다툰다
+- 그리고 여기서는 **진짜 feature를 알고 있으니 채점이 가능**했다. 실제 LLM에서는 정답이 없다
+- **그래서 SAE feature의 '해석'은 사람이 예시를 보고 이름 붙이는 일**이 되고, confirmation bias가 다시 들어온다
 
 ```{python}
 #| label: fig-sae
@@ -883,50 +893,32 @@ fig
 
 ## 이 분야가 아직 못 하는 것
 
-```{python}
-#| label: limits
-#| code-fold: false
+**이 장에서 성립한 것과 성립하지 않은 것을 정직하게 나눈다**
 
-print("**이 장에서 성립한 것과 성립하지 않은 것을 정직하게 나눈다**")
-print()
-print(f"{'주장':<34} {'이 장의 근거':<22} {'강도'}")
-print("-" * 76)
-for a, b, c in [
-    ("induction circuit이 존재한다", "ablation + patching", "**강함**"),
-    ("L1H1이 induction head다", "제거 시 무작위로 collapse", "**강함**"),
-    ("인과 경로가 sparse하다", f"{3*L}개 중 {len(hits)}개만 회복", "**강함**"),
-    ("1층이 직전 token을 쓴다", f"probe {pv[1]:.2f} → {pv[2]:.2f}",
-     "중간 (인과 미확인)"),
-    ("L1H0은 induction head다", f"pattern만 {DIAG[(1,0)][2]:.3f}",
-     "**틀렸다** (ablation이 반박)"),
-    ("superposition이 polysemantic의 원인", "장난감 모델", "약함 (실제 LLM 미검증)"),
-    ("SAE가 feature를 되찾는다", "정답을 아는 상황에서만", "약함 (LLM은 정답 없음)"),
-]:
-    print(f"{a:<34} {b:<22} {c}")
-print()
-print("**열린 문제들**")
-for s in ["**검증 문제** — circuit을 찾았다는 주장을 무엇으로 반증하는가. "
-          "지금은 ablation과 patching이 사실상 전부다",
-          "**규모 문제** — 이 장의 모델은 parameter 2만 개다. "
-          "70B 모델에서 같은 절차를 돌릴 방법이 없다",
-          "**완전성 문제** — circuit 하나를 찾아도 "
-          "그것이 모델 행동의 몇 %를 설명하는지 대개 모른다",
-          "**SAE 평가 문제** — 진짜 feature를 모르니 "
-          "'좋은 dictionary'의 정의 자체가 논쟁 중이다",
-          "**confirmation bias** — 이 장에서 L1H0이 정확히 그 함정이었다. "
-          "찾던 pattern은 거의 항상 발견된다"]:
-    print(f"  · {s}")
-print()
-print("**그럼에도 이 방향에 기대를 거는 이유**")
-for s in ["12.0의 post-hoc 설명과 달리 **causal intervention이 가능**하다 — "
-          "patching은 상관이 아니라 인과를 잰다",
-          "**steering(조종)이 따라온다** — feature 방향을 찾으면 "
-          "잔차에 더하거나 빼서 행동을 바꿀 수 있다",
-          "그것이 alignment·안전 연구가 이 분야에 거는 기대다 — "
-          "속임수나 위험한 의도에 해당하는 방향을 찾아 감시하거나 끄는 것",
-          "**다만 아직 연구 단계다.** 이 장의 결과를 70B 모델에 그대로 옮길 수 없다"]:
-    print(f"  · {s}")
-```
+| 주장 | 이 장의 근거 | 강도 |
+|---|---|---|
+| induction circuit이 존재한다 | ablation + patching | **강함** |
+| L1H1이 induction head다 | 제거 시 무작위로 collapse | **강함** |
+| 인과 경로가 sparse하다 | `{python} f'{3 * L}'`개 중 `{python} f'{len(hits)}'`개만 회복 | **강함** |
+| 1층이 직전 token을 쓴다 | probe `{python} f'{pv[1]:.2f}'` → `{python} f'{pv[2]:.2f}'` | 중간 (인과 미확인) |
+| L1H0은 induction head다 | pattern만 `{python} f'{DIAG[1, 0][2]:.3f}'` | **틀렸다** (ablation이 반박) |
+| superposition이 polysemantic의 원인 | 장난감 모델 | 약함 (실제 LLM 미검증) |
+| SAE가 feature를 되찾는다 | 정답을 아는 상황에서만 | 약함 (LLM은 정답 없음) |
+
+**열린 문제들**
+
+- **검증 문제** — circuit을 찾았다는 주장을 무엇으로 반증하는가. 지금은 ablation과 patching이 사실상 전부다
+- **규모 문제** — 이 장의 모델은 parameter 2만 개다. 70B 모델에서 같은 절차를 돌릴 방법이 없다
+- **완전성 문제** — circuit 하나를 찾아도 그것이 모델 행동의 몇 %를 설명하는지 대개 모른다
+- **SAE 평가 문제** — 진짜 feature를 모르니 '좋은 dictionary'의 정의 자체가 논쟁 중이다
+- **confirmation bias** — 이 장에서 L1H0이 정확히 그 함정이었다. 찾던 pattern은 거의 항상 발견된다
+
+**그럼에도 이 방향에 기대를 거는 이유**
+
+- 12.0의 post-hoc 설명과 달리 **causal intervention이 가능**하다 — patching은 상관이 아니라 인과를 잰다
+- **steering(조종)이 따라온다** — feature 방향을 찾으면 잔차에 더하거나 빼서 행동을 바꿀 수 있다
+- 그것이 alignment·안전 연구가 이 분야에 거는 기대다 — 속임수나 위험한 의도에 해당하는 방향을 찾아 감시하거나 끄는 것
+- **다만 아직 연구 단계다.** 이 장의 결과를 70B 모델에 그대로 옮길 수 없다
 
 ---
 
