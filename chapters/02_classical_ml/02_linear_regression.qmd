@@ -700,6 +700,116 @@ $\phi(x)$ 를 명시적으로 계산하지 않고 내적 $\phi(x)^\top\phi(x')$ 
 
 ---
 
+## 실제 도구로: `LinearRegression` 과 `numpy.linalg`
+
+이 장의 풀이와 성질을 scikit-learn과 NumPy의 함수로 확인한다. 세 가지 풀이가 같은 답을 주는지, 언제 normal equation을 쓰면 안 되는지, multicollinearity와 heteroscedasticity가 실제로 어떤 숫자로 나타나는지를 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install scikit-learn`).
+- 데이터는 seed를 고정한 난수다. 시뮬레이션 두 개가 1,000번, 2,000번씩 다시 뽑아 몇 초 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from sklearn.linear_model import LinearRegression, SGDRegressor
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+rng = np.random.default_rng(0)
+n = 200
+X = rng.normal(size=(n, 3))
+beta = np.array([2.0, -1.0, 0.5])
+y = 1.0 + X @ beta + rng.normal(0, 1.0, n)
+
+# 1) 세 가지 풀이: scikit-learn, normal equation, lstsq (QR/SVD)
+lr = LinearRegression().fit(X, y)
+A = np.c_[np.ones(n), X]
+ne = np.linalg.solve(A.T @ A, A.T @ y)
+ls = np.linalg.lstsq(A, y, rcond=None)[0]
+print(np.round(np.r_[lr.intercept_, lr.coef_], 4), np.abs(ne - ls).max())
+
+# 2) 기하학: residual 은 X 의 열들과 직교한다
+r = y - A @ ls
+print(f"{np.abs(A.T @ r).max():.1e}", round(float(r.mean()), 10))
+
+# 3) gradient descent 로도 같은 답 (scikit-learn 의 SGD)
+sgd = make_pipeline(StandardScaler(), SGDRegressor(max_iter=5000, tol=1e-8, eta0=0.01, random_state=0)).fit(X, y)
+sc = sgd[0]
+coef = sgd[-1].coef_ / sc.scale_
+print(np.round(coef, 3), round(float(sgd[-1].intercept_[0] - (sc.mean_ / sc.scale_) @ sgd[-1].coef_), 3))
+
+# 4) condition number 가 클 때 normal equation 은 정밀도를 잃는다
+t = np.linspace(0, 1, 100)
+V = np.vander(t, 12, increasing=True)                           # 다항식 특성 12개 (1, t, t^2, ...)
+w_true = rng.normal(size=12)
+yv = V @ w_true
+w_ne = np.linalg.solve(V.T @ V, V.T @ yv)
+w_ls = np.linalg.lstsq(V, yv, rcond=None)[0]
+print(f"{np.linalg.cond(V):.1e}", f"{np.linalg.cond(V.T @ V):.1e}",
+      f"{np.abs(V @ w_ne - yv).max():.1e}", f"{np.abs(V @ w_ls - yv).max():.1e}")
+
+# 5) multicollinearity: x2 를 x1 과 거의 같게 만들고 1000 번 다시 뽑는다
+def sim(rho, reps=1000):
+    coefs = []
+    for k in range(reps):
+        g = np.random.default_rng(k)
+        x1 = g.normal(size=n)
+        x2 = rho * x1 + np.sqrt(1 - rho ** 2) * g.normal(size=n)
+        yy = x1 + x2 + g.normal(size=n)
+        coefs.append(LinearRegression().fit(np.c_[x1, x2], yy).coef_)
+    c = np.array(coefs)
+    return c.mean(0), c.std(0), np.corrcoef(c.T)[0, 1]
+for rho in [0.0, 0.9, 0.99]:
+    m, s, cc = sim(rho)
+    vif = 1 / (1 - rho ** 2)
+    print(rho, np.round(m, 3), np.round(s, 3), round(float(np.sqrt(vif)), 2), round(float(cc), 3))
+
+# 6) heteroscedasticity: 잡음 크기가 x 에 비례하면 통상 standard error 가 틀린다
+def fit_se(x, yy):
+    D = np.c_[np.ones(len(x)), x]
+    b = np.linalg.lstsq(D, yy, rcond=None)[0]
+    e = yy - D @ b
+    XtXi = np.linalg.inv(D.T @ D)
+    se_ols = np.sqrt(np.diag(XtXi) * (e @ e) / (len(x) - 2))
+    se_hc = np.sqrt(np.diag(XtXi @ (D.T * e ** 2) @ D @ XtXi))       # White(HC0) robust
+    return b[1], se_ols[1], se_hc[1]
+res = []
+for k in range(2000):
+    g = np.random.default_rng(10000 + k)
+    x = g.uniform(0, 3, n)
+    yy = 1 + 2 * x + g.normal(size=n) * x ** 1.5                     # x 가 클수록 잡음이 크다
+    res.append(fit_se(x, yy))
+res = np.array(res)
+print(round(float(res[:, 0].mean()), 3), round(float(res[:, 0].std()), 3), round(float(res[:, 1].mean()), 3),
+      round(float(res[:, 2].mean()), 3))
+cover = lambda se: float(np.mean(np.abs(res[:, 0] - 2) < 1.96 * se))
+print(round(cover(res[:, 1]), 3), round(cover(res[:, 2]), 3))
+
+# [ 0.9639  1.91   -1.0962  0.553 ] 6.661338147750939e-16
+# 1.2e-13 0.0
+# [ 1.911 -1.097  0.552] 0.963
+# 1.2e+08 1.4e+16 3.4e-10 1.7e-15
+# 0.0 [1.003 1.004] [0.073 0.073] 1.0 -0.043
+# 0.9 [0.994 1.01 ] [0.17  0.167] 2.29 -0.904
+# 0.99 [0.972 1.031] [0.52  0.516] 7.09 -0.99
+# 1.997 0.252 0.211 0.247
+# 0.903 0.945
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **세 풀이가 같은 답을 준다 ("closed form 해 vs gradient descent").** `LinearRegression`, normal equation $(X^\top X)^{-1}X^\top y$, `lstsq` 의 계수가 $7\times10^{-16}$ 까지 같다. 참값 (1, 2, −1, 0.5)에 대해 (0.96, 1.91, −1.10, 0.55)다. 표본 200개의 잡음만큼 떨어져 있다. 표준화한 뒤 `SGDRegressor` 로 gradient descent를 해도 소수점 둘째 자리까지 같은 계수가 나온다.
+- **residual은 열 공간과 직교한다 ("기하학").** $X^\top r$ 의 최댓값이 $10^{-13}$ 이다. 절편 열이 있으므로 residual의 평균도 0이다. least squares 해가 $y$ 를 $X$ 의 열 공간에 직교 투영한 것이라는 본문의 그림 그대로다.
+- **condition number가 크면 normal equation은 정밀도를 잃는다.** 다항식 특성 12개(1, $t$, …, $t^{11}$)의 행렬은 condition number가 $1.2\times10^8$ 이다. $X^\top X$ 는 그 제곱인 $1.4\times10^{16}$ 이라 float64의 한계(약 $10^{16}$)에 닿는다. 정확히 맞출 수 있는 데이터인데도 normal equation의 오차는 $3\times10^{-10}$, `lstsq` (SVD)는 $2\times10^{-15}$ 다. scikit-learn과 `lstsq` 가 normal equation을 직접 풀지 않는 이유다.
+- **multicollinearity는 평균이 아니라 흩어짐을 키운다 ("multicollinearity", "직접 해보기" ②).** 참 계수가 (1, 1)인 데이터를 1,000번 다시 뽑아 맞추면, 두 특성의 상관 $\rho$ 가 0, 0.9, 0.99일 때 계수 평균은 셋 다 (1, 1) 근처이고 표준편차가 0.073, 0.17, 0.52다. $\rho = 0$ 대비 2.3배와 7.1배이고, $\sqrt{\text{VIF}} = 1/\sqrt{1-\rho^2}$ 가 2.29와 7.09다. 본문의 식이 그대로 나온다. 두 계수 추정의 상관은 −0.99다. 하나가 크게 나오면 다른 하나가 작게 나와 합은 맞춘다.
+- **heteroscedasticity에서 계수는 맞고 standard error가 틀린다 ("직접 해보기" ③).** 잡음이 $x$ 와 함께 커지는 데이터를 2,000번 뽑으면 기울기 추정의 평균이 1.997로 참값 2와 맞는다. 실제 표준편차는 0.252인데, 통상의 standard error 공식은 평균 0.211로 작게 말한다. White(HC0) robust standard error는 0.247이다. 그래서 "±1.96 standard error" 구간이 참값을 포함하는 비율이 통상 공식으로는 0.903(목표 0.95), robust로는 0.945다.
+
+**이 코드가 보여 주지 못하는 것.**
+`statsmodels` 를 쓰면 standard error, p-value, robust standard error(`cov_type="HC0"` 등)를 표로 바로 볼 수 있다. 여기서는 scikit-learn과 NumPy만 쓰려고 식을 직접 적었다. scikit-learn의 `LinearRegression` 은 standard error를 주지 않는다. 예측용 도구라서다.
+시뮬레이션은 정규 잡음과 독립 표본을 가정했다. 본문의 exogeneity 위반(잡음이 $x$ 와 상관)은 다루지 않았다. 그때는 계수의 평균 자체가 틀어진다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
