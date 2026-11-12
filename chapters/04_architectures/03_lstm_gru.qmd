@@ -662,6 +662,106 @@ hidden 차원 `{python} f"{d}"` 는 길이와 무관하게
 
 ---
 
+## 실제 도구로: `torch.nn.LSTM`
+
+이 장의 식이 PyTorch의 LSTM과 같은지 확인하고, PyTorch가 forget gate bias를 어떻게 시작하는지, 그 값에 따라 gradient가 얼마나 멀리 가는지를 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU). 모델을 내려받지 않고 바로 돌아간다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+
+nn = torch.nn
+torch.manual_seed(0)
+count = lambda m: sum(p.numel() for p in m.parameters())
+D, H = 3, 6
+
+# 1) parameter 수: RNN 의 4배(LSTM), 3배(GRU)
+print(count(nn.RNN(D, H)), count(nn.GRU(D, H)), count(nn.LSTM(D, H)), 4 * (H * (D + H) + H), 4 * (H * (D + H) + 2 * H))
+lstm = nn.LSTM(D, H, batch_first=True)
+print({n: tuple(p.shape) for n, p in lstm.named_parameters()})
+
+# 2) 한 step 을 이 장의 식으로 다시 계산한다. 행렬 안의 gate 순서는 i, f, g, o 다
+cell = nn.LSTMCell(D, H)
+x, h0, c0 = torch.randn(1, D), torch.randn(1, H), torch.randn(1, H)
+with torch.no_grad():
+    h1, c1 = cell(x, (h0, c0))
+    z = x @ cell.weight_ih.T + cell.bias_ih + h0 @ cell.weight_hh.T + cell.bias_hh
+    i, f, g, o = z.chunk(4, dim=1)
+    i, f, g, o = i.sigmoid(), f.sigmoid(), g.tanh(), o.sigmoid()
+    c_mine = f * c0 + i * g
+    h_mine = o * c_mine.tanh()
+print((c_mine - c1).abs().max().item(), (h_mine - h1).abs().max().item())
+
+# 3) 출력의 모양: 모든 시점의 h, 마지막 h, 마지막 c
+out, (hn, cn) = lstm(torch.randn(5, 7, D))                       # batch 5, 길이 7
+print(tuple(out.shape), tuple(hn.shape), tuple(cn.shape), (out[:, -1] - hn[0]).abs().max().item())
+
+# 4) PyTorch 는 forget gate bias 를 1 로 두지 않는다
+big = nn.LSTMCell(D, 64)
+bf = (big.bias_ih[64:128] + big.bias_hh[64:128]).detach()         # 두 bias 의 합이 실제 b_f
+print(round(bf.mean().item(), 3), round(bf.abs().max().item(), 3), round(2 / 64 ** 0.5, 3))
+
+# 5) b_f 에 따라 gradient 가 얼마나 멀리 가는가: 처음 cell state 가 T step 뒤의 cell state 에 주는 영향
+def reach(bf_value, T):
+    torch.manual_seed(0)
+    c = nn.LSTMCell(8, 64)
+    with torch.no_grad():
+        c.bias_ih[64:128] = bf_value; c.bias_hh[64:128] = 0.0
+    c0 = torch.zeros(1, 64, requires_grad=True)
+    h, cs = torch.zeros(1, 64), c0
+    xs = torch.randn(T, 1, 8)
+    for t in range(T):
+        h, cs = c(xs[t], (h, cs))
+    g, = torch.autograd.grad(cs.sum(), c0)
+    return f"{g.norm().item():.1e}"
+
+def reach_rnn(T):
+    torch.manual_seed(0)
+    c = nn.RNNCell(8, 64)
+    h0 = torch.zeros(1, 64, requires_grad=True)
+    h = h0
+    xs = torch.randn(T, 1, 8)
+    for t in range(T):
+        h = c(xs[t], h)
+    g, = torch.autograd.grad(h.sum(), h0)
+    return f"{g.norm().item():.1e}"
+
+for T in [10, 50, 200]:
+    print(T, reach_rnn(T), reach(0.0, T), reach(1.0, T), reach(3.0, T))
+print([f"{torch.sigmoid(torch.tensor(b)).item() ** 200:.1e}" for b in (0.0, 1.0, 3.0)])   # f^200 으로 어림한 값
+
+# 66 198 264 240 264
+# {'weight_ih_l0': (24, 3), 'weight_hh_l0': (24, 6), 'bias_ih_l0': (24,), 'bias_hh_l0': (24,)}
+# 4.470348358154297e-08 4.470348358154297e-08
+# (5, 7, 6) (1, 5, 6) (1, 5, 6) 0.0
+# -0.014 0.209 0.25
+# 10 6.1e-02 4.6e-02 1.1e+00 1.0e+01
+# 50 1.0e-10 6.4e-10 3.0e-03 5.0e+01
+# 200 0.0e+00 0.0e+00 3.1e-13 2.3e+01
+# ['6.2e-61', '6.2e-28', '6.0e-05']
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **parameter는 RNN의 4배(LSTM), 3배(GRU)다.** 입력 3, hidden 6에서 66, 198, 264개다. 다만 이 장의 `grad-check-cells` 표에서는 LSTM이 240개였다. PyTorch는 gate마다 bias를 두 개(`bias_ih`, `bias_hh`) 둔다. 계산에서는 둘이 더해지기만 하므로 하나와 같은데, cuDNN과 형식을 맞추려고 둘로 둔 것이다. $4(H(D+H) + H) = 240$ 에 bias $4H = 24$ 개가 더 붙어 264다.
+- **gate 네 개가 한 행렬에 쌓여 있다.** `weight_ih` 가 (24, 3), 곧 $4H \times D$ 다. 쌓인 순서는 $i, f, g, o$ 다.
+- **한 step이 이 장의 식 그대로다 ("gate가 하는 일").** 행렬을 넷으로 잘라 $c_t = f \odot c_{t-1} + i \odot g$, $h_t = o \odot \tanh(c_t)$ 로 계산한 값이 `LSTMCell` 의 출력과 $4\times10^{-8}$ 까지 같다.
+- **돌려주는 것이 세 가지다.** `out` 은 모든 시점의 $h$ (batch 5, 길이 7, hidden 6), `hn` 과 `cn` 은 마지막 시점의 $h$ 와 $c$ 다. `out` 의 마지막 시점이 `hn` 과 같다(차이 0.0). `batch_first=True` 를 주지 않으면 `out` 의 축 순서가 (길이, batch, hidden)이 된다.
+- **PyTorch는 forget gate bias를 1로 두지 않는다 (G4.3.3).** 실제 $b_f$ (두 bias의 합)의 평균이 −0.014이고 크기가 0.21을 넘지 않는다. 다른 weight와 똑같이 $\pm 1/\sqrt{H}$ 사이의 난수로 채운다. 본문에서 관례로 든 $b_f = 1$ 을 쓰려면 직접 넣어야 한다. Keras는 기본으로 1을 넣는다. framework를 옮기면 같은 구조의 모델이 다르게 학습될 수 있는 이유 하나다.
+- **$b_f$ 가 gradient의 도달 거리를 정한다 (G4.3.1).** 처음 cell state가 $T$ step 뒤의 cell state에 주는 영향을 autograd로 쟀다. hidden이 64개이므로 감쇠가 전혀 없으면 $\sqrt{64} = 8$ 이다. $T = 50$ 에서 vanilla RNN이 $10^{-10}$, $b_f = 0$ 인 LSTM이 $6\times10^{-10}$, $b_f = 1$ 이 $3\times10^{-3}$, $b_f = 3$ 이 50이다. $T = 200$ 에서는 RNN과 $b_f = 0$ 이 0.0, $b_f = 1$ 이 $3\times10^{-13}$, $b_f = 3$ 이 23이다.
+- **PyTorch 기본값($b_f \approx 0$)의 LSTM은 initialization 직후에는 RNN보다 멀리 가지 못한다.** 위 표에서 $b_f = 0$ 열은 RNN 열과 같은 자릿수다. $f \approx 0.5$ 이면 step마다 절반이 되므로 덧셈 경로가 있어도 금방 사라진다. LSTM이라는 구조가 아니라 **$f$ 가 1에 가까운 것**이 gradient를 살린다는 본문의 말 그대로다.
+- **$\prod f_t$ 로 어림한 값과는 자릿수가 다르다.** $f = \sigma(b_f)$ 로 고정하고 $f^{200}$ 을 계산하면 $b_f = 1$ 에서 $6\times10^{-28}$, $b_f = 3$ 에서 $6\times10^{-5}$ 인데, 측정값은 $3\times10^{-13}$ 과 23이다. $f$ 는 상수가 아니라 입력과 $h$ 에 따라 시점마다 달라지고, gradient는 $c \to h \to \text{gate} \to c$ 로 도는 길로도 흐른다. $b_f = 3$ 에서 8보다 큰 값이 나온 것도 그 길 때문이다. $\partial c_t/\partial c_{t-1} = f_t$ 는 여러 길 중 하나를 적은 것이다.
+
+**이 코드가 보여 주지 못하는 것.**
+전부 **학습 전** 한 순간의 측정이다. 학습이 시작되면 gate의 bias가 움직이므로, 기본값으로 시작한 LSTM이 긴 의존을 끝내 못 배운다는 뜻이 아니다. 실제로 배우는지는 본문 G4.3.3처럼 학습을 돌려 봐야 안다.
+gradient가 멀리 간다는 것과 그 과제를 푼다는 것도 다르다. $b_f = 3$ 은 여기서 가장 좋아 보이지만, 본문 "이 실험이 말하지 않는 것"대로 잊어야 하는 과제에서는 해가 될 수 있다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
