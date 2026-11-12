@@ -557,6 +557,65 @@ for p in [1, 5, 10, 20, 35, 39]:
 
 ---
 
+## 실제 도구로: 손실을 고르는 scikit-learn의 회귀들
+
+이 장의 두 주제를 scikit-learn으로 확인한다. 손실을 바꾸면 같은 데이터에서 다른 답이 나오는 것, 그리고 훈련 데이터로 고른 것을 훈련 데이터로 평가하면 낙관적이 되는 것이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from sklearn.linear_model import HuberRegressor, LinearRegression, QuantileRegressor, RANSACRegressor
+
+rng = np.random.default_rng(0)
+
+# 1) 손실을 바꾸면 같은 데이터에서 다른 직선이 나온다 (참 직선: 기울기 2, 절편 1)
+x = rng.uniform(0, 10, 50); y = 2 * x + 1 + rng.normal(0, 1, 50)
+x[-1], y[-1] = 9.5, -30                                         # outlier 하나
+X = x[:, None]
+for name, m in [("제곱 (OLS)", LinearRegression()), ("Huber", HuberRegressor()),
+                ("절대 (중앙값 회귀)", QuantileRegressor(quantile=0.5, alpha=0, solver="highs")),
+                ("RANSAC", RANSACRegressor(random_state=0))]:
+    m.fit(X, y)
+    est = m.estimator_ if name == "RANSAC" else m
+    print(name, round(float(est.coef_[0]), 3), round(float(est.intercept_), 3))
+
+
+# 2) 훈련 오차의 낙관: 아무 정보도 없는 '가설' |H| 개 중 훈련 데이터에서 가장 잘 맞는 것을 고르면
+n = 200
+labels = rng.integers(0, 2, n)
+for H in [1, 10, 100, 1000, 10000]:
+    bests = []
+    for _ in range(20):                                          # 20번 되풀이해 평균을 낸다
+        guesses = rng.integers(0, 2, (H, n), dtype=np.int8)      # 무작위로 찍는 분류기 H 개 (참 오차는 모두 0.5)
+        bests.append((guesses != labels).mean(1).min())
+    best = float(np.mean(bests))
+    print(H, round(best, 3), round(0.5 - best, 3), round(float(np.sqrt(np.log(H) / (2 * n))), 3))
+
+# 제곱 (OLS) 1.575 2.308
+# Huber 2.046 0.767
+# 절대 (중앙값 회귀) 2.03 0.983
+# RANSAC 2.064 0.728
+# 1 0.506 -0.006 0.0
+# 10 0.449 0.051 0.076
+# 100 0.41 0.09 0.107
+# 1000 0.382 0.118 0.131
+# 10000 0.364 0.136 0.152
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **손실이 답을 정한다 (G2.0.1).** 참 직선이 기울기 2, 절편 1인 점 50개에 outlier 하나($y = -30$)를 넣었다. 제곱 손실(`LinearRegression`)은 기울기 1.58, 절편 2.31로 outlier 쪽으로 끌려간다. Huber 손실(`HuberRegressor`)은 2.05와 0.77, 절대 손실(`QuantileRegressor(quantile=0.5)`, 중앙값 회귀)은 2.03과 0.98이다. RANSAC은 outlier를 아예 빼고 맞춰 2.06과 0.73이다. scikit-learn에서 손실을 바꾸는 것은 대개 다른 클래스를 고르는 일이다.
+- **최솟값을 고르는 것이 낙관을 만든다 ("왜 훈련 데이터로 평가하면 안 되는가", "직접 해보기" ②).** 무작위로 찍는 분류기(참 오차 0.5) $|H|$ 개 중 훈련 데이터 200개에서 가장 잘 맞는 것을 고르면, 그 훈련 오차가 $|H|$ = 10, 100, 1,000, 10,000에서 0.449, 0.410, 0.382, 0.364다(20번 평균). 아무것도 배우지 않았는데 0.5보다 0.05~0.14 좋아 보인다. 낙관의 크기가 $\sqrt{\ln|H|/2n}$ (0.076, 0.107, 0.131, 0.152)과 같은 방향으로 커진다. $|H|$ 를 1,000에서 10,000으로 늘리면 낙관이 0.118에서 0.136으로 1.15배다. $\sqrt{\ln 10^4/\ln 10^3} = 1.155$ 다.
+
+**이 코드가 보여 주지 못하는 것.**
+outlier 실험은 점 50개에 outlier 하나다. outlier가 여럿이거나 x 쪽으로 멀리 떨어지면(leverage가 크면) Huber도 끌려간다. 어느 손실이 맞는지는 outlier가 오류인지 진짜 관측인지에 달렸고, 그것은 데이터가 말해 주지 않는다.
+무작위 분류기는 서로 독립이라 낙관이 가장 크게 나오는 경우다. 실제 hypothesis들은 서로 비슷해서 실질적인 $|H|$ 가 훨씬 작다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
