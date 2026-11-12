@@ -132,7 +132,7 @@ kernel은 `ai-ml-study` 를 고른다.
 
 이 책의 본문 코드는 PyTorch를 쓰지 않는다. 빌드할 때마다 같은 그림이 나오도록 의존성을 NumPy·SciPy·Plotly로 제한했기 때문이다.
 대신 장 끝의 **실제 도구로** 절이, 그 장에서 NumPy로 만든 것을 PyTorch·Hugging Face·scikit-learn으로는 어떻게 쓰는지 보여 준다.
-지금 그 절이 있는 장은 73개다.
+지금 그 절이 있는 장은 75개다.
 
 - **Part 1 데이터 과학**
     - [1.0 데이터의 구조](chapters/01_data_science/00_data_and_types.qmd) — pandas로 타입, tidy data, 결측, 집계를 다룬다
@@ -185,6 +185,7 @@ kernel은 `ai-ml-study` 를 고른다.
 - **Part 6 생성 모델**
     - [6.1 autoencoder](chapters/06_generative/01_autoencoder.qmd) — PyTorch autoencoder와 scikit-learn PCA
     - [6.2 variational autoencoder](chapters/06_generative/02_vae.qmd) — PyTorch로 VAE를 학습시킨다
+    - [6.3 GAN](chapters/06_generative/03_gan.qmd) — PyTorch로 GAN을 학습시킨다
 - **Part 7 언어**
     - [7.0 텍스트를 다루기](chapters/07_language/00_text_representation.qmd) — scikit-learn의 CountVectorizer 와 TfidfVectorizer
     - [7.1 tokenization](chapters/07_language/01_tokenization.qmd) — 공개된 tokenizer 두 개
@@ -212,6 +213,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [10.4 policy gradient](chapters/10_rl/04_policy_gradient.qmd) — CartPole에서 REINFORCE
 - **Part 11 시스템**
     - [11.0 reproducibility와 실험 관리](chapters/11_systems/00_reproducibility.qmd) — PyTorch에서 seed와 흔들림을 잰다
+    - [11.3 hardware와 성능](chapters/11_systems/03_hardware.qmd) — 이 CPU에서 재 보는 roofline
     - [11.4 모델 efficiency](chapters/11_systems/04_efficiency.qmd) — PyTorch로 quantization, pruning, distillation
 - **Part 12 신뢰성**
     - [12.0 explainability](chapters/12_trust/00_interpretability.qmd) — permutation importance와 saliency를 실제 데이터에
