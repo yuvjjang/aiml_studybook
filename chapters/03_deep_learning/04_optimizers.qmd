@@ -915,6 +915,121 @@ optimizer를 바꿔서 얻는 이득보다 **learning rate를 제대로 맞춰�
 
 ---
 
+## 실제 도구로: `torch.optim`
+
+이 장의 식이 PyTorch의 optimizer에 그대로 들어 있는지 확인하고, "실무 기본값"의 조각들을 실제 API로 쓴다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU). 모델을 내려받지 않고 바로 돌아간다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+
+# 1) Adam 의 첫 step 은 gradient 크기와 무관하게 lr 이다
+p = torch.nn.Parameter(torch.zeros(3))
+opt = torch.optim.Adam([p], lr=0.01)
+p.grad = torch.tensor([1000.0, 1.0, 0.001])
+opt.step()
+print(p.data.tolist())
+
+# 2) 이 장의 식을 그대로 옮긴 Adam 과 torch.optim.Adam 이 같은 길을 가는가
+torch.manual_seed(0)
+G = torch.randn(200, 5, dtype=torch.float64) * torch.tensor([10.0, 1.0, 0.1, 0.01, 1.0])
+lr, b1, b2, eps = 3e-3, 0.9, 0.999, 1e-8
+theta = torch.ones(5, dtype=torch.float64); m = torch.zeros(5); v = torch.zeros(5)
+p = torch.nn.Parameter(torch.ones(5, dtype=torch.float64))
+opt = torch.optim.Adam([p], lr=lr, betas=(b1, b2), eps=eps)
+for t in range(1, 201):
+    g = G[t - 1]
+    m = b1 * m + (1 - b1) * g
+    v = b2 * v + (1 - b2) * g * g
+    theta = theta - lr * (m / (1 - b1**t)) / ((v / (1 - b2**t)).sqrt() + eps)
+    p.grad = g.clone(); opt.step()
+print((theta - p.data).abs().max().item())
+
+# 3) Adam(weight_decay) 는 L2 이고, AdamW 는 분리된 decay 다 — 본문 `adamw-vs-l2` 와 같은 설정
+lam, lr, T = 0.05, 0.01, 2000
+for cls in [torch.optim.Adam, torch.optim.AdamW]:
+    p = torch.nn.Parameter(torch.ones(2))
+    opt = cls([p], lr=lr, weight_decay=lam)
+    for t in range(T):
+        sgn = 1.0 if t % 2 == 0 else -1.0
+        p.grad = torch.tensor([10.0 * sgn, 0.1 * sgn])          # |g| = 10 과 0.1
+        opt.step()
+    print(cls.__name__, [f"{1 - x:.1%}" for x in p.data.tolist()])
+print(f"{1 - (1 - lr * lam) ** T:.1%}")                           # AdamW 의 decay 를 식으로: (1 - lr·λ)^T
+
+# 4) '실무 기본값' 을 실제 API 로: decay 를 걸 parameter 와 걸지 않을 parameter 를 나눈다
+model = torch.nn.Sequential(torch.nn.Embedding(100, 32), torch.nn.Linear(32, 32),
+                            torch.nn.LayerNorm(32), torch.nn.Linear(32, 100))
+decay, no_decay = [], []
+for mod in model.modules():
+    for name, p in mod.named_parameters(recurse=False):
+        is_matrix = isinstance(mod, torch.nn.Linear) and name == "weight"
+        (decay if is_matrix else no_decay).append(p)          # bias, LayerNorm, embedding 은 no_decay
+opt = torch.optim.AdamW([{"params": decay, "weight_decay": 0.1},
+                         {"params": no_decay, "weight_decay": 0.0}],
+                        lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
+print(sum(p.numel() for p in decay), sum(p.numel() for p in no_decay))
+
+# 5) warmup + cosine schedule
+warm, total = 100, 1000
+def lr_scale(step):
+    if step < warm:
+        return (step + 1) / warm
+    return 0.5 * (1 + math.cos(math.pi * (step - warm) / (total - warm)))
+sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_scale)
+lrs = []
+for step in range(total):
+    opt.step(); sched.step()
+    lrs.append(sched.get_last_lr()[0])
+print([f"{lrs[i]:.2e}" for i in [0, 49, 98, 99, 549, 998]])
+
+# 6) clipping: 돌려주는 값은 자르기 '전' 의 norm 이다
+x = torch.randint(0, 100, (16,))
+loss = torch.nn.functional.cross_entropy(model(x) * 50, x)     # 일부러 gradient 를 키운다
+opt.zero_grad(); loss.backward()
+before = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+after = torch.sqrt(sum((p.grad ** 2).sum() for p in model.parameters()))
+print(f"{before.item():.3f} {after.item():.3f}")
+
+# 7) optimizer state 의 크기: parameter 마다 m 과 v 가 하나씩
+opt.step()
+n_param = sum(p.numel() for p in model.parameters())
+n_state = sum(s["exp_avg"].numel() + s["exp_avg_sq"].numel() for s in opt.state.values())
+print(n_param, n_state, n_state / n_param)
+
+# [-0.009999999776482582, -0.009999999776482582, -0.009999900124967098]
+# 2.220446049250313e-16
+# Adam ['11.1%', '100.0%']
+# AdamW ['63.9%', '63.9%']
+# 63.2%
+# 4224 3396
+# ['6.00e-06', '1.53e-04', '3.00e-04', '3.00e-04', '1.50e-04', '9.14e-10']
+# 143.783 1.000
+# 7620 15240 2.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **Adam의 첫 step은 gradient 크기와 무관하다.** gradient가 1000, 1, 0.001로 100만 배 차이 나는데 세 parameter가 모두 `lr` 인 0.01만큼 움직였다. $t=1$ 에서 $\hat m/\sqrt{\hat v} = g/|g|$ 이기 때문이다. 셋째 값이 아주 조금 작은 것(0.0099999)은 분모의 $\epsilon = 10^{-8}$ 이 gradient 0.001에 비해 무시할 수 없기 때문이다. gradient가 $\epsilon$ 만큼 작아지면 scale invariance가 깨진다.
+- **이 장의 식이 곧 `torch.optim.Adam` 이다.** 식을 그대로 옮긴 6줄과 PyTorch의 Adam을 200 step 돌린 차이가 $2.2\times10^{-16}$, 곧 float64의 반올림 수준이다.
+- **`Adam(weight_decay=...)` 는 L2이고, 분리된 decay는 `AdamW` 다.** 본문 `adamw-vs-l2` 와 같은 설정에서 본문과 같은 숫자가 나왔다. Adam은 gradient가 큰 parameter를 11.1%, 작은 parameter를 100% 줄였고, AdamW는 둘 다 63.9% 줄였다. 이름이 비슷해 `Adam` 에 `weight_decay` 를 주고 AdamW를 쓴다고 착각하기 쉽다.
+- **AdamW의 decay는 식으로 계산된다.** step마다 $(1 - \eta\lambda)$ 를 곱하므로 2000 step 뒤에는 $1-(1-\eta\lambda)^{2000} = 63.2\%$ 가 줄어야 한다. 실제 값 63.9%와의 차이는 gradient step이 $\pm\eta$ 로 번갈아 움직이는 도중에 decay가 걸려서 생긴다. gradient를 0으로 두면 정확히 63.2%가 나오고, 부호를 반대로 시작하면 62.6%가 나온다 (둘 다 따로 확인했다).
+- **decay를 걸 parameter를 나누는 것은 직접 해야 한다.** PyTorch는 bias와 LayerNorm을 알아서 빼 주지 않는다. `weight_decay` 를 optimizer에 한 번 주면 모든 parameter에 걸린다. 위 코드처럼 group을 나눠 넘겨야 하고, 이 작은 모델에서는 4,224개에 decay가 걸리고 3,396개에는 걸리지 않는다.
+- **schedule은 `lr` 에 곱하는 배수를 돌려주는 함수다.** warmup 100 step 동안 $6\times10^{-6}$ 에서 $3\times10^{-4}$ 까지 올라가고, 그 뒤 cosine으로 내려가 중간(550번째 step)에 절반, 끝에 거의 0이 된다. `sched.step()` 은 `opt.step()` 다음에 부른다.
+- **`clip_grad_norm_` 이 돌려주는 값은 자르기 전의 norm이다.** 143.8을 돌려줬고, 자른 뒤 다시 재면 1.000이다. 이 반환값을 기록해 두면 gradient가 언제 튀는지를 추가 비용 없이 볼 수 있다.
+- **Adam의 state는 parameter의 2배다.** parameter 7,620개에 `exp_avg`($m$)와 `exp_avg_sq`($v$)가 합쳐 15,240개다. 본문 "optimizer state의 메모리 비용"의 계산 그대로다.
+
+**이 코드가 보여 주지 못하는 것.**
+여기서 확인한 것은 **갱신 규칙이 식과 같다**는 것이다. 어느 optimizer가 실제 학습에서 더 나은지는 이 코드로 알 수 없다. 그것은 모델, 데이터, learning rate에 따라 달라지고, 본문 "실측: 신경망에서의 비교"처럼 learning rate를 따로 맞춰 가며 비교해야 한다.
+`betas=(0.9, 0.95)`, `weight_decay=0.1` 같은 값도 여기서는 인자로 넘겼을 뿐 그 값이 좋다는 것을 확인하지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
