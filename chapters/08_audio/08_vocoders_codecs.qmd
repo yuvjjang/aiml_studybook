@@ -803,16 +803,16 @@ neural codec: SNR로 보면 고전 codec이 낫다
 ## 직접 해보기
 
 **① receptive field를 계산한다**
-`dilation` 에서 dilation을 1,2,4,...,512로 쌓으면 receptive field가 몇 sample인가?
-24kHz 기준 몇 ms인가? 음성의 어떤 구조를 담기에 충분한가.
+`dilation` 의 표에서 층 수 `L = 10`(dilation 1, 2, 4, ..., 512), stack 1개인 줄을 찾아라. receptive field가 몇 sample인가? 먼저 손으로 계산해 맞춰 보라.
+24 kHz 기준 몇 ms인가? 음성의 어떤 구조(pitch 주기, phoneme, 음절)를 담기에 충분한가.
 
 **② RVQ 단계를 늘린다**
-`rvq` 의 quantization 단계를 1·4·8·16으로 늘리며 bitrate와 재구성 품질을 재라.
-수익이 어디서 꺾이는가?
+`rvq` 의 `K, NSTAGE = 256, 6` 에서 단계 수를 12로 늘려 bitrate와 재구성 품질을 다시 재라.
+단계를 하나 더할 때 얻는 품질이 어디서 꺾이는가?
 
 **③ μ-law의 효과**
-`mulaw` 를 끄고 선형 8 bit로 quantization하면 noise가 어떻게 들리는가?
-왜 로그 companding이 지각적으로 유리한가?
+`mulaw` 는 선형 quantization과 µ-law를 이미 나란히 잰다. 구간별 SNR을 재는 구간 길이 `SEG = 320` 을 80으로 줄여 보라.
+조용한 구간에서 두 방식의 차이가 어떻게 달라지는가? 왜 로그 companding이 지각적으로 유리한가?
 :::
 
 ## 요약
