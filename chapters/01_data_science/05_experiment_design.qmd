@@ -718,6 +718,96 @@ ICC가 0.05이고 cluster가 200명이면 DE ≈ `{python} f"{de_200:.0f}"` — 
 
 ---
 
+## 실제 도구로: statsmodels로 A/B 테스트를 설계하고 검정한다
+
+이 장의 계산을 실무에서 쓰는 통계 library인 statsmodels로 다시 한다. 필요 표본 수, 비율 검정과 신뢰구간, peeking의 거짓 발견률, CUPED를 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `statsmodels` 0.15, `scipy` 1.18, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install statsmodels`).
+- 시뮬레이션이 실험을 수천 번 되풀이해 1분쯤 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from scipy import stats
+from statsmodels.stats.power import NormalIndPower
+from statsmodels.stats.proportion import proportion_effectsize, proportions_ztest, proportion_confint
+
+rng = np.random.default_rng(0)
+
+# 1) 필요 표본 수: 전환율 10% → 11% 를 검출력 80%, 유의수준 5% 로
+es = proportion_effectsize(0.11, 0.10)
+n = NormalIndPower().solve_power(effect_size=es, alpha=0.05, power=0.8, alternative="two-sided")
+p_bar = 0.105
+n_formula = (1.96 + 0.8416) ** 2 * 2 * p_bar * (1 - p_bar) / 0.01 ** 2
+print(round(es, 4), int(np.ceil(n)), int(np.ceil(n_formula)))
+for lift in [0.005, 0.01, 0.02]:
+    print(lift, int(np.ceil(NormalIndPower().solve_power(proportion_effectsize(0.10 + lift, 0.10), alpha=0.05, power=0.8))))
+
+# 2) 검정 하나: A 15,000명 중 1,500명, B 15,000명 중 1,640명 전환
+z, p = proportions_ztest([1640, 1500], [15000, 15000])
+lo, hi = proportion_confint(1640, 15000, method="wilson")
+print(round(z, 3), round(p, 4), round(lo, 4), round(hi, 4))
+
+# 3) 차이가 없을 때 p 값을 매일 들여다보다 처음 0.05 아래로 내려가면 멈추면 (peeking)
+def peek_run(days=30, per_day=1000, rate=0.1):
+    a = rng.random((days, per_day)) < rate; b = rng.random((days, per_day)) < rate
+    ca, cb = a.sum(1).cumsum(), b.sum(1).cumsum()
+    nn = per_day * np.arange(1, days + 1)
+    ps = [proportions_ztest([cb[d], ca[d]], [nn[d], nn[d]])[1] for d in range(days)]
+    return min(ps) < 0.05, ps[-1] < 0.05
+runs = np.array([peek_run() for _ in range(2000)])
+print(round(runs[:, 0].mean(), 3), round(runs[:, 1].mean(), 3))
+
+# 4) CUPED: 실험 전 지표(covariate) 로 분산을 줄인다. 같은 실험을 300번 되풀이해 추정치의 흩어짐을 본다
+N = 20000
+def experiment(seed):
+    r = np.random.default_rng(seed)
+    pre = r.gamma(2, 50, N)                                      # 실험 전 구매액
+    treat = r.random(N) < 0.5
+    post = 0.8 * pre + r.normal(0, 40, N) + 3.0 * treat          # 실제 효과 3
+    theta = np.cov(pre, post)[0, 1] / pre.var()
+    adj = post - theta * (pre - pre.mean())
+    eff = lambda m: m[treat].mean() - m[~treat].mean()
+    return eff(post), eff(adj), 1 - adj.var() / post.var(), pre, post, treat
+res = np.array([experiment(s)[:3] for s in range(300)])
+print(np.round(res[:, 0].mean(), 2), np.round(res[:, 0].std(), 3), np.round(res[:, 1].mean(), 2), np.round(res[:, 1].std(), 3),
+      round(float(res[:, 2].mean()), 3))
+_, _, _, pre, post, treat = experiment(0)
+print(round(np.corrcoef(pre, post)[0, 1] ** 2, 3))
+
+# 5) 처치 후에 측정한 covariate 를 쓰면: 효과가 사라진다
+post_cov = post + rng.normal(0, 5, N)                            # 처치의 영향을 받은 '사후' 지표
+theta2 = np.cov(post_cov, post)[0, 1] / post_cov.var()
+bad = post - theta2 * (post_cov - post_cov.mean())
+print(round(bad[treat].mean() - bad[~treat].mean(), 2))
+
+# 0.0326 14745 14753
+# 0.005 57756
+# 0.01 14745
+# 0.02 3835
+# 2.64 0.0083 0.1044 0.1144
+# 0.274 0.046
+# 3.03 0.956 2.98 0.58 0.666
+# 0.668
+# 0.06
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **필요 표본 수 (G1.5.2, "직접 해보기" ③).** 전환율 10%를 11%로 올리는 효과를 검출력 80%, 유의수준 5%로 잡으려면 집단마다 14,745명이 필요하다. statsmodels는 비율을 arcsine으로 변환한 효과 크기(Cohen의 $h$ = 0.0326)를 쓰고, 본문 G1.5.2의 공식에 $\sigma^2 = \bar p(1-\bar p)$ ($\bar p = 0.105$)를 넣으면 14,753명이다. 거의 같다. 효과를 절반(0.5%p)으로 잡으면 57,756명, 두 배(2%p)면 3,835명이다. 표본 수는 효과 크기의 제곱에 반비례한다.
+- **검정 하나.** 15,000명씩에서 1,500명과 1,640명이 전환했으면 $z = 2.64$, $p = 0.0083$ 이다. B의 전환율 95% 신뢰구간(Wilson)은 10.4%~11.4%다.
+- **매일 들여다보면 거짓 발견이 다섯 배가 된다 (G1.5.1).** 두 집단에 차이가 **전혀 없는** 실험을 2,000번 되풀이했다. 30일 동안 매일 $p$ 값을 보고 한 번이라도 0.05 아래로 내려가면 멈추면, 27.4%의 실험이 "유의한 차이"로 끝난다. 미리 정한 30일째에만 보면 4.6%로 설계대로 5% 근처다.
+- **CUPED는 같은 효과를 더 좁게 잡는다 (G1.5.3).** 실험 전 구매액을 covariate로 쓴 실험을 300번 되풀이하면, 그냥 차이를 낸 추정은 평균 3.03에 표준편차 0.956이고, CUPED는 평균 2.98에 표준편차 0.58이다. 둘 다 참값 3을 향하고(unbiased), CUPED가 40% 좁다. 분산은 평균 66.6% 줄었고, 이것이 실험 전후 지표 상관의 제곱(0.668)과 같다. 본문의 "분산은 $1-\rho^2$ 배가 된다"가 그대로 나온다.
+- **처치 후의 지표를 covariate로 쓰면 효과가 사라진다 ("직접 해보기" ②).** 처치의 영향을 받은 사후 지표를 CUPED에 넣으면 추정 효과가 3에서 0.06이 된다. 결과와 거의 같은 것을 빼 버린 셈이다. covariate는 반드시 처치 배정 전에 측정한 것이어야 한다.
+
+**이 코드가 보여 주지 못하는 것.**
+모두 이상적인 시뮬레이션이다. 실제 실험에서는 사용자가 여러 번 방문하고(독립이 아니다), 지표가 비율이 아니라 사용자당 평균이며, 배정 비율이 틀어지는 일(G1.5.4의 SRM)이 생긴다. 이 코드에는 그런 것이 없다.
+peeking을 하면서도 오류율을 지키는 sequential test(always-valid p-value, alpha spending 등)는 statsmodels에 바로 쓸 수 있는 형태로 없어서 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
