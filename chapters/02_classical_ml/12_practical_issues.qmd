@@ -623,6 +623,95 @@ confidence interval이 0을 `{python} "포함하므로 유의하다고 말할 �
 
 ---
 
+## 실제 도구로: 불균형 데이터와 drift 경보를 scikit-learn과 SciPy로
+
+이 장의 두 가지 실무 문제를 실제 도구로 잰다. 불균형 데이터에서 `class_weight` 와 oversampling이 무엇을 바꾸는지, 그리고 drift 경보가 아무 변화 없는 데이터에서 얼마나 자주 울리는지다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `scipy` 1.18, `numpy` 2.5. PyTorch는 쓰지 않는다.
+- KS 검정 2만 번에 1분쯤 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from scipy import stats
+from sklearn.calibration import calibration_curve
+from sklearn.datasets import make_classification
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.model_selection import train_test_split
+
+rng = np.random.default_rng(0)
+
+# 1) class imbalance: 양성 약 2.5% (98:2 로 만들고 label 1% 를 뒤섞었다). class_weight 와 resampling 은 순위가 아니라 확률을 바꾼다
+X, y = make_classification(n_samples=40000, n_features=10, n_informative=5, weights=[0.98], flip_y=0.01, random_state=0)
+Xa, Xb, ya, yb = train_test_split(X, y, test_size=0.5, random_state=0, stratify=y)
+idx_pos, idx_neg = np.where(ya == 1)[0], np.where(ya == 0)[0]
+over = np.r_[idx_neg, rng.choice(idx_pos, len(idx_neg), replace=True)]       # 양성을 복제해 50:50 으로
+models = {"그대로": LogisticRegression(max_iter=1000).fit(Xa, ya),
+          "class_weight": LogisticRegression(class_weight="balanced", max_iter=1000).fit(Xa, ya),
+          "oversampling": LogisticRegression(max_iter=1000).fit(Xa[over], ya[over])}
+def ece(p, t, bins=10):
+    edges = np.linspace(0, 1, bins + 1); out = 0
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (p > lo) & (p <= hi)
+        if m.any(): out += m.mean() * abs(t[m].mean() - p[m].mean())
+    return out
+pi_train, pi_true = 0.5, ya.mean()
+for name, m in models.items():
+    p = m.predict_proba(Xb)[:, 1]
+    print(name, round(roc_auc_score(yb, p), 4), round(average_precision_score(yb, p), 3), round(p.mean(), 3), round(ece(p, yb), 4))
+# prior shift 보정: 학습 때 양성 비율 0.5 → 실제 비율로 odds 를 되돌린다
+p = models["oversampling"].predict_proba(Xb)[:, 1]
+odds = p / (1 - p) * (pi_true / (1 - pi_true)) / (pi_train / (1 - pi_train))
+pc = odds / (1 + odds)
+print(round(roc_auc_score(yb, pc), 4), round(pc.mean(), 3), round(ece(pc, yb), 4), round(yb.mean(), 3))
+
+# 2) drift 탐지는 multiple comparisons 문제다: 아무 변화 없는 특성 200개, 100일
+ref = rng.normal(size=(5000, 200))
+alarms = []
+for day in range(100):
+    today = rng.normal(size=(1000, 200))
+    p = np.array([stats.ks_2samp(ref[:, j], today[:, j]).pvalue for j in range(200)])
+    alarms.append(((p < 0.05).sum(), (p < 0.05 / 200).sum()))
+alarms = np.array(alarms)
+print(round(alarms[:, 0].mean(), 2), round(float((alarms[:, 0] > 0).mean()), 2), round(alarms[:, 1].mean(), 3))
+
+# 3) PSI (population stability index) 로 바꾸면
+def psi(a, b, bins=10):
+    edges = np.quantile(a, np.linspace(0, 1, bins + 1)); edges[0], edges[-1] = -np.inf, np.inf
+    pa = np.histogram(a, edges)[0] / len(a); pb = np.histogram(b, edges)[0] / len(b)
+    pa, pb = np.clip(pa, 1e-6, None), np.clip(pb, 1e-6, None)
+    return float(((pb - pa) * np.log(pb / pa)).sum())
+today = rng.normal(size=(1000, 200))
+psis = np.array([psi(ref[:, j], today[:, j]) for j in range(200)])
+shift = rng.normal(0.2, 1, 1000)                                             # 평균이 0.2 표준편차 움직인 특성
+print(round(psis.mean(), 4), int((psis > 0.1).sum()), round(psi(ref[:, 0], shift), 4), round(stats.ks_2samp(ref[:, 0], shift).pvalue, 6))
+
+# 그대로 0.828 0.304 0.025 0.0023
+# class_weight 0.8375 0.177 0.328 0.3028
+# oversampling 0.8374 0.179 0.33 0.3049
+# 0.8374 0.024 0.0015 0.025
+# 9.5 1.0 0.03
+# 0.011 0 0.0577 0.0
+```
+
+각 모델 줄의 네 숫자는 (ROC-AUC, PR-AUC, 평균 예측 확률, ECE)다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **불균형 처방은 확률을 크게 바꾸고 순위는 조금 바꾼다 ("class imbalance").** 양성 2.5%인 데이터에서 아무것도 안 한 모델의 평균 예측 확률은 0.025로 실제 비율과 같고 ECE가 0.002다. `class_weight="balanced"` 와 양성 oversampling은 평균 예측 확률을 0.33으로 부풀리고 ECE가 0.30이 된다. ROC-AUC는 0.828에서 0.837로 조금 올랐다. 그런데 PR-AUC는 0.304에서 0.18로 떨어졌다. 양성이 드문 쪽의 상위 순위가 오히려 나빠졌다. 본문 그림의 "대부분은 threshold 조정과 같은 효과"보다 이 데이터에서는 차이가 컸다.
+- **oversampling의 확률은 되돌릴 수 있다 ("직접 해보기" ①).** 학습 때 양성 비율(0.5)과 실제 비율(0.025)의 odds 비로 예측을 보정하면, 평균 예측 확률이 0.024, ECE가 0.0015로 돌아온다. 단조 변환이라 ROC-AUC는 0.8374 그대로다. 이 장의 `prior-shift` 보정이 그대로 작동한다. 본문이 말한 SMOTE 대신 단순 복제로 했다(`imbalanced-learn` 이 따로 필요해서다).
+- **drift 경보는 아무 일 없어도 울린다 ("drift 탐지는 multiple comparisons 문제다", "직접 해보기" ②).** 분포가 전혀 변하지 않은 특성 200개에 매일 KS 검정을 하면 $p < 0.05$ 인 특성이 하루 평균 9.5개다. 100일 **모두** 하나 이상 울렸다. Bonferroni로 기준을 $0.05/200$ 으로 낮추면 하루 0.03개다.
+- **PSI는 표본이 크면 덜 민감하다.** 같은 상황에서 PSI가 평균 0.011이고 흔히 쓰는 기준 0.1을 넘는 특성이 0개다. 그런데 평균이 표준편차의 0.2만큼 움직인 특성도 PSI는 0.058로 기준 아래다. KS 검정은 $p \approx 0$ 으로 잡는다. 거짓 경보를 줄인 대가로 실제 변화도 놓친 것이다. 어떤 크기의 변화를 잡아야 하는지를 먼저 정해야 기준을 고를 수 있다.
+
+**이 코드가 보여 주지 못하는 것.**
+불균형 실험은 합성 데이터 하나, logistic regression 하나다. PR-AUC가 떨어진 것이 일반적인 현상인지는 이 코드로 말할 수 없다. 트리 모델이나 다른 데이터에서는 다를 수 있다.
+drift 실험의 특성들은 서로 독립이다. 실제 특성들은 상관되어 있어 경보가 몰려서 울리고, Bonferroni는 지나치게 보수적이 된다. concept drift($P(y|x)$ 의 변화)는 입력만 봐서는 잡을 수 없다는 본문 "입력 모니터링의 사각지대"도 여기서 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
