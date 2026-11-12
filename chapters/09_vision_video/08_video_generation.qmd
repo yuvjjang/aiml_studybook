@@ -547,8 +547,8 @@ fig
 시간 압축을 4배로 하면 몇 개인가?
 
 **② 깜빡임을 정량화한다**
-`flicker` 에서 frame 간 차분의 시간적 분산을 재라.
-시간 attention을 끄면 얼마나 커지는가?
+`flicker` 는 frame마다 위치가 무작위로 흔들리는 clip을 만들어(`flicker_clip` 의 `jitter`) 깜빡임 지표를 잰다. 표의 jitter 0.5, 1.5, 3.0에 0.1과 6.0을 추가하라.
+지표가 jitter에 비례해 커지는가? (이 장에는 시간 attention을 가진 생성 모델이 없다. frame을 서로 독립으로 만들면 생기는 흔들림을 jitter로 흉내 낸 것이다.)
 
 **③ rollout drift를 관찰한다**
 `rollout` 에서 autoregressive로 길게 생성하면 몇 초 뒤부터 품질이 무너지는가?
