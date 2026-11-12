@@ -847,6 +847,152 @@ weight보다 optimizer state가 2배 크다. 이 크기 때문에 실무의 관�
 
 ---
 
+## 실제 도구로: PyTorch 학습 루프에서 같은 검사를 한다
+
+이 장의 검사들을 실제 PyTorch 학습 루프에 건다. 초기 loss, 작은 batch 외우기, learning rate range test, gradient norm과 갱신 비율, gradient accumulation, bf16, checkpoint다. 각 검사가 무엇을 잡고 무엇을 놓치는지도 함께 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9 (데이터만). 모델을 내려받지 않는다.
+- 데이터는 scikit-learn에 들어 있는 손글씨 숫자(1,797장, class 10개)다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import copy
+import io
+import math
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+
+nn, F = torch.nn, torch.nn.functional
+d = load_digits()
+perm = np.random.default_rng(0).permutation(len(d.target))
+X = torch.tensor(d.data[perm] / 16.0, dtype=torch.float32)
+y = torch.tensor(d.target[perm])
+Xtr, ytr, Xva, yva = X[:1200], y[:1200], X[1200:], y[1200:]
+
+def make(seed=0):
+    torch.manual_seed(seed)
+    return nn.Sequential(nn.Linear(64, 256), nn.ReLU(), nn.Linear(256, 256), nn.ReLU(), nn.Linear(256, 10))
+
+# 1) 검사 2: 초기 loss 는 log(class 수) 근처여야 한다
+m = make()
+with torch.no_grad():
+    print(round(F.cross_entropy(m(Xtr), ytr).item(), 3), round(math.log(10), 3))
+# 출력층을 일부러 크게 시작하면
+bad = make()
+with torch.no_grad():
+    bad[-1].weight.mul_(30)
+    print(round(F.cross_entropy(bad(Xtr), ytr).item(), 2))
+# 불균형 이진 문제(양성 1%): 출력 bias 를 0 으로 둘 때와 log 빈도로 둘 때
+yb = (torch.rand(10000, generator=torch.Generator().manual_seed(0)) < 0.01).float()
+for b0 in [0.0, math.log(0.01 / 0.99)]:
+    print(round(b0, 3), round(F.binary_cross_entropy_with_logits(torch.full_like(yb, b0), yb).item(), 4))
+p = yb.mean().item()
+print(round(math.log(2), 4), round(-(p * math.log(p) + (1 - p) * math.log(1 - p)), 4))
+
+# 2) 검사 3: 샘플 10개는 외워야 한다. 못 외우면 코드가 틀렸다
+def overfit(model, xb, tb, steps=300, wd=0.0):
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=wd)
+    for _ in range(steps):
+        opt.zero_grad(); loss = F.cross_entropy(model(xb), tb); loss.backward(); opt.step()
+    return round(loss.item(), 4)
+print(overfit(make(), Xtr[:10], ytr[:10]), overfit(make(), Xtr[:10], ytr[:10], wd=10.0))
+# 흔한 버그: label 을 한 칸 밀었다 / 입력을 batch 안에서 섞었다 → 10개는 그래도 외운다
+print(overfit(make(), Xtr[:10], ytr[:10].roll(1)), overfit(make(), Xtr[:10][torch.randperm(10)], ytr[:10]))
+
+# 3) learning rate range test: lr 를 지수적으로 키우며 loss 를 기록한다
+m = make(); opt = torch.optim.SGD(m.parameters(), lr=1e-5)
+lrs, losses, g = np.logspace(-5, 1, 120), [], torch.Generator().manual_seed(0)
+for lr in lrs:
+    for pg in opt.param_groups: pg["lr"] = lr
+    idx = torch.randint(0, 1200, (64,), generator=g)
+    opt.zero_grad(); loss = F.cross_entropy(m(Xtr[idx]), ytr[idx]); loss.backward(); opt.step()
+    losses.append(loss.item())
+sm = np.convolve(losses, np.ones(5) / 5, mode="valid")
+i_min = int(sm.argmin())
+i_blow = i_min + int(np.argmax(sm[i_min:] > sm[0]))          # 최저점 뒤에서 처음 시작 loss 를 넘는 곳
+print(round(float(sm[0]), 2), f"{lrs[i_min + 2]:.2e}", round(float(sm.min()), 2), f"{lrs[i_blow + 2]:.2e}")
+
+# 4) gradient norm 과 update/weight 비율을 hook 없이 바로 잰다
+m = make(); opt = torch.optim.SGD(m.parameters(), lr=0.1)
+opt.zero_grad(); F.cross_entropy(m(Xtr[:64]), ytr[:64]).backward()
+before = [p.detach().clone() for p in m.parameters()]
+print(round(torch.nn.utils.clip_grad_norm_(m.parameters(), float("inf")).item(), 4))
+opt.step()
+ratios = [((p - b).norm() / b.norm()).item() for p, b in zip(m.parameters(), before) if p.dim() == 2]
+print([f"{r:.1e}" for r in ratios])
+
+# 5) gradient accumulation: batch 64 를 16 x 4 로 나눠 쌓으면 같은 gradient 다
+m1, m2 = make(), make()
+F.cross_entropy(m1(Xtr[:64]), ytr[:64]).backward()
+for k in range(4):
+    (F.cross_entropy(m2(Xtr[16 * k:16 * (k + 1)]), ytr[16 * k:16 * (k + 1)]) / 4).backward()   # 4 로 나눈다
+print(max((a.grad - b.grad).abs().max().item() for a, b in zip(m1.parameters(), m2.parameters())))
+
+# 6) mixed precision: bf16 으로 계산하면 결과가 얼마나 다른가 (CPU autocast)
+m = make()
+with torch.no_grad():
+    full = m(Xva)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        half = m(Xva)
+print(half.dtype, round((full - half.float()).abs().max().item(), 4), (full.argmax(1) == half.argmax(1)).float().mean().item())
+print(torch.tensor(1.0 + 2 ** -8, dtype=torch.bfloat16).item(), torch.tensor(1.0 + 2 ** -7, dtype=torch.bfloat16).item())
+
+# 7) checkpoint: model 만 저장하면 이어서 학습할 때 optimizer 상태가 사라진다
+def train_steps(model, opt, steps, start):
+    g = torch.Generator().manual_seed(start)
+    for _ in range(steps):
+        idx = torch.randint(0, 1200, (64,), generator=g)
+        opt.zero_grad(); F.cross_entropy(model(Xtr[idx]), ytr[idx]).backward(); opt.step()
+ref = make(); ro = torch.optim.Adam(ref.parameters(), lr=1e-3)
+train_steps(ref, ro, 50, 0); train_steps(ref, ro, 50, 1)                         # 끊지 않고 100 step
+a = make(); ao = torch.optim.Adam(a.parameters(), lr=1e-3); train_steps(a, ao, 50, 0)
+buf = io.BytesIO(); torch.save({"model": a.state_dict(), "opt": ao.state_dict()}, buf); buf.seek(0)
+ck = torch.load(buf)
+full_resume = make(); fo = torch.optim.Adam(full_resume.parameters(), lr=1e-3)
+full_resume.load_state_dict(ck["model"]); fo.load_state_dict(ck["opt"]); train_steps(full_resume, fo, 50, 1)
+model_only = make(); mo = torch.optim.Adam(model_only.parameters(), lr=1e-3)
+model_only.load_state_dict(ck["model"]); train_steps(model_only, mo, 50, 1)
+diff = lambda u, v: max((p - q).abs().max().item() for p, q in zip(u.parameters(), v.parameters()))
+print(diff(ref, full_resume), f"{diff(ref, model_only):.1e}")
+
+# 2.309 2.303
+# 3.01
+# 0.0 0.6931
+# -4.595 0.0661
+# 0.6931 0.0659
+# 0.0002 0.0159
+# 0.0006 0.0008
+# 2.31 7.78e-01 1.84 9.81e-01
+# 0.3386
+# ['1.2e-03', '2.5e-03', '1.1e-02']
+# 9.313225746154785e-09
+# torch.bfloat16 0.001 0.9932998418807983
+# 1.0 1.0078125
+# 0.0 3.9e-02
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **초기 loss가 $\log(\text{class 수})$ 와 맞는다 ("검사 2").** 갓 만든 모델의 loss가 2.309이고 $\log 10 = 2.303$ 이다. 출력층 weight를 30배로 키워 시작하면 3.01이 된다. 처음부터 무언가를 확신하고 있다는 신호다.
+- **불균형 데이터에서는 출력 bias를 log 빈도로 시작한다 ("직접 해보기" ①).** 양성 1%에서 bias를 0으로 두면 초기 loss가 $\log 2 = 0.6931$ 이고, $\log(0.01/0.99)$ 로 두면 0.0661이다. 실제 양성 비율로 계산한 entropy $H(p) = 0.0659$ 와 거의 같다. 앞의 경우는 모델이 처음 수백 step을 "양성은 드물다"는 것을 배우는 데 쓴다.
+- **샘플 10개는 외워야 한다 ("G3.9.1").** 300 step 뒤 loss가 0.0002다. weight decay를 10으로 크게 걸면 0.0159에서 멈춘다. 0에 가지 못하는 것이 보이지만 차이는 생각보다 작았다. 이 검사는 regularization을 끈 상태에서 해야 "못 외운다 = 코드가 틀렸다"로 읽을 수 있다.
+- **이 검사가 놓치는 버그도 있다.** label을 한 칸 밀어 엉뚱한 짝을 만들어도, 입력 순서만 섞어도, 10개는 그대로 외운다(0.0006, 0.0008). 10개는 어떤 짝이든 외울 수 있기 때문이다. 이 검사는 "학습 코드가 돌아가는가"를 보고, "데이터가 맞게 짝지어졌는가"는 보지 못한다. 그건 검증 정확도가 우연 수준에 머무는 것으로 드러난다.
+- **learning rate range test (G3.9.2).** lr을 $10^{-5}$ 에서 10까지 지수적으로 키우며 120 step을 돌리면, 이동평균 loss가 시작 2.31에서 lr 0.78 근처의 1.84까지 내려갔다가, lr 0.98에서 시작값을 넘는다. 본문대로라면 최저점(0.78)이 아니라 loss가 가장 가파르게 내려가는 지점을 고른다. 최저점은 이미 발산 직전이기 때문이다. 여기서는 step이 120개뿐이라 곡선이 거칠어, 가장 가파른 지점을 숫자로 뽑지는 않았다.
+- **갱신 비율을 바로 잴 수 있다 ("gradient norm을 찍어라", "직접 해보기" ③).** `clip_grad_norm_` 에 무한대를 주면 자르지 않고 전체 gradient norm만 돌려준다(0.339). SGD lr 0.1에서 한 step의 $\|\Delta W\|/\|W\|$ 가 세 층에서 $1.2\times10^{-3}$, $2.5\times10^{-3}$, $1.1\times10^{-2}$ 다. 본문의 기준 $10^{-3}$ 근처이고, 마지막 층이 열 배쯤 크다.
+- **gradient accumulation은 정확히 같은 gradient를 준다.** batch 64를 16씩 네 번 나눠 쌓으면 한 번에 계산한 것과 $9\times10^{-9}$ 까지 같다. 단, 각 loss를 4로 나눠야 한다. 나누지 않으면 gradient가 4배가 되어 lr을 4배 키운 것과 같다.
+- **bf16은 정밀도를 버린다 ("mixed precision의 함정").** CPU autocast로 bf16 계산을 하면 logit이 최대 0.001 달라지고, 597개 중 4개의 예측이 바뀐다(일치 99.3%). bf16은 유효 숫자가 8 bit라 $1 + 2^{-8}$ 이 1.0이 되고 $1 + 2^{-7}$ 은 1.0078로 남는다. 큰 값에 작은 값을 더하는 누적(loss 합, weight 갱신)을 bf16으로 하면 작은 값이 사라지는 이유다.
+- **checkpoint에는 optimizer 상태도 넣어야 한다 ("checkpointing").** 100 step을 끊지 않고 돌린 것과, 50 step에서 model과 optimizer를 저장했다 불러 50 step 더 돌린 것은 parameter가 정확히 같다(차이 0.0). model만 저장하고 optimizer를 새로 만들면 0.039 다르다. Adam의 $m$ 과 $v$ 가 0에서 다시 시작하기 때문이다.
+
+**이 코드가 보여 주지 못하는 것.**
+모든 검사가 잘 돌아가는 작은 모델에서 한 것이다. 실패 패턴(G3.9.3)을 실제로 만들어 이 검사들로 찾아보지는 않았다.
+bf16의 차이는 CPU autocast에서 잰 것이다. GPU의 mixed precision은 어떤 연산을 낮은 정밀도로 하는지가 다르고, fp16이면 loss scaling까지 필요하다. 그 규모의 차이는 여기서 볼 수 없다.
+learning rate range test의 결과(0.78)를 그대로 쓰면 안 된다. 120 step, batch 64의 짧은 실험이고, 실제 학습의 최적 lr은 batch 크기와 schedule에 따라 다르다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
