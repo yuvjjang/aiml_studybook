@@ -785,6 +785,87 @@ print(f"세션 수와 사용자별 평균 체류시간의 상관: {corr:+.3f}")
 
 ---
 
+## 실제 도구로: pandas로 타입, tidy data, 결측, 집계를 다룬다
+
+이 장 첫머리에 적은 대로 이 책의 본문은 NumPy 구조화 배열로 표를 다룬다. 실무에서는 pandas를 쓴다. 이 장의 주제를 pandas로 옮기며, 같은 개념이 실제 도구에서 어떤 모습으로 나타나는지 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `pandas` 3.1, `numpy` 2.5 (`pip install pandas`).
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(0)
+
+# 1) 타입: 숫자처럼 보이는 문자열, 순서가 있는 범주, 결측
+raw = pd.DataFrame({"id": ["001", "002", "003", "004"], "grade": ["B", "A", "C", "A"],
+                    "satisfaction": ["매우 불만", "보통", "만족", None], "income": ["3200", "4100", "", "5000"]})
+print(raw.dtypes.astype(str).to_dict())
+df = raw.assign(
+    income=pd.to_numeric(raw.income.replace("", pd.NA)),
+    satisfaction=pd.Categorical(raw.satisfaction, categories=["매우 불만", "불만", "보통", "만족", "매우 만족"], ordered=True),
+)
+print(df.dtypes.astype(str).to_dict(), df.isna().sum().to_dict())
+print(df.satisfaction.max(), (df.satisfaction > "보통").tolist(), df.satisfaction.cat.codes.tolist())
+print(df.id.tolist(), raw.id.astype(int).tolist())             # 문자열로 두지 않으면 앞의 0 이 사라진다
+
+# 2) tidy data: 넓은 표 ↔ 긴 표
+wide = pd.DataFrame({"store": ["강남", "판교"], "2024-01": [120, 80], "2024-02": [130, 95]})
+long = wide.melt(id_vars="store", var_name="month", value_name="sales")
+print(long.to_dict("records"))
+print(long.pivot(index="store", columns="month", values="sales").equals(wide.set_index("store").rename_axis(columns="month")))
+
+# 3) 결측의 표현: NaN, None, pd.NA, 그리고 정수 열
+s = pd.Series([1, 2, None])
+print(s.dtype, pd.Series([1, 2, None], dtype="Int64").dtype, pd.Series([1, 2, None], dtype="Int64").tolist())
+print(np.nan == np.nan, pd.isna(np.nan), s.mean(), s.sum(), s.mean(skipna=False))
+
+# 4) Simpson's paradox: 병원 두 곳의 생존율 (G1.0.1 과 같은 구조)
+rows = []
+for hosp, (n_mild, n_sev, p_mild, p_sev) in {"A": (900, 100, 0.95, 0.70), "B": (200, 800, 0.97, 0.75)}.items():
+    for sev, n, p in [("경증", n_mild, p_mild), ("중증", n_sev, p_sev)]:
+        rows.append(pd.DataFrame({"hospital": hosp, "severity": sev, "survived": rng.random(n) < p}))
+pts = pd.concat(rows, ignore_index=True)
+print(pts.groupby("hospital").survived.mean().round(3).to_dict())
+print(pts.groupby(["severity", "hospital"]).survived.mean().round(3).unstack().to_dict())
+print(pd.crosstab(pts.hospital, pts.severity).to_dict())
+
+# 5) groupby 의 함정: 집계 단위가 바뀌면 평균이 달라진다 (주문 단위 평균 vs 고객 단위 평균)
+orders = pd.DataFrame({"customer": ["a"] * 9 + ["b"], "amount": [10] * 9 + [1000]})
+print(orders.amount.mean(), orders.groupby("customer").amount.mean().mean(), orders.groupby("customer").amount.sum().mean())
+
+# {'id': 'str', 'grade': 'str', 'satisfaction': 'str', 'income': 'str'}
+# {'id': 'str', 'grade': 'str', 'satisfaction': 'category', 'income': 'float64'} {'id': 0, 'grade': 0, 'satisfaction': 1, 'income': 1}
+# 만족 [False, False, True, False] [0, 2, 3, -1]
+# ['001', '002', '003', '004'] [1, 2, 3, 4]
+# [{'store': '강남', 'month': '2024-01', 'sales': 120}, {'store': '판교', 'month': '2024-01', 'sales': 80}, {'store': '강남', 'month': '2024-02', 'sales': 130}, {'store': '판교', 'month': '2024-02', 'sales': 95}]
+# True
+# float64 Int64 [1, 2, <NA>]
+# False True 1.5 3.0 nan
+# {'A': 0.926, 'B': 0.807}
+# {'A': {'경증': 0.949, '중증': 0.72}, 'B': {'경증': 0.985, '중증': 0.762}}
+# {'경증': {'A': 900, 'B': 200}, '중증': {'A': 100, 'B': 800}}
+# 109.0 505.0 545.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **읽어 들인 표는 전부 문자열이다.** CSV나 사용자 입력에서 온 열은 숫자처럼 보여도 문자열로 들어온다. `pd.to_numeric` 으로 수입을 숫자로 바꾸면 빈 문자열이 결측이 된다. 거꾸로, ID처럼 숫자 모양의 이름은 문자열로 두어야 한다. 정수로 바꾸면 "001"이 1이 되어 앞의 0이 사라진다.
+- **순서가 있는 범주는 `ordered=True` 로 적는다 ("measurement scale").** 만족도를 순서 있는 categorical로 두면 최댓값("만족")과 크기 비교("보통"보다 위인가)가 순서대로 된다. 내부 code는 0, 2, 3이고 결측은 −1이다. 그래도 평균은 내지 않는다. 이 code는 순서만 뜻하고 간격은 뜻하지 않는다. 본문에서 말한 ordinal scale이다.
+- **넓은 표와 긴 표를 오간다 ("tidy data").** 달마다 열이 하나씩 있는 표를 `melt` 하면 (매장, 월, 매출)의 긴 표가 되고, `pivot` 하면 원래대로 돌아온다(`equals` 가 True). 한 행이 하나의 관측(매장 하나의 한 달 매출)인 긴 표가 tidy data이고, 대부분의 집계와 그림 도구가 이 모양을 기대한다.
+- **결측의 표현이 여럿이다 ("결측").** 정수 열에 결측이 섞이면 pandas는 기본으로 `float64` 로 바꾸고 NaN을 넣는다. `Int64` (대문자 I)로 지정하면 정수로 남고 결측은 `<NA>` 다. `np.nan == np.nan` 은 False라서 결측은 `isna` 로 찾아야 한다. `mean()` 과 `sum()` 은 기본으로 결측을 건너뛰고(1.5와 3.0), `skipna=False` 를 주면 NaN이 된다. 결측을 건너뛴다는 것은 "결측이 무작위로 빠졌다"고 가정하는 것이다.
+- **Simpson's paradox가 `groupby` 한 줄로 드러난다 (G1.0.1).** 전체로 보면 병원 A의 생존율이 0.926으로 B(0.807)보다 높다. 중증도로 나눠 보면 경증(0.949 대 0.985)과 중증(0.720 대 0.762) **모두에서** B가 높다. `crosstab` 이 이유를 보여 준다. A의 환자는 900명이 경증이고, B는 800명이 중증이다.
+- **집계 단위가 바뀌면 평균이 바뀐다 ("observational unit을 명시하라").** 고객 a가 10원짜리 주문을 9번, b가 1,000원짜리를 1번 했다. 주문 단위 평균은 109원, 고객별 평균의 평균은 505원, 고객별 합계의 평균은 545원이다. "평균 주문액"이라는 말만으로는 셋 중 무엇인지 알 수 없다.
+
+**이 코드가 보여 주지 못하는 것.**
+pandas의 기본 동작(결측 건너뛰기, 타입 자동 변환)은 버전에 따라 조금씩 바뀌어 왔다. 이 출력은 pandas 3.1의 것이다. 문자열 열의 dtype이 `str` 로 나오는 것도 3.0부터의 동작이다.
+Polars 같은 다른 DataFrame library는 결측과 타입을 더 엄격하게 다룬다. 여기서는 비교하지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
