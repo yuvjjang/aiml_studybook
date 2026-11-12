@@ -806,6 +806,91 @@ RNN-T lattice는 (시간, 출력 위치) 평면에서 오른쪽·위로 간다 �
 
 ---
 
+## 실제 도구로: `nn.CTCLoss` 와 wav2vec2의 CTC 출력
+
+PyTorch의 CTC loss가 이 장의 정의(모든 alignment 확률의 합)와 같은지 작은 경우에 직접 열거해 확인하고, CTC로 학습된 실제 음성 인식 모델의 frame별 출력에서 blank와 spike를 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `soundfile` 0.14
+- 모델은 `facebook/wav2vec2-base-960h`(영어 음성 960시간으로 CTC fine-tuning, 약 360 MB)다. 불러올 때 `masked_spec_embed` 가 없다는 표가 출력되는데, 학습 때만 쓰는 parameter라 추론에는 영향이 없다. 아래 출력에서는 그 표를 뺐다.
+- 시험 음성은 [8.6](06_asr_modern.qmd)의 "실제 도구로"와 같은 파일이다. Windows 음성 합성기로 만든 5.8초짜리 영어 문장이라 실제 녹음보다 훨씬 깨끗하다. `speech.wav` 자리에 자기 16 kHz mono 파일을 넣으면 된다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import itertools
+import math
+import soundfile as sf
+import torch
+from transformers import AutoProcessor, Wav2Vec2ForCTC
+
+F = torch.nn.functional
+torch.manual_seed(0)
+
+# 1) nn.CTCLoss 가 '모든 alignment 의 확률 합' 의 -log 인지, 작은 경우에 직접 열거해 확인한다
+T, C = 6, 4                                                   # frame 6개, class 4개 (0 = blank)
+logp = torch.randn(T, 1, C).log_softmax(2)
+target = torch.tensor([[1, 2, 2]])                            # 같은 글자가 연속이면 사이에 blank 가 꼭 있어야 한다
+
+def collapse(path):
+    out, prev = [], None
+    for c in path:
+        if c != prev and c != 0:
+            out.append(c)
+        prev = c
+    return out
+
+total, n_paths = 0.0, 0
+for path in itertools.product(range(C), repeat=T):
+    if collapse(path) == [1, 2, 2]:
+        n_paths += 1
+        total += math.exp(sum(logp[t, 0, c].item() for t, c in enumerate(path)))
+ctc = F.ctc_loss(logp, target, torch.tensor([T]), torch.tensor([3]), blank=0, reduction="sum")
+print(n_paths, round(-math.log(total), 5), round(ctc.item(), 5))
+
+# 2) 불가능한 경우: frame 이 모자라면 loss 는 무한대
+short = F.ctc_loss(logp[:3], target, torch.tensor([3]), torch.tensor([3]), reduction="sum")
+print(short.item(), F.ctc_loss(logp[:3], target, torch.tensor([3]), torch.tensor([3]), reduction="sum", zero_infinity=True).item())
+
+# 3) 실제 모델: wav2vec2 의 CTC 출력. 같은 테스트 음성(합성)을 넣어 frame 별 argmax 를 본다
+proc = AutoProcessor.from_pretrained("facebook/wav2vec2-base-960h")
+model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-base-960h").eval()
+wav, sr = sf.read("speech.wav", dtype="float32")          # 16 kHz mono 음성 파일
+inp = proc(wav, sampling_rate=sr, return_tensors="pt")
+with torch.no_grad():
+    logits = model(**inp).logits[0]                           # (frame, 32)
+ids = logits.argmax(-1)
+blank = proc.tokenizer.pad_token_id
+print(len(wav) / sr, logits.shape, round((ids == blank).float().mean().item(), 3))
+print(proc.decode(ids))
+# 글자 frame 들이 한 frame 짜리 spike 로 서는가: 연속된 같은 글자 구간의 길이
+runs = [len(list(g)) for k, g in itertools.groupby(ids.tolist()) if k != blank]
+print(len(runs), max(runs), round(sum(r == 1 for r in runs) / len(runs), 3))
+probs = logits.softmax(-1)
+print(round(probs.max(-1).values.mean().item(), 3))
+
+# 28 4.47055 4.47055
+# inf 0.0
+# 5.755 torch.Size([287, 32]) 0.561
+# THE MEETING WILL START AT THREE O'CLOCK ON MONDAY PLEASE BRING THE QUARTERLY REPORT
+# 84 5 0.619
+# 0.972
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **CTC loss는 모든 alignment의 확률을 더한 것이다 (G8.4.1, "직접 해보기" ②).** frame 6개, class 4개($4^6 = 4{,}096$ 가지 경로)에서 "1 2 2"로 접히는 경로가 28개다. 그 28개의 확률을 직접 더해 $-\log$ 를 취한 값과 `F.ctc_loss` 가 4.47055로 같다. PyTorch는 이것을 이 장의 forward algorithm으로 계산한다.
+- **frame이 모자라면 loss는 무한대다.** "1 2 2"는 같은 글자 2가 연속이라 사이에 blank가 꼭 있어야 해서 최소 4 frame이 필요하다. frame 3개로 계산하면 `inf` 다. 실제 학습에서는 이런 표본 하나가 batch 전체의 gradient를 망가뜨리므로, `zero_infinity=True` 로 그 표본의 loss를 0으로 바꾸는 경우가 많다.
+- **실제 모델의 출력 대부분은 blank다 (G8.4.4).** 5.8초가 287 frame(20 ms 간격)이 되고, frame별 argmax의 56%가 blank다. argmax를 접기만 하면(greedy decoding) "THE MEETING WILL START AT THREE O'CLOCK ON MONDAY PLEASE BRING THE QUARTERLY REPORT"로 문장이 정확히 나온다. 이 모델은 대문자와 apostrophe만 쓰고 마침표가 없다. [8.6](06_asr_modern.qmd)의 Whisper가 "3 o'clock"으로 쓴 숫자를 여기서는 "THREE"로 쓴다. 학습 데이터(LibriSpeech)의 표기 관례를 따른 것이다.
+- **글자는 짧은 spike로 선다.** blank가 아닌 출력이 이어진 구간 84개 중 62%가 한 frame짜리이고, 가장 긴 것도 5 frame(100 ms)이다. 한 글자의 소리는 그보다 길게 이어지지만, 모델은 그중 한두 frame에만 글자를 내고 나머지를 blank로 채운다. 본문에서 본 spike 현상이 실제 모델에서도 그대로다. 이 구간 수에는 단어 사이의 구분자(`|`)도 들어 있다.
+- **모델은 자기 출력에 매우 확신한다.** frame마다 가장 큰 확률의 평균이 0.972다. blank와 글자 모두 거의 확률 1로 고른다.
+
+**이 코드가 보여 주지 못하는 것.**
+깨끗한 합성 음성 하나다. 실제 녹음, 잡음, 억양이 다른 화자에서는 오류가 나고, 그때 beam search나 언어 모델을 붙인 decoding(G8.4.5)이 차이를 만든다. 여기서는 greedy decoding만 했다.
+RNN-T는 PyTorch에 `torchaudio.functional.rnnt_loss` 로 있지만, 공개된 RNN-T 모델을 CPU에서 간단히 돌릴 방법을 찾지 못해 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
