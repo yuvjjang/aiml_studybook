@@ -663,6 +663,146 @@ QAT는 quantization을 학습에 넣는다 — forward는 quantization하고 bac
 
 ---
 
+## 실제 도구로: PyTorch로 quantization, pruning, distillation
+
+이 장의 세 가지 기법을 PyTorch로 실제 분류기에 적용한다. teacher는 손글씨 숫자를 학습한 MLP(parameter 8.5만 개)다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9 (데이터만). 모델을 내려받지 않는다.
+- PyTorch에 내장된 quantization 도구(`torch.ao.quantization`, `torch.quantize_per_tensor` 등)는 이 버전에서 곧 없어진다는 경고를 낸다. 그래서 quantization은 int8 tensor로 직접 했다. 실무에서 LLM을 quantize할 때는 `bitsandbytes`, `torchao`, GGUF 같은 별도 도구를 쓴다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import copy
+import warnings
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+import time
+from torch.nn.utils import prune
+
+nn, F = torch.nn, torch.nn.functional
+d = load_digits()
+perm = np.random.default_rng(0).permutation(len(d.target))
+X = torch.tensor(d.data[perm] / 16.0, dtype=torch.float32)
+y = torch.tensor(d.target[perm])
+Xtr, ytr, Xte, yte = X[:1200], y[:1200], X[1200:], y[1200:]
+
+
+def make(h=256, seed=0):
+    torch.manual_seed(seed)
+    return nn.Sequential(nn.Linear(64, h), nn.ReLU(), nn.Linear(h, h), nn.ReLU(), nn.Linear(h, 10))
+
+
+def fit(m, epochs=40, lr=1e-3, teacher=None, T=4.0, alpha=0.9, seed=0):
+    opt = torch.optim.Adam(m.parameters(), lr=lr)
+    g = torch.Generator().manual_seed(seed)
+    for _ in range(epochs):
+        m.train()
+        for idx in torch.randperm(1200, generator=g).split(64):
+            out = m(Xtr[idx])
+            loss = F.cross_entropy(out, ytr[idx])
+            if teacher is not None:
+                with torch.no_grad():
+                    soft = F.softmax(teacher(Xtr[idx]) / T, 1)
+                kd = F.kl_div(F.log_softmax(out / T, 1), soft, reduction="batchmean") * T * T
+                loss = alpha * kd + (1 - alpha) * loss
+            opt.zero_grad(); loss.backward(); opt.step()
+    return m.eval()
+
+
+acc = lambda m: round((m(Xte).argmax(1) == yte).float().mean().item(), 3)
+teacher = fit(make(256))
+print(acc(teacher), sum(p.numel() for p in teacher.parameters()))
+
+# 1) 8bit quantization: 정수(int8)로 저장하고, 쓸 때 scale 을 곱해 되돌린다
+def quantize(W, per_channel):
+    scale = (W.abs().amax(1, keepdim=True) if per_channel else W.abs().max()) / 127
+    q = torch.round(W / scale).clamp(-127, 127).to(torch.int8)
+    return q, scale
+W = teacher[2].weight.detach()
+for name, pc in [("per-tensor", False), ("per-channel", True)]:
+    q, sc = quantize(W, pc)
+    print(name, q.dtype, f"{(q.float() * sc - W).abs().mean().item():.1e}", q.element_size() * q.numel(), W.element_size() * W.numel())
+
+# 2) outlier 하나가 per-tensor scale 을 망친다
+W2 = W.clone(); W2[0, 0] = W.abs().max() * 50
+for name, pc in [("per-tensor", False), ("per-channel", True)]:
+    q, sc = quantize(W2, pc)
+    print(name, f"{(q.float() * sc - W2).abs()[1:].mean().item():.1e}", round((q[1:] == 0).float().mean().item(), 3))
+# 모델 전체를 8bit, 4bit 로 반올림했을 때 정확도
+for bits in [8, 4, 3]:
+    m = copy.deepcopy(teacher)
+    with torch.no_grad():
+        for i in (0, 2, 4):
+            W_ = m[i].weight; lv = 2 ** (bits - 1) - 1
+            sc = W_.abs().amax(1, keepdim=True) / lv
+            W_.copy_(torch.round(W_ / sc).clamp(-lv, lv) * sc)
+    print(bits, acc(m))
+
+# 3) pruning: torch.nn.utils.prune 으로 크기가 작은 weight 를 0 으로 (재학습 없이 / 있게)
+for amount in [0.5, 0.8, 0.95]:
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        m = copy.deepcopy(teacher)
+        params = [(m[i], "weight") for i in (0, 2, 4)]
+        prune.global_unstructured(params, pruning_method=prune.L1Unstructured, amount=amount)
+        before = acc(m)
+        fit(m, epochs=10)                          # mask 는 유지된 채 남은 weight 만 다시 학습
+        zeros = sum(int((mod.weight == 0).sum()) for mod, _ in params) / sum(mod.weight.numel() for mod, _ in params)
+    print(amount, before, acc(m), round(zeros, 3), len(w))
+# 0 이 많아도 dense 행렬곱은 같은 시간이 걸린다
+A = torch.randn(2048, 2048); B = A * (torch.rand_like(A) > 0.95)
+def t(M):
+    t0 = time.perf_counter()
+    for _ in range(20): M @ A
+    return (time.perf_counter() - t0) / 20 * 1000
+print(round(t(A), 1), round(t(B), 1), round(t(B.to_sparse()), 1))
+
+# 4) distillation: 작은 student (hidden 16) 를 정답만으로 / teacher 의 soft label 로
+for T in [1.0, 4.0, 10.0]:
+    print(T, [acc(fit(make(16, seed=s), teacher=teacher, T=T, seed=s)) for s in range(3)])
+print("정답만", [acc(fit(make(16, seed=s), seed=s)) for s in range(3)])
+with torch.no_grad():
+    p = F.softmax(teacher(Xte[:1]) / 1.0, 1)[0]; p4 = F.softmax(teacher(Xte[:1]) / 4.0, 1)[0]
+print(int(yte[0]), [round(v, 3) for v in p.tolist()], [round(v, 3) for v in p4.tolist()])
+
+# 0.978 85002
+# per-tensor torch.int8 6.7e-04 65536 262144
+# per-channel torch.int8 3.7e-04 65536 262144
+# per-tensor 3.3e-02 0.727
+# per-channel 3.7e-04 0.008
+# 8 0.978
+# 4 0.982
+# 3 0.975
+# 0.5 0.977 0.983 0.5 0
+# 0.8 0.956 0.985 0.8 0
+# 0.95 0.238 0.955 0.95 0
+# 81.7 97.5 634.6
+# 1.0 [0.936, 0.928, 0.935]
+# 4.0 [0.905, 0.928, 0.91]
+# 10.0 [0.894, 0.915, 0.901]
+# 정답만 [0.931, 0.938, 0.938]
+# 4 [0.0, 0.001, 0.0, 0.0, 0.999, 0.0, 0.0, 0.0, 0.0, 0.0] [0.001, 0.126, 0.0, 0.0, 0.796, 0.003, 0.02, 0.047, 0.004, 0.002]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **int8로 저장하면 메모리가 1/4이다 (G11.4.1).** 256×256 행렬이 float32로 262,144 byte, int8로 65,536 byte다. 되돌린 값의 평균 오차는 per-tensor $6.7\times10^{-4}$, per-channel $3.7\times10^{-4}$ 다. 실제로는 scale(행마다 float 하나)도 저장해야 해서 정확히 1/4보다 조금 크다.
+- **outlier 하나가 per-tensor를 망친다 (G11.4.2, "직접 해보기" ①).** 원소 하나를 최댓값의 50배로 만들면, per-tensor에서는 나머지 원소의 오차가 $3.3\times10^{-2}$ 로 90배 커지고 **72.7%가 0으로 반올림된다.** 눈금 하나가 그 outlier에 맞춰 너무 굵어졌다. per-channel에서는 그 행만 영향을 받아 나머지는 $3.7\times10^{-4}$ 그대로이고 0이 되는 원소는 0.8%다.
+- **이 작은 모델은 3bit까지 버틴다.** 세 층을 행마다 scale을 두고 8, 4, 3 bit로 반올림하면 정확도가 0.978, 0.982, 0.975다(원래 0.978). 4bit에서 오히려 조금 높은 것은 시험 597장에서 2~3장의 우연이다. [7.14](../07_language/14_inference_optimization.qmd)의 GPT-2는 4bit per-channel에서 perplexity가 17.7에서 25.0으로 나빠졌다. 모델과 과제에 따라 견디는 bit 수가 다르다.
+- **pruning은 재학습이 결정적이다 (G11.4.3, "직접 해보기" ②).** `torch.nn.utils.prune` 으로 세 층 전체에서 크기가 작은 weight를 지웠다. 50%를 지우면 재학습 없이도 0.977이다. 80%에서 0.956, 95%에서 0.238로 무너진다. 남은 weight만 10 epoch 다시 학습시키면 0.983, 0.985, 0.955로 회복한다. 95%를 지운 모델도 원래와 2%p 차이다. `prune` 은 mask를 걸어 두므로 재학습 중에도 지운 자리가 0으로 남는다.
+- **0이 많아도 빨라지지 않는다.** 2048×2048 행렬곱 시간이 dense 82 ms, 95%를 0으로 채운 dense 98 ms(측정마다 흔들린다), 같은 것을 sparse 형식으로 바꾼 것 635 ms다. 0이 흩어져 있는(unstructured) sparsity는 CPU의 일반 행렬곱을 빠르게 하지 않고, 범용 sparse 연산은 오히려 느리다. 속도를 얻으려면 행이나 channel을 통째로 지우거나(structured), 하드웨어가 지원하는 패턴(2:4 sparsity 등)을 써야 한다.
+- **이 실험에서 distillation은 이득이 없었다 (G11.4.5, "직접 해보기" ③).** hidden 16짜리 student를 정답만으로 학습시키면 seed 셋에서 0.931~0.938이다. teacher의 soft label로 학습시키면 $T = 1$ 에서 0.928~0.936으로 비슷하고, $T = 4$ 와 10에서는 0.90~0.93으로 오히려 낮다. 본문의 제목 "언제 이득인가"에 대해, 이 설정은 이득이 없는 쪽이었다.
+- **teacher가 너무 확신하면 전할 것이 적다.** 첫 시험 이미지(숫자 4)에서 teacher의 확률은 $T = 1$ 에서 0.999가 정답에 몰려 있다. $T = 4$ 로 부드럽게 하면 정답 0.80, 숫자 1에 0.13, 7에 0.05가 드러난다. 이 "4는 1이나 7과 조금 닮았다"는 정보가 dark knowledge다. 다만 이 과제에서는 그 정보가 student에게 도움이 되지 않았다. 데이터(1,200장)로 이미 student 용량만큼 배울 수 있었기 때문으로 보이지만, 따로 확인하지 않았다.
+
+**이 코드가 보여 주지 못하는 것.**
+quantization은 반올림한 값을 다시 float로 계산했다. 메모리를 아끼는 것은 저장할 때뿐이고, 계산 속도를 얻으려면 int8 행렬곱을 하는 kernel이 필요하다. 그것은 여기서 재지 않았다.
+distillation은 seed 셋, $\alpha = 0.9$ 하나, student 크기 하나에서 했다. 데이터가 적거나 student가 teacher와 구조가 다를 때, label에 잡음이 있을 때 이득이 크다고 보고되는데, 그런 설정은 시험하지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
