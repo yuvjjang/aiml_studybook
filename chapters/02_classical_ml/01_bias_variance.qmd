@@ -561,6 +561,86 @@ $p > n$ 이면 훈련 오차를 0으로 만드는 해가 무한히 많다.
 
 ---
 
+## 실제 도구로: `validation_curve` 와 `learning_curve`
+
+scikit-learn은 이 장의 두 그림을 함수 하나씩으로 그려 준다. 다항 차수에 따른 validation curve, 데이터 양에 따른 learning curve를 숫자로 보고, bias²와 variance를 직접 재고, double descent를 실제로 만든다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다.
+- 데이터는 $\sin(2\pi x)$ 에 잡음을 섞은 것과, 특성 400개짜리 선형 모델이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.model_selection import learning_curve, validation_curve
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.tree import DecisionTreeRegressor
+
+rng = np.random.default_rng(0)
+
+# 1) validation curve 와 learning curve
+xs = rng.uniform(0, 1, 300); ys = np.sin(2 * np.pi * xs) + rng.normal(0, 0.3, 300)
+Xs = xs[:, None]
+poly = lambda d: make_pipeline(PolynomialFeatures(d), LinearRegression())
+degs = [1, 3, 5, 9, 15]
+tr, va = validation_curve(make_pipeline(PolynomialFeatures(), LinearRegression()), Xs, ys,
+                          param_name="polynomialfeatures__degree", param_range=degs, cv=5, scoring="neg_mean_squared_error")
+print([(d, round(float(-a.mean()), 3), round(float(-b.mean()), 3)) for d, a, b in zip(degs, tr, va)])
+
+for name, m in [("직선 (high bias)", poly(1)), ("깊은 트리 (high variance)", DecisionTreeRegressor(random_state=0))]:
+    sizes, tr, va = learning_curve(m, Xs, ys, train_sizes=[0.1, 0.3, 0.6, 1.0], cv=5, scoring="neg_mean_squared_error")
+    print(name, [(int(s), round(float(-a.mean()), 3), round(float(-b.mean()), 3)) for s, a, b in zip(sizes, tr, va)])
+
+# bias²와 variance 를 직접: 같은 분포에서 훈련 집합 200개를 새로 뽑아 x=0.25 에서의 예측을 모은다
+x0 = np.array([[0.25]]); f0 = np.sin(2 * np.pi * 0.25)
+for d in [1, 3, 9]:
+    preds = []
+    for k in range(200):
+        r = np.random.default_rng(100 + k)
+        xx = r.uniform(0, 1, 30); yy = np.sin(2 * np.pi * xx) + r.normal(0, 0.3, 30)
+        preds.append(poly(d).fit(xx[:, None], yy).predict(x0)[0])
+    preds = np.array(preds)
+    print(d, round(float((preds.mean() - f0) ** 2), 4), round(float(preds.var()), 4))
+
+# double descent: 특성 p 개만 써서 최소 norm 해로 맞춘다. 표본은 n = 40 개
+n, P = 40, 400
+beta_true = rng.normal(0, 1, P) / np.sqrt(P)                    # 400개 특성 모두에 조금씩 신호가 있다
+Xt, Xe = rng.normal(size=(n, P)), rng.normal(size=(2000, P))
+yt, ye = Xt @ beta_true + rng.normal(0, 0.1, n), Xe @ beta_true
+res = []
+for p in [10, 30, 38, 40, 42, 60, 100, 400]:
+    beta = np.linalg.lstsq(Xt[:, :p], yt, rcond=None)[0]           # p > n 이면 lstsq 가 최소 norm 해를 준다
+    res.append((p, round(float(np.mean((Xe[:, :p] @ beta - ye) ** 2)), 3), round(float(np.linalg.norm(beta)), 2)))
+print(res)
+ridge = [round(float(np.mean((Ridge(lam, fit_intercept=False).fit(Xt[:, :40], yt).predict(Xe[:, :40]) - ye) ** 2)), 3) for lam in (1e-3, 0.1, 1.0)]
+print(ridge)
+
+# [(1, 0.281, 0.285), (3, 0.09, 0.092), (5, 0.084, 0.087), (9, 0.083, 0.088), (15, 0.083, 0.089)]
+# 직선 (high bias) [(24, 0.265, 0.35), (72, 0.311, 0.286), (144, 0.311, 0.287), (240, 0.281, 0.285)]
+# 깊은 트리 (high variance) [(24, -0.0, 0.173), (72, -0.0, 0.167), (144, -0.0, 0.177), (240, -0.0, 0.153)]
+# 1 0.2701 0.0207
+# 3 0.0003 0.0126
+# 9 0.0005 0.0277
+# [(10, 1.064, 0.46), (30, 3.571, 1.71), (38, 18.021, 4.16), (40, 20.835, 4.5), (42, 7.304, 2.57), (60, 2.48, 1.44), (100, 1.23, 0.8), (400, 0.801, 0.35)]
+# [20.684, 12.588, 3.932]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **validation curve (G2.1.1).** 다항 차수 1, 3, 5, 9, 15에서 5-fold 훈련 MSE가 0.281에서 0.083으로 줄기만 하고, 검증 MSE는 0.285, 0.092, 0.087, 0.088, 0.089다. 3차에서 크게 좋아지고 5차부터는 거의 평평하다. 잡음 분산이 0.09($0.3^2$)이므로 검증 오차가 이미 바닥에 닿았다. 표본이 300개라 15차도 크게 무너지지 않았다.
+- **learning curve는 처방을 알려 준다 ("learning curve").** 직선은 훈련 표본을 24개에서 240개로 늘려도 훈련과 검증 MSE가 0.28 근처에서 붙어 있다. high bias다. 데이터를 더 모아도 소용없고 모델을 바꿔야 한다. 깊은 트리는 훈련 MSE가 늘 0이고 검증은 0.17 근처다. high variance다. 이 범위에서는 데이터를 늘려도 간격이 많이 줄지 않았다.
+- **bias²와 variance를 직접 잰다 (G2.1.2).** 훈련 집합(30개)을 200번 새로 뽑아 $x = 0.25$ 에서의 예측을 모았다. 1차는 bias² 0.270, variance 0.021, 3차는 0.0003과 0.013, 9차는 0.0005와 0.028이다. 차수를 올리면 bias가 사라지고, 너무 올리면 variance가 다시 커진다.
+- **double descent가 실제로 나온다 ("고전적 U자 그림이 빗나가는 곳").** 표본 40개로 특성 $p$ 개만 써서 최소 norm 해를 구하면, 시험 MSE가 $p$ = 10에서 1.06, 38에서 18.0, **40에서 20.8**, 42에서 7.3, 100에서 1.23, 400에서 0.80이다. $p = n$ 에서 봉우리가 서고, 그 너머에서 다시 내려가 $p = 10$ 보다 좋아진다. 계수의 norm도 $p = n$ 에서 4.5로 가장 크다. 정확히 맞춰야 하는 방정식이 가장 빠듯한 지점이다.
+- **regularization이 봉우리를 누른다 ("직접 해보기" ①).** 같은 $p = 40$ 에서 Ridge의 $\lambda$ 를 0.001, 0.1, 1.0으로 키우면 시험 MSE가 20.7, 12.6, 3.9로 내려간다. 봉우리는 regularization이 없는 최소 norm 해에서 생긴다.
+
+**이 코드가 보여 주지 못하는 것.**
+bias–variance 분해는 제곱 오차에서만 깔끔하게 성립한다(본문). 분류의 0-1 손실에서 시도하는 것("직접 해보기" ③)은 하지 않았다.
+double descent는 특성이 독립이고 신호가 400개 특성에 고르게 퍼진 선형 모델에서 만든 것이다. 신경망에서도 비슷한 현상이 보고되지만, 그것을 이 코드로 보인 것은 아니다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
