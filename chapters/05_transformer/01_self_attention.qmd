@@ -423,6 +423,104 @@ self-attention은 데이터에 대해 거의 아무것도 가정하지 않는다
 
 ---
 
+## 실제 도구로: `nn.MultiheadAttention` 의 mask
+
+PyTorch의 attention layer로 이 장의 성질을 확인한다. permutation equivariance, causal mask와 누출 검사, padding mask, mask를 $-\infty$ 로 넣는 이유, attention 행렬의 rank다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU). 모델을 내려받지 않고 바로 돌아간다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+
+nn, F = torch.nn, torch.nn.functional
+torch.manual_seed(0)
+d, n = 32, 6
+mha = nn.MultiheadAttention(d, 4, batch_first=True).eval()
+x = torch.randn(1, n, d)
+perm = torch.tensor([3, 0, 5, 1, 4, 2])
+
+# 1) permutation equivariance: 입력 순서를 섞으면 출력도 같은 순서로 섞일 뿐이다
+with torch.no_grad():
+    out, _ = mha(x, x, x)
+    out_p, _ = mha(x[:, perm], x[:, perm], x[:, perm])
+    print(f"{(out_p - out[:, perm]).abs().max().item():.1e}")
+    # 위치 정보를 더하면 깨진다
+    pos = torch.randn(1, n, d)
+    xp = x + pos
+    o1, _ = mha(xp, xp, xp)
+    xq = x[:, perm] + pos
+    o2, _ = mha(xq, xq, xq)
+    print(f"{(o2 - o1[:, perm]).abs().max().item():.1e}")
+
+# 2) causal mask: attn_mask 의 True 는 '보지 마라'
+causal = torch.ones(n, n, dtype=torch.bool).triu(1)
+with torch.no_grad():
+    o, w = mha(x, x, x, attn_mask=causal)
+    print(w[0].triu(1).abs().max().item(), [round(v, 3) for v in w[0].sum(-1).tolist()])
+    # 미래 token 을 바꿔도 앞쪽 출력이 그대로인가 (누출 검사)
+    x2 = x.clone(); x2[:, 4:] = torch.randn(1, 2, d)
+    o_b, _ = mha(x2, x2, x2, attn_mask=causal)
+    print(f"{(o_b[:, :4] - o[:, :4]).abs().max().item():.1e}", f"{(o_b[:, 4:] - o[:, 4:]).abs().max().item():.1e}")
+    # 한 칸 어긋난 mask(바로 다음 token 까지 허용)는 같은 검사에서 누출을 드러낸다
+    off = torch.ones(n, n, dtype=torch.bool).triu(2)
+    o_c, _ = mha(x, x, x, attn_mask=off); o_d, _ = mha(x2, x2, x2, attn_mask=off)
+    print(f"{(o_d[:, :4] - o_c[:, :4]).abs().max().item():.1e}")
+
+# 3) padding mask: batch 안에서 길이가 다를 때
+pad = torch.tensor([[False] * 6, [False] * 4 + [True] * 2])        # 둘째 문장은 마지막 둘이 padding
+xb = torch.randn(2, n, d)
+with torch.no_grad():
+    _, wb = mha(xb, xb, xb, key_padding_mask=pad)
+    print(wb[1, :, 4:].abs().max().item())
+    alone, _ = mha(xb[1:, :4], xb[1:, :4], xb[1:, :4])
+    full, _ = mha(xb, xb, xb, key_padding_mask=pad)
+    print(f"{(full[1, :4] - alone[0]).abs().max().item():.1e}")
+
+# 4) mask 는 −∞ 로 더한다. 0 을 곱하면 softmax 뒤에 합이 1 이 아니다
+s = torch.randn(n, n)
+m_inf = s.masked_fill(causal, float("-inf")).softmax(-1)
+m_zero = s.softmax(-1) * (~causal)
+print([round(v, 3) for v in m_inf.sum(-1).tolist()], [round(v, 3) for v in m_zero.sum(-1).tolist()])
+# 한 줄이 전부 가려지면 NaN 이 된다
+print(torch.full((3,), float("-inf")).softmax(-1).tolist())
+
+# 5) QK^T 의 rank 는 head 차원을 넘지 못한다
+for nn_ in [16, 64, 256]:
+    q, k = torch.randn(nn_, 8), torch.randn(nn_, 8)
+    print(nn_, torch.linalg.matrix_rank(q @ k.T).item(), torch.linalg.matrix_rank((q @ k.T / math.sqrt(8)).softmax(-1)).item())
+
+# 6.3e-08
+# 5.5e-01
+# 0.0 [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+# 0.0e+00 3.8e-01
+# 1.7e-01
+# 0.0
+# 7.5e-08
+# [1.0, 1.0, 1.0, 1.0, 1.0, 1.0] [0.034, 0.227, 0.109, 0.63, 0.856, 1.0]
+# [nan, nan, nan]
+# 16 8 16
+# 64 8 63
+# 256 8 251
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **self-attention은 순서를 모른다 (G5.1.1).** 입력 6개의 순서를 섞어 넣으면 출력이 같은 순서로 섞일 뿐 값은 같다(차이 $6\times10^{-8}$). 위치마다 다른 벡터를 더한 뒤 섞으면 차이가 0.55로 깨진다("직접 해보기" ①). 순서 정보는 attention이 아니라 positional encoding([5.3](03_positional_encoding.qmd))이 넣는다.
+- **`attn_mask` 의 True는 "보지 마라"다 (G5.1.2).** causal mask를 주면 attention 가중치의 위 삼각이 정확히 0이고 각 행의 합은 1이다. PyTorch의 bool mask는 True가 차단이다. 다른 library나 직접 짠 코드에서는 반대(True가 허용)인 경우가 있어 헷갈리기 쉽다.
+- **누출은 미래를 바꿔 보면 드러난다 ("직접 해보기" ②).** 5번째 이후의 입력만 바꾸면, causal mask에서는 앞 4개 출력이 정확히 그대로(차이 0.0)이고 뒤쪽만 바뀐다(0.38). 한 칸 어긋나 바로 다음 token까지 허용하는 mask로 같은 검사를 하면 앞쪽 출력이 0.17 바뀐다. 4번째 위치가 5번째를 보고 있다는 뜻이다. 학습할 때는 이런 누출이 오히려 loss를 낮춰 주므로, 이런 검사가 아니면 알아채기 어렵다.
+- **padding은 `key_padding_mask` 로 가린다.** 길이가 4인 문장을 6으로 채운 batch에서, padding 위치로 가는 가중치가 정확히 0이다. 그 문장의 앞 4개 출력은 padding 없이 4개만 넣었을 때와 $7\times10^{-8}$ 까지 같다.
+- **mask는 $-\infty$ 를 더하는 것이다 ("mask는 −∞ 로, 0 으로가 아니다").** 점수에 $-\infty$ 를 넣고 softmax하면 행마다 합이 1이다. softmax를 먼저 하고 0을 곱하면 행의 합이 0.03에서 1.0까지 들쭉날쭉하다. 가려진 쪽에 갔어야 할 확률이 어디로도 재분배되지 않았다. 한 행이 **전부** $-\infty$ 이면 softmax는 NaN이다. 본문에서 말한 대로다.
+- **$QK^\top$ 의 rank는 head 차원을 넘지 못한다 ("직접 해보기" ③).** head 차원 8에서 길이가 16, 64, 256이어도 $QK^\top$ 의 rank는 8이다. 그런데 softmax를 거친 attention 행렬은 16, 63, 251로 거의 꽉 찬 rank다. softmax의 지수함수가 저차원 점수 행렬을 고차원으로 펴 준다. "attention은 low-rank"라는 말은 softmax 전의 점수에 대한 것이다.
+
+**이 코드가 보여 주지 못하는 것.**
+학습하지 않은 무작위 layer다. mask와 같은 구조적 성질은 학습과 무관하게 성립하지만, 학습된 모델의 attention이 실제로 무엇을 보는지는 [5.0](00_attention_mechanism.qmd)과 [5.2](02_multi_head.qmd)의 "실제 도구로"에서 다뤘다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
