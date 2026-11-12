@@ -131,8 +131,60 @@ kernel은 `ai-ml-study` 를 고른다.
 ## 6. 실제 도구용 환경을 따로 만든다
 
 이 책의 본문 코드는 PyTorch를 쓰지 않는다. 빌드할 때마다 같은 그림이 나오도록 의존성을 NumPy·SciPy·Plotly로 제한했기 때문이다.
-대신 장 끝의 **실제 도구로** 절이, 그 장에서 NumPy로 만든 것을 PyTorch·Hugging Face로는 어떻게 쓰는지 보여 준다
-(예: [2.4](chapters/02_classical_ml/04_logistic_regression.qmd), [2.7](chapters/02_classical_ml/07_ensembles.qmd), [2.10](chapters/02_classical_ml/10_dimensionality_reduction.qmd), [2.11](chapters/02_classical_ml/11_model_evaluation.qmd), [3.4](chapters/03_deep_learning/04_optimizers.qmd), [3.5](chapters/03_deep_learning/05_normalization.qmd), [3.7](chapters/03_deep_learning/07_initialization.qmd), [3.8](chapters/03_deep_learning/08_autograd_from_scratch.qmd), [4.0](chapters/04_architectures/00_cnn.qmd), [4.3](chapters/04_architectures/03_lstm_gru.qmd), [5.0](chapters/05_transformer/00_attention_mechanism.qmd), [5.2](chapters/05_transformer/02_multi_head.qmd), [5.3](chapters/05_transformer/03_positional_encoding.qmd), [5.4](chapters/05_transformer/04_transformer_block.qmd), [5.6 GPT를 처음부터 만들기](chapters/05_transformer/06_build_gpt.qmd), [7.1](chapters/07_language/01_tokenization.qmd), [7.2](chapters/07_language/02_language_models.qmd), [7.3](chapters/07_language/03_word_embeddings.qmd), [7.4](chapters/07_language/04_pretraining_paradigms.qmd), [7.6 fine-tuning과 PEFT](chapters/07_language/06_finetuning_peft.qmd), [7.8](chapters/07_language/08_prompting_icl.qmd), [7.9 decoding](chapters/07_language/09_decoding.qmd), [7.10 RAG](chapters/07_language/10_rag.qmd), [7.14](chapters/07_language/14_inference_optimization.qmd), [8.6 현대 음성 인식](chapters/08_audio/06_asr_modern.qmd), [9.2 ViT](chapters/09_vision_video/02_vit.qmd), [9.4 CLIP과 multimodal 표현](chapters/09_vision_video/04_clip_multimodal.qmd), [12.0](chapters/12_trust/00_interpretability.qmd), [12.1](chapters/12_trust/01_mechanistic.qmd), [12.2](chapters/12_trust/02_uncertainty.qmd), [12.3](chapters/12_trust/03_robustness.qmd)).
+대신 장 끝의 **실제 도구로** 절이, 그 장에서 NumPy로 만든 것을 PyTorch·Hugging Face·scikit-learn으로는 어떻게 쓰는지 보여 준다.
+지금 그 절이 있는 장은 42개다.
+
+- **Part 2 고전 ML**
+    - [2.3 regularization](chapters/02_classical_ml/03_regularization.qmd) — scikit-learn의 Ridge 와 Lasso
+    - [2.4 logistic regression과 분류](chapters/02_classical_ml/04_logistic_regression.qmd) — scikit-learn의 LogisticRegression
+    - [2.5 support vector machine과 kernel](chapters/02_classical_ml/05_svm_kernels.qmd) — scikit-learn의 SVC
+    - [2.6 decision tree](chapters/02_classical_ml/06_trees.qmd) — scikit-learn의 DecisionTreeClassifier
+    - [2.7 ensemble](chapters/02_classical_ml/07_ensembles.qmd) — scikit-learn의 forest와 boosting
+    - [2.8 kNN·naive Bayes·기타](chapters/02_classical_ml/08_knn_naive_bayes.qmd) — scikit-learn의 kNN, naive Bayes, LDA·QDA, GP
+    - [2.9 clustering](chapters/02_classical_ml/09_clustering.qmd) — scikit-learn의 clustering
+    - [2.10 dimensionality reduction](chapters/02_classical_ml/10_dimensionality_reduction.qmd) — scikit-learn의 PCA와 t-SNE
+    - [2.11 모델 평가와 선택](chapters/02_classical_ml/11_model_evaluation.qmd) — scikit-learn으로 평가의 함정을 재현한다
+- **Part 3 딥러닝 기초**
+    - [3.3 loss function](chapters/03_deep_learning/03_losses.qmd) — torch.nn 의 loss들
+    - [3.4 optimizer](chapters/03_deep_learning/04_optimizers.qmd) — torch.optim
+    - [3.5 normalization layer](chapters/03_deep_learning/05_normalization.qmd) — torch.nn 의 normalization layer
+    - [3.6 딥러닝의 regularization](chapters/03_deep_learning/06_regularization_dl.qmd) — PyTorch의 dropout, weight decay, mixup, SWA
+    - [3.7 initialization과 gradient 흐름](chapters/03_deep_learning/07_initialization.qmd) — torch.nn.init 과 PyTorch의 기본값
+    - [3.8 autograd 직접 만들기](chapters/03_deep_learning/08_autograd_from_scratch.qmd) — 같은 것을 torch.autograd 로
+    - [3.9 학습 실전과 debugging](chapters/03_deep_learning/09_training_practice.qmd) — PyTorch 학습 루프에서 같은 검사를 한다
+- **Part 4 architecture**
+    - [4.0 CNN](chapters/04_architectures/00_cnn.qmd) — torch.nn.Conv2d
+    - [4.3 LSTM과 GRU](chapters/04_architectures/03_lstm_gru.qmd) — torch.nn.LSTM
+- **Part 5 Transformer**
+    - [5.0 attention mechanism](chapters/05_transformer/00_attention_mechanism.qmd) — BERT의 attention을 꺼내 본다
+    - [5.2 multi-head attention](chapters/05_transformer/02_multi_head.qmd) — nn.MultiheadAttention 과 GPT-2의 head들
+    - [5.3 positional encoding](chapters/05_transformer/03_positional_encoding.qmd) — GPT-2의 학습형 position embedding
+    - [5.4 Transformer block](chapters/05_transformer/04_transformer_block.qmd) — GPT-2의 block을 뜯어 본다
+    - [5.5 encoder-decoder와 세 가지 계열](chapters/05_transformer/05_encoder_decoder.qmd) — T5로 encoder-decoder를 들여다본다
+    - [5.6 GPT를 처음부터 만들기](chapters/05_transformer/06_build_gpt.qmd) — PyTorch로 옮기면
+    - [5.7 efficient attention과 긴 문맥](chapters/05_transformer/07_efficient_attention.qmd) — scaled_dot_product_attention
+- **Part 7 언어**
+    - [7.1 tokenization](chapters/07_language/01_tokenization.qmd) — 공개된 tokenizer 두 개
+    - [7.2 language model의 기초](chapters/07_language/02_language_models.qmd) — GPT-2의 perplexity를 잰다
+    - [7.3 word embedding](chapters/07_language/03_word_embeddings.qmd) — 공개된 GloVe 벡터
+    - [7.4 pretraining paradigm](chapters/07_language/04_pretraining_paradigms.qmd) — BERT와 GPT-2를 나란히 놓는다
+    - [7.6 fine-tuning과 PEFT](chapters/07_language/06_finetuning_peft.qmd) — PyTorch와 PEFT
+    - [7.8 prompting과 in-context learning](chapters/07_language/08_prompting_icl.qmd) — GPT-2에 few-shot prompt를 준다
+    - [7.9 decoding 전략](chapters/07_language/09_decoding.qmd) — generate 의 인자들
+    - [7.10 RAG](chapters/07_language/10_rag.qmd) — BM25, 문장 embedding, RRF
+    - [7.14 inference 최적화](chapters/07_language/14_inference_optimization.qmd) — GPT-2로 KV cache와 quantization을 잰다
+- **Part 8 음성**
+    - [8.6 현대 음성 인식](chapters/08_audio/06_asr_modern.qmd) — Whisper로 받아쓰기
+- **Part 9 비전·비디오**
+    - [9.2 Vision Transformer](chapters/09_vision_video/02_vit.qmd) — 공개된 ViT로 확인하기
+    - [9.4 CLIP과 multimodal 표현](chapters/09_vision_video/04_clip_multimodal.qmd) — 공개된 CLIP으로 확인하기
+- **Part 11 시스템**
+    - [11.0 reproducibility와 실험 관리](chapters/11_systems/00_reproducibility.qmd) — PyTorch에서 seed와 흔들림을 잰다
+- **Part 12 신뢰성**
+    - [12.0 explainability](chapters/12_trust/00_interpretability.qmd) — permutation importance와 saliency를 실제 데이터에
+    - [12.1 mechanistic interpretability](chapters/12_trust/01_mechanistic.qmd) — GPT-2에서 같은 절차를 밟는다
+    - [12.2 uncertainty와 calibration](chapters/12_trust/02_uncertainty.qmd) — PyTorch로 학습한 분류기를 보정한다
+    - [12.3 robustness와 distribution shift](chapters/12_trust/03_robustness.qmd) — PyTorch로 공격을 만든다
 
 이 코드는 책의 가상환경과 **별도의 환경**에서 돌린다.
 
@@ -141,7 +193,7 @@ python -m venv venv-torch
 venv-torch/bin/pip install torch transformers peft          # Windows: venv-torch\Scripts\pip
 ```
 
-장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다 (예: [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [4.0](chapters/04_architectures/00_cnn.qmd)·[12.2](chapters/12_trust/02_uncertainty.qmd)·[12.3](chapters/12_trust/03_robustness.qmd)은 `scikit-learn`). Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 된다.
+장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)는 `sentencepiece` 가 필요하다.
 GPU가 있으면 [pytorch.org](https://pytorch.org/get-started/locally/) 의 안내대로 자기 CUDA 버전에 맞는 `torch` 를 설치한다.
 
 **이 절의 코드를 읽을 때 알아 둘 것**
