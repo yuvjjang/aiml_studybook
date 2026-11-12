@@ -539,6 +539,132 @@ pretraining–fine-tuning paradigm이 성립하는 이유는 가정 하나다:
 이 변화가 [7.6](06_finetuning_peft.qmd)(PEFT)과 [7.7](07_alignment.qmd)(alignment)의 전제다.
 작은 개입으로 충분한 이유가 '가르치는 것이 적기 때문'이다.
 
+---
+
+## 실제 도구로: BERT와 GPT-2를 나란히 놓는다
+
+masked LM으로 학습한 BERT와 causal LM으로 학습한 GPT-2를 불러, 이 장에서 계산과 작은 실험으로 본 차이를 실제 모델에서 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `bert-base-uncased`(약 440 MB)와 `gpt2`(약 550 MB)다.
+- BERT를 불러올 때 "UNEXPECTED" 라고 적힌 표가 출력된다. 내려받은 파일에 들어 있지만 지금 쓰지 않는 부분(next sentence prediction용 head 등)을 알려 주는 것이고 오류가 아니다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+from transformers import (AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM, AutoTokenizer,
+                          DataCollatorForLanguageModeling)
+
+btok = AutoTokenizer.from_pretrained("bert-base-uncased")
+bert = AutoModelForMaskedLM.from_pretrained("bert-base-uncased").eval()
+gtok = AutoTokenizer.from_pretrained("gpt2")
+gpt = AutoModelForCausalLM.from_pretrained("gpt2").eval()
+
+# 1) 같은 빈칸을 두 모델이 맞힌다: BERT 는 양쪽을 보고, GPT-2 는 왼쪽만 본다
+left, right = "The", "barked all night and kept the neighbors awake."
+enc = btok(f"{left} [MASK] {right}", return_tensors="pt")
+pos = (enc.input_ids[0] == btok.mask_token_id).nonzero().item()
+with torch.no_grad():
+    pb = bert(**enc).logits[0, pos].softmax(-1)
+    pg = gpt(**gtok(left, return_tensors="pt")).logits[0, -1].softmax(-1)
+print([(btok.decode(i), round(p, 3)) for p, i in zip(*[t.tolist() for t in pb.topk(4)])])
+print([(gtok.decode(i), round(p, 3)) for p, i in zip(*[t.tolist() for t in pg.topk(4)])])
+print(round(pb[btok.convert_tokens_to_ids("dog")].item(), 3), round(pg[gtok.encode(" dog")[0]].item(), 5))
+
+# 2) 뒤 단어를 바꾸면 앞 token 의 representation 이 바뀌는가
+def first_word_vec(model, tok, text, idx):
+    with torch.no_grad():
+        return model(**tok(text, return_tensors="pt"), output_hidden_states=True).hidden_states[-1][0, idx]
+a, b = "The bank was closed because of the flood", "The bank was closed because of the holiday"
+for name, model, tok, idx in [("BERT", bert, btok, 2), ("GPT-2", gpt, gtok, 1)]:       # 'bank' 의 위치
+    va, vb = first_word_vec(model, tok, a, idx), first_word_vec(model, tok, b, idx)
+    print(name, tok.convert_ids_to_tokens(tok(a).input_ids)[idx], (va - vb).abs().max().item())
+
+# 3) 80/10/10: masking 을 실제로 해 주는 collator 가 고른 것을 센다
+torch.manual_seed(0)
+coll = DataCollatorForLanguageModeling(btok, mlm=True, mlm_probability=0.15)
+ids = btok("the quick brown fox jumps over the lazy dog " * 12, add_special_tokens=False).input_ids   # 108 token
+batch = coll([{"input_ids": ids} for _ in range(2000)])
+orig = torch.tensor(ids).expand(2000, -1)
+sel = batch["labels"] != -100                              # loss 를 계산하는 위치
+inp = batch["input_ids"][sel]
+n = sel.sum().item()
+is_mask = (inp == btok.mask_token_id).sum().item()
+same = (inp == orig[sel]).sum().item()
+print(round(sel.float().mean().item(), 4), round(is_mask / n, 3), round(same / n, 3),
+      round((n - is_mask - same) / n, 3))
+
+# 4) contextual representation: 'bank' 의 벡터를 층마다 꺼내, 같은 뜻끼리와 다른 뜻끼리의 cosine 을 잰다
+enc_model = AutoModel.from_pretrained("bert-base-uncased").eval()
+MONEY = ["she deposited the check at the bank this morning", "the bank approved his loan application",
+         "he withdrew cash from the bank yesterday", "the bank raised its interest rates again"]
+RIVER = ["they sat on the bank of the river and fished", "the boat drifted toward the muddy bank",
+         "wild flowers grew along the bank of the stream", "he climbed up the steep bank from the water"]
+
+def bank_vecs(sents):
+    out = []
+    for s in sents:
+        e = btok(s, return_tensors="pt")
+        i = e.input_ids[0].tolist().index(btok.convert_tokens_to_ids("bank"))
+        with torch.no_grad():
+            hs = enc_model(**e, output_hidden_states=True).hidden_states
+        out.append(torch.stack([h[0, i] for h in hs]))      # (13, 768): embedding + 12층
+    return torch.stack(out)                                 # (4, 13, 768)
+
+M, R = bank_vecs(MONEY), bank_vecs(RIVER)
+cos = torch.nn.functional.cosine_similarity
+pairs = [(i, j) for i in range(4) for j in range(i + 1, 4)]
+for layer in [0, 1, 4, 8, 11, 12]:
+    same = torch.stack([cos(X[i, layer], X[j, layer], dim=0) for X in (M, R) for i, j in pairs]).mean()
+    diff = torch.stack([cos(M[i, layer], R[j, layer], dim=0) for i in range(4) for j in range(4)]).mean()
+    print(layer, round(same.item(), 3), round(diff.item(), 3))
+
+# 5) anisotropy: 서로 다른 문장의 서로 다른 token 끼리는 얼마나 비슷한가
+with torch.no_grad():
+    H = [enc_model(**btok(s, return_tensors="pt"), output_hidden_states=True).hidden_states for s in MONEY + RIVER]
+g = torch.Generator().manual_seed(0)
+for layer in [0, 4, 8, 12]:
+    sims = []
+    for _ in range(500):
+        i, j = torch.randperm(8, generator=g)[:2].tolist()
+        a = H[i][layer][0, torch.randint(1, H[i][layer].shape[1] - 1, (1,), generator=g).item()]
+        b = H[j][layer][0, torch.randint(1, H[j][layer].shape[1] - 1, (1,), generator=g).item()]
+        sims.append(cos(a, b, dim=0).item())
+    print(layer, round(sum(sims) / len(sims), 3))
+
+# [('dogs', 0.474), ('dog', 0.46), ('cat', 0.013), ('animals', 0.004)]
+# [('\n', 0.014), (' the', 0.01), (' "', 0.008), (',', 0.006)]
+# 0.46 0.00013
+# BERT bank 0.9436305165290833
+# GPT-2 Ġbank 0.0
+# 0.1497 0.801 0.099 0.1
+# 0 0.965 0.961
+# 1 0.883 0.755
+# 4 0.799 0.491
+# 8 0.743 0.405
+# 11 0.756 0.484
+# 12 0.714 0.419
+# 0 0.139
+# 4 0.299
+# 8 0.35
+# 12 0.352
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **뒤쪽 문맥이 답을 정한다 (G7.4.1).** "The ___ barked all night …"의 빈칸에 BERT는 dogs 0.47, dog 0.46을 준다. 둘을 합치면 0.93이다. GPT-2는 "The"까지만 보므로 dog의 확률이 0.00013이고, 1위 후보의 확률도 0.014뿐이다. GPT-2가 못해서가 아니라 답을 정하는 정보(barked)가 오른쪽에 있기 때문이다.
+- **causal 모델에서는 뒤 단어가 앞의 representation을 바꾸지 못한다.** 문장의 마지막 단어만 flood에서 holiday로 바꿨을 때, BERT에서는 앞쪽 "bank"의 벡터가 0.94 달라지고 GPT-2에서는 **정확히 0.0**이다. causal mask가 그렇게 만든다([5.1](../05_transformer/01_self_attention.qmd)). GPT-2가 순서대로 생성할 수 있는 것도, 한 방향의 문맥만 쓰는 것도 같은 성질에서 나온다.
+- **80/10/10이 실제 도구에 그대로 들어 있다 (G7.4.2, G7.4.4).** `DataCollatorForLanguageModeling` 이 token의 14.97%를 골랐고, 그중 80.1%를 `[MASK]` 로, 10.0%를 무작위 token으로 바꾸고 9.9%를 그대로 뒀다. loss는 고른 위치에서만 계산된다(나머지 label이 −100). 본문에서 "BERT는 forward pass 한 번에 15%만 배운다"고 한 것이 이 숫자다.
+- **같은 단어의 벡터가 문맥에 따라 갈린다 (G7.4.4).** "bank"가 은행인 문장 4개와 강둑인 문장 4개에서 그 token의 벡터를 층마다 꺼냈다. 입력층에서는 같은 뜻끼리 0.965, 다른 뜻끼리 0.961로 구별이 없다(같은 token embedding에 위치만 다르다). 4층을 지나면 0.80과 0.49로 벌어지고 마지막 층에서 0.71과 0.42다. [7.3](03_word_embeddings.qmd)의 static embedding이 못 하던 일이다.
+- **깊어질수록 같은 뜻끼리도 흩어진다.** 같은 뜻끼리의 cosine이 0.965에서 0.714로 내려간다. 본문에서 "실제 BERT에서 보고된 것"으로 든 첫 항목이다.
+- **anisotropy도 보인다.** 서로 다른 문장의 서로 다른 token을 무작위로 짝지은 cosine이 입력층 0.14에서 마지막 층 0.35로 올라간다. 아무 관계 없는 token끼리도 평균적으로 같은 쪽을 향한다는 뜻이다. 위의 0.42(다른 뜻의 bank끼리)를 읽을 때 기준선이 0이 아니라 0.35쯤이라는 것을 함께 봐야 한다.
+
+**이 코드가 보여 주지 못하는 것.**
+빈칸 문제는 답이 오른쪽에 있도록 고른 문장 하나다. 답이 왼쪽 문맥으로 정해지는 문장에서는 두 모델의 차이가 이렇게 크지 않다. bidirectional 문맥의 평균적인 이득은 이 예제가 아니라 본문 G7.4.1의 계산이 말해 준다.
+"bank" 실험은 문장 8개이고, anisotropy는 그 8개 문장 안의 token으로 잰 것이다. 숫자의 둘째 자리는 문장을 바꾸면 달라진다.
+그리고 두 모델은 목표만 다른 것이 아니다. 학습 데이터, tokenizer, 크기가 모두 다르다. 여기서 본 차이 중 구조에서 나오는 것(뒤 문맥을 보는가)은 확실하지만, 품질 차이를 pretraining 목표의 차이로 돌릴 수는 없다.
 
 ---
 
