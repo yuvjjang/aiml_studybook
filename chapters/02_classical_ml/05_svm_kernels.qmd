@@ -579,6 +579,88 @@ $\epsilon=0$ 이면 MAE와 같아진다. $\epsilon$ 을 키우면 **평평한 �
 
 ---
 
+## 실제 도구로: scikit-learn의 `SVC`
+
+이 장의 dual 해, kernel trick, $C$ 와 $\gamma$ 의 효과를 scikit-learn의 SVM에서 확인한다. 학습된 모델에서 support vector와 dual 계수를 꺼내 decision function을 손으로 다시 계산해 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install scikit-learn`).
+- 데이터는 scikit-learn의 `make_moons`(초승달 두 개)와 `make_blobs` 로 만든다. seed를 고정했다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from sklearn.datasets import make_blobs, make_moons
+from sklearn.metrics.pairwise import rbf_kernel
+from sklearn.svm import SVC
+
+X, y = make_moons(n_samples=400, noise=0.25, random_state=0)
+Xte, yte = make_moons(n_samples=2000, noise=0.25, random_state=1)
+
+# 1) 학습에 쓰인 것은 support vector 뿐이다: 그 점들만으로 다시 학습시킨다
+svm = SVC(kernel="rbf", C=1.0, gamma=1.0).fit(X, y)
+sv = svm.support_
+again = SVC(kernel="rbf", C=1.0, gamma=1.0).fit(X[sv], y[sv])
+print(len(sv), round(len(sv) / len(X), 3), round(svm.score(Xte, yte), 3),
+      f"{np.abs(svm.decision_function(Xte) - again.decision_function(Xte)).max():.1e}",
+      (svm.predict(Xte) == again.predict(Xte)).mean())
+
+# 2) kernel trick: f(x) = sum_i alpha_i y_i K(x_i, x) + b 를 직접 계산한다
+K = rbf_kernel(Xte, X[sv], gamma=1.0)                     # exp(-gamma ||x - x_i||^2)
+mine = K @ svm.dual_coef_[0] + svm.intercept_[0]          # dual_coef_ = alpha_i * y_i
+print(np.abs(mine - svm.decision_function(Xte)).max(), round(float(np.abs(svm.dual_coef_).max()), 3))
+
+# 3) C 와 margin: 겹치는 두 덩어리, 선형 kernel
+B, by = make_blobs(n_samples=200, centers=[[-1, 0], [1, 0]], cluster_std=0.8, random_state=0)
+for C in [0.01, 1, 100]:
+    m = SVC(kernel="linear", C=C).fit(B, by)
+    w = m.coef_[0]
+    print(C, round(float(2 / np.linalg.norm(w)), 2), len(m.support_), int((m.predict(B) != by).sum()),
+          int((np.abs(m.dual_coef_[0]) > C * 0.999).sum()))    # 마지막: alpha 가 상한 C 에 붙은 점의 수
+
+# 4) gamma 를 극단으로
+for g in [0.01, 1, 100, 10000]:
+    m = SVC(kernel="rbf", C=1.0, gamma=g).fit(X, y)
+    print(g, round(m.score(X, y), 3), round(m.score(Xte, yte), 3), len(m.support_))
+
+# 5) C 와 gamma 를 함께 훑는다 (시험 정확도)
+for C in [0.1, 10, 1000]:
+    print(C, [round(SVC(C=C, gamma=g).fit(X, y).score(Xte, yte), 3) for g in (0.1, 1, 10, 100)])
+
+# 6) 특성의 단위가 다르면: 둘째 특성을 1000 배
+S = np.array([1.0, 1000.0])
+print(round(SVC().fit(X * S, y).score(Xte * S, yte), 3), round(SVC().fit(X, y).score(Xte, yte), 3))
+
+# 100 0.25 0.933 3.4e-03 1.0
+# 2.5923707624997405e-14 1.0
+# 0.01 2.8 137 26 134
+# 1 1.1 64 24 60
+# 100 1.04 60 24 57
+# 0.01 0.85 0.842 234
+# 1 0.925 0.933 100
+# 100 0.97 0.903 326
+# 10000 1.0 0.538 400
+# 0.1 [0.839, 0.911, 0.938, 0.897]
+# 10 [0.886, 0.94, 0.919, 0.889]
+# 1000 [0.93, 0.918, 0.876, 0.872]
+# 0.808 0.931
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **학습에 쓰인 것은 support vector뿐이다 ("직접 해보기" ①).** 400개 중 100개(25%)가 support vector다. 그 100개만으로 다시 학습시키면 시험 데이터 2,000개의 예측이 전부 같다. decision function 값은 최대 $3\times10^{-3}$ 다르다. 정확히 0이 아닌 것은 solver가 허용 오차 안에서 멈추기 때문이다.
+- **kernel trick이 식 그대로다 ("kernel trick").** $f(x) = \sum_i \alpha_i y_i K(x_i, x) + b$ 를 support vector와 RBF kernel로 직접 계산한 값이 `decision_function` 과 $3\times10^{-14}$ 까지 같다. 100차원이든 무한 차원이든, 실제로 계산하는 것은 support vector 100개와의 kernel 값뿐이다. `dual_coef_` 의 최댓값이 정확히 1.0, 곧 $C$ 다. soft margin에서 $\alpha_i$ 의 상한이 $C$ 이기 때문이다.
+- **$C$ 를 줄이면 margin이 넓어지고 support vector가 늘어난다 ("soft margin", "직접 해보기" ②).** 겹치는 두 덩어리에서 $C$ 가 0.01, 1, 100일 때 margin 폭 $2/\|w\|$ 가 2.8, 1.1, 1.04이고 support vector가 137, 64, 60개다. 훈련 오분류는 26, 24, 24개로 거의 같다. 데이터가 겹쳐 있어 $C$ 를 키워도 오류를 더 줄일 수 없기 때문이다. support vector의 대부분(134, 60, 57개)은 $\alpha_i = C$ 인 점, 곧 margin 안에 들어왔거나 틀린 점이다.
+- **$\gamma$ 를 키우면 외운다 ("직접 해보기" ③).** $\gamma$ 가 0.01에서 10,000으로 가면 훈련 정확도는 0.85에서 1.0으로 오르고, 시험 정확도는 0.84, 0.93, 0.90을 거쳐 0.54로 떨어진다. $\gamma = 10{,}000$ 에서는 400개 전부가 support vector다. kernel 폭이 점 사이 거리보다 훨씬 좁아져서, 각 점이 자기 주변만 칠하는 lookup table이 된 것이다.
+- **$C$ 와 $\gamma$ 는 함께 정해야 한다 ("C와 γ의 상호작용").** 격자에서 가장 좋은 것은 $C = 10$, $\gamma = 1$ 의 0.94다. $C = 0.1$ 에서는 $\gamma = 10$ 이 가장 좋고(0.938), $C = 1000$ 에서는 $\gamma = 0.1$ 이 가장 좋다(0.93). 한쪽을 키우면 다른 쪽을 줄여야 균형이 맞는다. 하나씩 따로 고르면 이 대각선을 놓친다.
+- **RBF kernel은 거리를 쓰므로 단위에 민감하다.** 한 특성을 1,000배 하면 시험 정확도가 0.931에서 0.808로 떨어진다. 거리 계산이 그 한 특성에 지배된다.
+
+**이 코드가 보여 주지 못하는 것.**
+2차원 장난감 데이터다. $C$ 와 $\gamma$ 의 좋은 값은 데이터마다 다르고, 여기서 찾은 $C = 10$, $\gamma = 1$ 을 다른 데이터에 쓸 이유가 없다. 또 시험 데이터로 격자를 고른 것이므로 0.94는 낙관적인 값이다([2.11](11_model_evaluation.qmd)의 selection bias).
+`SVC` 는 표본 수가 늘면 학습 시간이 대략 제곱 이상으로 늘어난다. 표본이 수만 개를 넘으면 `LinearSVC` 나 kernel 근사(`Nystroem`)를 쓰는데, 이 코드로는 그 규모를 재지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
