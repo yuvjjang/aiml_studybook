@@ -818,8 +818,8 @@ RNN-T lattice는 (시간, 출력 위치) 평면에서 오른쪽·위로 간다 �
 `forward` 의 결과가 같은지 확인하라.
 
 **③ spike 현상을 관찰한다**
-`spikes` 에서 학습이 진행됨에 따라 blank 확률의 비율을 재라.
-왜 CTC 출력이 뾰족해지는가? 그것이 streaming에 무슨 뜻인가.
+`train` 의 표에서 "blank frame 비율" 열이 epoch에 따라 어떻게 변하는지 먼저 보라.
+그다음 학습 반복 `range(1, 31)` 을 `range(1, 6)` 으로 줄여 덜 학습된 모델로 `spikes` 를 다시 돌려라. spike 폭이 어떻게 다른가? 왜 CTC 출력이 뾰족해지는가? 그것이 streaming에 무슨 뜻인가.
 :::
 
 ## 연습 문제
