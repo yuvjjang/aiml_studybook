@@ -605,6 +605,138 @@ fig.show()
 
 ---
 
+## 실제 도구로: scikit-learn의 kNN, naive Bayes, LDA·QDA, GP
+
+이 장의 baseline 모델들을 scikit-learn으로 돌린다. $k$ 에 따른 bias–variance, 차원의 저주, naive Bayes의 과신, 그리고 GP가 데이터 밖에서 무엇을 말하는지를 숫자로 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5, `scipy` 1.18. PyTorch는 쓰지 않는다.
+- 데이터는 scikit-learn의 `make_moons`, 손글씨 숫자(1,797장, 64차원)와 seed를 고정한 난수다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from scipy.spatial.distance import pdist
+from sklearn.datasets import load_digits, make_moons
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
+from sklearn.dummy import DummyClassifier
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+
+rng = np.random.default_rng(0)
+
+# 1) k 를 1 에서 n 까지: 훈련·시험 정확도
+X, y = make_moons(n_samples=400, noise=0.3, random_state=0)
+Xte, yte = make_moons(n_samples=2000, noise=0.3, random_state=1)
+for k in [1, 5, 25, 100, 400]:
+    m = KNeighborsClassifier(k).fit(X, y)
+    print(k, round(m.score(X, y), 3), round(m.score(Xte, yte), 3))
+print(round(DummyClassifier(strategy="most_frequent").fit(X, y).score(Xte, yte), 3))
+
+# 2) distance concentration: 가장 먼 점과 가장 가까운 점의 거리 비
+for d in [2, 10, 100, 1000]:
+    P = rng.uniform(size=(500, d))
+    dist = np.linalg.norm(P[1:] - P[0], axis=1)
+    print(d, round(float(dist.max() / dist.min()), 2), round(float(dist.std() / dist.mean()), 3))
+# 같은 1000 차원이라도 실제 자유도가 2 인 곡면 위의 점이면
+t = rng.uniform(0, 4 * np.pi, (500, 2))
+curve = np.c_[np.cos(t[:, 0]), np.sin(t[:, 0]), t[:, 1]] @ rng.normal(size=(3, 1000))
+dist = np.linalg.norm(curve[1:] - curve[0], axis=1)
+print(round(float(dist.max() / dist.min()), 2), round(float(dist.std() / dist.mean()), 3))
+
+# 3) 차원이 늘면 kNN 이 무너진다: 신호는 2 개 특성에만 있고 나머지는 잡음
+for extra in [0, 10, 100, 1000]:
+    Z, Zte = np.c_[X, rng.normal(size=(400, extra))], np.c_[Xte, rng.normal(size=(2000, extra))]
+    print(extra, round(KNeighborsClassifier(15).fit(Z, y).score(Zte, yte), 3),
+          round(LogisticRegression(max_iter=2000).fit(Z, y).score(Zte, yte), 3))
+
+# 4) naive Bayes: 손글씨 숫자
+D, dy = load_digits(return_X_y=True)
+Da, Db, ya, yb = train_test_split(D, dy, test_size=0.5, random_state=0, stratify=dy)
+nb = GaussianNB().fit(Da, ya)
+p = nb.predict_proba(Db)
+print(round(nb.score(Db, yb), 3), round(float((p.max(1) > 0.999).mean()), 3), round(log_loss(yb, p), 2))
+try:
+    QuadraticDiscriminantAnalysis().fit(Da, ya)
+except Exception as e:
+    print(type(e).__name__, str(e)[:60])                  # class 마다 늘 0 인 pixel 이 있어 공분산이 특이행렬이다
+for name, m in [("LDA", LinearDiscriminantAnalysis()), ("QDA reg 0.1", QuadraticDiscriminantAnalysis(reg_param=0.1)),
+                ("QDA reg 0.5", QuadraticDiscriminantAnalysis(reg_param=0.5)), ("logistic", LogisticRegression(max_iter=5000)),
+                ("kNN k=3", KNeighborsClassifier(3))]:
+    print(name, round(cross_val_score(m, D, dy, cv=5).mean(), 3))
+
+# 5) 같은 특성을 복제하면: naive Bayes 는 같은 증거를 두 번 센다
+Dd, Ddb = np.c_[Da, Da, Da], np.c_[Db, Db, Db]
+nb3 = GaussianNB().fit(Dd, ya)
+p3 = nb3.predict_proba(Ddb)
+print(round(nb3.score(Ddb, yb), 3), round(float((p3.max(1) > 0.999).mean()), 3), round(log_loss(yb, p3), 2))
+# 이진 문제에서 log-odds 가 정확히 몇 배가 되는가
+two = np.isin(dy, [3, 8])
+A, a = D[two], (dy[two] == 8).astype(int)
+lo = lambda m, Z: m.predict_log_proba(Z)[:, 1] - m.predict_log_proba(Z)[:, 0]
+m1, m2 = GaussianNB(var_smoothing=1e-2).fit(A, a), GaussianNB(var_smoothing=1e-2).fit(np.c_[A, A], a)
+print(round(float(np.median(lo(m2, np.c_[A, A]) / lo(m1, A))), 3))
+
+# 6) Gaussian process: 예측과 함께 불확실성을 준다
+xs = np.sort(rng.uniform(0, 5, 15))[:, None]
+ys = np.sin(2 * xs[:, 0]) + rng.normal(0, 0.1, 15)
+gp = GaussianProcessRegressor(RBF(1.0) + WhiteKernel(0.01), random_state=0).fit(xs, ys)
+grid = np.array([[0.5], [2.5], [4.9], [8.0], [15.0]])
+mu, sd = gp.predict(grid, return_std=True)
+print(gp.kernel_)
+print([(float(g[0]), round(float(m), 2), round(float(s), 2)) for g, m, s in zip(grid, mu, sd)])
+
+# 1 1.0 0.86
+# 5 0.907 0.895
+# 25 0.9 0.905
+# 100 0.887 0.891
+# 400 0.5 0.5
+# 0.5
+# 2 67.13 0.481
+# 10 3.32 0.181
+# 100 1.36 0.051
+# 1000 1.11 0.016
+# 104.64 0.54
+# 0 0.901 0.852
+# 10 0.771 0.845
+# 100 0.633 0.784
+# 1000 0.525 0.6
+# 0.829 0.901 3.76
+# LinAlgError The covariance matrix of class 0 is not full rank. Increase 
+# LDA 0.908
+# QDA reg 0.1 0.938
+# QDA reg 0.5 0.957
+# logistic 0.914
+# kNN k=3 0.967
+# 0.829 0.966 5.01
+# 2.001
+# RBF(length_scale=0.674) + WhiteKernel(noise_level=0.00679)
+# [(0.5, 0.77, 0.19), (2.5, -1.0, 0.09), (4.9, -0.33, 0.1), (8.0, -0.0, 1.0), (15.0, -0.0, 1.0)]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **$k$ 가 bias와 variance를 정한다 (G2.8.1, "직접 해보기" ②).** $k = 1$ 이면 훈련 정확도 1.0, 시험 0.86이다. $k = 25$ 에서 시험 0.905로 가장 좋고, $k = 400 = n$ 이면 훈련도 시험도 0.5다. 이웃이 훈련 데이터 전부이므로 늘 다수 class를 답하고, 가장 흔한 class를 답하는 `DummyClassifier` 와 같은 모델이 된다.
+- **고차원에서는 가장 가까운 점과 가장 먼 점이 비슷해진다 ("curse of dimensionality").** 균등분포의 점 500개에서 한 점으로부터 가장 먼 점과 가장 가까운 점의 거리 비가 2차원 67, 10차원 3.3, 100차원 1.36, 1,000차원 1.11이다. 거리의 변동계수(표준편차/평균)는 0.48, 0.18, 0.05, 0.016으로 대략 $1/\sqrt d$ 를 따라 줄어든다.
+- **실제 자유도가 낮으면 저주가 약하다 ("직접 해보기" ①).** 같은 1,000차원이라도 자유도 2인 곡면 위에 놓인 점들은 거리 비가 105, 변동계수가 0.54다. 2차원 균등분포와 비슷한 수준이다. 본문의 manifold 가설이 kNN이 실제 데이터에서 통하는 이유다.
+- **쓸모없는 차원이 늘면 kNN이 먼저 무너진다.** 신호가 있는 2개 특성에 잡음 특성을 10, 100, 1,000개 붙이면 kNN($k = 15$)의 시험 정확도가 0.901, 0.771, 0.633, 0.525로 떨어진다. logistic regression은 0.852, 0.845, 0.784, 0.600이다. kNN은 모든 차원을 같은 무게로 거리에 넣고, logistic은 쓸모없는 특성의 계수를 작게 둘 수 있다.
+- **naive Bayes는 정확도에 비해 크게 과신한다 ("naive Bayes: 틀린 가정의 위력").** 손글씨 숫자에서 정확도는 0.829인데, 예측의 90%가 확률 0.999를 넘는다. log loss가 3.76이다. 이웃한 pixel들은 서로 강하게 상관되어 있는데 그것을 독립인 증거로 하나씩 곱하기 때문이다.
+- **같은 특성을 복제하면 확률만 망가진다 ("직접 해보기" ③).** 64개 특성을 그대로 세 번 이어 붙이면 정확도는 0.829 그대로이고, 0.999를 넘는 예측이 96.6%로 늘고, log loss는 5.01로 나빠진다. 3과 8을 가르는 이진 문제에서 특성을 두 번 넣으면 log-odds가 정확히 2.001배다. 같은 증거를 두 번 세니 확신도 두 배가 된다. 순위(argmax)는 그대로라 정확도는 변하지 않는다.
+- **QDA는 이 데이터에서 그대로는 돌지도 않는다 ("discriminant analysis").** 손글씨 숫자는 class마다 늘 0인 가장자리 pixel이 있어서 class별 공분산 행렬이 특이행렬이다. scikit-learn이 오류를 내고 `reg_param` 을 키우라고 한다. 0.1을 주면 5-fold 정확도 0.938, 0.5를 주면 0.957이다. 공분산을 하나로 묶는 LDA는 0.908이다. 같은 데이터에서 kNN($k = 3$)이 0.967로 가장 좋았다.
+- **GP는 데이터가 없는 곳에서 "모른다"고 말한다 ("Gaussian process").** 0~5 구간의 점 15개로 학습한 GP는 데이터 안쪽 $x = 2.5$ 에서 표준편차 0.09, 바깥 $x = 8$ 과 15에서 1.0이다. 그때 평균은 0이다. 1.0은 prior의 표준편차로, 아무것도 모를 때로 돌아간 것이다. RBF kernel의 길이 척도(0.674)와 잡음 크기(0.0068)도 데이터로 맞췄다.
+
+**이 코드가 보여 주지 못하는 것.**
+kNN이 가장 좋았던 것은 손글씨 숫자가 kNN에 유리한 데이터이기 때문이다(64차원이지만 실제 자유도가 낮고, 같은 숫자끼리 pixel이 비슷하다). 다른 데이터에서는 순위가 바뀐다. 본문 "baseline을 세우는 법"대로 여러 baseline을 같이 돌려 보는 것이 요점이다.
+naive Bayes를 텍스트에 쓰는 경우(`MultinomialNB`)는 다루지 않았다. 텍스트에서는 단어 count가 이미지 pixel보다 덜 상관되어 과신이 덜할 수 있지만 여기서 확인하지 않았다.
+ANN(approximate nearest neighbor) library(FAISS 등)는 scikit-learn에 없어서 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
