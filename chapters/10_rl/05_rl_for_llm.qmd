@@ -575,12 +575,12 @@ a, b_, c = RLVR
 Pareto 곡선의 무릎이 어디인가?
 
 **② reward hacking을 관찰한다**
-`hacking` 에서 학습을 오래 돌리면 대리 보상만 오르고 참 품질은 떨어진다.
-어느 시점에 멈춰야 하는가? 무엇으로 그 시점을 알 수 있는가?
+`hacking` 은 reward model에 spurious 성분을 가중치 `c` 로 섞고, KL 계수 $\beta$를 줄여 가며(= 최적화를 더 세게 밀며) 대리 보상과 참 품질을 함께 잰다.
+`c=2.0` 인 표에서 대리 보상은 계속 오르는데 참 품질이 꺾이는 $\beta$를 찾아라. 참 품질을 볼 수 없는 실제 상황에서는 무엇으로 그 지점을 알 수 있겠는가?
 
 **③ GRPO의 group 크기**
-`grpo` 의 group 크기를 2·8·32로 바꾸며 advantage 추정의 variance와 비용을 재라.
-value network를 없앤 대가가 무엇인가?
+`grpo` 는 group 크기 `k` 를 `[8, 64]` 로 두고 잰다. 목록을 `[2, 8, 32, 64]` 로 바꿔 advantage 추정의 variance를 비교하라.
+group이 작을 때 무엇이 나빠지는가? value network를 없앤 대가가 무엇인가?
 :::
 
 ## 요약
