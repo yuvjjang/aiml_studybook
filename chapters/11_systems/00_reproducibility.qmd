@@ -547,6 +547,129 @@ hash를 찍어 봐야 안다.
 
 마지막 줄이 [11.1](01_data_pipeline.qmd)의 주제로 이어진다.
 
+---
+
+## 실제 도구로: PyTorch에서 seed와 흔들림을 잰다
+
+이 장의 실험을 PyTorch 학습 루프로 다시 한다. 같은 seed가 정말 같은 결과를 주는지, seed만 바꾸면 얼마나 흔들리는지, 그 흔들림이 어디서 오는지, 합산 순서 같은 작은 차이가 학습을 얼마나 갈라놓는지를 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9 (데이터만). 모델을 내려받지 않는다.
+- 데이터는 scikit-learn에 들어 있는 손글씨 숫자다. 훈련 300장, 시험 1,497장이다. 학습 한 번에 1~2초 걸리고, 전체로 2분쯤 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import random
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+
+nn, F = torch.nn, torch.nn.functional
+d = load_digits()
+perm = np.random.default_rng(0).permutation(len(d.target))
+X = torch.tensor(d.data[perm] / 16.0, dtype=torch.float32)
+y = torch.tensor(d.target[perm])
+Xtr, ytr, Xte, yte = X[:300], y[:300], X[300:], y[300:]
+
+
+def seed_everything(s):
+    random.seed(s); np.random.seed(s); torch.manual_seed(s)
+
+
+def train(seed, data_seed=None, init_seed=None):
+    """seed 하나로 전부 정하거나, 초기값과 데이터 순서의 seed 를 따로 준다."""
+    seed_everything(seed)
+    torch.manual_seed(seed if init_seed is None else init_seed)
+    m = nn.Sequential(nn.Linear(64, 128), nn.ReLU(), nn.Dropout(0.2), nn.Linear(128, 10))
+    opt = torch.optim.SGD(m.parameters(), lr=0.05, momentum=0.9)
+    g = torch.Generator().manual_seed(seed if data_seed is None else data_seed)
+    loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(Xtr, ytr), batch_size=32,
+                                         shuffle=True, generator=g)
+    for _ in range(30):
+        m.train()
+        for xb, tb in loader:
+            opt.zero_grad(); F.cross_entropy(m(xb), tb).backward(); opt.step()
+    m.eval()
+    with torch.no_grad():
+        return (m(Xte).argmax(1) == yte).float().mean().item(), m
+
+# 1) 같은 seed 면 bit 단위로 같다
+a1, m1 = train(0); a2, m2 = train(0)
+print(a1 == a2, all(torch.equal(p, q) for p, q in zip(m1.parameters(), m2.parameters())))
+
+# 2) seed 만 바꾸면 (G11.0.1)
+accs = np.array([train(s)[0] for s in range(20)])
+print(round(accs.mean(), 4), round(accs.std(ddof=1), 4), round(accs.min(), 4), round(accs.max(), 4))
+
+# 3) 흔들림은 어디서 오는가: 초기값만 바꾸기 / 데이터 순서만 바꾸기 (dropout mask 는 초기값 쪽 seed 를 따른다)
+init_only = np.array([train(0, data_seed=0, init_seed=s)[0] for s in range(20)])
+data_only = np.array([train(0, data_seed=s, init_seed=0)[0] for s in range(20)])
+print(round(init_only.std(ddof=1), 4), round(data_only.std(ddof=1), 4))
+
+# 4) best-of-k: 아무 차이 없는 '방법 A' 와 '방법 B' 를 각각 5 seed 돌려 최고값만 보고한다
+rng = np.random.default_rng(0)
+gaps = []
+for _ in range(2000):
+    A, B = rng.choice(accs, 5), rng.choice(accs, 5)
+    gaps.append(abs(A.max() - B.max()))
+print(round(float(np.mean(gaps)), 4), round(float(np.quantile(gaps, 0.9)), 4))
+
+# 5) 합산 순서: 같은 float32 값들을 다른 순서로 더하면
+v = torch.randn(1_000_000, generator=torch.Generator().manual_seed(0)) * 1000
+s1, s2 = v.sum().item(), v[torch.randperm(len(v), generator=torch.Generator().manual_seed(1))].sum().item()
+s3 = float(np.sum(v.numpy().astype(np.float64)))
+print(s1, s2, round(s3, 3), s1 == s2)
+
+# 6) 그 작은 차이가 학습을 갈라놓는가: 첫 step 의 gradient 에 1e-7 을 더하고 같은 seed 로 학습
+def train_nudged(eps):
+    seed_everything(0)
+    m = nn.Sequential(nn.Linear(64, 128), nn.ReLU(), nn.Dropout(0.2), nn.Linear(128, 10))
+    opt = torch.optim.SGD(m.parameters(), lr=0.05, momentum=0.9)
+    loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(Xtr, ytr), batch_size=32, shuffle=True,
+                                         generator=torch.Generator().manual_seed(0))
+    first = True
+    for _ in range(30):
+        m.train()
+        for xb, tb in loader:
+            opt.zero_grad(); F.cross_entropy(m(xb), tb).backward()
+            if first:
+                m[0].weight.grad[0, 0] += eps; first = False
+            opt.step()
+    m.eval()
+    with torch.no_grad():
+        return m, (m(Xte).argmax(1) == yte).float().mean().item()
+(ma, aa), (mb, ab) = train_nudged(0.0), train_nudged(1e-7)
+print(f"{max((p - q).abs().max().item() for p, q in zip(ma.parameters(), mb.parameters())):.1e}", aa, ab)
+
+# 7) 결정적 알고리즘 강제: 지원하지 않는 연산이면 오류로 알려 준다
+torch.use_deterministic_algorithms(True)
+print(torch.are_deterministic_algorithms_enabled())
+torch.use_deterministic_algorithms(False)
+
+# True True
+# 0.9512 0.0023 0.9472 0.9566
+# 0.0027 0.0021
+# 0.0021 0.0047
+# -1561453.0 -1561452.875 -1561452.916 False
+# 5.0e-08 0.9519038200378418 0.9519038200378418
+# True
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **CPU에서 같은 seed는 bit 단위로 같다 ("reproducibility의 세 층위").** `random`, `numpy`, `torch` 의 seed를 모두 정하고 `DataLoader` 에 seed를 준 `Generator` 를 넘기면, 두 번 학습한 모델의 parameter가 전부 정확히 같다. `DataLoader` 의 섞기는 `generator` 를 따로 주지 않으면 전역 torch 난수를 쓰므로, 모델을 만드는 순서가 바뀌면 섞기도 바뀐다.
+- **seed만 바꾸면 흔들린다 (G11.0.1, "직접 해보기" ①).** 같은 코드, 같은 데이터에서 seed 20개의 시험 정확도가 평균 0.9512, 표준편차 0.0023, 범위 0.9472~0.9566이다. 최고와 최저가 0.0094 차이다. 이 실험에서 0.005 이하의 "개선"은 seed 하나로는 주장할 수 없다.
+- **흔들림은 초기값과 데이터 순서 양쪽에서 온다 (G11.0.2).** 초기값(과 dropout mask)의 seed만 바꾸면 표준편차 0.0027, 데이터 순서의 seed만 바꾸면 0.0021이다. 둘 다 비슷한 크기라, 하나만 고정해서는 흔들림이 줄지 않는다.
+- **best-of-5는 없는 차이를 만든다 (G11.0.3, "직접 해보기" ②).** 차이가 전혀 없는 두 방법을 각각 5 seed 돌려 최고값만 비교하면, 두 최고값의 차이가 평균 0.0021, 열 번에 한 번은 0.0047을 넘는다. 표준편차(0.0023)만큼의 "개선"이 아무것도 바꾸지 않고 나온다.
+- **합산 순서가 결과를 바꾼다 (G11.0.5, "직접 해보기" ③).** 같은 float32 값 100만 개를 다른 순서로 더하면 −1,561,453.0과 −1,561,452.875다. float64로 더한 값은 −1,561,452.916이라 둘 다 조금씩 틀렸다. GPU에서는 병렬 합산의 순서가 실행마다 달라질 수 있어, 같은 seed로도 결과가 bit 단위로 같지 않은 이유가 된다.
+- **이 실험에서는 작은 차이가 커지지 않았다.** 첫 step의 gradient 하나에 $10^{-7}$ 을 더하고 같은 seed로 학습하면, 30 epoch 뒤 parameter 차이가 $5\times10^{-8}$ 이고 시험 정확도는 완전히 같다. 본문에서 걱정한 "작은 차이가 학습 곡선을 갈라놓는다"는 여기서 일어나지 않았다. 작은 모델, 작은 lr, 쉬운 데이터라 학습이 안정적이었기 때문으로 보인다. 큰 모델과 큰 lr에서는 결과가 다를 수 있다.
+- **결정적 알고리즘을 강제할 수 있다.** `torch.use_deterministic_algorithms(True)` 를 켜면, 결정적인 구현이 없는 연산을 쓸 때 조용히 넘어가지 않고 오류를 낸다. GPU에서는 cuBLAS를 위해 환경 변수(`CUBLAS_WORKSPACE_CONFIG`)도 정해야 한다. 여기서는 CPU라 켜는 것만 확인했다.
+
+**이 코드가 보여 주지 못하는 것.**
+CPU, 한 기계, 한 PyTorch 버전에서 한 것이다. 같은 코드라도 GPU 종류, CUDA·cuDNN 버전, PyTorch 버전이 바뀌면 bit 단위 재현은 보장되지 않는다. PyTorch 문서도 그렇게 말한다.
+"seed 20개의 표준편차 0.0023"은 이 모델, 이 데이터의 값이다. 본문 G11.0.4의 계산대로 seed 몇 개가 필요한지는 그 값에 따라 달라진다.
+작은 차이가 커지지 않은 결과는 하나의 섭동(gradient 원소 하나, $10^{-7}$)에서 본 것이다. 섭동의 크기나 위치, 학습 설정을 바꿔 훑지 않았다.
 
 ---
 
