@@ -717,6 +717,110 @@ framework가 합쳐진 함수를 제공하는 이유다 —
 
 ---
 
+## 실제 도구로: `torch.nn.functional` 의 activation
+
+PyTorch의 activation 함수가 이 장의 식과 같은지 확인하고, 깊이에 따른 gradient, dead ReLU, SwiGLU의 parameter 수를 실제로 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9 (데이터만). 모델을 내려받지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+
+nn, F = torch.nn, torch.nn.functional
+x = torch.linspace(-5, 5, 10001)
+
+# 1) GELU 는 x * Phi(x). PyTorch 에는 정확한 식과 tanh 근사 두 가지가 있다
+phi = 0.5 * (1 + torch.erf(x / math.sqrt(2)))
+print(f"{(F.gelu(x) - x * phi).abs().max().item():.1e}", f"{(F.gelu(x, approximate='tanh') - F.gelu(x)).abs().max().item():.1e}")
+# GELU 와 SiLU(x * sigmoid(x)) 의 최대 차이, 그리고 SiLU 를 x * sigmoid(1.702 x) 로 바꾸면
+print(round((F.gelu(x) - F.silu(x)).abs().max().item(), 4), round((F.gelu(x) - x * torch.sigmoid(1.702 * x)).abs().max().item(), 4))
+
+# 2) 도함수: autograd 로 잰 최댓값
+for name, f in [("sigmoid", torch.sigmoid), ("tanh", torch.tanh), ("ReLU", F.relu), ("GELU", F.gelu), ("SiLU", F.silu)]:
+    xx = x.clone().requires_grad_(True)
+    g, = torch.autograd.grad(f(xx).sum(), xx)
+    print(name, round(g.max().item(), 4), round(g.min().item(), 4), round(g[0].item(), 5))   # 최대, 최소, x=-5 에서
+
+# 3) 깊이에 따른 gradient: 같은 초기화 규칙(Xavier)으로 50층을 쌓고, 첫 층 weight 의 gradient 크기
+def depth_grad(act, depth):
+    torch.manual_seed(0)
+    layers = []
+    for _ in range(depth):
+        l = nn.Linear(128, 128); nn.init.xavier_normal_(l.weight); nn.init.zeros_(l.bias)
+        layers += [l, act()]
+    net = nn.Sequential(*layers, nn.Linear(128, 1))
+    net(torch.randn(256, 128)).pow(2).mean().backward()
+    return f"{layers[0].weight.grad.norm().item():.1e}"
+for act in [nn.Sigmoid, nn.Tanh, nn.ReLU, nn.GELU]:
+    print(act.__name__, [depth_grad(act, d) for d in (5, 20, 50)])
+
+# 4) dead ReLU: 학습률을 크게 하면 한 번도 켜지지 않는 unit 이 생긴다
+d = load_digits()
+X = torch.tensor(d.data / 16.0, dtype=torch.float32); y = torch.tensor(d.target)
+def dead_fraction(act, lr):
+    torch.manual_seed(0)
+    net = nn.Sequential(nn.Linear(64, 256), act(), nn.Linear(256, 10))
+    opt = torch.optim.SGD(net.parameters(), lr=lr)
+    for _ in range(30):
+        for idx in torch.randperm(len(X)).split(64):
+            opt.zero_grad(); F.cross_entropy(net(X[idx]), y[idx]).backward(); opt.step()
+    with torch.no_grad():
+        h = net[:2](X)
+        acc = (net(X).argmax(1) == y).float().mean().item()
+    return round(((h > 0).sum(0) == 0).float().mean().item(), 3), round(acc, 3)
+for lr in [0.1, 1.0, 3.0]:
+    print(lr, dead_fraction(nn.ReLU, lr), dead_fraction(lambda: nn.LeakyReLU(0.01), lr))
+
+# 5) SwiGLU: gate 가 하나 더 있는 FFN. 같은 parameter 수로 맞추려면 hidden 을 2/3 로
+d_model = 512
+class SwiGLU(nn.Module):
+    def __init__(self, d, h):
+        super().__init__()
+        self.w1, self.w3, self.w2 = nn.Linear(d, h, bias=False), nn.Linear(d, h, bias=False), nn.Linear(h, d, bias=False)
+    def forward(self, x):
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+count = lambda m: sum(p.numel() for p in m.parameters())
+plain = nn.Sequential(nn.Linear(d_model, 4 * d_model, bias=False), nn.GELU(), nn.Linear(4 * d_model, d_model, bias=False))
+print(count(plain), count(SwiGLU(d_model, 4 * d_model)), count(SwiGLU(d_model, int(8 * d_model / 3))))
+
+# 4.8e-07 4.7e-04
+# 0.193 0.0203
+# sigmoid 0.25 0.0066 0.00665
+# tanh 1.0 0.0002 0.00018
+# ReLU 1.0 0.0 0.0
+# GELU 1.1289 -0.1289 -1e-05
+# SiLU 1.0998 -0.0998 -0.02655
+# Sigmoid ['1.4e-04', '1.9e-13', '0.0e+00']
+# Tanh ['1.2e-01', '3.3e-02', '1.3e-02']
+# ReLU ['1.7e-02', '2.0e-05', '1.4e-09']
+# GELU ['5.2e-03', '8.3e-08', '2.0e-16']
+# 0.1 (0.023, 0.971) (0.027, 0.971)
+# 1.0 (0.035, 0.999) (0.031, 0.999)
+# 3.0 (1.0, 0.1) (0.953, 0.226)
+# 2097152 3145728 2096640
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **GELU는 $x\,\Phi(x)$ 그대로다 ("GELU: 확률적 해석").** 정규분포 누적분포함수로 직접 계산한 값과 `F.gelu` 의 차이가 $5\times10^{-7}$ 이다. `approximate="tanh"` 로 쓰는 근사(GPT-2가 쓴 것)는 최대 $5\times10^{-4}$ 다르다. 학습한 모델을 불러올 때 어느 쪽으로 학습됐는지 맞춰야 하는 이유다.
+- **GELU와 SiLU의 최대 차이는 0.19다 ("직접 해보기" ②).** $[-5, 5]$ 에서 $x\,\sigma(x)$ 와 비교한 값이다. 둘 다 "$x$ 에 0~1 사이의 값을 곱한다"는 같은 모양이지만 곱하는 함수의 기울기가 다르다. $x\,\sigma(1.702x)$ 로 기울기를 맞추면 차이가 0.02로 줄어든다. 학습에 영향을 줄 만한 크기인지는 이 숫자만으로 판단할 수 없고, 본문 "실측"처럼 학습을 돌려 봐야 한다.
+- **도함수의 범위가 식 그대로다 (G3.2.1).** sigmoid의 도함수 최댓값이 0.25, tanh가 1.0이다. $x = -5$ 에서 sigmoid는 0.0066, tanh는 0.0002로 거의 0이다(saturation). GELU와 SiLU는 도함수가 1을 조금 넘고(1.13, 1.10) 음수도 된다(−0.13, −0.10). ReLU처럼 0과 1만 있는 것이 아니다.
+- **깊이에 따라 gradient가 사라지는 속도가 다르다 ("saturation", "직접 해보기" ③).** 모든 층을 Xavier로 초기화하고 쌓았을 때, 첫 층 weight의 gradient 크기가 5층, 20층, 50층에서 sigmoid는 $10^{-4}$, $10^{-13}$, 0으로 사라진다. tanh는 0.12, 0.033, 0.013으로 가장 잘 버틴다. ReLU와 GELU도 50층에서 $10^{-9}$, $10^{-16}$ 이다. Xavier는 tanh에 맞춘 규칙이라 ReLU 계열에서는 층마다 분산이 절반이 되기 때문이다. ReLU에 He 초기화를 쓰면 다르다([3.7](07_initialization.qmd)의 "실제 도구로"에서 30층 He가 버티는 것을 확인했다).
+- **dead ReLU는 learning rate가 클 때 한꺼번에 온다 (G3.2.2, "직접 해보기" ①).** 손글씨 숫자로 학습시키면 학습 데이터 전체에서 한 번도 켜지지 않는 unit의 비율이 lr 0.1에서 2.3%, 1.0에서 3.5%다. lr 3.0에서는 100%가 죽고 정확도가 0.1(우연 수준)이다. LeakyReLU로 바꾸면 lr 0.1과 1.0에서는 비율이 비슷하고(2.7%, 3.1%), lr 3.0에서도 95%가 음수 쪽에만 머물러 정확도가 0.226이다. LeakyReLU는 죽은 unit에 gradient를 흘려 주지만, 학습 자체가 발산하는 lr에서는 구해 주지 못했다. "비율이 0이 되는가"에 대한 답은 여기서는 "아니다"다.
+- **SwiGLU는 행렬이 셋이라 hidden을 2/3로 줄여야 공정하다 ("GLU 계열").** $d = 512$ 에서 보통 FFN($4d$)이 209.7만 개, 같은 hidden의 SwiGLU가 314.6만 개(1.5배)다. hidden을 $\frac{8}{3}d$ 로 줄이면 209.7만 개로 같아진다. LLaMA 계열의 FFN 크기가 $4d$ 가 아니라 $\frac{8}{3}d$ 근처인 이유다.
+
+**이 코드가 보여 주지 못하는 것.**
+깊이 실험은 normalization과 residual connection이 없는 망에서 한 것이다. 실제 깊은 망은 둘 중 하나를 거의 항상 쓰고, 그러면 activation의 차이가 이렇게 크게 나지 않는다.
+dead ReLU 실험은 seed 하나, 데이터 하나다. lr 1.0과 3.0 사이 어디서 무너지는지는 훑지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
