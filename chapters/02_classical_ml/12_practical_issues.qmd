@@ -636,7 +636,6 @@ confidence interval이 0을 `{python} "포함하므로 유의하다고 말할 �
 # 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
 import numpy as np
 from scipy import stats
-from sklearn.calibration import calibration_curve
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
@@ -644,7 +643,7 @@ from sklearn.model_selection import train_test_split
 
 rng = np.random.default_rng(0)
 
-# 1) class imbalance: 양성 약 2.5% (98:2 로 만들고 label 1% 를 뒤섞었다). class_weight 와 resampling 은 순위가 아니라 확률을 바꾼다
+# 1) class imbalance: 양성 약 2.5% (98:2 로 만들고 label 1% 를 뒤섞었다). class_weight 와 resampling 이 확률과 순위를 얼마나 바꾸는가
 X, y = make_classification(n_samples=40000, n_features=10, n_informative=5, weights=[0.98], flip_y=0.01, random_state=0)
 Xa, Xb, ya, yb = train_test_split(X, y, test_size=0.5, random_state=0, stratify=y)
 idx_pos, idx_neg = np.where(ya == 1)[0], np.where(ya == 0)[0]
