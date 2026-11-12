@@ -603,6 +603,108 @@ meta model을 학습한다. 기본 모델이 이미 외운 데이터라 meta mod
 
 ---
 
+## 실제 도구로: scikit-learn의 forest와 boosting
+
+이 장의 식과 주장을 scikit-learn의 ensemble로 확인한다. 평균의 효과, OOB 추정, 트리 사이의 상관, 그리고 boosting이 언제 나빠지기 시작하는지를 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install scikit-learn`).
+- 분류는 scikit-learn에 들어 있는 손글씨 숫자(1,797장)로, 회귀는 `make_friedman1` 이 만드는 합성 함수로 한다. 내려받는 것이 없다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import warnings
+import numpy as np
+from sklearn.datasets import load_digits, make_friedman1
+from sklearn.ensemble import BaggingClassifier, GradientBoostingRegressor, RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.tree import DecisionTreeClassifier
+
+# 분류: 손글씨 숫자 1,797장 (8x8)
+X, y = load_digits(return_X_y=True)
+Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.4, random_state=0, stratify=y)
+
+# 1) 트리 하나 → bagging → random forest
+tree = DecisionTreeClassifier(random_state=0).fit(Xtr, ytr)
+bag = BaggingClassifier(DecisionTreeClassifier(), n_estimators=200, random_state=0).fit(Xtr, ytr)
+rf = RandomForestClassifier(n_estimators=200, random_state=0).fit(Xtr, ytr)
+print(round(tree.score(Xte, yte), 3), round(bag.score(Xte, yte), 3), round(rf.score(Xte, yte), 3))
+
+# 2) OOB 추정, 5-fold CV, 시험 정확도를 트리 수별로 나란히
+for n in [10, 30, 100, 500]:
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        m = RandomForestClassifier(n_estimators=n, oob_score=True, random_state=0).fit(Xtr, ytr)
+    cv = cross_val_score(RandomForestClassifier(n_estimators=n, random_state=0), Xtr, ytr, cv=5).mean()
+    print(n, round(m.oob_score_, 3), round(cv, 3), round(m.score(Xte, yte), 3), len(w))
+
+# 3) random forest 는 트리를 늘려도 나빠지지 않는다
+m = RandomForestClassifier(n_estimators=1, warm_start=True, random_state=0)
+accs = []
+for n in [1, 10, 100, 1000]:
+    m.set_params(n_estimators=n).fit(Xtr, ytr)
+    accs.append(round(m.score(Xte, yte), 3))
+print(accs)
+
+# 회귀: Friedman #1 (특성 10개 중 5개만 쓰이는 합성 함수, 잡음 표준편차 1)
+Xr, yr = make_friedman1(n_samples=1200, noise=1.0, random_state=0)
+Xa, Xb, ya, yb = Xr[:600], Xr[600:], yr[:600], yr[600:]
+
+# 4) max_features 를 줄이면 트리끼리의 상관이 내려간다
+for mf in [1.0, 0.33, 0.1]:
+    f = RandomForestRegressor(n_estimators=300, max_features=mf, random_state=0).fit(Xa, ya)
+    P = np.array([t.predict(Xb) for t in f.estimators_])           # (트리 300, 표본 600)
+    R = P - yb                                                     # 트리마다의 오차
+    C = np.corrcoef(R)
+    rho = (C.sum() - 300) / (300 * 299)
+    print(mf, round(float(rho), 3), round(float((R ** 2).mean()), 2), round(mean_squared_error(yb, f.predict(Xb)), 2))
+
+# 5) boosting 은 계속 돌리면 나빠진다: 라운드별 시험 MSE
+for lr in [1.0, 0.1, 0.05]:
+    g = GradientBoostingRegressor(n_estimators=2000, learning_rate=lr, max_depth=3, random_state=0).fit(Xa, ya)
+    test = np.array([mean_squared_error(yb, p) for p in g.staged_predict(Xb)])
+    print(lr, int(test.argmin()) + 1, round(float(test.min()), 2), round(float(test[-1]), 2),
+          round(mean_squared_error(ya, g.predict(Xa)), 4))
+
+# 6) 언제 멈출지를 검증셋으로 정한다 (early stopping)
+g = GradientBoostingRegressor(n_estimators=2000, learning_rate=0.1, max_depth=3, random_state=0,
+                              validation_fraction=0.2, n_iter_no_change=20).fit(Xa, ya)
+print(g.n_estimators_, round(mean_squared_error(yb, g.predict(Xb)), 2))
+
+# 0.837 0.955 0.969
+# 10 0.858 0.928 0.947 1
+# 30 0.938 0.961 0.967 0
+# 100 0.964 0.967 0.972 0
+# 500 0.974 0.968 0.974 0
+# [0.707, 0.947, 0.972, 0.969]
+# 1.0 0.358 11.95 4.31
+# 0.33 0.278 16.69 4.66
+# 0.1 0.322 28.34 9.19
+# 1.0 16 6.32 7.28 0.0
+# 0.1 289 2.27 2.33 0.0
+# 0.05 595 2.25 2.3 0.0036
+# 281 2.51
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **평균이 통한다.** 트리 하나의 시험 정확도가 0.837, 같은 트리 200개를 bootstrap으로 평균한 bagging이 0.955, random forest가 0.969다.
+- **OOB는 트리가 적을 때 비관적이다 ("OOB 추정을 믿을 수 있는 조건", "직접 해보기" ②).** 트리 10개에서 OOB가 0.858인데 5-fold CV는 0.928, 시험 정확도는 0.947이다. 트리 100개에서는 0.964, 0.967, 0.972로 붙고, 500개에서는 OOB(0.974)가 시험 정확도와 같다. 트리 10개일 때는 scikit-learn이 경고도 낸다(마지막 열의 1). 어떤 표본은 모든 트리의 bootstrap에 들어가 OOB 예측이 아예 없기 때문이다.
+- **random forest는 트리를 늘려도 나빠지지 않는다.** 1개, 10개, 100개, 1,000개에서 0.707, 0.947, 0.972, 0.969다. 100개 이후는 제자리다.
+- **forest의 오차 ≈ $\rho\,\sigma^2$ 이다 ("왜 평균이 통하는가").** 트리 300개의 오차끼리 평균 상관 $\rho$ 와 트리 하나의 평균 제곱 오차를 곱하면, `max_features` 가 1.0일 때 $0.358 \times 11.95 = 4.28$ 이고 실제 forest의 MSE는 4.31이다. 0.33일 때는 $0.278 \times 16.69 = 4.64$ 와 4.66이다. 본문의 극한식이 실제 forest에서 소수점 첫째 자리까지 맞는다.
+- **그런데 여기서는 `max_features` 를 줄인 것이 이득이 아니었다.** 0.33으로 줄이면 상관은 0.358에서 0.278로 내려가지만 트리 하나의 오차가 11.95에서 16.69로 커져서 forest는 4.31에서 4.66으로 조금 나빠진다. 0.1까지 줄이면 9.19다. 본문에서 "너무 줄이면 개별 트리가 약해져 절충점이 있다"고 한 것이고, 이 데이터에서는 그 절충점이 1.0 쪽에 있다. 특성 10개 중 5개만 쓸모 있는 데이터라, 후보를 줄이면 쓸모없는 특성으로 나누는 일이 잦아지기 때문으로 보인다.
+- **boosting은 계속 돌리면 나빠진다.** learning rate 1.0에서는 시험 MSE가 16번째 라운드에 6.32로 가장 낮고 2,000번째에는 7.28이다. 그동안 훈련 MSE는 0.0이 됐다. random forest와 반대다.
+- **learning rate를 절반으로 하면 트리가 두 배 필요하다 (G2.7.2, "직접 해보기" ③).** 0.1에서는 289번째에 2.27, 0.05에서는 595번째에 2.25다. 라운드 수가 2.06배이고 도달한 MSE는 거의 같다. 1.0에서의 6.32와 비교하면 작은 learning rate가 훨씬 좋은 곳에 닿는다.
+- **언제 멈출지는 검증 데이터로 정한다.** `n_iter_no_change=20` 을 주면 2,000개를 다 만들지 않고 281개에서 멈춘다. 이때 시험 MSE는 2.51로 위의 2.27보다 나쁘다. 훈련 데이터의 20%를 검증용으로 떼어 내 학습에 쓴 데이터가 줄었기 때문이다. early stopping은 공짜가 아니다.
+
+**이 코드가 보여 주지 못하는 것.**
+`max_features` 와 learning rate의 결과는 합성 데이터 하나에서 잰 것이다. 어느 값이 좋은지는 데이터마다 다르다. 특히 "`max_features` 를 줄이면 손해"는 쓸모없는 특성이 절반인 이 데이터의 성질이고, 일반적인 결론이 아니다.
+위의 "289번째에 2.27"은 **시험 데이터를 보고** 고른 라운드다. 실제로는 그렇게 고를 수 없고, 그래서 검증 데이터로 멈춘 2.51이 실제로 얻을 수 있는 값에 가깝다.
+XGBoost·LightGBM·CatBoost는 여기서 쓰지 않았다. scikit-learn에서 그에 해당하는 것은 `HistGradientBoostingRegressor` 다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
