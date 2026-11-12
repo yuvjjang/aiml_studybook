@@ -922,6 +922,136 @@ fig
 
 ---
 
+## 실제 도구로: GPT-2에서 같은 절차를 밟는다
+
+이 장의 모델은 induction 과제로 직접 학습시킨 2층짜리였다. 여기서는 그런 과제를 따로 배운 적이 없는 GPT-2에 같은 과제를 주고, attention pattern 읽기, ablation, logit lens를 같은 순서로 해 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `gpt2`(12층, 층마다 head 12개, 약 550 MB)다. 전용 library(TransformerLens 등) 없이 `transformers` 의 출력과 hook만 쓴다.
+- 층과 head 번호는 본문처럼 0부터 센다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2", attn_implementation="eager").eval()
+NL, NH, DH = 12, 12, 64
+
+# 과제: 무작위 token 50개를 두 번 이어 붙인다 — 두 번째 구간은 '앞에서 본 것'을 베껴야만 맞힌다
+g = torch.Generator().manual_seed(0)
+B, HALF = 20, 50
+half = torch.randint(1000, 40000, (B, HALF), generator=g)
+ids = torch.cat([torch.full((B, 1), tok.bos_token_id), half, half], dim=1)     # (20, 101)
+tgt = ids[:, 1:]
+first, second = slice(0, HALF), slice(HALF + 1, 2 * HALF)      # 예측 위치: 첫 구간 / 두 번째 구간
+
+
+def run(kill=()):
+    """kill: 출력을 0 으로 만들 (층, head) 목록. head 들이 합쳐지는 c_proj 의 입력에서 지운다."""
+    hooks = []
+    for l in {l for l, _ in kill}:
+        hs = [h for ll, h in kill if ll == l]
+        def pre(mod, args, hs=hs):
+            x = args[0].clone()
+            for h in hs:
+                x[..., h * DH:(h + 1) * DH] = 0
+            return (x,)
+        hooks.append(model.transformer.h[l].attn.c_proj.register_forward_pre_hook(pre))
+    with torch.no_grad():
+        out = model(ids, output_attentions=True, output_hidden_states=True)
+    for h in hooks:
+        h.remove()
+    return out
+
+
+def acc(logits, where):
+    return (logits[:, :-1].argmax(-1) == tgt)[:, where].float().mean().item()
+
+
+out = run()
+print(round(acc(out.logits, first), 3), round(acc(out.logits, second), 3))
+
+# 1) attention pattern 읽기: 두 번째 구간의 위치 i 가 (i - 50 + 1), 곧 '지난번 이 token 의 다음' 을 보는가
+A = torch.stack(out.attentions)                                  # (층, batch, head, n, n)
+pos = torch.arange(HALF + 1, 2 * HALF + 1)
+ind = A[:, :, :, pos, pos - HALF + 1].mean((1, 3))               # (12, 12) induction 점수
+prev = A[:, :, :, pos, pos - 1].mean((1, 3))                     # 바로 앞 token
+top = ind.flatten().topk(6)
+print([(divmod(i, NH), round(v, 2)) for v, i in zip(top.values.tolist(), top.indices.tolist())])
+tp = prev.flatten().topk(3)
+print([(divmod(i, NH), round(v, 2)) for v, i in zip(tp.values.tolist(), tp.indices.tolist())])
+
+# 2) ablation: pattern 이 뚜렷한 head 를 지우면 능력이 사라지는가
+heads = [divmod(i, NH) for i in top.indices.tolist()]
+for name, kill in [("1위 하나", heads[:1]), ("상위 3개", heads[:3]), ("상위 6개", heads[:6])]:
+    print(name, kill, round(acc(run(kill).logits, second), 3))
+gr = torch.Generator().manual_seed(1)
+low = (ind.flatten() < 0.1).nonzero().flatten()                  # induction 점수가 낮은 head 중에서 뽑는다
+rnd = [divmod(i, NH) for i in low[torch.randperm(len(low), generator=gr)[:6]].tolist()]
+print("무작위 6개", rnd, round(acc(run(rnd).logits, second), 3))
+# 점수가 0.3 을 넘는 head 전부
+many = [divmod(i, NH) for i in (ind.flatten() > 0.3).nonzero().flatten().tolist()]
+print(len(many), round(acc(run(many).logits, second), 3))
+# 앞 층의 previous-token head 하나
+pt = divmod(tp.indices[0].item(), NH)
+print(pt, round(acc(run([pt]).logits, second), 3))
+
+# 3) logit lens: 층마다 residual stream 을 (마지막 LayerNorm 을 거쳐) unembedding 에 통과시킨다
+def lens_logits(hs):
+    """hidden_states 13개(embedding 뒤 + 12층). 마지막 것은 이미 ln_f 를 거친 값이라 다시 걸지 않는다."""
+    return [model.lm_head(h if i == NL else model.transformer.ln_f(h)) for i, h in enumerate(hs)]
+
+lens = [round(acc(lg, second), 2) for lg in lens_logits(out.hidden_states)]
+print(lens)
+
+# 4) 같은 lens 를 사실 문장에: 정답 token 의 순위가 층을 따라 어떻게 내려가는가
+p = tok("The Eiffel Tower is located in the city of", return_tensors="pt")
+with torch.no_grad():
+    o = model(**p, output_hidden_states=True)
+ans = tok.encode(" Paris")[0]
+ranks, tops = [], []
+for lg in lens_logits([h[0, -1] for h in o.hidden_states]):
+    ranks.append(int((lg > lg[ans]).sum()))
+    tops.append(tok.decode(lg.argmax()))
+print(ranks)
+print(tops)
+
+# 0.0 0.993
+# [((5, 5), 0.93), ((6, 9), 0.92), ((7, 10), 0.92), ((5, 1), 0.91), ((7, 2), 0.84), ((9, 6), 0.53)]
+# [((4, 11), 0.99), ((6, 8), 0.66), ((3, 7), 0.53)]
+# 1위 하나 [(5, 5)] 0.982
+# 상위 3개 [(5, 5), (6, 9), (7, 10)] 0.96
+# 상위 6개 [(5, 5), (6, 9), (7, 10), (5, 1), (7, 2), (9, 6)] 0.289
+# 무작위 6개 [(7, 8), (8, 9), (10, 4), (1, 5), (0, 7), (1, 11)] 0.956
+# 16 0.003
+# (4, 11) 0.991
+# [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.53, 0.63, 0.95, 0.99, 0.99]
+# [22946, 6059, 5617, 2103, 837, 448, 254, 144, 95, 12, 1, 0, 0]
+# [' destro', ' the', ' the', ' the', ' the', ' the', ' England', ' East', ' Ing', ' Rome', ' London', ' Paris', ' Paris']
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **GPT-2는 이 과제를 배운 적이 없는데도 푼다.** 무작위 token 50개는 예측할 수 없으므로 첫 구간의 정확도는 0.0이다. 같은 50개가 다시 나오는 두 번째 구간에서는 0.993이다. 본문의 모델은 이 과제로 학습시킨 것이었고, 여기서는 일반 글로만 학습한 모델에 같은 능력이 들어 있다.
+- **induction pattern을 가진 head가 여럿 있다 ("circuit 찾기 ①").** "지난번 이 token의 다음 자리"에 주는 가중치가 0.8을 넘는 head가 다섯 개다(L5H5, L6H9, L7H10, L5H1, L7H2). 바로 앞 token만 보는 head도 있다. L4H11은 가중치의 0.99를 직전 token에 준다. 본문의 2층 모델에는 이렇게 깨끗한 previous-token head가 없었다.
+- **head 하나를 지워서는 능력이 사라지지 않는다 ("circuit 찾기 ②").** pattern이 가장 뚜렷한 L5H5를 지워도 정확도는 0.993에서 0.982로만 내려간다. 상위 3개를 지워도 0.96이다. 상위 6개를 지워야 0.289가 되고, 점수가 0.3을 넘는 16개를 다 지우면 0.003이다. induction 점수가 낮은 head 6개를 지운 대조군은 0.956이다. 본문에서는 head 하나가 능력의 전부였지만, 여기서는 같은 일을 하는 head가 여럿이라 하나씩 지우는 실험으로는 중요도가 드러나지 않는다.
+- **pattern이 뚜렷하다고 필요한 것은 아니다.** L4H11은 직전 token을 0.99로 보는데, 지워도 정확도가 0.991이다. 본문의 L1H0과 같은 교훈이다. 다만 여기서 내릴 수 있는 결론은 "이 head 하나가 없어도 된다"까지다. 직전 token 정보가 필요 없다는 뜻이 아니다. 같은 일을 하는 다른 head가 대신했을 수 있고, 이 실험은 그것을 가리지 않는다.
+- **logit lens에서 답은 induction head가 있는 층 뒤에 나타난다.** 층마다 residual stream을 unembedding에 통과시키면 정확도가 처음 6개 층을 지날 때까지 0.0이고, 그 뒤로 0.01, 0.53, 0.63, 0.95, 0.99로 올라간다. induction pattern이 뚜렷한 head가 있던 층이 5~7번이고, 0.53으로 뛰는 것이 7번 층을 지난 직후다.
+- **사실 문장에서는 답이 조금씩 다가온다.** "The Eiffel Tower is located in the city of" 다음의 Paris는 순위가 22,946위에서 층마다 내려가 마지막 두 층에서 1위가 된다. 그 직전에 1위였던 것은 Rome, London이다. 먼저 "도시 이름"이 정해지고 그다음에 어느 도시인지가 정해지는 것처럼 보인다. 본문에서 "실제 LLM에서는 residual이 점진적으로 답에 수렴한다"고 한 모습이다. 다만 문장 하나에서 본 것이고, "도시 범주가 먼저"라는 해석은 순위표를 읽은 것일 뿐 개입으로 확인한 것이 아니다.
+
+**구현에서 걸리는 곳 두 가지.**
+`attn_implementation="eager"` 를 주지 않으면 attention 가중치가 나오지 않는다. 그리고 `hidden_states` 의 마지막 원소에는 이미 마지막 LayerNorm이 적용돼 있다. 여기에 LayerNorm을 한 번 더 걸면 마지막 층의 lens 정확도가 0.99가 아니라 0.12로 나온다(이 코드를 쓰면서 실제로 겪은 실수다).
+
+**이 코드가 보여 주지 못하는 것.**
+head의 출력을 0으로 만드는 ablation은 가장 거친 방법이다. 모델이 본 적 없는 값을 넣는 것이라, 정확도가 떨어져도 그 head의 정보가 필요해서인지 0이라는 입력이 낯설어서인지 구분되지 않는다. 그래서 실제 연구에서는 평균값으로 바꾸거나 본문의 activation patching을 쓴다. 여기서는 patching을 하지 않았다.
+또 "induction head 16개"는 점수 0.3이라는 임의의 기준으로 고른 것이고, 무작위 token이라는 한 과제에서 잰 것이다. 이 head들이 일반 글에서 무엇을 하는지는 이 실험이 말해 주지 않는다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
