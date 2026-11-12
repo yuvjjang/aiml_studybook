@@ -591,8 +591,8 @@ fig
 시간 modeling의 실제 기여가 몇 %p인가? dataset에 따라 다른가?
 
 **③ (2+1)D로 분해한다**
-`r21d` 에서 3D conv와 (2+1)D의 parameter 수·성능을 비교하라.
-factorization이 왜 optimization에 유리한가?
+`r21d` 는 3D conv와 (2+1)D의 parameter 수를 맞춰 보고, 어떤 kernel이 "공간 × 시간"의 곱 하나(rank 1)로 표현되는지를 `rank1_residual` 로 잰다.
+운동 검출 kernel의 residual이 큰 이유를 설명하라. (이 청크는 분류 성능을 재지 않는다. factorization이 optimization에 유리하다는 주장은 원 논문의 실험 결과이고 여기서 확인한 것이 아니다.)
 :::
 
 ## 요약
