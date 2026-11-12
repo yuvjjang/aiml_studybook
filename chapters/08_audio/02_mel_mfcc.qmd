@@ -800,16 +800,16 @@ for nm, X in [("MFCC", M_clean), ("Δ", D1), ("ΔΔ", D2)]:
 ## 직접 해보기
 
 **① mel filter 수를 훑는다**
-`filterbank` 의 filter 수를 20·40·80으로 바꾸며 정보 손실과 차원을 비교하라.
-80이 현대 모델의 표준이 된 이유를 추측해 보라.
+`filterbank` 의 `N_MELS = 40` 을 20과 80으로 바꾸고 `melvalue` 까지 다시 돌려라.
+차원과 변별 거리가 어떻게 달라지는가? 80이 현대 모델에서 자주 쓰이는 이유를 추측해 보라.
 
 **② DCT가 무엇을 하는지 확인한다**
 `decorrelate` 에서 DCT 전후 feature의 covariance matrix를 비교하라.
 대각화가 얼마나 되는가? 그래서 왜 diagonal covariance GMM에 유리했는가.
 
 **③ CMVN이 지우는 것**
-`cmvn` 을 적용하면 channel feature가 제거된다. 화자 인식 과제에서
-CMVN을 적용하면 성능이 어떻게 되는가? 왜 과제마다 다른가.
+`cmvn` 에서 channel filter의 통과 대역 300~3400 Hz를 300~2000 Hz로 좁혀 왜곡을 키워라. CMN 전후의 RMSE는 어떻게 되는가?
+(생각해 볼 것: CMN은 발화 전체에 걸친 상수 성분을 지운다. 화자의 고유한 음색도 그런 성분이다. 화자 인식에서 CMN을 쓰면 무엇을 잃을 수 있는가? 이 장의 코드로는 확인할 수 없다.)
 :::
 
 ## 연습 문제
