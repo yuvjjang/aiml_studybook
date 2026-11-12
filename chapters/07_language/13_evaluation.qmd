@@ -664,6 +664,84 @@ effective dimension(실효 차원 — 실제로 독립적인 축이 몇 개인�
 - 여러 benchmark가 서로 correlated되어 있지 않은가?
 - **inference compute를 맞췄는가?** (7.12 — n을 밝히지 않은 점수)
 
+---
+
+## 실제 도구로: statsmodels로 평가 결과를 검정한다
+
+두 모델을 같은 benchmark로 비교할 때 쓰는 통계 도구를 실제 함수로 쓴다. 문항마다 난이도가 있어 두 모델의 정오가 상관된 결과를 만들고, 신뢰구간, paired 검정, power, Bradley–Terry 점수를 계산한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `statsmodels` 0.15, `scipy` 1.18, `scikit-learn` 1.9. PyTorch는 쓰지 않는다.
+- 실제 LLM을 돌리지 않고, 정오를 알고 만든 결과를 쓴다. power 계산이 시뮬레이션을 900번 해서 1분쯤 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from scipy import stats
+from sklearn.linear_model import LogisticRegression
+from statsmodels.stats.contingency_tables import mcnemar
+from statsmodels.stats.proportion import proportion_confint
+
+rng = np.random.default_rng(0)
+
+# 같은 500 문항을 두 모델이 푼다. 문항마다 '어려움' 이 있어 두 모델의 정오가 상관된다
+n = 500
+difficulty = rng.normal(0, 1.5, n)
+p_a = 1 / (1 + np.exp(-(0.8 - difficulty)))                     # 모델 A
+p_b = 1 / (1 + np.exp(-(1.0 - difficulty)))                     # 모델 B 가 조금 낫다
+a = rng.random(n) < p_a; b = rng.random(n) < p_b
+print(round(float(a.mean()), 3), round(float(b.mean()), 3), round(float(np.corrcoef(a, b)[0, 1]), 3))
+
+# 1) 정확도 하나의 신뢰구간: 500 문항이면 폭이 얼마인가
+lo, hi = proportion_confint(a.sum(), n, method="wilson")
+print(round(float(lo), 3), round(float(hi), 3), round(float(hi - lo), 3))
+
+# 2) 두 모델 비교: 따로따로(독립 표본처럼) / 같은 문항이라는 것을 쓴다(McNemar, paired bootstrap)
+p_indep = stats.chi2_contingency([[a.sum(), n - a.sum()], [b.sum(), n - b.sum()]])[1]
+table = [[np.sum(a & b), np.sum(a & ~b)], [np.sum(~a & b), np.sum(~a & ~b)]]
+p_mcn = mcnemar(table, exact=True).pvalue
+boot = [np.mean(b[i]) - np.mean(a[i]) for i in (rng.integers(0, n, n) for _ in range(5000))]
+print([[int(v) for v in r] for r in table], round(float(p_indep), 4), round(float(p_mcn), 4), np.round(np.percentile(boot, [2.5, 97.5]), 3).tolist())
+
+# 3) 문항 수에 따른 power: 참 차이가 이만큼일 때 McNemar 가 p<0.05 를 낼 확률
+def power(n_items, reps=300):
+    hits = 0
+    for _ in range(reps):
+        d = rng.normal(0, 1.5, n_items)
+        aa = rng.random(n_items) < 1 / (1 + np.exp(-(0.8 - d)))
+        bb = rng.random(n_items) < 1 / (1 + np.exp(-(1.0 - d)))
+        t = [[np.sum(aa & bb), np.sum(aa & ~bb)], [np.sum(~aa & bb), np.sum(~aa & ~bb)]]
+        hits += int(mcnemar(t, exact=True).pvalue < 0.05)
+    return round(hits / reps, 2)
+print([(k, power(k)) for k in (200, 500, 2000)])
+
+# 4) pairwise 선호에서 Bradley–Terry(Elo 의 통계 모델) 점수를 logistic regression 으로 추정한다
+true = np.array([0.0, 0.3, 0.6, 1.2])                            # 모델 4개의 참 강도
+pairs = rng.integers(0, 4, (3000, 2)); pairs = pairs[pairs[:, 0] != pairs[:, 1]]
+win = rng.random(len(pairs)) < 1 / (1 + np.exp(-(true[pairs[:, 0]] - true[pairs[:, 1]])))
+Xbt = np.zeros((len(pairs), 4)); Xbt[np.arange(len(pairs)), pairs[:, 0]] = 1; Xbt[np.arange(len(pairs)), pairs[:, 1]] = -1
+bt = LogisticRegression(fit_intercept=False, C=1e6).fit(Xbt, win)
+est = bt.coef_[0] - bt.coef_[0][0]
+print(np.round(est, 2).tolist(), np.round(est * 400 / np.log(10), 0).tolist())   # 마지막: Elo 단위로
+
+# 0.638 0.68 0.349
+# 0.595 0.679 0.084
+# [[256, 63], [84, 97]] 0.1821 0.0987 [-0.006, 0.088]
+# [(200, 0.12), (500, 0.19), (2000, 0.72)]
+# [0.0, 0.29, 0.68, 1.11] [0.0, 51.0, 118.0, 193.0]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **500문항짜리 정확도의 95% 구간 폭이 8%p다 (G7.13.1).** 모델 A의 정확도 0.638에 대한 Wilson 구간이 [0.595, 0.679]다. leaderboard에서 1~2%p 차이로 순위가 갈리는 것을 이 폭과 비교해 봐야 한다.
+- **같은 문항이라는 것을 쓰면 검정이 날카로워진다 ("직접 해보기" ①).** 두 모델의 정확도는 0.638과 0.680이고, 문항별 정오의 상관이 0.35다. 두 결과를 독립 표본처럼 비교하면 $p = 0.18$, 둘 다 틀리거나 둘 다 맞힌 문항을 빼고 엇갈린 문항(63개 대 84개)만 보는 McNemar 검정은 $p = 0.099$ 다. 문항 단위 bootstrap의 차이 구간은 [−0.006, 0.088]로 0을 겨우 포함한다. 참 차이가 있게 만든 데이터인데도 500문항으로는 유의하지 않다.
+- **필요한 문항 수 (G7.13.1의 "실무 규칙").** 같은 크기의 참 차이를 McNemar로 잡을 확률(power)이 문항 200개에서 12%, 500개에서 19%, 2,000개에서 72%다. 4%p 차이를 확실히 보려면 수천 문항이 필요하다.
+- **Bradley–Terry 점수는 logistic regression이다 (G7.13.3).** 모델 넷의 참 강도가 (0, 0.3, 0.6, 1.2)일 때, 쌍마다 이긴 쪽을 1로 둔 logistic regression의 계수가 (0, 0.29, 0.68, 1.11)이다. Elo 단위($\times 400/\ln 10$)로 바꾸면 0, 51, 118, 193점이다. 비교 3,000번(쌍마다 약 500번)에서 이 정도로 회복된다.
+
+**이 코드가 보여 주지 못하는 것.**
+LLM judge의 위치·길이 편향(G7.13.2)과 contamination(G7.13.4)은 실제 모델과 데이터가 있어야 볼 수 있어 다루지 않았다.
+문항마다 독립이라고 가정했다. 실제 benchmark는 같은 원문에서 나온 문항, 비슷한 주제의 문항이 묶여 있어 실질적인 문항 수가 더 적다. 그러면 구간이 여기보다 넓다.
 
 ---
 
