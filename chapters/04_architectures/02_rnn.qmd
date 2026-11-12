@@ -627,6 +627,106 @@ inference 시 Transformer는 KV cache를 들고 한 step씩 도는 — 사실상
 
 ---
 
+## 실제 도구로: `torch.nn.RNN`
+
+PyTorch의 RNN이 이 장의 식과 같은지 확인하고, 펼친 망에서 gradient가 거리에 따라 어떻게 사라지거나 터지는지, clipping이 무엇을 지키는지, teacher forcing으로 배운 모델이 자기 출력을 되먹일 때 어떻게 되는지를 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU). 모델을 내려받지 않고 바로 돌아간다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+
+nn, F = torch.nn, torch.nn.functional
+torch.manual_seed(0)
+
+# 1) nn.RNN 의 한 step: h_t = tanh(W_ih x_t + b_ih + W_hh h_{t-1} + b_hh)
+rnn = nn.RNN(3, 8, batch_first=True)
+x = torch.randn(2, 5, 3)
+out, hn = rnn(x)
+h = torch.zeros(2, 8)
+with torch.no_grad():
+    for t in range(5):
+        h = torch.tanh(x[:, t] @ rnn.weight_ih_l0.T + rnn.bias_ih_l0 + h @ rnn.weight_hh_l0.T + rnn.bias_hh_l0)
+print(tuple(out.shape), tuple(hn.shape), f"{(h - hn[0]).abs().max().item():.1e}")
+
+# 2) 펼치면 깊은 망이다: 마지막 출력이 t 번째 입력에 얼마나 민감한가 (W_hh 의 크기를 바꿔 가며)
+def sensitivity(scale, T=100, H=64):
+    torch.manual_seed(0)
+    r = nn.RNN(1, H, batch_first=True)
+    with torch.no_grad():
+        nn.init.orthogonal_(r.weight_hh_l0); r.weight_hh_l0.mul_(scale); r.bias_hh_l0.zero_(); r.bias_ih_l0.zero_()
+    xs = torch.randn(1, T, 1, requires_grad=True)
+    out, _ = r(xs)
+    g, = torch.autograd.grad(out[0, -1].sum(), xs)
+    gn = g[0, :, 0].abs()
+    return [f"{gn[T - 1 - k].item():.0e}" for k in (0, 10, 30, 60, 99)], round(out.abs().max().item(), 3)
+for s in [0.5, 0.9, 1.0, 1.5, 3.0]:
+    print(s, *sensitivity(s))
+
+# 3) gradient clipping 은 방향을 지킨다 (norm 기준) / 값 기준은 방향을 바꾼다
+torch.manual_seed(1)
+g = torch.randn(1000) * torch.logspace(-2, 2, 1000)          # 크기가 제각각인 gradient
+by_norm = g * min(1.0, 1.0 / g.norm().item())
+by_value = g.clamp(-0.1, 0.1)
+cos = lambda a, b: F.cosine_similarity(a, b, dim=0).item()
+print(round(g.norm().item(), 1), round(cos(g, by_norm), 6), round(cos(g, by_value), 3))
+p = nn.Parameter(g.clone()); p.grad = g.clone()
+print(round(nn.utils.clip_grad_norm_([p], 1.0).item(), 1), round(p.grad.norm().item(), 4))
+
+# 4) teacher forcing 과 자유 생성: 사인파 다음 값 예측
+t = torch.arange(0, 400) * 0.1
+wave = torch.sin(t)
+torch.manual_seed(0)
+net = nn.RNN(1, 32, batch_first=True); head = nn.Linear(32, 1)
+opt = torch.optim.Adam(list(net.parameters()) + list(head.parameters()), lr=1e-2)
+for step in range(300):
+    i = torch.randint(0, 300, (16,))
+    seq = torch.stack([wave[j:j + 60] for j in i])[..., None]
+    out, _ = net(seq[:, :-1])
+    loss = F.mse_loss(head(out), seq[:, 1:])                   # 매 step 정답을 입력으로 준다
+    opt.zero_grad(); loss.backward(); opt.step()
+with torch.no_grad():
+    ctx = wave[300:340][None, :, None]
+    out, h = net(ctx)
+    pred, cur = [], head(out[:, -1:])
+    for _ in range(60):
+        pred.append(cur.item())
+        o, h = net(cur, h)
+        cur = head(o)
+    err = (torch.tensor(pred) - wave[340:400]).abs()
+    tf_out, _ = net(wave[300:399][None, :, None])
+    tf_err = (head(tf_out)[0, 39:, 0] - wave[340:400]).abs()
+print(round(loss.item(), 5), [round(err[k].item(), 3) for k in (0, 9, 29, 59)], round(tf_err.max().item(), 3))
+
+# (2, 5, 8) (1, 2, 8) 6.0e-08
+# 0.5 ['5e-01', '2e-04', '6e-10', '3e-19', '6e-31'] 0.329
+# 0.9 ['5e-01', '9e-02', '2e-02', '4e-04', '4e-06'] 0.536
+# 1.0 ['5e-01', '2e-01', '2e-01', '5e-02', '1e-02'] 0.718
+# 1.5 ['5e-01', '7e-01', '3e+00', '4e+00', '5e+02'] 1.0
+# 3.0 ['3e-01', '6e-01', '2e+02', '3e+06', '9e+11'] 1.0
+# 760.7 1.0 0.434
+# 760.7 1.0
+# 0.00101 [0.005, 0.039, 0.125, 0.074] 0.011
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **한 step이 이 장의 식이다.** $h_t = \tanh(W_{ih}x_t + b_{ih} + W_{hh}h_{t-1} + b_{hh})$ 를 반복문으로 계산한 마지막 상태가 `nn.RNN` 의 `hn` 과 $6\times10^{-8}$ 까지 같다. PyTorch는 bias를 두 개 두지만 더해질 뿐이다.
+- **거리에 따라 gradient가 지수적으로 변한다 (G4.2.2).** 마지막 출력을 각 시점의 입력으로 미분한 크기를, $W_{hh}$ 를 직교행렬에 배율을 곱해 만든 RNN에서 쟀다. 배율 0.5에서는 거리 10에서 $2\times10^{-4}$, 거리 99에서 $6\times10^{-31}$ 이다. 0.9에서는 거리 99에서 $4\times10^{-6}$ 이다. 배율 1.0에서도 거리 99에서 0.01로 줄어든다. tanh의 기울기가 1보다 작기 때문이다.
+- **상태는 안 터지는데 gradient는 터진다 ("직접 해보기" ①).** 배율 1.5와 3.0에서 gradient가 거리 99에서 $5\times10^{2}$, $9\times10^{11}$ 이다. 그런데 상태의 최댓값은 1.0이다. tanh가 상태를 $[-1, 1]$ 에 가두기 때문이다. gradient에 곱해지는 $\operatorname{diag}(1-h^2)W^\top$ 은 $h$ 가 포화되지 않은 차원에서는 $W$ 의 크기를 그대로 전한다.
+- **norm clipping은 방향을 지키고, 값 clipping은 방향을 바꾼다 ("gradient clipping", "직접 해보기" ②).** 크기가 제각각인 gradient(norm 761)를 norm 1로 자르면 원래와의 cosine이 1.0이다. 원소마다 ±0.1로 자르면 0.43이다. 큰 원소는 다 같은 값으로 눌리고 작은 원소는 그대로라 방향이 달라진다. `clip_grad_norm_` 은 norm 방식이고, 자르기 전의 norm(760.7)을 돌려준다.
+- **teacher forcing으로 배운 모델은 자기 출력을 되먹이면 오차가 쌓인다 ("teacher forcing과 exposure bias", "직접 해보기" ③).** 사인파 다음 값 예측을 매 step 정답을 입력으로 주며 학습시켰다(MSE 0.001). 같은 구간을 정답을 주며 예측하면 오차가 최대 0.011이다. 40 step의 실제 값을 보여 준 뒤 자기 출력을 다음 입력으로 넣으며 60 step을 생성하면, 오차가 1번째 step 0.005, 10번째 0.039, 30번째 0.125다. 60번째는 0.074로 다시 줄었다. 오차가 단조롭게 커지지는 않는다. 생성한 파형의 위상이 조금씩 어긋나며 실제 파형과 엇갈렸다 맞았다 하는 것으로 보이지만, 따로 확인하지 않았다.
+
+**이 코드가 보여 주지 못하는 것.**
+gradient 실험은 학습하지 않은 RNN, 입력 차원 1, 한 번의 무작위 입력에서 잰 것이다. 학습 중에는 $W_{hh}$ 가 바뀌므로 거리별 gradient도 바뀐다. 본문 G4.2.3처럼 실제로 먼 의존을 배우는지는 학습을 돌려 봐야 안다.
+exposure bias 실험은 매끈한 사인파 하나다. 실제 sequence(텍스트, 음성)에서는 한 번 틀린 출력이 본 적 없는 입력이 되어 훨씬 빨리 무너질 수 있다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
