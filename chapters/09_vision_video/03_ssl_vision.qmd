@@ -719,8 +719,8 @@ linear probing을 보면 'augmentation이 결정적이다'가 된다. **같은 �
 표현의 분산이 몇 step 만에 0에 가까워지는가?
 
 **② augmentation 강도를 훑는다**
-`aug-steps` 의 crop 범위를 좁게·넓게 바꾸며 linear probing 성능을 재라.
-너무 강한 augmentation이 해가 되는 지점이 있는가?
+`aug` 는 이동(crop)과 밝기 augmentation을 켜고 끈 조합을 비교하고, `aug-steps` 는 학습 step을 200에서 3,200까지 늘려 가며 같은 것을 잰다.
+두 표를 함께 보라. augmentation의 효과는 학습을 오래 할수록 커지는가, 줄어드는가? 평가 과제가 요구하지 않는 invariance를 넣으면 어떻게 될지 예상해 보라.
 
 **③ MAE의 masking 비율**
 `mae` 의 비율을 25%·50%·75%·90%로 바꿔라. 75%가 왜 잘 되는지
