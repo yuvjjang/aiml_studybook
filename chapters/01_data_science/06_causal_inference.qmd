@@ -715,6 +715,112 @@ ML을 쓰면 그 함수를 유연하게 추정할 수 있지만, regularization 
 
 ---
 
+## 실제 도구로: statsmodels로 인과 효과를 추정한다
+
+이 장의 방법들을 statsmodels의 회귀식과 scikit-learn의 logistic regression으로 다시 한다. 참 효과를 알고 만든 데이터이므로, 어떤 방법이 맞고 어떤 방법이 틀리는지 숫자로 보인다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `statsmodels` 0.15, `scikit-learn` 1.9, `pandas` 3.1.
+- statsmodels의 formula API(`smf.ols("y ~ treat + age", df)`)는 R과 같은 식 문법으로 회귀를 적는다. `group * post` 는 두 변수와 그 상호작용 항을 모두 넣으라는 뜻이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from sklearn.linear_model import LogisticRegression
+
+rng = np.random.default_rng(0)
+n = 20000
+
+# 데이터: 나이(confounder)가 처치와 결과 모두에 영향. 참 처치 효과는 2.0
+age = rng.normal(50, 10, n)
+treat = (rng.random(n) < 1 / (1 + np.exp(-(age - 50) / 5))).astype(int)    # 나이가 많을수록 처치를 받는다
+outcome = 2.0 * treat - 0.3 * age + rng.normal(0, 3, n)
+after = outcome + 1.5 * treat + rng.normal(0, 1, n)                          # 처치와 결과 둘 다의 영향을 받는 변수 (collider)
+df = pd.DataFrame({"age": age, "treat": treat, "y": outcome, "collider": after})
+
+# 1) 무엇을 통제하는가 (G1.6.1): 회귀식에 무엇을 넣느냐로 추정치가 바뀐다
+for f in ["y ~ treat", "y ~ treat + age", "y ~ treat + age + collider"]:
+    r = smf.ols(f, df).fit()
+    lo, hi = r.conf_int().loc["treat"]
+    print(f, round(r.params["treat"], 3), round(lo, 3), round(hi, 3))
+
+# 2) propensity score 와 IPW (G1.6.2)
+ps = LogisticRegression().fit(df[["age"]], df.treat).predict_proba(df[["age"]])[:, 1]
+w = np.where(df.treat == 1, 1 / ps, 1 / (1 - ps))
+ipw = np.average(df.y[df.treat == 1], weights=w[df.treat == 1]) - np.average(df.y[df.treat == 0], weights=w[df.treat == 0])
+print(round(ipw, 3), round(ps.min(), 4), round(ps.max(), 4), round(w.max(), 1))
+# positivity 를 깨면: 나이가 처치를 거의 결정하도록 (기울기를 5배)
+treat2 = (rng.random(n) < 1 / (1 + np.exp(-(age - 50) / 1))).astype(int)
+y2 = 2.0 * treat2 - 0.3 * age + rng.normal(0, 3, n)
+def ipw_est(seed, trim=None):
+    r = np.random.default_rng(seed); idx = r.integers(0, n, n)                # bootstrap
+    a_, t_, y_ = age[idx, None], treat2[idx], y2[idx]
+    p = LogisticRegression().fit(a_, t_).predict_proba(a_)[:, 1]
+    if trim: p = p.clip(trim, 1 - trim)
+    with np.errstate(divide="ignore"):                       # np.where 가 양쪽을 다 계산하므로
+        ww = np.where(t_ == 1, 1 / p, 1 / (1 - p))
+    return np.average(y_[t_ == 1], weights=ww[t_ == 1]) - np.average(y_[t_ == 0], weights=ww[t_ == 0])
+print(round(smf.ols("y ~ t + a", pd.DataFrame({"y": y2, "t": treat2, "a": age})).fit().params["t"], 3),
+      round(float(np.mean((treat2 == 1) & (age < 45))), 4), round(float(np.mean((treat2 == 0) & (age > 55))), 4))
+for trim in [None, 0.01]:
+    est = np.array([ipw_est(s, trim) for s in range(100)])
+    print(trim, round(est.mean(), 3), round(est.std(), 3))
+
+# 3) instrumental variable (G1.6.3): 관측하지 못한 confounder u. 무작위로 배정된 쿠폰 z 가 처치만 바꾼다
+u = rng.normal(0, 1, n)
+z = rng.integers(0, 2, n)
+d = (0.8 * z + u + rng.normal(0, 1, n) > 0.5).astype(int)
+yy = 2.0 * d + 3.0 * u + rng.normal(0, 1, n)
+iv = pd.DataFrame({"z": z, "d": d, "y": yy})
+naive = smf.ols("y ~ d", iv).fit().params["d"]
+first = smf.ols("d ~ z", iv).fit()
+iv["d_hat"] = first.fittedvalues
+two_sls = smf.ols("y ~ d_hat", iv).fit().params["d_hat"]
+wald = (iv.y[iv.z == 1].mean() - iv.y[iv.z == 0].mean()) / (iv.d[iv.z == 1].mean() - iv.d[iv.z == 0].mean())
+print(round(naive, 3), round(two_sls, 3), round(wald, 3), round(first.fvalue, 1))
+
+# 4) difference-in-differences (G1.6.4): 상호작용 항의 계수
+rows = []
+for g in (0, 1):
+    for t in range(6):
+        k = 2000
+        rows.append(pd.DataFrame({"group": g, "period": t, "post": int(t >= 3),
+                                  "y": 10 + 3 * g + 0.5 * t + 1.5 * g * (t >= 3) + rng.normal(0, 2, k)}))
+panel = pd.concat(rows, ignore_index=True)
+did = smf.ols("y ~ group * post", panel).fit()
+print(round(did.params["group:post"], 3), [round(v, 3) for v in did.conf_int().loc["group:post"]])
+pre = panel[panel.period < 3].assign(fake=lambda d_: (d_.period >= 1).astype(int))
+print(round(smf.ols("y ~ group * fake", pre).fit().params["group:fake"], 3))
+
+# y ~ treat -1.566 -1.673 -1.46
+# y ~ treat + age 2.1 1.995 2.204
+# y ~ treat + age + collider -1.147 -1.183 -1.11
+# 2.109 0.0003 0.9996 277.9
+# 2.042 0.0001 0.0003
+# None -0.314 0.327
+# 0.01 -0.852 0.134
+# 5.27 2.108 2.108 984.5
+# 1.449 [1.346, 1.551]
+# 0.002
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **무엇을 통제하느냐로 답이 바뀐다 (G1.6.1, "직접 해보기" ①).** 참 처치 효과는 2.0이다. 아무것도 통제하지 않으면 −1.57로 부호까지 틀린다. 나이 많은 사람이 처치를 더 받고, 나이가 결과를 낮추기 때문이다(confounding). 나이를 넣으면 2.10이고 95% 구간 [2.00, 2.20]이 참값을 포함한다. 여기에 처치와 결과 **둘 다의 영향을 받는** 변수(collider)를 더 넣으면 −1.15로 다시 틀린다. "많이 통제할수록 좋다"가 아니다.
+- **propensity score로 가중하면 맞는다 (G1.6.2).** 나이로 처치 확률을 추정하고 역수로 가중한 IPW 추정이 2.11이다. 이때 propensity score는 0.0003에서 0.9996까지 퍼지고 가장 큰 가중치가 278이다.
+- **positivity가 깨지면 IPW가 무너진다 ("직접 해보기" ②).** 나이가 처치를 거의 결정하도록 바꾸면(2만 명 중 45세 미만이면서 처치받은 사람이 2명, 55세 초과이면서 처치받지 않은 사람이 6명), bootstrap 100번의 IPW 추정이 평균 −0.31(표준편차 0.33)이다. 참값 2.0과 멀다. propensity를 0.01~0.99로 잘라도(trimming) −0.85다. 비교할 상대가 없는 사람들을 극단적인 가중치 몇 개로 메우려다 실패한 것이다. propensity 모델의 regularization을 끄고 다시 해도 같았다(따로 확인했다). 같은 데이터에서 나이를 넣은 회귀는 2.04로 맞는다. 다만 이것은 결과가 나이에 **선형**이라는 가정이 맞아서다. 겹치지 않는 구간을 선형으로 이어 붙여 추정한 것이고, 그 가정이 틀리면 회귀도 틀린다.
+- **도구 변수가 관측하지 못한 confounder를 우회한다 (G1.6.3).** 처치와 결과 모두에 영향을 주는 $u$ 를 관측하지 못하면 단순 회귀는 5.27이다. 무작위로 나눠 준 쿠폰 $z$ 를 도구 변수로 쓰면, 2단계 회귀(2SLS)와 Wald 추정이 모두 2.108이다. 1단계의 F 통계량이 985로 커서 도구가 약하지 않다.
+- **DiD는 상호작용 항 하나다 (G1.6.4).** 집단 × 처치 이후의 계수가 1.449이고 95% 구간 [1.35, 1.55]가 참값 1.5를 포함한다. 처치 이전 구간에서 가짜 처치 시점을 두고 같은 회귀를 돌리면(placebo test) 0.002다. 이 데이터는 parallel trends를 만족하도록 만들었으니 0에 가까운 것이 맞다("직접 해보기" ③).
+
+**이 코드가 보여 주지 못하는 것.**
+모든 데이터를 인과 구조를 알고 만들었다. 실제 데이터에서는 무엇이 confounder이고 무엇이 collider인지를 데이터가 알려 주지 않는다. 그것은 도메인 지식으로 그린 DAG가 정한다.
+2SLS를 두 번의 OLS로 계산하면 계수는 맞지만 standard error가 틀린다. 실제로는 `linearmodels` 같은 library의 IV 추정을 쓴다. placebo test가 0이 나온 것도 parallel trends를 **증명하지 않는다**. 본문 "parallel trends는 검정할 수 없다"의 내용 그대로다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
