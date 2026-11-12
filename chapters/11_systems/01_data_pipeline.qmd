@@ -728,8 +728,8 @@ print("**batch vs streaming**")
 batch 내 class 분포의 치우침을 재라. 정렬된 데이터에서 특히 위험한 이유는?
 
 **② 저장 형식을 비교한다**
-`formats` 의 row-major와 column-major에서 "feature 3개만 읽기"의 I/O를 비교하라.
-몇 배 차이인가?
+`layout` 은 같은 배열을 row-major와 column-major로 두고 "한 열만 읽기"의 시간을 잰다. 몇 배 차이인가?
+시간 측정이라 돌릴 때마다 숫자가 달라진다. 서너 번 돌려 배수가 얼마나 흔들리는지도 함께 보라. 그다음 `formats` 의 표에서 저장 크기와 decoding 시간이 서로 어떻게 맞바뀌는지 읽어라.
 
 **③ training/serving skew를 만든다**
 `skew` 에서 학습 때와 serving 때 다른 전처리를 적용해 보라.
