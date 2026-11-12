@@ -800,6 +800,100 @@ M4·M5 예측 대회의 반복된 교훈:
 
 ---
 
+## 실제 도구로: statsmodels와 scikit-learn의 시계열 도구
+
+이 장의 정상성 검정, ACF, ARIMA, spurious regression, 시계열 검증 분할을 statsmodels와 scikit-learn으로 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `statsmodels` 0.15, `pandas` 3.1, `scikit-learn` 1.9. PyTorch는 쓰지 않는다.
+- 데이터는 seed를 고정한 random walk와 AR(1) 계열(길이 500)이다.
+- 이 버전의 `adfuller` 는 반환 형식이 곧 바뀐다는 경고를 낸다. `result_object=True` 를 주면 새 형식으로 받고 경고가 사라진다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import KFold, TimeSeriesSplit, cross_val_score
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.stattools import acf, adfuller, coint
+
+rng = np.random.default_rng(0)
+n = 500
+
+# 1) 정상성 검정: random walk 와 AR(1)
+rw = rng.normal(size=n).cumsum()
+ar = np.zeros(n)
+for t in range(1, n):
+    ar[t] = 0.7 * ar[t - 1] + rng.normal()
+for name, s in [("random walk", rw), ("차분한 random walk", np.diff(rw)), ("AR(1) 0.7", ar)]:
+    r = adfuller(s, result_object=True)
+    stat, p = r.statistic, r.pvalue
+    print(name, round(stat, 2), round(p, 4))
+
+# 2) AR(1) 의 ACF 는 phi^k 로 줄어든다
+print(np.round(acf(ar, nlags=4), 3), np.round(0.7 ** np.arange(5), 3))
+
+# 3) ARIMA 로 계수 추정과 예측
+fit = ARIMA(ar, order=(1, 0, 0)).fit()
+print(np.round(fit.params, 3), round(fit.aic, 1))
+fc = fit.get_forecast(10)
+print(np.round(fc.predicted_mean[[0, 4, 9]], 3), np.round(fc.conf_int()[[0, 9]], 2).tolist())
+# over-differencing: 이미 정상인 계열을 한 번 더 차분하면
+fit_d = ARIMA(ar, order=(1, 1, 0)).fit()
+print(round(fit_d.aic, 1), round(acf(np.diff(ar), nlags=1)[1], 3))
+
+# 4) 두 random walk 는 관계가 없어도 상관이 크게 나온다 (spurious regression)
+cors = [abs(np.corrcoef(rng.normal(size=n).cumsum(), rng.normal(size=n).cumsum())[0, 1]) for _ in range(500)]
+cors_iid = [abs(np.corrcoef(rng.normal(size=n), rng.normal(size=n))[0, 1]) for _ in range(500)]
+print(round(float(np.mean(cors)), 3), round(float(np.mean(np.array(cors) > 0.5)), 3), round(float(np.mean(cors_iid)), 3))
+# cointegration: 같은 random walk 를 공유하면
+x2 = rw + rng.normal(0, 1, n)
+print(round(coint(rw, x2)[1], 4), round(coint(rw, rng.normal(size=n).cumsum())[1], 4))
+
+# 5) 검증 분할: 섞은 KFold 와 TimeSeriesSplit — 미래로 과거를 예측하면 점수가 부풀려진다
+idx = pd.date_range("2020-01-01", periods=n, freq="D")
+y = pd.Series(rw, index=idx)
+X = pd.DataFrame({"lag1": y.shift(1), "t": np.arange(n)}, index=idx).dropna()
+yy = y.loc[X.index]
+X2 = X[["t"]]                                                     # 시간만 보고 맞히는 모델
+for name, cv in [("섞은 KFold", KFold(5, shuffle=True, random_state=0)), ("TimeSeriesSplit", TimeSeriesSplit(5))]:
+    print(name, round(cross_val_score(RandomForestRegressor(100, random_state=0), X2, yy, cv=cv, scoring="r2").mean(), 3),
+          round(cross_val_score(LinearRegression(), X[["lag1"]], yy, cv=cv, scoring="r2").mean(), 3))
+print([(len(a), len(b), int(a.max()) < int(b.min())) for a, b in TimeSeriesSplit(5).split(X2)][:3])
+
+# random walk -1.07 0.7252
+# 차분한 random walk -22.74 0.0
+# AR(1) 0.7 -8.96 0.0
+# [1.    0.722 0.512 0.38  0.235] [1.    0.7   0.49  0.343 0.24 ]
+# [-0.227  0.721  0.879] 1361.1
+# [ 0.021 -0.16  -0.214] [[-1.82, 1.86], [-2.86, 2.43]]
+# 1423.6 -0.124
+# 0.417 0.392 0.036
+# 0.0 0.8987
+# 섞은 KFold 0.989 0.986
+# TimeSeriesSplit -1.132 0.862
+# [(84, 83, True), (167, 83, True), (250, 83, True)]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **ADF 검정이 random walk를 비정상으로 본다 ("stationarity").** random walk의 $p$ 값이 0.725로 "단위근이 있다"를 기각하지 못한다. 한 번 차분하면 $p \approx 0$ 이고, AR(1)($\phi = 0.7$)도 $p \approx 0$ 이다.
+- **AR(1)의 ACF는 $\phi^k$ 로 줄어든다 (G1.7.2, "직접 해보기" ②).** 표본 ACF가 0.722, 0.512, 0.380, 0.235이고 이론값 $0.7^k$ 는 0.700, 0.490, 0.343, 0.240이다.
+- **ARIMA가 계수를 되찾는다.** `ARIMA(order=(1,0,0))` 의 AR 계수 추정이 0.721(참값 0.7), 잡음 분산 0.879(참값 1)다. 10 step 예측은 0.021에서 평균(−0.227)을 향해 줄어들고, 95% 예측 구간은 첫 step의 [−1.82, 1.86]에서 10번째 [−2.86, 2.43]으로 넓어진다. 먼 미래일수록 과거가 덜 알려 준다.
+- **이미 정상인 계열을 또 차분하면 나빠진다 ("직접 해보기" ③).** 같은 데이터에 `order=(1,1,0)` 을 맞추면 AIC가 1361에서 1424로 나빠진다. 차분한 계열의 lag-1 ACF는 −0.124로 음수가 된다. 과차분은 없던 음의 상관을 만든다.
+- **관계없는 random walk 둘이 높은 상관을 보인다 (G1.7.1).** 서로 독립인 random walk 쌍 500개의 상관계수 절댓값이 평균 0.417이고, 39%가 0.5를 넘는다. 같은 길이의 독립 잡음끼리는 평균 0.036이다. 추세가 있는 두 계열은 아무 관계가 없어도 함께 움직이는 것처럼 보인다.
+- **cointegration 검정은 진짜 관계와 가짜 관계를 가른다 ("직접 해보기" ①).** 같은 random walk에 잡음을 더한 계열과의 cointegration 검정은 $p \approx 0$, 독립인 random walk와는 $p = 0.90$ 이다.
+- **섞은 KFold는 시계열 점수를 부풀린다 (G1.7.3).** 날짜 번호 하나만 보고 random walk를 맞히는 random forest가, 섞은 5-fold에서는 $R^2$ 0.989이고 `TimeSeriesSplit` 에서는 −1.132다. 섞으면 이웃한 날짜의 값을 보고 맞히는 것이라 거의 다 맞고, 과거만 보고 미래를 맞혀야 하면 평균만도 못하다. 전날 값(lag 1)을 쓰는 선형 모델은 0.986과 0.862로 차이가 작다. `TimeSeriesSplit` 은 늘 훈련 구간이 검증 구간보다 앞에 오고 훈련 구간이 점점 길어진다(84, 167, 250, …).
+
+**이 코드가 보여 주지 못하는 것.**
+모든 계열이 모델을 알고 만든 합성 데이터라 ARIMA가 잘 맞는다. 실제 시계열에는 계절성, 구조 변화, 이상값이 있고, 차수를 고르는 것부터 판단이 필요하다.
+예측 지표(G1.7.4)와 계절 모델(SARIMA), 최근의 신경망 시계열 모델은 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
