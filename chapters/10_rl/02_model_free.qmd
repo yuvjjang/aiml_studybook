@@ -753,6 +753,92 @@ fig
 
 ---
 
+## 실제 도구로: Gymnasium의 CliffWalking
+
+강화학습 환경의 표준 API인 Gymnasium으로 이 장의 cliff walking을 다시 한다. 환경은 Gymnasium에 들어 있는 것을 쓰고, SARSA와 Q-learning은 이 장의 식대로 표(table)를 직접 갱신한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `gymnasium` 1.4, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install gymnasium`).
+- 격자는 4×12다. 출발점은 왼쪽 아래, 목표는 오른쪽 아래, 그 사이 아래 줄이 절벽이다. 한 걸음마다 −1, 절벽에 떨어지면 −100을 받고 출발점으로 돌아간다. 줄 번호는 위에서부터 0, 1, 2, 3이고 절벽은 3번 줄이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import gymnasium as gym
+
+# CliffWalking: 4 x 12 격자. 아래 줄 가운데가 절벽(-100, 출발점으로 돌아감), 한 걸음마다 -1
+env = gym.make("CliffWalking-v1")
+nS, nA = env.observation_space.n, env.action_space.n
+print(nS, nA, env.reset(seed=0)[0])
+s, r, term, trunc, info = env.step(1)        # 0 위, 1 오른쪽, 2 아래, 3 왼쪽. 출발점에서 오른쪽은 절벽이다
+print(s, r, term)
+
+
+def run(algo, episodes=500, alpha=0.5, eps=0.1, seed=0):
+    rng = np.random.default_rng(seed)
+    Q = np.zeros((nS, nA))
+    pick = lambda s: int(rng.integers(nA)) if rng.random() < eps else int(Q[s].argmax())
+    returns = []
+    for ep in range(episodes):
+        s, _ = env.reset(seed=seed * 10000 + ep)
+        a, G, done = pick(s), 0, False
+        while not done:
+            s2, r, term, trunc, _ = env.step(a)
+            done = term or trunc
+            a2 = pick(s2)
+            target = r if term else r + (Q[s2, a2] if algo == "SARSA" else Q[s2].max())
+            Q[s, a] += alpha * (target - Q[s, a])
+            s, a, G = s2, a2, G + r
+        returns.append(G)
+    return Q, np.array(returns)
+
+
+def greedy_path(Q, limit=60):
+    s, _ = env.reset(seed=0)
+    rows, G = [], 0
+    for _ in range(limit):
+        rows.append(s // 12)
+        s, r, term, trunc, _ = env.step(int(Q[s].argmax()))
+        G += r
+        if term or trunc:
+            break
+    return G, max(set(rows), key=rows.count), len(rows)        # 수익, 가장 오래 머문 줄, 걸음 수
+
+
+# 1) 학습 중 (탐험하면서) 얻은 수익과, 학습 뒤 greedy 로 걸은 길
+for algo in ["SARSA", "Q-learning"]:
+    res = [run(algo, seed=s) for s in range(5)]
+    online = np.mean([r[-100:].mean() for _, r in res])
+    print(algo, round(online, 1), [greedy_path(Q) for Q, _ in res[:2]])
+
+# 2) 탐험을 0 으로 줄여 가며 학습하면
+for algo in ["SARSA", "Q-learning"]:
+    Q, r = run(algo, eps=0.01, seed=0)
+    print(algo, round(r[-100:].mean(), 1), greedy_path(Q))
+
+# 48 4 36
+# 36 -100 False
+# SARSA -25.3 [(-60, 0, 60), (-17, 0, 17)]
+# Q-learning -49.3 [(-13, 2, 13), (-13, 2, 13)]
+# SARSA -19.4 (-17, 1, 17)
+# Q-learning -14.2 (-13, 2, 13)
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **환경과 에이전트는 `reset` 과 `step` 으로만 이야기한다.** 상태 48개, 행동 4개다. `step` 은 다음 상태, 보상, 끝났는지(`terminated`), 시간 제한으로 잘렸는지(`truncated`)를 돌려준다. 출발점(36번)에서 오른쪽으로 가면 절벽이라 −100을 받고 출발점으로 돌아간다. 에피소드는 끝나지 않는다.
+- **Q-learning은 절벽 바로 위를, SARSA는 멀리 돌아간다 (G10.2.3, "직접 해보기" ②).** 학습 뒤 greedy로 걸으면 Q-learning은 다섯 seed 모두 절벽 바로 위 2번 줄을 따라 13걸음(수익 −13, 최단 경로)에 간다. SARSA는 다섯 seed 중 네 개에서 맨 위 0번 줄로 돌아 17걸음(−17)에 간다(코드는 두 seed만 출력하고, 나머지는 따로 확인했다). Q-learning은 "다음에는 가장 좋은 행동을 한다"고 가정하고 배우고, SARSA는 "다음에도 10%는 아무렇게나 움직인다"는 실제 행동을 그대로 배우기 때문이다.
+- **학습 중의 수익은 SARSA가 낫다.** 탐험($\epsilon = 0.1$)을 하는 동안 마지막 100 에피소드의 평균 수익이 SARSA −25.3, Q-learning −49.3이다. Q-learning이 고른 길은 절벽 옆이라, 무작위 한 걸음에 떨어진다. 배운 길이 더 좋은 쪽과 배우는 동안 덜 다치는 쪽이 다르다.
+- **SARSA의 greedy policy가 목표에 닿지 못한 경우도 있었다.** 첫 seed의 SARSA는 greedy로 걸으면 0번 줄에서 60걸음 안에 목표에 닿지 못했다. 500 에피소드, $\alpha = 0.5$ 로는 표가 다 수렴하지 않아서, 탐험할 때는 문제가 안 되던 값의 작은 차이가 greedy로 걸을 때 제자리를 돌게 만든 것으로 보인다.
+- **탐험을 줄이면 둘이 가까워진다.** $\epsilon = 0.01$ 로 학습하면 SARSA는 1번 줄로 17걸음, Q-learning은 그대로 13걸음이다. 학습 중 수익도 −19.4와 −14.2로 순서가 뒤집힌다. $\epsilon$ 이 0에 가까우면 SARSA의 목표도 greedy 행동에 가까워져 두 알고리즘의 차이가 줄어든다.
+
+**이 코드가 보여 주지 못하는 것.**
+seed 다섯 개, 에피소드 500개, 학습률 하나의 결과다. SARSA가 어느 줄로 도는지는 탐험의 크기에 따라 바뀌었다($\epsilon = 0.1$ 에서 0번 줄, 0.01에서 1번 줄).
+Gymnasium은 환경만 제공한다. 알고리즘은 이 절처럼 직접 쓰거나 Stable-Baselines3 같은 library를 쓴다. 이 장의 deadly triad와 importance sampling은 표 방식으로는 드러나지 않아 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
