@@ -132,7 +132,7 @@ kernel은 `ai-ml-study` 를 고른다.
 
 이 책의 본문 코드는 PyTorch를 쓰지 않는다. 빌드할 때마다 같은 그림이 나오도록 의존성을 NumPy·SciPy·Plotly로 제한했기 때문이다.
 대신 장 끝의 **실제 도구로** 절이, 그 장에서 NumPy로 만든 것을 PyTorch·Hugging Face·scikit-learn으로는 어떻게 쓰는지 보여 준다.
-지금 그 절이 있는 장은 69개다.
+지금 그 절이 있는 장은 73개다.
 
 - **Part 1 데이터 과학**
     - [1.0 데이터의 구조](chapters/01_data_science/00_data_and_types.qmd) — pandas로 타입, tidy data, 결측, 집계를 다룬다
@@ -143,6 +143,8 @@ kernel은 `ai-ml-study` 를 고른다.
     - [1.6 causal inference: 인과추론](chapters/01_data_science/06_causal_inference.qmd) — statsmodels로 인과 효과를 추정한다
     - [1.7 시계열 분석](chapters/01_data_science/07_time_series.qmd) — statsmodels와 scikit-learn의 시계열 도구
 - **Part 2 고전 ML**
+    - [2.0 학습이란 무엇인가](chapters/02_classical_ml/00_learning_problem.qmd) — 손실을 고르는 scikit-learn의 회귀들
+    - [2.1 bias–variance와 generalization](chapters/02_classical_ml/01_bias_variance.qmd) — validation_curve 와 learning_curve
     - [2.2 선형회귀](chapters/02_classical_ml/02_linear_regression.qmd) — LinearRegression 과 numpy.linalg
     - [2.3 regularization](chapters/02_classical_ml/03_regularization.qmd) — scikit-learn의 Ridge 와 Lasso
     - [2.4 logistic regression과 분류](chapters/02_classical_ml/04_logistic_regression.qmd) — scikit-learn의 LogisticRegression
@@ -195,11 +197,13 @@ kernel은 `ai-ml-study` 를 고른다.
     - [7.10 RAG](chapters/07_language/10_rag.qmd) — BM25, 문장 embedding, RRF
     - [7.14 inference 최적화](chapters/07_language/14_inference_optimization.qmd) — GPT-2로 KV cache와 quantization을 잰다
 - **Part 8 음성**
+    - [8.0 소리와 디지털 신호](chapters/08_audio/00_sound_and_sampling.qmd) — soundfile과 SciPy로 sampling과 quantization을 확인한다
     - [8.1 Fourier 변환과 spectrogram](chapters/08_audio/01_fourier_stft.qmd) — torch.stft 와 scipy.signal
     - [8.2 mel scale과 MFCC](chapters/08_audio/02_mel_mfcc.qmd) — librosa의 mel과 MFCC
     - [8.4 CTC와 RNN-T](chapters/08_audio/04_ctc_rnnt.qmd) — nn.CTCLoss 와 wav2vec2의 CTC 출력
     - [8.6 현대 음성 인식](chapters/08_audio/06_asr_modern.qmd) — Whisper로 받아쓰기
 - **Part 9 비전·비디오**
+    - [9.0 이미지의 표현과 처리](chapters/09_vision_video/00_image_basics.qmd) — Pillow와 SciPy의 이미지 함수
     - [9.2 Vision Transformer](chapters/09_vision_video/02_vit.qmd) — 공개된 ViT로 확인하기
     - [9.4 CLIP과 multimodal 표현](chapters/09_vision_video/04_clip_multimodal.qmd) — 공개된 CLIP으로 확인하기
 - **Part 10 강화학습**
@@ -223,7 +227,7 @@ python -m venv venv-torch
 venv-torch/bin/pip install torch transformers peft          # Windows: venv-torch\Scripts\pip
 ```
 
-장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. Part 1의 절들은 `pandas` 와 `statsmodels` 를, 강화학습 장들은 `gymnasium` 을, 음성 장들은 `librosa`·`soundfile` 을 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)는 `sentencepiece` 가 필요하다.
+장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. Part 1의 절들은 `pandas` 와 `statsmodels` 를, 강화학습 장들은 `gymnasium` 을, 음성 장들은 `librosa`·`soundfile` 을, 9.0은 `pillow` 를 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)는 `sentencepiece` 가 필요하다.
 GPU가 있으면 [pytorch.org](https://pytorch.org/get-started/locally/) 의 안내대로 자기 CUDA 버전에 맞는 `torch` 를 설치한다.
 
 **이 절의 코드를 읽을 때 알아 둘 것**
