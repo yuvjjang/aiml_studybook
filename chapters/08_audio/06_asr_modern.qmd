@@ -802,6 +802,96 @@ ASR은 pipeline의 한 조각일 뿐이다
 
 ---
 
+## 실제 도구로: Whisper로 받아쓰기
+
+지금까지는 합성 음성과 직접 만든 CTC 모델이었다. 여기서는 공개된 Whisper 모델로 같은 것을 본다. WER, noise에 대한 견고함, 그리고 입력에 음성이 없을 때의 출력이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 그때 나온 출력을 그대로 적었다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다. 이 블록에는 `pip install soundfile` 이 더 필요하다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `soundfile` 0.14
+- 모델은 가장 작은 영어 전용 `openai/whisper-tiny.en`(약 150 MB)이다. CPU에서 발화 하나에 몇 초가 걸린다.
+- **음성 파일은 직접 준비한다.** 아래 문장(`ref`)을 16 kHz mono WAV로 녹음해 `speech.wav` 로 저장한다. 이 책에서는 Windows의 음성 합성기로 만든 5.8초짜리 파일을 썼다. 사람이 녹음한 것이 아니므로 실제 녹음보다 훨씬 깨끗하다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import soundfile as sf
+import torch
+from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+proc = WhisperProcessor.from_pretrained("openai/whisper-tiny.en")
+model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en").eval()
+
+wav, sr = sf.read("speech.wav", dtype="float32")        # 16 kHz mono 로 녹음한 파일
+assert sr == 16000 and wav.ndim == 1
+print(len(wav) / sr)                                    # 길이(초)
+
+
+def transcribe(x):
+    feats = proc(x, sampling_rate=16000, return_tensors="pt").input_features
+    with torch.no_grad():
+        ids = model.generate(feats)
+    return feats.shape, proc.batch_decode(ids, skip_special_tokens=True)[0].strip()
+
+
+def wer(ref, hyp):
+    """단어 단위 edit distance / 정답 단어 수."""
+    norm = lambda s: "".join(c for c in s.lower() if c.isalnum() or c in " '").split()
+    r, h = norm(ref), norm(hyp)
+    d = np.arange(len(h) + 1)
+    for i in range(1, len(r) + 1):
+        prev, d[0] = d[0], i
+        for j in range(1, len(h) + 1):
+            prev, d[j] = d[j], min(d[j] + 1, d[j-1] + 1, prev + (r[i-1] != h[j-1]))
+    return d[-1] / len(r)
+
+
+ref = "The meeting will start at three o'clock on Monday. Please bring the quarterly report."
+
+# 1) 깨끗한 음성
+shape, hyp = transcribe(wav)
+print(shape)                                            # 입력은 늘 30초 분량의 log-mel
+print(hyp, wer(ref, hyp))
+
+# 2) noise 를 섞는다 — SNR 을 낮춰 가며
+rng = np.random.default_rng(0)
+p_sig = float(np.mean(wav**2))
+for snr_db in [20, 10, 0, -5]:
+    noise = rng.normal(0, np.sqrt(p_sig / 10**(snr_db/10)), len(wav)).astype("float32")
+    hyp = transcribe(wav + noise)[1]
+    print(snr_db, round(wer(ref, hyp), 3), hyp)
+
+# 3) 음성이 없는 입력 — 5초의 무음과 noise
+print(repr(transcribe(np.zeros(5 * 16000, dtype="float32"))[1]))
+print(repr(transcribe(rng.normal(0, 0.1, 5 * 16000).astype("float32"))[1]))
+
+# 5.755
+# torch.Size([1, 80, 3000])
+# The meeting will start at 3 o'clock on Monday. Please bring the quarterly report. 0.07142857142857142
+# 20 0.071 The meeting will start at 3 o'clock on Monday. Please bring the quarterly report.
+# 10 0.071 The meeting will start at 3 o'clock on Monday. Please bring the quarterly report.
+# 0 0.071 The meeting will start at 3 o'clock on Monday. Please bring the quarterly report.
+# -5 1.0 The moon will try to do a clock on number. This moon is further than we thought.
+# 'you'
+# 'You'
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **입력 모양 `(1, 80, 3000)`.** 5.8초짜리 음성인데 frame이 3,000개다. Whisper는 입력을 늘 30초로 채우고(모자라면 0을 붙인다) 10 ms 간격의 80차원 log-mel로 바꾼다. [8.2](02_mel_mfcc.qmd)의 log-mel이 그대로 쓰인다.
+- **WER 0.071은 인식 오류가 아니다.** 모델은 한 단어도 틀리지 않았다. 정답에는 "three"라 적었고 모델은 "3"이라 썼을 뿐이다. 14단어 중 하나가 다르다고 세어 1/14가 됐다. 이 장 앞에서 말한 **텍스트 normalization** 문제가 바로 이것이다. 숫자 표기를 맞추는 normalization을 넣으면 WER은 0이 된다. 논문의 WER을 비교할 때 normalization 규칙을 확인해야 하는 이유다.
+- **noise에는 강하다가 한 번에 무너진다.** SNR 0 dB(신호와 noise의 에너지가 같다)까지 출력이 똑같다. −5 dB에서 WER이 1.0이 된다. 중간이 없다.
+- **무너질 때의 출력이 문제다.** "The moon will try to do a clock on number."는 문법이 맞는 그럴듯한 문장이다. 모르겠다는 표시가 없다. G8.6.4가 다룬 문제의 실제 모습이다. Whisper의 decoder는 앞 단어를 보고 다음 단어를 내는 language model이기도 해서, 음향 증거가 약해지면 말이 되는 문장을 만들어 낸다.
+- **음성이 없는데도 단어를 낸다.** 5초의 완전한 무음에 "you", noise에 "You"를 출력했다. Whisper의 잘 알려진 hallucination이다. 실제 system이 앞단에 voice activity detection을 두고 음성이 없는 구간을 잘라내는 이유다.
+
+**이 코드가 보여 주지 못하는 것.**
+발화 하나로 잰 WER은 측정이 아니다. 단어 하나가 7%p를 움직인다. 믿을 만한 WER은 수백 발화 이상의 평균이다.
+시험 음성이 합성 음성이라는 점도 크다. 억양이 고르고 잡음과 잔향이 없다. 사람이 방에서 녹음한 음성은 더 높은 SNR에서 무너질 수 있다.
+더한 noise도 white noise 한 종류다. 이 장의 G8.6.1~G8.6.2가 다룬 화자·channel의 변화는 여기서 시험하지 않았다.
+"0 dB까지 버틴다"는 이 음성, 이 noise, 이 모델에서의 결과다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
