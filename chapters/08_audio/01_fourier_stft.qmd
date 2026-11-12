@@ -447,16 +447,16 @@ HiFi-GAN 같은 신경망 vocoder는 그 대응을 아예 학습해버린다 —
 ## 직접 해보기
 
 **① 불확정성 원리를 눈으로 본다**
-`stft-settings` 의 window 길이를 8ms·25ms·100ms로 바꾸며 같은 신호를 분석하라.
-시간 해상도와 주파수 해상도가 어떻게 맞바뀌는가?
+`stft-settings` 의 `settings` 목록에 16 kHz에서 `n_fft` 가 128(8 ms), 1600(100 ms)인 줄을 추가하고 "frame"과 "Δf" 열을 보라.
+두 열의 곱은 어떻게 되는가? 그다음 G8.1.3 그림의 slider로 같은 맞바꿈을 눈으로 확인하라.
 
 **② window function을 바꾼다**
-rectangular window와 Hann window의 spectral leakage를 비교하라.
-side lobe가 몇 dB 차이인가? main lobe 폭은?
+rectangular window와 Hann window의 spectral leakage를 비교하라. side lobe가 몇 dB 차이인가? main lobe 폭은?
+(이 과제는 코드를 새로 짜야 한다. `audio.window("rect", N)` 과 `audio.window("hann", N)` 을 bin 중앙에서 벗어난 주파수의 sine wave에 곱한 뒤 `np.fft.rfft` 의 크기를 dB로 그리면 된다.)
 
 **③ 완전 복원 조건을 깨뜨린다**
-hop을 window 길이와 같게(overlap 0) 두고 역 STFT를 하면 무엇이 생기는가?
-COLA 조건을 만족하는 hop을 찾아 확인하라.
+hop을 window 길이와 같게(overlap 0) 두고 역 STFT를 하면 무엇이 생기는가? COLA 조건을 만족하는 hop을 찾아 확인하라.
+(이 장에는 역 STFT 코드가 없다. [8.7](07_tts.qmd)의 `griffinlim` 청크에 있는 `istft` 함수를 가져다 쓰면 된다.)
 :::
 
 ## 연습 문제
