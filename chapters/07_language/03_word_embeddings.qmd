@@ -758,6 +758,110 @@ Part 5의 attention이 정확히 이 문제를 푼 도구다.
 SGNS의 "positive 쌍은 끌어당기고 negative 쌍은 밀어낸다"가
 현대 contrastive learning(InfoNCE)의 원형이다.
 
+---
+
+## 실제 도구로: 공개된 GloVe 벡터
+
+이 장의 analogy는 성립하도록 설계한 언어에서 잰 것이다. 여기서는 실제 말뭉치로 학습된 GloVe 벡터를 내려받아 같은 것을 잰다. 설계하지 않은 데이터에서는 어디까지 성립하는가를 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `gensim` 4.4, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install gensim`).
+- 벡터는 `glove-wiki-gigaword-100` 이다. Wikipedia와 뉴스 말뭉치로 학습한 100차원 GloVe이고, 단어 40만 개에 128 MB다. 전부 소문자다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import gensim.downloader as api
+
+kv = api.load("glove-wiki-gigaword-100")           # Wikipedia + Gigaword 로 학습한 GloVe, 100차원
+print(len(kv.index_to_key), kv.vector_size)
+
+unit = lambda w: kv[w] / np.linalg.norm(kv[w])
+cos = lambda a, b: float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+# 1) 이웃
+print([(w, round(s, 2)) for w, s in kv.most_similar("king", topn=5)])
+
+# 2) analogy: king - man + woman.  입력 단어를 후보에서 빼느냐에 따라 답이 달라진다
+v = unit("king") - unit("man") + unit("woman")
+sims = kv.vectors @ v / (np.linalg.norm(kv.vectors, axis=1) * np.linalg.norm(v))
+print([(kv.index_to_key[i], round(float(sims[i]), 2)) for i in np.argsort(-sims)[:4]])   # 빼지 않음
+print([(w, round(s, 2)) for w, s in kv.most_similar(["king", "woman"], ["man"], topn=3)])  # 뺌
+
+# 3) 관계 종류에 따라 성적이 다르다 (a : b = c : ?)
+QS = {
+    "수도": [("france", "paris", "japan", "tokyo"), ("france", "paris", "germany", "berlin"),
+             ("france", "paris", "italy", "rome"), ("france", "paris", "egypt", "cairo"),
+             ("france", "paris", "korea", "seoul"), ("france", "paris", "canada", "ottawa")],
+    "성별": [("man", "woman", "king", "queen"), ("man", "woman", "father", "mother"),
+             ("man", "woman", "uncle", "aunt"), ("man", "woman", "actor", "actress"),
+             ("man", "woman", "brother", "sister"), ("man", "woman", "boy", "girl")],
+    "비교급": [("big", "bigger", "small", "smaller"), ("big", "bigger", "fast", "faster"),
+               ("big", "bigger", "good", "better"), ("big", "bigger", "cold", "colder"),
+               ("big", "bigger", "easy", "easier"), ("big", "bigger", "bad", "worse")],
+    "반의어": [("hot", "cold", "big", "small"), ("hot", "cold", "fast", "slow"),
+               ("hot", "cold", "happy", "sad"), ("hot", "cold", "rich", "poor"),
+               ("hot", "cold", "early", "late"), ("hot", "cold", "strong", "weak")],
+}
+for name, qs in QS.items():
+    got = [kv.most_similar([b, c], [a], topn=1)[0][0] for a, b, c, _ in qs]
+    ok = sum(g == q[3] for g, q in zip(got, qs))
+    print(name, f"{ok}/{len(qs)}", [f"{q[2]}→{g}" for g, q in zip(got, qs) if g != q[3]])
+
+# 4) 차이 벡터는 얼마나 평행한가
+pairs = [("man", "woman"), ("king", "queen"), ("father", "mother"), ("uncle", "aunt"),
+         ("actor", "actress"), ("brother", "sister"), ("boy", "girl"), ("he", "she")]
+D = [unit(b) - unit(a) for a, b in pairs]
+cs = [cos(D[i], D[j]) for i in range(len(D)) for j in range(i + 1, len(D))]
+print(round(float(np.mean(cs)), 3), round(min(cs), 3), round(max(cs), 3))
+
+# 5) bias: 직업 단어를 he→she 방향에 projection 한다
+axis = unit("she") - unit("he"); axis /= np.linalg.norm(axis)
+jobs = ["nurse", "receptionist", "librarian", "teacher", "doctor", "lawyer",
+        "programmer", "engineer", "carpenter", "mechanic"]
+print(sorted([(j, round(float(unit(j) @ axis), 2)) for j in jobs], key=lambda t: -t[1]))
+
+# 6) 다의어: 벡터는 단어마다 하나뿐이다
+for w in ["bank", "apple", "bat"]:
+    print(w, [x for x, _ in kv.most_similar(w, topn=6)])
+print(round(float(kv.similarity("bank", "river")), 2), round(float(kv.similarity("bank", "money")), 2))
+
+# 7) vocabulary 에 없는 단어
+for w in ["tokenizer", "tokenizerz", "Paris"]:
+    print(w, w in kv.key_to_index)
+
+# 400000 100
+# [('prince', 0.77), ('queen', 0.75), ('son', 0.7), ('brother', 0.7), ('monarch', 0.7)]
+# [('king', 0.84), ('queen', 0.77), ('monarch', 0.68), ('throne', 0.68)]
+# [('queen', 0.77), ('monarch', 0.68), ('throne', 0.68)]
+# 수도 5/6 ['canada→toronto']
+# 성별 5/6 ['brother→daughter']
+# 비교급 4/6 ['small→larger', 'cold→cooler']
+# 반의어 2/6 ['big→even', 'happy→feel', 'rich→richer', 'strong→stronger']
+# 0.627 0.444 0.795
+# [('nurse', 0.28), ('receptionist', 0.27), ('librarian', 0.1), ('teacher', 0.07), ('doctor', 0.04), ('carpenter', -0.02), ('programmer', -0.06), ('lawyer', -0.07), ('mechanic', -0.12), ('engineer', -0.16)]
+# bank ['banks', 'banking', 'credit', 'investment', 'financial', 'securities']
+# apple ['microsoft', 'ibm', 'intel', 'software', 'dell', 'pc']
+# bat ['bats', 'balls', 'pitch', 'batting', 'wicket', 'ball']
+# 0.33 0.57
+# tokenizer False
+# tokenizerz False
+# Paris False
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **king − man + woman에 가장 가까운 것은 queen이 아니라 king이다 (G7.3.4).** 입력 단어를 후보에서 빼지 않으면 1위가 king(0.84)이고 queen(0.77)은 2위다. 벡터 산수의 결과가 출발점에서 별로 멀리 가지 않기 때문이다. "queen이 나온다"는 유명한 결과는 입력 세 단어를 후보에서 뺀다는 규칙을 포함한다. 본문의 `analogy_top` 도 `ban` 으로 같은 일을 하고, `most_similar` 도 그렇게 한다.
+- **관계의 종류에 따라 성적이 다르다.** 수도 5/6, 성별 5/6, 비교급 4/6, 반의어 2/6이다. 반의어에서 틀린 답은 even, feel, richer, stronger로, 관계를 옮긴 것이 아니라 질문 단어의 이웃을 돌려준 것에 가깝다. "뜨겁다 → 차갑다"는 한 방향의 평행이동으로 표현되는 관계가 아니다. 항목이 여섯 개씩뿐이라 이 비율 자체는 근거가 약하고, 관계마다 다르다는 것만 읽는다.
+- **차이 벡터는 평행하지 않고 비슷한 쪽을 향할 뿐이다 (G7.3.4).** 성별 쌍 8개의 차이 벡터끼리 cosine 유사도가 평균 0.63, 최소 0.44다. 본문의 설계한 언어에서는 차이 벡터가 거의 같은 방향이었다. 실제 벡터에서 analogy가 가끔 틀리는 이유가 여기 있다.
+- **직업 단어가 성별 방향에 줄을 선다 (G7.3.6).** he → she 방향으로의 projection이 nurse 0.28, receptionist 0.27에서 mechanic −0.12, engineer −0.16까지 늘어선다. 누가 넣은 것이 아니라 말뭉치에서 이 단어들이 어떤 대명사와 함께 쓰였는지가 그대로 남은 것이다.
+- **벡터 하나에 뜻 하나만 남는다 (G7.3.7).** bank의 이웃은 전부 금융이고, apple의 이웃은 전부 컴퓨터 회사이고, bat의 이웃은 전부 야구와 크리켓이다. 강둑, 과일, 박쥐는 이웃 6개 안에 없다. bank와 river의 유사도(0.33)가 0은 아니지만 money(0.57)보다 훨씬 낮다. 뉴스 말뭉치에서 더 자주 쓰인 뜻이 벡터를 차지했다.
+- **vocabulary에 없으면 벡터가 없다.** 40만 단어 안에 tokenizer가 없다. 오타 tokenizerz도 없고, 대문자로 쓴 Paris도 없다(전부 소문자로 학습됐다). `kv["tokenizer"]` 는 `KeyError` 를 낸다. 본문에서 fastText가 풀려던 문제다.
+
+**이 코드가 보여 주지 못하는 것.**
+analogy 문항 24개와 직업 단어 10개는 이 절을 위해 고른 것이다. 다른 단어를 고르면 숫자가 달라지고, 특히 bias 결과는 어떤 단어를 목록에 넣느냐에 민감하다. 제대로 재려면 Google analogy test set(약 2만 문항)이나 WEAT처럼 정해진 시험을 써야 한다.
+또 이것은 100차원, 60억 token 말뭉치의 벡터 하나다. 차원이나 말뭉치가 다른 벡터에서는 값이 다르다.
 
 ---
 
