@@ -606,6 +606,109 @@ $d_{\text{model}}$ 이 커지면 He와 어긋난다 — 그래서 muP 같은 sca
 
 ---
 
+## 실제 도구로: `torch.nn.init` 과 PyTorch의 기본값
+
+이 장의 식이 PyTorch의 initialization 함수와 같은지 확인하고, `nn.Linear` 를 그냥 만들었을 때 무엇이 들어가는지, GPT-2가 실제로 어떤 값으로 시작하는지를 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 내려받는 것이 없다. GPT-2도 가중치를 받지 않고 설정만으로 "학습 전" 모델을 만든다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+from transformers import GPT2Config, GPT2LMHeadModel
+
+nn = torch.nn
+torch.manual_seed(0)
+n = 512
+
+# 1) nn.init 의 함수들이 이 장의 식과 같은 표준편차를 주는가
+W = torch.empty(n, n)
+for name, fn, want in [("He", lambda w: nn.init.kaiming_normal_(w, nonlinearity="relu"), math.sqrt(2 / n)),
+                       ("Xavier", nn.init.xavier_normal_, math.sqrt(2 / (n + n))),
+                       ("orthogonal", nn.init.orthogonal_, math.sqrt(1 / n))]:
+    fn(W)
+    print(name, round(W.std().item(), 5), round(want, 5))
+
+# 2) nn.Linear 를 그냥 만들면 어떤 initialization 인가
+lin = nn.Linear(n, n)
+print(round(lin.weight.std().item(), 5), round(math.sqrt(1 / (3 * n)), 5),
+      round(lin.weight.abs().max().item(), 5), round(1 / math.sqrt(n), 5))
+
+# 3) 30층 ReLU 망에 신호를 흘린다: 마지막 층 activation 의 크기와,
+#    출력에 크기 1 짜리 gradient 를 넣었을 때 첫 층 weight 까지 돌아온 gradient 의 크기
+def probe(init, depth=30):
+    torch.manual_seed(0)
+    layers = []
+    for _ in range(depth):
+        l = nn.Linear(n, n)
+        init(l)
+        layers += [l, nn.ReLU()]
+    net = nn.Sequential(*layers)
+    h = net(torch.randn(256, n))
+    h.backward(torch.ones_like(h) / math.sqrt(h.numel()))
+    return f"{h.pow(2).mean().sqrt().item():.2e}", f"{layers[0].weight.grad.norm().item():.2e}"
+
+def he(l): nn.init.kaiming_normal_(l.weight, nonlinearity="relu"); nn.init.zeros_(l.bias)
+def xavier(l): nn.init.xavier_normal_(l.weight); nn.init.zeros_(l.bias)
+def default(l): nn.init.zeros_(l.bias)                    # weight 는 nn.Linear 가 넣어 준 그대로
+print("기본값", probe(default))
+print("Xavier", probe(xavier))
+print("He    ", probe(he))
+print(f"{6 ** -15:.2e} {2 ** -15:.2e}")                    # 층마다 분산이 1/6, 1/2 배일 때 30층 뒤의 크기
+
+# 4) 모든 weight 를 같은 값으로 시작하면: 학습을 해도 hidden unit 들이 서로 구별되지 않는다
+torch.manual_seed(0)
+net = nn.Sequential(nn.Linear(4, 8), nn.Tanh(), nn.Linear(8, 1))
+for p in net.parameters():
+    nn.init.constant_(p, 0.5)
+x, t = torch.randn(64, 4), torch.randn(64, 1)
+opt = torch.optim.SGD(net.parameters(), lr=0.1)
+for _ in range(200):
+    opt.zero_grad(); (net(x) - t).pow(2).mean().backward(); opt.step()
+print((net[0].weight - net[0].weight[0]).abs().max().item())    # hidden unit 8개의 weight 가 서로 같은가
+
+# 5) GPT-2 를 '학습 전' 상태로 만들면 (가중치를 내려받지 않고 config 로만 생성)
+torch.manual_seed(0)
+g = GPT2LMHeadModel(GPT2Config())                          # 12층, d_model 768
+b = g.transformer.h[0]
+std = lambda p: round(p.std().item(), 5)
+print(std(g.transformer.wte.weight), std(b.attn.c_attn.weight), std(b.mlp.c_fc.weight))
+print(std(b.attn.c_proj.weight), std(b.mlp.c_proj.weight), round(0.02 / math.sqrt(2 * 12), 5))
+print(b.ln_1.weight.unique().tolist(), b.ln_1.bias.unique().tolist(), b.attn.c_attn.bias.abs().max().item())
+
+# He 0.06251 0.0625
+# Xavier 0.04423 0.04419
+# orthogonal 0.04419 0.04419
+# 0.02552 0.02552 0.04419 0.04419
+# 기본값 ('2.49e-12', '4.00e-10')
+# Xavier ('1.75e-05', '2.05e-03')
+# He     ('5.74e-01', '4.76e+01')
+# 2.13e-12 3.05e-05
+# 1.7881393432617188e-07
+# 0.02 0.02 0.02
+# 0.00408 0.00408 0.00408
+# [1.0] [0.0] 0.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **`nn.init` 의 함수들은 이 장의 표 그대로다.** $n_{\text{in}} = n_{\text{out}} = 512$ 에서 He는 $\sqrt{2/512} = 0.0625$, Xavier는 $\sqrt{2/1024} = 0.0442$ 다. orthogonal 행렬의 원소도 표준편차가 $\sqrt{1/512}$ 로 LeCun과 같은 크기다.
+- **`nn.Linear` 의 기본값은 He가 아니다.** 아무것도 지정하지 않으면 weight가 $\pm 1/\sqrt{n_{\text{in}}}$ 사이의 균등분포로 채워진다(최댓값 0.0442). 표준편차로는 $\sqrt{1/(3n_{\text{in}})} = 0.0255$ 이고, He의 0.41배다. 분산으로는 He의 1/6이다.
+- **그래서 기본값으로 깊은 ReLU 망을 쌓으면 신호가 사라진다 ("variance propagation 분석").** 30층 뒤 activation의 크기가 기본값에서 $2.5\times10^{-12}$, Xavier에서 $1.8\times10^{-5}$, He에서 0.57이다. 이 장의 계산대로면 ReLU 한 층을 지날 때 분산이 $n_{\text{in}}\sigma_w^2/2$ 배가 되므로, 기본값은 층마다 1/6, Xavier는 1/2, He는 1배다. 30층 뒤 크기의 예측이 $6^{-15} = 2.1\times10^{-12}$ 과 $2^{-15} = 3.1\times10^{-5}$ 이고 측정값과 같은 자릿수다.
+- **backward도 같은 순서로 무너진다 ("backward pass 쪽도 봐야 한다").** 출력에 크기 1짜리 gradient를 넣고 첫 층 weight까지 돌아온 gradient의 norm이 기본값 $4\times10^{-10}$, Xavier $2\times10^{-3}$, He 48이다. 값 자체는 입력의 크기가 곱해진 것이라 1과 비교할 수 없고, 세 값의 비율을 읽는다.
+- **같은 값으로 시작하면 끝까지 같다 ("왜 0으로 initialization하면 안 되는가").** 모든 weight를 0.5로 두고 200 step을 학습시킨 뒤에도 hidden unit 8개의 weight가 서로 같다(차이 $2\times10^{-7}$, float32의 반올림 수준). unit이 8개여도 하나만 있는 것과 같다.
+- **GPT-2의 시작값이 "실전 initialization 관례"의 표와 같다.** embedding, attention의 Q·K·V, FFN 첫 층이 모두 표준편차 0.02다. residual stream으로 나가는 두 output projection은 0.00408이고, 이것이 $0.02/\sqrt{2\cdot12}$ 다. LayerNorm은 $\gamma = 1$, $\beta = 0$, bias는 0이다.
+
+**이 코드가 보여 주지 못하는 것.**
+기본값이 깊은 망에서 무너진다는 결과는 **normalization도 residual connection도 없는 30층 ReLU 망**에서의 것이다. 실제로 쓰는 깊은 망에는 둘 중 하나가 거의 항상 있고, 그러면 기본값으로도 학습이 된다. PyTorch의 기본값이 틀렸다는 뜻이 아니라, 기본값이 무엇인지 모르고 구조를 바꾸면 이런 일이 생길 수 있다는 것까지만 읽는다.
+또 여기서 잰 것은 **학습 전 한 순간**의 신호 크기다. 실제로 학습이 되는지는 본문 G3.7.2처럼 학습을 돌려 봐야 안다. GPT-2에 대해서도 시작값이 표와 같다는 것만 확인했고, 그 값이 다른 값보다 낫다는 것은 확인하지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
