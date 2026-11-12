@@ -637,6 +637,98 @@ AdamW는 decay를 gradient가 아니라 **갱신 단계에 직접** 적용해 �
 
 ---
 
+## 실제 도구로: scikit-learn의 `Ridge` 와 `Lasso`
+
+이 장의 식과 성질을 scikit-learn으로 확인한다. 표본이 60개인데 특성이 50개이고, 그중 5개만 실제로 쓰이는 데이터를 만들어 OLS, Ridge, Lasso를 비교한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install scikit-learn`).
+- 데이터는 seed를 고정한 난수다. 참 계수는 앞 5개가 (3, −2, 2, −1, 1)이고 나머지 45개는 0이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from sklearn.linear_model import ElasticNet, Lasso, LassoCV, LinearRegression, Ridge, RidgeCV
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+rng = np.random.default_rng(0)
+
+# 데이터: 표본 60개, 특성 50개. 그중 5개만 실제로 쓰인다 (p 가 n 에 가까운 상황)
+n, p = 60, 50
+beta = np.zeros(p); beta[:5] = [3, -2, 2, -1, 1]
+X, Xte = rng.normal(size=(n, p)), rng.normal(size=(2000, p))
+y, yte = X @ beta + rng.normal(0, 1, n), Xte @ beta + rng.normal(0, 1, 2000)
+
+# 1) Ridge 는 닫힌 식 그대로다
+lam = 3.0
+closed = np.linalg.solve(X.T @ X + lam * np.eye(p), X.T @ y)
+print(np.abs(Ridge(alpha=lam, fit_intercept=False).fit(X, y).coef_ - closed).max())
+
+# 2) OLS, Ridge, Lasso: 계수의 크기, 0 이 아닌 계수의 수, 시험 R^2
+for name, m in [("OLS", LinearRegression()), ("Ridge", RidgeCV(alphas=np.logspace(-3, 3, 50))),
+                ("Lasso", LassoCV(cv=5, random_state=0))]:
+    m.fit(X, y)
+    print(name, round(float(np.linalg.norm(m.coef_)), 2), int((m.coef_ != 0).sum()),
+          round(m.score(Xte, yte), 3), round(float(getattr(m, "alpha_", 0)), 3))
+lasso = LassoCV(cv=5, random_state=0).fit(X, y)
+print(sorted(np.flatnonzero(lasso.coef_).tolist())[:8], [round(float(v), 2) for v in lasso.coef_[:5]])
+
+# 3) Lasso 의 경로: alpha 가 lambda_max 이상이면 전부 0 이다
+a_max = np.abs(X.T @ (y - y.mean())).max() / n
+print(round(float(a_max), 3), [int((Lasso(alpha=a_max * f, max_iter=50000).fit(X, y).coef_ != 0).sum())
+                               for f in (1.0, 0.5, 0.2, 0.05, 0.01)])
+print([int((np.abs(Ridge(alpha=a).fit(X, y).coef_) < 1e-10).sum()) for a in (1, 100, 10000)])
+
+# 4) 상관 0.99 인 쌍둥이 특성: Lasso 는 하나를 고르고, Ridge 와 ElasticNet 은 나눈다
+for seed in range(3):
+    r = np.random.default_rng(seed)
+    z = r.normal(size=200)
+    T = np.c_[z, 0.99 * z + np.sqrt(1 - 0.99 ** 2) * r.normal(size=200)]
+    t = z + r.normal(0, 0.5, 200)                             # 참 신호는 z 하나
+    row = [np.round(m.fit(T, t).coef_, 2).tolist() for m in
+           (Lasso(alpha=0.1), ElasticNet(alpha=0.1, l1_ratio=0.5), Ridge(alpha=10.0))]
+    print(seed, row)
+
+# 5) 단위를 바꾸면: 첫 특성을 m 에서 mm 로 (값이 1000 배)
+Xs, Xtes = X.copy(), Xte.copy()
+Xs[:, 0] *= 1000; Xtes[:, 0] *= 1000
+for name, make in [("OLS", LinearRegression), ("Ridge", lambda: Ridge(alpha=30.0)), ("Lasso", lambda: Lasso(alpha=0.3))]:
+    a, b = make().fit(X, y).predict(Xte), make().fit(Xs, y).predict(Xtes)
+    c = make_pipeline(StandardScaler(), make()).fit(X, y).predict(Xte)
+    d = make_pipeline(StandardScaler(), make()).fit(Xs, y).predict(Xtes)
+    print(name, round(float(np.abs(a - b).max()), 4), round(float(np.abs(c - d).max()), 6))
+
+# 2.7755575615628914e-15
+# OLS 4.97 50 0.751 0.0
+# Ridge 3.31 50 0.742 6.251
+# Lasso 4.07 18 0.923 0.105
+# [0, 1, 2, 3, 4, 7, 17, 20] [2.96, -1.79, 1.79, -0.73, 0.79]
+# 2.993 [0, 3, 6, 14, 34]
+# [0, 0, 0]
+# 0 [[0.81, 0.11], [0.54, 0.42], [0.56, 0.45]]
+# 1 [[0.94, 0.0], [0.66, 0.3], [0.69, 0.33]]
+# 2 [[0.9, 0.0], [0.56, 0.38], [0.58, 0.4]]
+# OLS 0.0 0.0
+# Ridge 7.4827 0.0
+# Lasso 1.6743 0.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **Ridge는 닫힌 식 그대로다 ("Ridge: L2 벌점").** $(X^\top X + \lambda I)^{-1}X^\top y$ 를 직접 푼 값과 `Ridge` 의 계수 차이가 $3\times10^{-15}$ 다. scikit-learn은 $\lambda$ 를 `alpha` 라고 부른다.
+- **이 데이터에서는 Lasso가 크게 이기고, Ridge는 OLS보다 나을 것이 없었다.** 시험 $R^2$ 가 OLS 0.751, Ridge 0.742, Lasso 0.923이다. 참 계수가 sparse하니 Lasso가 유리한 것은 예상대로다. Ridge가 OLS보다 조금 나쁘게 나온 것은 본문의 "언제나 이득"이 **최적의** $\lambda$ 에 대한 이야기이기 때문이다. `RidgeCV` 는 훈련 데이터의 leave-one-out으로 $\lambda = 6.25$ 를 골랐고, 그것이 시험 데이터에서 최적이 아니었다. $\lambda$ 를 데이터로 고르는 순간 보장은 사라진다.
+- **Lasso는 계수를 0으로 만들고, Ridge는 만들지 않는다 ("Lasso: L1 벌점과 sparsity").** Lasso가 남긴 계수는 50개 중 18개이고, 참 계수 5개가 모두 그 안에 있다. 나머지 13개는 잘못 남은 것이다. 남은 참 계수는 (2.96, −1.79, 1.79, −0.73, 0.79)로 0 쪽으로 줄어 있다. Ridge는 $\lambda$ 를 1, 100, 10,000으로 키워도 정확히 0인 계수가 하나도 없다.
+- **$\lambda_{\max}$ 이상에서는 전부 0이다 (G2.3.2).** $\lambda_{\max} = \max_j |x_j^\top(y - \bar y)|/n = 2.993$ 에서 0이 아닌 계수가 0개이고, 그 0.5배, 0.2배, 0.05배, 0.01배에서 3, 6, 14, 34개다. regularization path는 $\lambda_{\max}$ 에서 시작해 내려오면 된다.
+- **쌍둥이 특성에서 Lasso는 하나를 고르고, Ridge와 ElasticNet은 나눈다 ("직접 해보기" ③).** 상관 0.99인 두 특성에서 Lasso는 seed 1과 2에서 한쪽 계수를 정확히 0으로 만들었다(0.94와 0.0). seed 0에서는 둘 다 남겼다(0.81과 0.11). ElasticNet과 Ridge는 세 seed 모두 0.55 대 0.40 근처로 나눴다. 다만 이 실험에서 Lasso가 남긴 쪽은 늘 첫째 특성이었다. 첫째가 target을 만든 바로 그 변수 $z$ 이고 둘째는 $z$ 에 잡음을 섞은 것이라 둘이 대칭이 아니기 때문이다. 대칭인 쌍둥이였다면 seed에 따라 남는 쪽이 바뀌었을 것으로 보이지만 여기서는 확인하지 않았다.
+- **단위를 바꾸면 Ridge와 Lasso의 답이 바뀐다 ("왜 standardization이 필수인가").** 첫 특성을 1,000배(m를 mm로) 하면 OLS의 예측은 그대로이고(차이 0.0), Ridge는 7.48, Lasso는 1.67까지 달라진다. 1,000배 큰 값에는 작은 계수로 같은 일을 할 수 있으니 벌점을 거의 받지 않는다. `StandardScaler` 를 앞에 두면 두 경우의 예측이 정확히 같아진다.
+
+**이 코드가 보여 주지 못하는 것.**
+sparse한 참 계수를 일부러 만든 데이터다. 참 계수가 고르게 퍼져 있으면 Ridge가 Lasso보다 나은 경우가 흔하고, 어느 쪽이 나은지는 데이터가 정한다.
+Lasso가 참 계수 5개를 다 찾은 것은 신호(계수 1~3)가 잡음(표준편차 1)에 비해 컸기 때문이다. 신호가 약하거나 특성끼리 상관이 크면 Lasso의 선택은 불안정해진다. 그 불안정성은 여기서 재지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
