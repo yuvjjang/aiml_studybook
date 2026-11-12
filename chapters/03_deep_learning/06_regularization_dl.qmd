@@ -723,6 +723,136 @@ Zhang et al.(2017)의 실험이 문제를 선명하게 만들었다.
 
 ---
 
+## 실제 도구로: PyTorch의 dropout, weight decay, mixup, SWA
+
+이 장의 도구들을 PyTorch로 실제 데이터에 걸어 본다. 손글씨 숫자를 200장만으로 학습시켜 overfitting이 생기게 하고, 각 도구가 시험 정확도와 confidence를 어떻게 바꾸는지 잰다. 결과는 기대와 다르게 나왔고, 그대로 적는다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9 (데이터만). 모델을 내려받지 않는다.
+- 데이터는 scikit-learn에 들어 있는 손글씨 숫자 1,797장이다. 훈련 200장, 검증 500장, 시험 1,097장으로 나눴다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+
+nn, F = torch.nn, torch.nn.functional
+
+# 1) nn.Dropout: 학습 때는 0 으로 만들고 1/(1-p) 를 곱한다. 평가 때는 아무것도 안 한다
+torch.manual_seed(0)
+drop = nn.Dropout(p=0.5)
+x = torch.ones(100000)
+y = drop(x)
+print(round((y == 0).float().mean().item(), 3), y.unique().tolist(), round(y.mean().item(), 3))
+drop.eval()
+print(torch.equal(drop(x), x))
+
+# 데이터: 손글씨 숫자. 일부러 200장만으로 학습시켜 overfitting 을 만든다
+d = load_digits()
+perm = np.random.default_rng(0).permutation(len(d.target))
+X = torch.tensor(d.data[perm] / 16.0, dtype=torch.float32)
+y = torch.tensor(d.target[perm])
+Xtr, ytr, Xva, yva, Xte, yte = X[:200], y[:200], X[200:700], y[200:700], X[700:], y[700:]
+
+def mlp(p):
+    return nn.Sequential(nn.Linear(64, 512), nn.ReLU(), nn.Dropout(p), nn.Linear(512, 512), nn.ReLU(),
+                         nn.Dropout(p), nn.Linear(512, 10))
+
+def acc(m, X_, y_):
+    m.eval()
+    with torch.no_grad():
+        return round((m(X_).argmax(1) == y_).float().mean().item(), 3)
+
+def run(p=0.0, wd=0.0, epochs=300, swa_from=None, ema=None, mixup=0.0):
+    torch.manual_seed(0)
+    m = mlp(p)
+    opt = torch.optim.AdamW(m.parameters(), lr=1e-3, weight_decay=wd)
+    avg = None
+    if swa_from is not None:
+        avg = torch.optim.swa_utils.AveragedModel(m)
+    if ema is not None:
+        avg = torch.optim.swa_utils.AveragedModel(m, multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(ema))
+    hist = []
+    g = torch.Generator().manual_seed(0)
+    for ep in range(epochs):
+        m.train()
+        for idx in torch.randperm(200, generator=g).split(32):
+            xb, yb = Xtr[idx], F.one_hot(ytr[idx], 10).float()
+            if mixup:
+                lam = float(np.random.default_rng(ep * 100 + int(idx[0])).beta(mixup, mixup))
+                j = torch.randperm(len(idx), generator=g)
+                xb, yb = lam * xb + (1 - lam) * xb[j], lam * yb + (1 - lam) * yb[j]
+            opt.zero_grad()
+            F.cross_entropy(m(xb), yb).backward()
+            opt.step()
+            if ema is not None or (swa_from is not None and ep >= swa_from):
+                avg.update_parameters(m)
+        hist.append(acc(m, Xva, yva))
+    return m, avg, hist
+
+# 2) 아무 regularization 없이 / dropout / weight decay / mixup
+base, _, h0 = run()
+print("없음    ", acc(base, Xtr, ytr), acc(base, Xte, yte), int(np.argmax(h0)) + 1, max(h0), h0[-1])
+for name, kw in [("dropout 0.5", dict(p=0.5)), ("weight decay 0.1", dict(wd=0.1)), ("mixup α=0.4", dict(mixup=0.4))]:
+    m, _, h = run(**kw)
+    print(name, acc(m, Xtr, ytr), acc(m, Xte, yte))
+
+# 3) 과신: 시험 데이터에서 평균 confidence
+def conf(m):
+    m.eval()
+    with torch.no_grad():
+        return round(m(Xte).softmax(1).max(1).values.mean().item(), 3)
+print(conf(base), conf(run(mixup=0.4)[0]), conf(run(p=0.5)[0]))
+
+# 4) weight averaging: SWA (100 epoch 부터 평균) 와 EMA (decay 0.999)
+_, swa, _ = run(swa_from=100)
+_, emam, _ = run(ema=0.999)
+print(acc(swa.module, Xte, yte), acc(emam.module, Xte, yte))
+
+# 5) early stopping 과 Ridge: 선형 회귀에서 GD 를 t step 돌린 것 vs lambda = 1/(eta t) 인 Ridge
+rng = np.random.default_rng(0)
+A = rng.normal(size=(100, 20)); A[:, 1] = A[:, 0] + 0.1 * rng.normal(size=100)
+b = A @ rng.normal(size=20) + rng.normal(size=100)
+eta = 0.001
+for steps in [10, 100, 1000]:
+    w = np.zeros(20)
+    for _ in range(steps):
+        w -= eta * A.T @ (A @ w - b)
+    lam = 1 / (eta * steps)
+    ridge = np.linalg.solve(A.T @ A + lam * np.eye(20), A.T @ b)
+    print(steps, round(float(np.linalg.norm(w)), 3), round(float(np.linalg.norm(ridge)), 3),
+          round(float(np.linalg.norm(w - ridge) / np.linalg.norm(ridge)), 3))
+
+# 0.501 [0.0, 2.0] 0.999
+# True
+# 없음     1.0 0.951 83 0.94 0.936
+# dropout 0.5 1.0 0.954
+# weight decay 0.1 1.0 0.954
+# mixup α=0.4 1.0 0.931
+# 0.976 0.828 0.983
+# 0.949 0.949
+# 10 2.824 2.149 0.316
+# 100 4.114 3.728 0.114
+# 1000 4.125 4.08 0.013
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **`nn.Dropout` 은 학습 때 키우고, 평가 때 아무것도 안 한다 (G3.6.1, "직접 해보기" ①).** $p = 0.5$ 에서 50.1%가 0이 되고 나머지는 2.0이 된다. 평균은 0.999로 입력과 같다. 이 장의 inverted dropout이다. `eval()` 로 바꾸면 입력이 그대로 나온다. 그래서 평가 때 `eval()` 을 잊으면 예측이 매번 달라진다.
+- **이 데이터에서는 어떤 regularization도 시험 정확도를 거의 바꾸지 않았다.** 아무것도 없을 때 훈련 정확도 1.0, 시험 0.951이다. dropout 0.954, weight decay 0.954, mixup 0.931이다. 앞의 둘은 시험 1,097장에서 3장 차이이고, mixup은 오히려 나빴다. 훈련 데이터를 다 외웠는데도 시험 정확도가 0.95라서, 고칠 overfitting이 많지 않았다. 본문 첫 절의 실험처럼, 큰 망이 작은 데이터에서 생각만큼 무너지지 않은 것이다.
+- **early stopping도 이득이 작다 ("early stopping").** 검증 정확도는 83번째 epoch에 0.94로 가장 높았고, 300 epoch 끝에 0.936이다. 늦게 멈춘 손해가 0.004다.
+- **mixup은 confidence를 크게 낮춘다. 여기서는 너무 낮췄다 ("직접 해보기" ②).** 시험 데이터의 평균 confidence가 regularization 없이 0.976, dropout 0.983, mixup 0.828이다. 앞의 둘은 정확도(0.95)보다 높아 과신이고, mixup은 정확도(0.931)보다 한참 낮아 **과소 확신**이다. 섞인 label로만 학습했으니 확률 1에 가까운 답을 본 적이 없다. calibration을 맞추려면 [12.2](../12_trust/02_uncertainty.qmd)의 temperature scaling이 따로 필요하다.
+- **weight averaging은 PyTorch에 들어 있다 (G3.6.3).** `torch.optim.swa_utils.AveragedModel` 하나로 SWA(100 epoch부터 단순 평균)와 EMA(decay 0.999)를 만들 수 있다. 둘 다 시험 정확도가 0.949로, 평균하지 않은 모델(0.951)과 같은 수준이다. BatchNorm이 있는 모델이라면 평균한 뒤 `swa_utils.update_bn` 으로 통계를 다시 계산해야 한다. 여기서는 BatchNorm이 없어 생략했다.
+- **early stopping은 Ridge와 비슷하다 ("직접 해보기" ③).** 선형 회귀에서 gradient descent를 $t$ step 돌린 계수와 $\lambda = 1/(\eta t)$ 인 Ridge의 계수가 상대 차이 0.316(10 step), 0.114(100 step), 0.013(1,000 step)이다. 둘 다 0에서 출발해 작은 고유값 방향을 덜 키운다는 점이 같고, step이 많을수록 대응이 정확해진다. 정확히 같아지는 것은 아니다.
+
+**이 코드가 보여 주지 못하는 것.**
+seed 하나, 데이터 하나, hyperparameter 하나씩이다. dropout 비율, weight decay 세기, mixup의 $\alpha$ 를 바꾸면 결과가 달라질 수 있고, 여기서는 훑지 않았다. "regularization이 소용없다"가 아니라 "이 설정에서는 차이가 시험 데이터의 흔들림 안에 있다"까지만 읽는다.
+8×8 숫자는 쉬운 과제라 정확도가 처음부터 높다. 데이터가 어렵고 모델이 클수록 이 도구들의 차이가 커진다고 알려져 있지만, 여기서 확인한 것은 아니다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
