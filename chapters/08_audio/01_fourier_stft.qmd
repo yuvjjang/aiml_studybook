@@ -443,6 +443,106 @@ HiFi-GAN 같은 신경망 vocoder는 그 대응을 아예 학습해버린다 —
 
 ---
 
+## 실제 도구로: `torch.stft` 와 `scipy.signal`
+
+실제 음성 모델의 앞단은 `torch.stft` (또는 그것을 감싼 `torchaudio`)로 spectrogram을 만든다. 이 장의 DFT, window, STFT, 역변환을 이 함수들로 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scipy` 1.18, `numpy` 2.5. 음성 파일 없이 합성한 신호를 쓴다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from scipy import signal
+
+sr = 16000
+t = np.arange(sr) / sr                                        # 1초
+
+# 1) torch.stft 와 scipy.signal.stft: 25 ms frame, 10 ms hop, Hann window
+x = np.sin(2 * np.pi * 440 * t) + 0.5 * np.sin(2 * np.pi * 1000 * t)
+n_fft, hop = 400, 160
+S = torch.stft(torch.tensor(x), n_fft=n_fft, hop_length=hop, window=torch.hann_window(n_fft, dtype=torch.float64),
+               return_complex=True, center=True)
+print(tuple(S.shape), S.dtype, round(sr / n_fft, 1))          # (주파수 bin, frame), bin 간격 Hz
+mag = S.abs().mean(1).numpy()
+pk = signal.find_peaks(mag, height=0.2 * mag.max())[0]          # 봉우리만 (이웃 bin 으로 번진 값은 빼고)
+print([round(i * sr / n_fft, 1) for i in pk])
+
+# 2) 같은 크기의 window 라도 함수에 따라 leakage 가 다르다: bin 사이에 걸친 주파수
+N = 1024
+f0 = 100.5 * sr / N                                           # 100번 bin 과 101번 bin 사이
+s = np.sin(2 * np.pi * f0 * np.arange(N) / sr)
+for name in ["boxcar", "hann", "hamming", "blackman"]:
+    w = signal.get_window(name, N)
+    spec = 20 * np.log10(np.abs(np.fft.rfft(s * w)) + 1e-12)
+    spec -= spec.max()
+    print(name, round(float(spec[130]), 1), round(float(spec[200]), 1))   # 피크에서 30 bin, 100 bin 떨어진 곳 (dB)
+
+# 3) 시간-주파수 해상도: 두 짧은 click(10 ms 간격)과 가까운 두 음(440, 460 Hz)
+clicks = np.zeros(sr); clicks[8000] = 1; clicks[8160] = 1
+tones = np.sin(2 * np.pi * 440 * t) + np.sin(2 * np.pi * 460 * t)
+for n in [128, 400, 1600]:
+    f, tt, Z = signal.stft(clicks, sr, nperseg=n, noverlap=n - 32)
+    e = np.abs(Z).sum(0)
+    peaks = signal.find_peaks(e / e.max(), height=0.5)[0]
+    f2, _, Z2 = signal.stft(tones, sr, nperseg=n, noverlap=n // 2)
+    m = np.abs(Z2).mean(1)
+    band = (f2 > 300) & (f2 < 600)
+    pk = signal.find_peaks(m[band], height=0.5 * m[band].max())[0]
+    print(n, round(1000 * n / sr, 1), round(sr / n, 1), len(peaks), len(pk))   # frame ms, Δf Hz, 보인 click 수, 보인 음 수
+
+# 4) 역 STFT: overlap 이 충분하면 완전히 돌아온다, 없으면 이음매가 생긴다
+for hop_ in [100, 200, 400]:
+    w = torch.hann_window(400, dtype=torch.float64)
+    Z = torch.stft(torch.tensor(x), 400, hop_, window=w, return_complex=True)
+    try:
+        back = torch.istft(Z, 400, hop_, window=w, length=len(x))
+        print(hop_, f"{(back - torch.tensor(x)).abs().max().item():.1e}")
+    except RuntimeError as e:
+        print(hop_, "RuntimeError", str(e)[:70])
+print(signal.check_COLA("hann", 400, 400 - 200), signal.check_COLA("hann", 400, 0))
+
+# 5) 위상을 버리면: 크기는 그대로 두고 위상을 무작위로 바꿔 되돌린다
+Z = torch.stft(torch.tensor(x), 400, 100, window=torch.hann_window(400, dtype=torch.float64), return_complex=True)
+rng = np.random.default_rng(0)
+Zr = Z.abs() * torch.exp(1j * torch.tensor(rng.uniform(0, 2 * np.pi, Z.shape)))
+y = torch.istft(Zr, 400, 100, window=torch.hann_window(400, dtype=torch.float64), length=len(x))
+Zy = torch.stft(y, 400, 100, window=torch.hann_window(400, dtype=torch.float64), return_complex=True)
+print(round(float(np.corrcoef(x, y.numpy())[0, 1]), 3), round(((Zy.abs() - Z.abs()).norm() / Z.abs().norm()).item(), 3))
+
+# (201, 101) torch.complex128 40.0
+# [np.float64(440.0), np.float64(1000.0)]
+# boxcar -36.4 -48.6
+# hann -96.7 -128.7
+# hamming -55.2 -67.4
+# blackman -104.5 -136.4
+# 128 8.0 125.0 2 0
+# 400 25.0 40.0 2 1
+# 1600 100.0 10.0 1 2
+# 100 1.1e-15
+# 200 1.3e-15
+# 400 RuntimeError istft(CPUComplexDoubleType[201, 41], n_fft=400, hop_length=400, win_le
+# True False
+# 0.09 0.654
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **`torch.stft` 의 출력 모양 ("실무 설정값").** 16 kHz, 25 ms frame(400 sample), 10 ms hop(160 sample)으로 1초를 변환하면 (201, 101)이다. 주파수 bin은 $400/2+1 = 201$ 개이고 간격은 40 Hz다. frame은 101개다. `center=True` (기본값)라 양 끝에 반 frame씩 덧대서 $16000/160 + 1$ 개가 된다. 출력은 복소수이고, 크기와 위상을 함께 담고 있다.
+- **봉우리가 넣은 주파수에 선다.** 440 Hz와 1,000 Hz를 섞은 신호에서 봉우리가 정확히 440과 1,000 Hz다. 두 주파수가 모두 40 Hz의 배수라 bin 한가운데에 놓였다. 다만 가장 큰 bin 두 개를 고르면 440 Hz와 그 옆 400 Hz가 나온다. Hann window가 440 Hz의 에너지를 이웃 bin으로 번지게 하고, 그 번진 값(진폭의 절반)이 진폭이 절반인 1,000 Hz의 봉우리와 비슷한 크기이기 때문이다. 봉우리를 찾을 때는 이웃보다 큰 bin을 골라야 한다.
+- **window 함수에 따라 leakage가 100 dB 가까이 다르다 (G8.1.2, "직접 해보기" ②).** bin과 bin 사이(100.5번 bin)에 걸친 sine wave에서, 봉우리로부터 30 bin 떨어진 곳의 크기가 rectangular window −36 dB, Hamming −55 dB, Hann −97 dB, Blackman −105 dB다. window를 안 쓰는 것(rectangular)은 끝이 잘린 신호를 그대로 변환하는 것이라 에너지가 멀리까지 퍼진다.
+- **frame을 길게 하면 주파수가, 짧게 하면 시간이 선명해진다 (G8.1.3, "직접 해보기" ①).** 10 ms 간격의 click 두 개와 20 Hz 간격의 음 두 개(440, 460 Hz)를 놓고 frame 길이를 바꿨다. 8 ms frame(Δf 125 Hz)은 click 둘을 구분하지만 두 음은 구분하지 못한다(300~600 Hz 사이 bin이 375와 500 Hz 둘뿐이라 봉우리가 서지 않는다). 25 ms(Δf 40 Hz)는 click 둘은 아직 구분하지만 두 음은 하나로 보인다. 100 ms(Δf 10 Hz)는 두 음을 구분하지만 click은 하나로 합쳐진다. frame 길이와 Δf의 곱이 늘 1이다.
+- **overlap이 충분해야 되돌릴 수 있다 ("직접 해보기" ③).** Hann window 400 sample에 hop 100과 200이면 `torch.istft` 로 되돌린 신호가 원래와 $10^{-15}$ 까지 같다. hop 400(overlap 0)이면 `torch.istft` 가 오류를 낸다. window가 0인 frame 경계에서 나눌 값이 없어 복원이 불가능하기 때문이다(NOLA 조건). scipy의 `check_COLA` 도 overlap 200은 True, 0은 False다.
+- **위상을 버리면 소리가 다른 것이 된다 ("위상을 버리는 대가").** STFT의 크기는 그대로 두고 위상만 무작위로 바꿔 되돌리면, 원래 신호와의 상관이 0.09다. 그 결과를 다시 STFT하면 크기도 원래와 65% 다르다. 무작위 위상은 서로 맞지 않아서, 겹치는 frame들이 서로를 지운다. 크기만 있는 spectrogram에서 소리를 만들려면 [8.7](07_tts.qmd)의 Griffin-Lim이나 vocoder가 필요한 이유다.
+
+**이 코드가 보여 주지 못하는 것.**
+모든 신호가 깨끗한 합성 신호다. 실제 음성에는 잡음과 여러 음원이 섞이고, 주파수가 bin 한가운데 놓이는 일은 없다.
+mel filterbank와 log 압축은 다음 장([8.2](02_mel_mfcc.qmd))의 내용이라 여기서 하지 않았다. `torchaudio.transforms.MelSpectrogram` 이 그것을 한 번에 한다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
