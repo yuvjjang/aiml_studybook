@@ -690,6 +690,112 @@ entropy는 `{python} f'{ENT[0][2]:.3f}'` → `{python} f'{ENT[-1][2]:.3f}'`로 �
 
 ---
 
+## 실제 도구로: CartPole에서 REINFORCE
+
+Gymnasium의 CartPole에서 REINFORCE를 PyTorch로 학습시킨다. 막대가 쓰러지지 않게 수레를 좌우로 미는 과제이고, 버틴 step마다 보상 1을 받아 최대 500이다. baseline(학습하는 value 함수)의 유무로 학습 곡선과 gradient의 흩어짐을 비교한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `gymnasium` 1.4
+- 학습 여섯 번(에피소드 600개씩)에 CPU로 30분 넘게 걸렸다. 에피소드가 길어질수록 느려진다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+import gymnasium as gym
+
+nn = torch.nn
+env = gym.make("CartPole-v1")                 # 막대가 쓰러지지 않게 수레를 좌우로 민다. 버틴 step 마다 +1, 최대 500
+print(env.observation_space.shape, env.action_space.n, env.spec.max_episode_steps)
+
+
+def make(seed):
+    torch.manual_seed(seed)
+    pi = nn.Sequential(nn.Linear(4, 64), nn.Tanh(), nn.Linear(64, 2))
+    v = nn.Sequential(nn.Linear(4, 64), nn.Tanh(), nn.Linear(64, 1))
+    return pi, v
+
+
+def episode(pi, seed):
+    obs, _ = env.reset(seed=seed)
+    logps, rews, states, done = [], [], [], False
+    while not done:
+        s = torch.tensor(obs, dtype=torch.float32)
+        dist = torch.distributions.Categorical(logits=pi(s))
+        a = dist.sample()
+        obs, r, term, trunc, _ = env.step(a.item())
+        logps.append(dist.log_prob(a)); rews.append(r); states.append(s)
+        done = term or trunc
+    return torch.stack(logps), rews, torch.stack(states)
+
+
+def returns_to_go(rews, gamma=0.99):
+    G, out = 0.0, []
+    for r in reversed(rews):
+        G = r + gamma * G
+        out.append(G)
+    return torch.tensor(out[::-1])
+
+
+def train(baseline, episodes=600, seed=0):
+    pi, v = make(seed)
+    opt = torch.optim.Adam(list(pi.parameters()) + list(v.parameters()), lr=1e-2)
+    torch.manual_seed(seed)
+    lengths = []
+    for ep in range(episodes):
+        logp, rews, states = episode(pi, seed * 100000 + ep)
+        G = returns_to_go(rews)
+        if baseline:
+            b = v(states).squeeze(1)
+            adv = G - b.detach()
+            loss = -(logp * adv).sum() + ((G - b) ** 2).mean()
+        else:
+            loss = -(logp * G).sum()
+        opt.zero_grad(); loss.backward(); opt.step()
+        lengths.append(len(rews))
+    return pi, v, np.array(lengths)
+
+
+# 1) REINFORCE, baseline 없음 / 있음 (seed 3개)
+for baseline in [False, True]:
+    runs = [train(baseline, seed=s)[2] for s in range(3)]
+    print(baseline, [int(r[:50].mean()) for r in runs], [int(r[-50:].mean()) for r in runs])
+
+# 2) 같은 policy 에서 gradient 추정의 흩어짐: 한 에피소드짜리 추정 50개의 표준편차
+pi, v, _ = train(True, episodes=150, seed=0)
+def grad_once(use_b, s):
+    logp, rews, states = episode(pi, s)
+    G = returns_to_go(rews)
+    adv = G - v(states).squeeze(1).detach() if use_b else G
+    g = torch.autograd.grad(-(logp * adv).sum(), list(pi.parameters()))
+    return torch.cat([x.flatten() for x in g])
+for use_b in [False, True]:
+    torch.manual_seed(1)
+    gs = torch.stack([grad_once(use_b, 900000 + i) for i in range(50)])
+    print(use_b, round(gs.mean(0).norm().item(), 1), round(gs.std(0).norm().item(), 1))
+
+# (4,) 2 500
+# False [39, 35, 48] [500, 167, 332]
+# True [43, 55, 44] [500, 144, 321]
+# False 496.7 4552.0
+# True 222.9 1201.4
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **REINFORCE는 실제로 배운다 ("policy gradient theorem").** 처음 50 에피소드의 평균 길이가 35~55 step이고, 마지막 50 에피소드는 seed에 따라 144~500 step이다. 두 run은 최대치 500에 닿았다. $\log\pi(a|s)$ 에 return을 곱해 올리는 것만으로 된다.
+- **이 실험에서 baseline은 학습 곡선을 뚜렷하게 바꾸지 않았다.** 마지막 50 에피소드 평균이 baseline 없이 500, 167, 332이고, 있을 때 500, 144, 321이다. seed 사이의 차이가 baseline 유무의 차이보다 훨씬 크다. seed 세 개로는 어느 쪽이 낫다고 말할 수 없다.
+- **gradient의 흩어짐은 크게 줄었다 (G10.4.1, "직접 해보기" ①).** 같은 policy에서 에피소드 하나로 낸 gradient 추정 50개의 표준편차(norm)가 baseline 없이 4,552, 있을 때 1,201이다. 3.8배, 분산으로는 약 14배다. 본문의 "기댓값은 그대로, variance만 줄인다" 중 뒤쪽이 실제 신경망 policy에서도 나온다.
+- **기댓값이 같다는 것은 이 숫자로는 확인되지 않는다.** 평균 gradient의 norm이 497과 223으로 달라 보이지만, baseline이 없는 쪽은 50개 평균의 표준오차가 $4552/\sqrt{50} \approx 644$ 로 평균 자체보다 크다. 평균을 비교할 만큼 표본이 많지 않다. 본문은 기댓값을 정확히 계산할 수 있는 작은 격자에서 그것을 확인했다.
+- **variance가 줄었는데 학습이 빨라지지 않은 이유는 가리지 못했다.** Adam이 gradient 크기를 정규화하는 것, 학습률(0.01)이 커서 다른 요인이 학습을 지배했을 가능성 등이 있지만 따로 실험하지 않았다.
+
+**이 코드가 보여 주지 못하는 것.**
+seed 세 개, 600 에피소드의 결과다. 강화학습의 학습 곡선은 seed에 따라 크게 갈려서(여기서도 144~500), 비교하려면 seed가 훨씬 많이 필요하다([11.0](../11_systems/00_reproducibility.qmd)).
+GAE와 PPO는 다루지 않았다. 직접 구현하면 길어지고, 실무에서는 Stable-Baselines3 같은 library의 구현을 쓴다. 이 장의 clipping 실험을 실제 환경에서 보려면 그런 구현으로 `clip_range` 와 epoch 수를 바꿔 보면 된다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
