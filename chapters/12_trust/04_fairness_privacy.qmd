@@ -577,12 +577,13 @@ fig
 동시에 만족시키려 해 보라. 어디서 모순이 나는가?
 
 **② 완화 기법의 대가**
-`mitigation` 의 세 지점(pre-processing·학습 중·post-processing)에서 각각 fairness 지표와
-정확도를 재라. 어느 쪽이 비용이 적은가?
+`mitigation` 은 `impossibility` 에서 만든 threshold 전략들(전부 post-processing이다)의 정확도를 기준과 비교한다.
+어느 fairness 기준을 맞추는 전략이 정확도를 가장 많이 내주는가? 왜 그 기준이 비싼가?
+(pre-processing과 학습 중 완화는 표로 정리만 되어 있고 이 장의 코드로는 재지 않는다.)
 
 **③ DP budget과 격차**
-`dp-disparate` 에서 $\epsilon$을 조이면 소수 집단의 성능이 먼저 떨어진다.
-격차가 $\epsilon$에 어떻게 의존하는가?
+문헌은 $\epsilon$을 조이면 소수 집단의 성능이 먼저 떨어진다고 보고한다. 그런데 `dp-disparate` 의 실험에서는 그 현상이 **재현되지 않았다.**
+본문이 든 이유(선형 모델이라 두 집단이 parameter를 공유한다)를 읽고, 어떤 모델과 데이터에서라면 격차가 나타날지 예상해 보라. seed 하나의 결과만 보면 어떤 결론을 내리게 되는지도 확인하라.
 :::
 
 ## 요약
