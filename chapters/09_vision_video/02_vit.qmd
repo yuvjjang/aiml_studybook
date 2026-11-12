@@ -773,6 +773,99 @@ ViT 이후의 흐름은 대체로 **뺐던 bias를 조금씩 되가져오는** �
 - attention rollout 등 보정 기법 없이 한 층의 map만 보면 오해하기 쉽다
 - 즉 'attention이 물체를 찾는다'는 **학습 방식의 산물**이지 구조의 산물이 아니다
 
+---
+
+## 실제 도구로: 공개된 ViT로 확인하기
+
+지금까지는 공식과 작은 실험으로 ViT의 구조를 봤다. 여기서는 공개된 ViT-Base를 불러 이 장의 세 가지를 직접 확인한다. token 수, positional embedding의 interpolation, 그리고 위치 정보가 없으면 patch의 순서를 모른다는 것이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 주석 아래의 출력은 그때 나온 값이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다. 이 블록에는 `pip install pillow` 가 더 필요하다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `pillow` 13.0
+- 모델은 `google/vit-base-patch16-224-in21k`(약 350 MB)다. 이미지는 내려받지 않고 코드로 그린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from PIL import Image, ImageDraw
+from transformers import ViTModel
+
+model = ViTModel.from_pretrained("google/vit-base-patch16-224-in21k").eval()
+
+
+def picture(size):
+    """내려받을 이미지 없이: 흰 바탕에 빨간 원과 파란 사각형."""
+    im = Image.new("RGB", (size, size), "white")
+    d = ImageDraw.Draw(im)
+    s = size / 224
+    d.ellipse([30*s, 40*s, 110*s, 120*s], fill=(220, 30, 30))
+    d.rectangle([120*s, 110*s, 200*s, 190*s], fill=(40, 70, 220))
+    return im
+
+
+def to_tensor(im):                              # [0,1] -> [-1,1], 이 모델의 전처리와 같다
+    x = torch.from_numpy(np.asarray(im).copy()).float()          # (H, W, 3)
+    return ((x / 255 - 0.5) / 0.5).permute(2, 0, 1)[None]
+
+
+x224, x384 = to_tensor(picture(224)), to_tensor(picture(384))
+
+# 1) token 수: (H/P)^2 + [CLS]
+with torch.no_grad():
+    h224 = model(x224).last_hidden_state
+print(h224.shape, model.embeddings.position_embeddings.shape)
+
+# 2) 해상도를 바꾸면: positional embedding 이 14x14 용이라 그대로는 안 된다
+try:
+    with torch.no_grad():
+        model(x384)
+except Exception as e:
+    print(type(e).__name__, str(e)[:90])
+with torch.no_grad():
+    h384 = model(x384, interpolate_pos_encoding=True).last_hidden_state
+print(h384.shape)
+cos = torch.nn.functional.cosine_similarity
+print(round(cos(h224[:, 0], h384[:, 0]).item(), 3))        # 같은 그림, 두 해상도의 [CLS] 표현
+
+# 3) patch 를 섞는다: 16x16 조각 196개의 순서를 무작위로
+P = 16
+patches = x224.unfold(2, P, P).unfold(3, P, P).reshape(1, 3, 196, P, P)
+perm = torch.randperm(196, generator=torch.Generator().manual_seed(0))
+xs = patches[:, :, perm].reshape(1, 3, 14, 14, P, P).permute(0, 1, 2, 4, 3, 5).reshape(1, 3, 224, 224)
+with torch.no_grad():
+    hs = model(xs).last_hidden_state
+print(round(cos(h224[:, 0], hs[:, 0]).item(), 3))          # 섞은 그림의 [CLS] 와 원래 [CLS]
+
+# 4) positional embedding 을 0 으로 만들고 같은 일을 한다
+pe = model.embeddings.position_embeddings.data.clone()
+model.embeddings.position_embeddings.data.zero_()
+with torch.no_grad():
+    a, b = model(x224).last_hidden_state, model(xs).last_hidden_state
+model.embeddings.position_embeddings.data.copy_(pe)
+print(round(cos(a[:, 0], b[:, 0]).item(), 4))               # 위치 정보가 없으면 순서를 구별하지 못한다
+print(round((a[0, 1:][perm] - b[0, 1:]).abs().max().item(), 5))   # patch token 은 순서만 바뀐다
+
+# torch.Size([1, 197, 768]) torch.Size([1, 197, 768])
+# ValueError Input image size (384*384) doesn't match model (224*224).
+# torch.Size([1, 577, 768])
+# 0.984
+# 0.725
+# 1.0
+# 0.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **token 197개 (G9.2.1).** $224/16 = 14$, $14^2 = 196$ 개의 patch에 [CLS] 하나가 붙는다. positional embedding도 정확히 197개다. 위치마다 하나씩 학습된 벡터이기 때문이다.
+- **해상도를 바꾸면 그대로는 돌지 않는다 (G9.2.3).** 384px이면 patch가 $24^2 = 576$ 개인데 positional embedding은 196개뿐이다. `interpolate_pos_encoding=True` 를 주면 14×14 격자의 embedding을 24×24로 interpolation해 577개 token으로 돈다. 같은 그림을 두 해상도로 넣었을 때 [CLS] 표현의 cosine 유사도는 0.984였다. 거의 같지만 완전히 같지는 않다.
+- **patch를 섞으면 표현이 달라진다.** 196개 조각의 순서를 무작위로 바꾸자 [CLS]의 유사도가 0.725로 떨어졌다. 모델이 patch의 위치를 쓰고 있다는 뜻이다.
+- **그 능력은 전부 positional embedding에서 온다.** positional embedding을 0으로 만들고 같은 일을 하면 [CLS]의 유사도가 정확히 1.0이다. patch token들은 순서만 바뀌었을 뿐 값이 같다(최대 차이 0.0). 본문에서 말한 대로 attention 자체는 순서를 모른다. 위치 정보는 선택 사항이 아니다.
+
+**이 코드가 보여 주지 못하는 것.**
+그림 한 장으로 잰 유사도다. 0.984와 0.725는 이 그림에 대한 값이고, 다른 그림에서는 달라진다.
+interpolation 뒤의 **분류 정확도**가 어떻게 되는지는 재지 않았다. 표현이 비슷하다는 것과 성능이 유지된다는 것은 다른 주장이다. 실제로는 높은 해상도로 옮긴 뒤 fine-tuning을 조금 더 하는 것이 보통이다.
+positional embedding을 0으로 만든 모델은 그렇게 학습된 모델이 아니다. "위치 없이 학습하면 얼마나 나쁜가"는 이 실험으로 알 수 없고, 여기서 확인한 것은 구조상의 성질(순서를 구별하지 못함)뿐이다.
 
 ---
 
