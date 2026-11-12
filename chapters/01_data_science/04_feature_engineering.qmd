@@ -771,6 +771,101 @@ feature engineering의 가장 비싼 실패는 **serving 시점에 그 특성을
 - serving 불가다 (계산할 수 없음)
 - 재정의가 필요하다 ('세션 총' → '지금까지')
 
+---
+
+## 실제 도구로: pandas와 scikit-learn의 특성 변환
+
+이 장의 feature engineering을 pandas의 날짜 기능과 scikit-learn의 변환기로 다시 한다. 시각의 cyclical encoding, 곱 특성, 다항 특성의 차원 폭발, 특성 선택 기준을 숫자로 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `pandas` 3.1, `scikit-learn` 1.9, `numpy` 2.5.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import pandas as pd
+from sklearn.feature_selection import SelectKBest, f_regression, mutual_info_regression
+from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, PolynomialFeatures, SplineTransformer
+
+rng = np.random.default_rng(0)
+
+# 1) 날짜 열에서 특성 뽑기 (pandas 의 .dt)
+ts = pd.Series(pd.date_range("2024-12-30 21:00", periods=6, freq="2h"))
+feat = pd.DataFrame({"hour": ts.dt.hour, "dow": ts.dt.day_of_week, "weekend": ts.dt.day_of_week >= 5, "month": ts.dt.month})
+print(feat.to_dict("list"))
+
+# 2) cyclical encoding: 시각을 숫자 하나로 넣으면 23시와 0시가 멀다
+hour = rng.integers(0, 24, 5000)
+y = np.cos(2 * np.pi * hour / 24) * 3 + rng.normal(0, 0.5, 5000)          # 자정 근처에 높다
+H = hour[:, None].astype(float)
+encoders = {
+    "숫자 그대로": FunctionTransformer(lambda h: h),
+    "sin·cos": FunctionTransformer(lambda h: np.c_[np.sin(2 * np.pi * h / 24), np.cos(2 * np.pi * h / 24)]),
+    "one-hot": OneHotEncoder(handle_unknown="ignore"),
+    "periodic spline": SplineTransformer(n_knots=7, degree=3, extrapolation="periodic"),
+}
+for name, enc in encoders.items():
+    m = make_pipeline(enc, Ridge(1e-3))
+    print(name, round(cross_val_score(m, H, y, cv=5).mean(), 3), m.fit(H, y)[0].transform(H[:1]).shape[1])
+sc = FunctionTransformer(lambda h: np.c_[np.sin(2 * np.pi * h / 24), np.cos(2 * np.pi * h / 24)])
+e = sc.transform(np.array([[23.0], [0.0], [12.0]]))
+print(round(float(np.linalg.norm(e[0] - e[1])), 3), round(float(np.linalg.norm(e[1] - e[2])), 3))
+
+# 3) interaction: XOR 은 곱 하나로 풀린다
+X = rng.uniform(-1, 1, (2000, 2)); lab = (X[:, 0] * X[:, 1] > 0).astype(int)
+for name, m in [("선형", LogisticRegression()),
+                ("곱 특성", make_pipeline(PolynomialFeatures(2, interaction_only=True, include_bias=False), LogisticRegression()))]:
+    print(name, round(cross_val_score(m, X, lab, cv=5).mean(), 3))
+
+# 4) 다항 특성의 차원 폭발: d=20, 3차, 표본 500
+Xp = rng.normal(size=(500, 20)); yp = Xp[:, 0] - 2 * Xp[:, 1] * Xp[:, 2] + rng.normal(0, 1, 500)
+Xa, Xb, ya, yb = train_test_split(Xp, yp, test_size=0.4, random_state=0)
+for deg in [1, 2, 3]:
+    m = make_pipeline(PolynomialFeatures(deg, include_bias=False), LinearRegression()).fit(Xa, ya)
+    print(deg, m[0].n_output_features_, round(m.score(Xa, ya), 3), round(m.score(Xb, yb), 3))
+m = make_pipeline(PolynomialFeatures(3, include_bias=False), Ridge(10.0)).fit(Xa, ya)
+print("3차 + Ridge", round(m.score(Xb, yb), 3))
+
+# 5) feature selection: 선형 관계만 보는 기준과 mutual information
+Xs = rng.normal(size=(2000, 10))
+ys = Xs[:, 0] + np.abs(Xs[:, 1]) * 2 + rng.normal(0, 0.5, 2000)               # 1번 특성은 비선형(대칭)
+F, _ = f_regression(Xs, ys)
+MI = mutual_info_regression(Xs, ys, random_state=0)
+print(np.round(F[:4], 1).tolist(), np.round(MI[:4], 3).tolist())
+print(SelectKBest(f_regression, k=2).fit(Xs, ys).get_support(indices=True).tolist(),
+      SelectKBest(lambda X_, y_: mutual_info_regression(X_, y_, random_state=0), k=2).fit(Xs, ys).get_support(indices=True).tolist())
+
+# {'hour': [21, 23, 1, 3, 5, 7], 'dow': [0, 0, 1, 1, 1, 1], 'weekend': [False, False, False, False, False, False], 'month': [12, 12, 12, 12, 12, 12]}
+# 숫자 그대로 0.006 1
+# sin·cos 0.948 2
+# one-hot 0.947 24
+# periodic spline 0.948 6
+# 0.261 2.0
+# 선형 0.522
+# 곱 특성 0.992
+# 1 20 0.169 0.18
+# 2 230 0.966 -0.872
+# 3 1770 1.0 0.084
+# 3차 + Ridge 0.102
+# [1214.2, 2.3, 0.5, 0.9] [0.292, 0.374, 0.0, 0.013]
+# [0, 6] [0, 1]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **pandas의 `.dt` 가 날짜를 쪼갠다 ("시간 특성").** 12월 30일 21시부터 2시간 간격의 시각에서 시, 요일(월=0), 주말 여부, 월을 바로 뽑는다. 자정을 넘으면 요일이 0에서 1로 바뀐다. 이 버전의 pandas는 `dayofweek` 대신 `day_of_week` 를 쓰라고 경고한다.
+- **시각을 숫자 하나로 넣으면 선형 모델이 아무것도 배우지 못한다 (G1.4.2).** 자정 근처에 높은 target을 시각 숫자(0~23) 하나로 맞추면 $R^2$ 가 0.006이다. sin·cos 두 열로 바꾸면 0.948이다. 23시와 0시의 거리가 0.26으로 가깝고, 0시와 12시는 2.0으로 가장 멀다. one-hot(24열)과 주기적 spline(`SplineTransformer(extrapolation="periodic")`, 6열)도 0.947, 0.948로 같은 수준이다. 이 target은 정확히 cos 모양이라 sin·cos가 딱 맞았다. 모양이 더 복잡하면 one-hot이나 spline이 유리할 수 있다.
+- **XOR은 곱 하나로 풀린다 (G1.4.3).** 두 특성의 부호가 같으면 1인 데이터에서, logistic regression은 정확도 0.522(우연)이고 `PolynomialFeatures(interaction_only=True)` 로 $x_1x_2$ 를 더하면 0.992다.
+- **다항 특성은 금방 표본 수를 넘는다 ("직접 해보기" ②).** 특성 20개를 2차로 펼치면 230개, 3차면 1,770개다. 훈련 표본이 300개일 때, 1차는 훈련·시험 $R^2$ 0.17, 0.18이다. 2차는 0.97과 −0.87로 외웠다. target에 실제로 곱 항이 있는데도 그렇다. 3차는 특성이 표본보다 많아 훈련 데이터를 정확히 맞추고(1.0) 시험은 0.08이다. Ridge를 붙여도 0.10이다. 이 표본 수로는 곱 항 하나를 찾으려고 1,770개를 다 펼치는 것이 득보다 실이 크다.
+- **선형 기준의 특성 선택은 비선형 관계를 놓친다 (G1.4.4).** target이 $x_0 + 2|x_1|$ 인 데이터에서 F 통계량은 $x_0$ 에 1,214, $x_1$ 에 2.3이다. $|x_1|$ 은 $x_1$ 과 상관이 0이라 선형 기준으로는 안 보인다. mutual information은 $x_1$ 에 0.374로 $x_0$ (0.292)보다 높게 준다. 상위 2개를 고르면 F는 $x_0$ 과 아무 관계없는 $x_6$ 을, MI는 $x_0$ 과 $x_1$ 을 고른다.
+
+**이 코드가 보여 주지 못하는 것.**
+모두 관계를 알고 만든 합성 데이터다. 실제로는 어떤 변환이 맞는지 모르므로, 여기서처럼 후보를 cross-validation으로 비교하는 것이 실무의 방법이다.
+mutual information 추정은 표본이 적거나 특성이 많으면 불안정하다. 이 예에서는 표본이 2,000개라 잘 됐다. 텍스트 특성(TF-IDF)은 [7.0](../07_language/00_text_representation.qmd)의 "실제 도구로"에서 다뤘다.
 
 ---
 
