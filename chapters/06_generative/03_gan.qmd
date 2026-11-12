@@ -638,6 +638,93 @@ CFG의 guidance scale과 정확히 같은 성격의 손잡이다.
 autoencoder는 순수 VAE가 아니라 **VQGAN — discriminator로 학습된 autoencoder**다.
 6.2에서 본 '흐릿함' 문제를 GAN loss로 해결한 것이다. 6.7에서 다시 만난다.
 
+---
+
+## 실제 도구로: PyTorch로 GAN을 학습시킨다
+
+원 위에 놓인 Gaussian 8개를 목표로 작은 GAN을 PyTorch로 학습시킨다. mode collapse를 보기 좋은 표준 예다. 이 장의 두 generator loss(saturating, non-saturating)를 seed 셋에서 비교한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU). 모델을 내려받지 않는다. 학습 여섯 번에 CPU로 몇 분 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+
+nn, F = torch.nn, torch.nn.functional
+torch.manual_seed(0)
+
+# 목표 분포: 원 위에 놓인 Gaussian 8개 (mode collapse 를 보기 좋은 표준 예)
+centers = torch.tensor([[math.cos(2 * math.pi * k / 8), math.sin(2 * math.pi * k / 8)] for k in range(8)]) * 2
+def real(n, g):
+    idx = torch.randint(0, 8, (n,), generator=g)
+    return centers[idx] + 0.05 * torch.randn(n, 2, generator=g)
+
+def mlp(i, o):
+    return nn.Sequential(nn.Linear(i, 128), nn.ReLU(), nn.Linear(128, 128), nn.ReLU(), nn.Linear(128, o))
+
+def train(loss_kind, steps=4000, seed=0):
+    torch.manual_seed(seed); g = torch.Generator().manual_seed(seed)
+    G, D = mlp(8, 2), mlp(2, 1)
+    og, od = torch.optim.Adam(G.parameters(), 1e-3, betas=(0.5, 0.999)), torch.optim.Adam(D.parameters(), 1e-3, betas=(0.5, 0.999))
+    gnorms = []
+    for step in range(steps):
+        x, z = real(256, g), torch.randn(256, 8, generator=g)
+        fake = G(z)
+        d_loss = F.binary_cross_entropy_with_logits(D(x), torch.ones(256, 1)) + \
+                 F.binary_cross_entropy_with_logits(D(fake.detach()), torch.zeros(256, 1))
+        od.zero_grad(); d_loss.backward(); od.step()
+        logit = D(fake)
+        if loss_kind == "saturating":                      # min log(1 - D(G(z)))
+            g_loss = -F.binary_cross_entropy_with_logits(logit, torch.zeros(256, 1))
+        else:                                              # non-saturating: max log D(G(z))
+            g_loss = F.binary_cross_entropy_with_logits(logit, torch.ones(256, 1))
+        og.zero_grad(); g_loss.backward()
+        if step < 200:
+            gnorms.append(sum(p.grad.norm() ** 2 for p in G.parameters()).sqrt().item())
+        og.step()
+    with torch.no_grad():
+        s = G(torch.randn(4000, 8, generator=g))
+        nearest = torch.cdist(s, centers).argmin(1)
+        close = torch.cdist(s, centers).min(1).values < 0.3
+        counts = torch.bincount(nearest[close], minlength=8)
+    return (counts > 40).sum().item(), round(close.float().mean().item(), 3), counts.tolist(), round(sum(gnorms[:20]) / 20, 4)
+
+# 1) 두 generator loss: 잡힌 mode 수, mode 근처에 떨어진 표본 비율, mode 별 개수, 초반 gradient 크기
+for kind in ["saturating", "non-saturating"]:
+    for seed in range(3):
+        print(kind, seed, *train(kind, seed=seed))
+
+# 2) 학습 초반, discriminator 가 이길 때의 generator gradient: 두 loss 의 기울기를 직접 비교
+d = torch.linspace(-6, 0, 4)                              # D 의 logit (작을수록 '가짜' 라고 확신)
+d.requires_grad_(True)
+sat = torch.log(1 - torch.sigmoid(d))                     # generator 가 줄이려는 값
+nonsat = -torch.log(torch.sigmoid(d))
+gs, = torch.autograd.grad(sat.sum(), d); gn, = torch.autograd.grad(nonsat.sum(), d)
+print([round(v, 4) for v in gs.tolist()], [round(v, 4) for v in gn.tolist()])
+
+# saturating 0 8 0.927 [451, 452, 418, 437, 459, 508, 483, 499] 0.507
+# saturating 1 8 0.935 [433, 396, 478, 464, 474, 516, 546, 432] 0.483
+# saturating 2 8 0.936 [478, 473, 461, 449, 466, 425, 499, 493] 0.4474
+# non-saturating 0 6 0.952 [524, 7, 657, 3, 597, 609, 752, 660] 0.5113
+# non-saturating 1 8 0.957 [418, 497, 470, 551, 473, 576, 459, 384] 0.5407
+# non-saturating 2 8 0.918 [409, 617, 491, 427, 248, 492, 511, 477] 0.6269
+# [-0.0025, -0.018, -0.1192, -0.5] [-0.9975, -0.982, -0.8808, -0.5]
+```
+
+각 줄은 (loss, seed, 잡힌 mode 수, mode 근처 표본 비율, mode별 표본 수, 초반 20 step의 generator gradient 크기)다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **이 실험에서는 saturating loss도 잘 학습했다.** 교과서대로라면 $\log(1-D(G(z)))$ 를 줄이는 saturating loss는 학습 초반에 gradient가 사라져 잘 안 배워야 한다(G6.3.2). 그런데 세 seed 모두 8개 mode를 다 잡았고 표본의 93%가 mode 근처에 떨어졌다. 초반 generator gradient의 크기도 0.45~0.51로 non-saturating(0.51~0.63)과 같은 자릿수다. discriminator가 초반에 압도적으로 이기지 않아서 saturating 구간에 들어가지 않은 것으로 보인다.
+- **gradient가 사라지는 것은 discriminator가 확신할 때다.** 마지막 줄이 그 조건을 직접 보여 준다. $D$ 의 logit이 −6(가짜라고 강하게 확신)일 때 saturating loss의 gradient는 −0.0025, non-saturating은 −0.9975로 400배 차이다. logit이 0이면 둘 다 −0.5로 같다. 위 실험에서는 discriminator가 이 정도로 확신하는 구간이 길지 않았다.
+- **mode collapse는 non-saturating에서도 일어났다 (G6.3.3).** non-saturating loss의 첫 seed는 8개 중 6개 mode만 잡았다. 두 mode에 떨어진 표본이 7개와 3개뿐이다. 다른 두 seed는 8개를 다 잡았다. collapse는 loss를 바꾸는 것만으로 막히지 않고 seed에 따라 일어났다 안 일어났다 한다.
+
+**이 코드가 보여 주지 못하는 것.**
+seed 셋, 2차원 장난감 분포, 학습률 하나다. saturating loss가 실제 이미지 GAN에서 실패하는 것은 discriminator가 금방 이기는 고차원 문제이기 때문이고, 이 장난감 실험에서 그런 상황이 재현되지 않았을 뿐이다. 교과서의 주장을 반박하는 결과로 읽으면 안 된다.
+"잡힌 mode"는 반경 0.3 안의 표본이 40개를 넘는 mode로 이 절에서 정한 기준이다.
 
 ---
 
