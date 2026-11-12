@@ -889,6 +889,96 @@ for nm, c in cols.items():
 
 ---
 
+## 실제 도구로: pandas와 SciPy로 EDA를 한다
+
+이 장의 EDA 도구들을 pandas와 SciPy로 다시 한다. 요약 통계가 감추는 것, 히스토그램 구간 규칙, 상관계수의 한계, 강건한 요약, outlier 규칙을 실제 함수로 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `pandas` 3.1, `scipy` 1.18, `numpy` 2.5.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+rng = np.random.default_rng(0)
+
+# 1) describe() 가 보여 주는 것과 감추는 것: 평균·분산이 같은 두 열
+n = 2000
+a = rng.normal(0, 1, n)
+b = np.where(rng.random(n) < 0.5, -1, 1) + rng.normal(0, 0.05, n)        # 봉우리 둘
+b = (b - b.mean()) / b.std() * a.std() + a.mean()
+df = pd.DataFrame({"정규": a, "두 봉우리": b})
+print(df.describe().round(2).loc[["mean", "std", "25%", "50%", "75%"]].to_dict())
+print(df.skew().round(2).to_dict(), df.kurt().round(2).to_dict())
+
+# 2) 히스토그램 구간 수: numpy 의 규칙들
+for rule in ["sturges", "fd", "scott", "auto"]:
+    print(rule, len(np.histogram_bin_edges(a, bins=rule)) - 1, len(np.histogram_bin_edges(b, bins=rule)) - 1)
+def peaks(x, bins):
+    h, _ = np.histogram(x, bins=bins)
+    h = np.r_[0, h, 0]                                        # 양 끝 칸도 봉우리가 될 수 있게
+    return int(((h[1:-1] > h[:-2]) & (h[1:-1] > h[2:])).sum())
+print([(k, peaks(b, k)) for k in (3, 5, 8, 12, 33)])
+
+# 3) 상관계수가 0 인데 관계가 강하다
+x = rng.uniform(-1, 1, n)
+y = x ** 2 + rng.normal(0, 0.02, n)
+print(round(np.corrcoef(x, y)[0, 1], 3), round(stats.spearmanr(x, y)[0], 3), round(stats.spearmanr(np.abs(x), y)[0], 3))
+
+# 4) 강건한 요약: 오염 비율을 늘리며 평균, 중앙값, trimmed mean 을 본다
+clean = rng.normal(100, 10, 1000)
+for frac in [0.0, 0.05, 0.15, 0.25]:
+    z = clean.copy(); k = int(frac * len(z)); z[:k] = 10_000
+    print(frac, round(z.mean(), 1), round(np.median(z), 1), round(stats.trim_mean(z, 0.2), 1))
+
+# 5) MAD: 1.4826 은 정규분포 기준이다
+for name, s, sigma in [("정규", rng.normal(0, 2, 100000), 2.0), ("균등", rng.uniform(0, 1, 100000), 1 / np.sqrt(12)),
+                       ("지수", rng.exponential(1, 100000), 1.0)]:
+    print(name, round(sigma, 3), round(stats.median_abs_deviation(s, scale="normal"), 3), round(s.std(), 3))
+
+# 6) outlier 규칙마다 지목하는 점이 다르다 (오른쪽으로 긴 분포)
+w = rng.lognormal(0, 1, 1000)
+z_rule = np.abs(stats.zscore(w)) > 3
+q1, q3 = np.percentile(w, [25, 75]); iqr_rule = (w < q1 - 1.5 * (q3 - q1)) | (w > q3 + 1.5 * (q3 - q1))
+mad_rule = np.abs(w - np.median(w)) / stats.median_abs_deviation(w, scale="normal") > 3.5
+print(int(z_rule.sum()), int(iqr_rule.sum()), int(mad_rule.sum()), int((np.abs(stats.zscore(np.log(w))) > 3).sum()))
+
+# {'정규': {'mean': -0.03, 'std': 1.0, '25%': -0.7, '50%': -0.03, '75%': 0.66}, '두 봉우리': {'mean': -0.03, 'std': 1.0, '25%': -1.01, '50%': -0.91, '75%': 0.99}}
+# {'정규': -0.06, '두 봉우리': 0.05} {'정규': 0.04, '두 봉우리': -1.99}
+# sturges 12 12
+# fd 33 8
+# scott 26 9
+# auto 33 12
+# [(3, 2), (5, 2), (8, 2), (12, 2), (33, 2)]
+# 0.011 -0.006 0.993
+# 0.0 99.8 99.6 99.7
+# 0.05 594.8 100.3 100.5
+# 0.15 1584.9 102.1 102.4
+# 0.25 2575.0 104.4 929.1
+# 정규 2.0 1.997 2.001
+# 균등 0.289 0.369 0.288
+# 지수 1.0 0.714 1.012
+# 8 60 59 4
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **`describe()` 는 봉우리를 보여 주지 않는다.** 정규분포 하나와 봉우리 둘짜리 분포를 평균 −0.03, 표준편차 1.00으로 맞추면 `describe()` 의 평균과 표준편차가 같다. 사분위수는 다르지만(−0.70 대 −1.01), 그것만 보고 봉우리가 둘이라고 알아채기는 어렵다. 첨도(kurtosis)가 −1.99로 크게 음수인 것이 단서다.
+- **구간 규칙이 데이터에 따라 다른 답을 준다 (G1.1.1, "직접 해보기" ①).** 정규분포에 Sturges는 12칸, Freedman–Diaconis(FD)는 33칸, Scott은 26칸을 권한다. 봉우리 둘짜리에서는 FD가 8칸, Scott이 9칸이다. 사분위 범위가 넓어서 칸이 굵어진다. 이 데이터는 봉우리가 뚜렷해서 3칸에서 33칸까지 모두 봉우리 두 개를 보였다. 규칙이 봉우리를 보장한다는 뜻은 아니다. 봉우리가 가깝거나 작으면 굵은 칸이 그것을 지운다.
+- **상관계수 0이 관계가 없다는 뜻이 아니다 (G1.1.3).** $y = x^2$ 에 잡음을 조금 섞으면 Pearson 상관 0.011, Spearman 상관 −0.006이다. 둘 다 단조 관계만 잰다. $|x|$ 와 $y$ 의 Spearman은 0.993이다.
+- **강건한 요약은 오염 비율에 따라 무너진다 ("직접 해보기" ②).** 값 100 근처의 데이터에 10,000을 섞으면, 평균은 5%만 섞여도 595로 무너진다. 중앙값은 25%에서도 104.4다. 20% trimmed mean(`scipy.stats.trim_mean`)은 15%까지는 102.4로 버티다가 25%에서 929로 무너진다. 양쪽에서 20%씩 잘라 내므로, 오염이 20%를 넘으면 남은 부분에 오염이 섞인다. breakdown point 20%가 그대로 나온다.
+- **1.4826·MAD는 정규분포에서만 $\sigma$ 다 ("직접 해보기" ③).** `median_abs_deviation(scale="normal")` 이 1.4826을 곱해 준다. 정규분포에서는 참 $\sigma$ 2.0에 대해 1.997이다. 균등분포에서는 0.369로 참값 0.289보다 28% 크고, 지수분포에서는 0.714로 참값 1.0보다 29% 작다. 크기는 비슷하게 어긋나고 방향이 반대다.
+- **outlier 규칙마다 지목하는 수가 다르다 (G1.1.4).** 오른쪽으로 긴 log-normal 1,000개에서, $|z| > 3$ 은 8개, IQR 1.5배 규칙은 60개, MAD 3.5배 규칙은 59개를 outlier로 지목한다. log를 취한 뒤 $|z| > 3$ 을 쓰면 4개다. 이 데이터에는 오염이 없다. 지목된 점들은 분포의 긴 꼬리일 뿐이다. 어떤 규칙을 쓸지보다, 분포가 어떤 모양인지를 먼저 봐야 한다.
+
+**이 코드가 보여 주지 못하는 것.**
+EDA의 대부분은 그림을 보는 일인데, 여기서는 숫자만 찍었다. 그림을 그리는 도구(matplotlib, seaborn, plotly)는 [1.2](02_visualization.qmd)의 주제다.
+모든 데이터가 seed를 고정한 합성 데이터라 무엇이 정답인지 안다. 실제 데이터에서는 어떤 점이 오염이고 어떤 점이 진짜 꼬리인지 데이터만으로 가릴 수 없는 경우가 많다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
