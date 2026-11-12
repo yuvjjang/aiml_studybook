@@ -657,6 +657,123 @@ fig
 - **형식 민감성은 평가를 오염시킨다** — [11.0](../11_systems/00_reproducibility.qmd)의 reproducibility 문제와 직결
 - benchmark 점수를 보고할 때 **prompt 변형에 대한 분산**을 함께 보고해야 하는 이유
 
+---
+
+## 실제 도구로: PyTorch로 공격을 만든다
+
+이 장의 공격과 방어를 실제 손글씨 숫자 이미지와 PyTorch로 다시 만든다. 본문에서 손으로 계산하던 "입력에 대한 gradient"가 여기서는 `torch.autograd.grad` 한 줄이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9. 모델을 내려받지 않고, 데이터는 scikit-learn에 들어 있는 손글씨 숫자(8×8 pixel, 1,797장)다.
+- pixel 값은 0~1이고, $\varepsilon$ 은 그 단위다. $\varepsilon = 0.1$ 은 밝기 범위의 10%다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+
+F = torch.nn.functional
+d = load_digits()                                                  # 8x8 손글씨 숫자 1,797장
+perm = np.random.default_rng(0).permutation(len(d.target))
+X = torch.tensor(d.data[perm] / 16.0, dtype=torch.float32)         # pixel 값을 0~1 로
+y = torch.tensor(d.target[perm])
+Xtr, ytr, Xte, yte = X[:1200], y[:1200], X[1200:], y[1200:]
+
+
+def fgsm(net, x, t, eps):
+    x = x.clone().requires_grad_(True)
+    g, = torch.autograd.grad(F.cross_entropy(net(x), t), x)        # 입력에 대한 gradient
+    return (x + eps * g.sign()).clamp(0, 1).detach()
+
+
+def pgd(net, x, t, eps, steps=10):
+    xa = x.clone()
+    for _ in range(steps):
+        xa.requires_grad_(True)
+        g, = torch.autograd.grad(F.cross_entropy(net(xa), t), xa)
+        xa = xa.detach() + (2.5 * eps / steps) * g.sign()
+        xa = (x + (xa - x).clamp(-eps, eps)).clamp(0, 1)           # eps 상자 안으로 되돌린다
+    return xa.detach()
+
+
+def train(seed, adv_eps=0.0, epochs=60):
+    torch.manual_seed(seed)
+    net = torch.nn.Sequential(torch.nn.Linear(64, 128), torch.nn.ReLU(),
+                              torch.nn.Linear(128, 128), torch.nn.ReLU(), torch.nn.Linear(128, 10))
+    opt = torch.optim.Adam(net.parameters(), lr=2e-3)
+    for _ in range(epochs):
+        for idx in torch.randperm(len(Xtr)).split(64):
+            xb, tb = Xtr[idx], ytr[idx]
+            if adv_eps:
+                xb = pgd(net, xb, tb, adv_eps, steps=5)             # 공격받은 입력으로 학습한다
+            opt.zero_grad()
+            F.cross_entropy(net(xb), tb).backward()
+            opt.step()
+    return net.eval()
+
+
+acc = lambda net, x: round((net(x).argmax(1) == yte).float().mean().item(), 3)
+A, B = train(0), train(1)
+print(acc(A, Xte), acc(B, Xte))
+
+# 1) 같은 크기로 흔든다: 무작위 방향 / FGSM / PGD
+g = torch.Generator().manual_seed(0)
+for eps in [0.02, 0.05, 0.1, 0.2]:
+    noise = eps * (torch.randint(0, 2, Xte.shape, generator=g) * 2.0 - 1)
+    print(eps, acc(A, (Xte + noise).clamp(0, 1)), acc(A, fgsm(A, Xte, yte, eps)), acc(A, pgd(A, Xte, yte, eps)))
+
+# 2) 흔든 크기를 재 본다 (eps = 0.1)
+xa = pgd(A, Xte, yte, 0.1)
+print(round((xa - Xte).abs().max().item(), 3), round((xa - Xte).norm(dim=1).mean().item(), 3),
+      round(Xte.norm(dim=1).mean().item(), 3))
+conf = A(xa).softmax(1).max(1).values
+wrong = A(xa).argmax(1) != yte
+print(round(conf[wrong].mean().item(), 3))                          # 틀린 답에 준 confidence
+
+# 3) transfer: A 로 만든 예제를 seed 가 다른 B 에 넣는다
+for eps in [0.1, 0.2]:
+    xa = pgd(A, Xte, yte, eps)
+    print(eps, acc(A, xa), acc(B, xa))
+
+# 4) adversarial training (eps = 0.1)
+R = train(0, adv_eps=0.1)
+print(acc(R, Xte), acc(R, pgd(R, Xte, yte, 0.1)), acc(R, pgd(R, Xte, yte, 0.2)), acc(R, pgd(A, Xte, yte, 0.1)))
+
+# 5) 숫자가 아닌 입력에 주는 confidence
+noise_img = torch.rand(1000, 64, generator=g)
+print(round(A(Xte).softmax(1).max(1).values.mean().item(), 3),
+      round(A(noise_img).softmax(1).max(1).values.mean().item(), 3),
+      round((A(noise_img).softmax(1).max(1).values > 0.9).float().mean().item(), 3))
+
+# 0.973 0.978
+# 0.02 0.973 0.935 0.933
+# 0.05 0.98 0.809 0.806
+# 0.1 0.963 0.367 0.302
+# 0.2 0.903 0.08 0.0
+# 0.1 0.669 3.867
+# 0.919
+# 0.1 0.302 0.409
+# 0.2 0.0 0.012
+# 0.99 0.844 0.253 0.899
+# 0.985 0.897 0.677
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **크기가 아니라 방향이다 (G12.3.1).** 같은 $\varepsilon = 0.1$ 로 흔들어도, 무작위 방향이면 정확도가 0.973에서 0.963으로 거의 그대로이고, gradient 방향이면 FGSM 0.367, PGD 0.302다. $\varepsilon = 0.2$ 에서는 무작위가 0.903, PGD가 0.0이다. 본문의 합성 이미지에서 본 것과 같은 모양이 실제 손글씨에서도 나온다.
+- **흔든 양은 이미지에 비해 작다.** $\varepsilon = 0.1$ 의 perturbation은 L2 norm이 평균 0.67이고, 이미지의 norm은 3.87이다. 이미지 크기의 17%쯤이다. 다만 8×8 이미지에서 밝기 10%는 눈에 보이는 변화다. 고해상도 사진에서 말하는 "사람 눈에 보이지 않는" 공격과 같은 규모가 아니다.
+- **틀린 답을 확신한다.** PGD에 넘어간 예측의 평균 confidence가 0.919다. 모델이 헷갈려서 틀리는 것이 아니라 다른 숫자라고 확신한다. [12.2](02_uncertainty.qmd)의 confidence가 여기서는 경고 신호가 되지 못한다.
+- **공격이 다른 모델로 옮겨 간다 ("transfer attack").** 모델 A의 gradient로 만든 예제를 seed만 다른 모델 B에 넣으면, $\varepsilon = 0.1$ 에서 B의 정확도가 0.978에서 0.409로 떨어진다. A 자신(0.302)보다는 덜 떨어지지만 큰 폭이다. $\varepsilon = 0.2$ 에서는 0.012다. B의 내부를 전혀 보지 않고 만든 공격이다.
+- **adversarial training이 여기서도 깨끗한 정확도를 깎지 않았다.** PGD로 흔든 입력으로 학습한 모델은 $\varepsilon = 0.1$ 공격에서 0.844를 지킨다(보통 모델은 0.302). 깨끗한 정확도는 0.990으로 보통 모델(0.973)보다 오히려 높다. 본문 "교과서와 다른 결과가 나왔다"와 같은 방향이다. 작은 데이터, 작은 모델에서는 adversarial training이 regularization으로 작용한다는 본문의 설명과 맞는다. 큰 모델에서 보고되는 trade-off를 부정하는 결과가 아니다.
+- **방어는 학습한 $\varepsilon$ 까지만이다.** 같은 모델이 $\varepsilon = 0.2$ 에서는 0.253으로 떨어진다. 0.1로 학습했으면 0.1까지 버틴다.
+- **숫자가 아닌 입력에도 확신한다 (G12.3.2).** 균등 난수로 채운 이미지 1,000장에 대해 평균 confidence가 0.897이고, 68%에서 0.9를 넘는다. 시험 데이터에서의 평균(0.985)과 크게 다르지 않다. 최대 softmax만으로는 "이것은 숫자가 아니다"를 가려내기 어렵다.
+
+**이 코드가 보여 주지 못하는 것.**
+8×8 이미지와 작은 MLP에서 잰 값이다. $\varepsilon$ 에 따른 정확도 숫자를 다른 데이터로 옮길 수 없다(본문의 한계 표시와 같다).
+adversarial training의 결과는 seed 하나에서 본 것이다. 깨끗한 정확도 0.990과 0.973의 차이는 시험 데이터 597장에서 10장쯤의 차이이고, seed를 바꾸면 뒤집힐 수 있다. "깎이지 않았다"까지만 읽고 "올랐다"고 읽지 않는다.
+robust 정확도 0.844도 **이 PGD(10 step)에 대한** 값이다. 더 강한 공격을 쓰면 더 낮게 나올 수 있다. robustness를 주장하려면 AutoAttack 같은 표준 공격 묶음으로 재는 것이 관례이고, 여기서는 하지 않았다.
 
 ---
 
