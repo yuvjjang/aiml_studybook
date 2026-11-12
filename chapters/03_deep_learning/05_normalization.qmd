@@ -728,6 +728,113 @@ for norm, label in [(None, "normalization 없음"), ("batch", "BatchNorm"), ("la
 normalization을 아예 빼는 것도 가능하다 (Fixup, ReZero, NF-Net).
 다만 initialization·residual scale을 훨씬 조심스럽게 다뤄야 한다 — [3.7](07_initialization.qmd)의 주제다.
 
+---
+
+## 실제 도구로: `torch.nn` 의 normalization layer
+
+이 장의 식과 성질을 PyTorch의 layer에서 확인한다. BatchNorm의 학습·평가 동작 차이, batch 의존성, LayerNorm과 RMSNorm의 식, scale invariance다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU). 모델을 내려받지 않고 바로 돌아간다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+
+torch.manual_seed(0)
+x = torch.randn(32, 6) * 3 + 5                      # batch 32, channel 6. 평균 5, 표준편차 3 근처
+
+# 1) BatchNorm: 학습 때는 batch 통계, 평가 때는 running 통계
+bn = torch.nn.BatchNorm1d(6)
+print(bn.running_mean[:2].tolist(), bn.running_var[:2].tolist(), bn.momentum)
+y_train = bn(x)                                      # train mode (기본)
+mine = (x - x.mean(0)) / torch.sqrt(x.var(0, unbiased=False) + bn.eps)
+print((y_train - mine).abs().max().item())
+print(bn.running_mean[0].item(), 0.9 * 0 + 0.1 * x.mean(0)[0].item())          # 이동평균 한 걸음
+print(bn.running_var[0].item(), 0.9 * 1 + 0.1 * x.var(0, unbiased=True)[0].item())
+bn.eval()
+y_eval = bn(x)
+print(y_train.mean().item(), y_train.std().item(), y_eval.mean().item(), y_eval.std().item())
+
+# 같은 입력을 200번 더 보여 주면 running 통계가 따라온다
+bn.train()
+for _ in range(200):
+    bn(x)
+bn.eval()
+unb = (x - x.mean(0)) / torch.sqrt(x.var(0, unbiased=True) + bn.eps)      # running_var 는 n-1 로 나눈 분산
+print((bn(x) - y_train).abs().max().item(), (bn(x) - unb).abs().max().item())
+
+# 2) batch 가 1 이면
+bn.train()
+try:
+    bn(x[:1])
+except ValueError as e:
+    print("ValueError:", e)
+bn.eval()
+print(bn(x[:1]).shape)
+
+# 3) 같은 샘플인데 batch 의 나머지가 바뀌면 출력이 바뀌는가
+ln = torch.nn.LayerNorm(6)
+bn.train()
+other = torch.randn(31, 6) * 3 + 5
+a = torch.cat([x[:1], x[1:]]); b = torch.cat([x[:1], other])
+print((bn(a)[0] - bn(b)[0]).abs().max().item(), (ln(a)[0] - ln(b)[0]).abs().max().item())
+
+# 4) LayerNorm 과 RMSNorm 은 이 장의 식 그대로다
+z = torch.randn(4, 512) + 0.3
+mine_ln = (z - z.mean(-1, keepdim=True)) / torch.sqrt(z.var(-1, unbiased=False, keepdim=True) + 1e-5)
+print((torch.nn.LayerNorm(512)(z) - mine_ln).abs().max().item())
+rms = torch.nn.RMSNorm(512, eps=1e-6)
+mine_rms = z / torch.sqrt(z.pow(2).mean(-1, keepdim=True) + 1e-6)
+print((rms(z) - mine_rms).abs().max().item())
+print(sum(p.numel() for p in torch.nn.LayerNorm(512).parameters()), sum(p.numel() for p in rms.parameters()))
+
+# 5) scale invariance: normalization 앞의 weight 를 c 배 하면 loss 는 그대로, gradient 는 1/c
+torch.manual_seed(1)
+lin, bn2, head = torch.nn.Linear(6, 16), torch.nn.BatchNorm1d(16), torch.nn.Linear(16, 3)
+t = torch.randint(0, 3, (32,))
+W0 = lin.weight.detach().clone()
+for c in [1.0, 3.0, 10.0]:
+    with torch.no_grad():
+        lin.weight.copy_(c * W0)
+    lin.zero_grad()
+    loss = torch.nn.functional.cross_entropy(head(torch.relu(bn2(lin(x)))), t)
+    loss.backward()
+    g = lin.weight.grad
+    print(c, round(loss.item(), 6), f"{g.norm().item():.4e}", f"{c * g.norm().item():.4e}",
+          f"{(g * lin.weight).sum().item():.1e}")      # 마지막: gradient 와 weight 의 내적
+
+# [0.0, 0.0] [1.0, 1.0] 0.1
+# 4.76837158203125e-07
+# 0.5196240544319153 0.5196240425109864
+# 1.5873773097991943 1.5873773097991943
+# 0.0 1.0026137828826904 3.4778892993927 2.1909687519073486
+# 0.044454336166381836 2.0265579223632812e-06
+# ValueError: Expected more than 1 value per channel when training, got input size torch.Size([1, 6])
+# torch.Size([1, 6])
+# 0.5830538272857666 0.0
+# 4.76837158203125e-07
+# 2.384185791015625e-07
+# 1024 512
+# 1.0 1.224081 3.3336e-01 3.3336e-01 4.2e-07
+# 3.0 1.224081 1.1112e-01 3.3337e-01 6.3e-08
+# 10.0 1.224081 3.3337e-02 3.3337e-01 3.0e-08
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **학습 mode의 BatchNorm은 이 장의 식 그대로다.** batch의 평균과 분산($n$ 으로 나눈 것)으로 표준화한 값과 layer의 출력이 $5\times10^{-7}$ 까지 같다.
+- **running 통계는 이동평균으로 한 걸음씩 움직인다.** 처음에는 평균 0, 분산 1이고, forward 한 번 뒤에는 $0.9 \times \text{옛 값} + 0.1 \times \text{batch 통계}$ 가 된다. `momentum=0.1` 은 [3.4](04_optimizers.qmd)의 momentum과 반대로 **새 값**에 주는 비중이다. 분산 쪽은 $n-1$ 로 나눈 값을 쌓는다.
+- **`eval()` 로 바꾸면 같은 입력의 출력이 달라진다 ("BatchNorm의 대가").** 학습 mode에서 평균 0, 표준편차 1이던 출력이, 평가 mode에서는 평균 3.48, 표준편차 2.19다. running 통계가 아직 한 걸음밖에 안 움직여 실제 분포(평균 5, 표준편차 3)와 멀기 때문이다. 같은 batch를 200번 더 보여 주면 차이가 0.044로 줄어든다. 남은 0.044는 두 mode가 쓰는 분산의 정의가 달라서이고($n$ 과 $n-1$), $n-1$ 로 나눈 식과 비교하면 $2\times10^{-6}$ 까지 같다.
+- **batch가 1이면 학습 mode에서 오류가 난다.** 샘플 하나로는 분산을 낼 수 없다. 평가 mode에서는 running 통계를 쓰므로 된다. 반대로 말하면, 추론할 때 `model.eval()` 을 잊어도 batch가 2 이상이면 **오류 없이** 돌아가고 결과만 달라진다.
+- **BatchNorm의 출력은 batch의 다른 샘플에 의존한다.** 같은 샘플인데 batch의 나머지 31개를 바꾸면 출력이 0.58 달라진다. LayerNorm은 정확히 0.0이다. 본문의 "한 학생의 전 과목 점수 기준"이라 다른 학생이 누구든 상관없다.
+- **LayerNorm과 RMSNorm도 식 그대로다.** 직접 계산한 값과의 차이가 $10^{-7}$ 수준이다. parameter 수는 LayerNorm이 1,024개($\gamma$ 와 $\beta$), RMSNorm이 512개($\gamma$ 만)다.
+- **scale invariance가 숫자로 나온다 ("normalization의 숨은 효과").** BatchNorm 앞의 weight를 3배, 10배 해도 loss가 소수점 6자리까지 같다(1.224081). gradient의 norm은 정확히 1/3, 1/10이 되어 $c\,\|\nabla L\|$ 이 0.3334로 일정하다. 마지막 열은 gradient와 weight의 내적이고 0이다. weight를 키우는 방향으로는 loss가 변하지 않으니 gradient가 그 방향 성분을 갖지 않는다.
+
+**이 코드가 보여 주지 못하는 것.**
+여기서 확인한 것은 **layer 하나의 동작**이다. normalization이 학습을 실제로 안정시키는지, 어느 것이 더 나은지는 이 코드에 없다. 그것은 본문의 학습 실험이 다루는 질문이다.
+`eval()` 을 잊었을 때의 차이도 running 통계가 덜 쌓인 극단적인 경우를 보인 것이다. 충분히 학습된 모델에서는 차이가 훨씬 작고, 그래서 더 알아채기 어렵다.
 
 ---
 
