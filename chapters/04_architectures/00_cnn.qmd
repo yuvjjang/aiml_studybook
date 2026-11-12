@@ -708,6 +708,128 @@ global average pooling으로 대체하고(NiN, ResNet), 속도를 올리려면 �
 
 ---
 
+## 실제 도구로: `torch.nn.Conv2d`
+
+이 장의 식과 성질을 PyTorch의 convolution layer에서 확인한다. parameter 수, 출력 크기 공식, equivariance, receptive field를 직접 재고, 마지막에 실제 손글씨 숫자로 MLP와 CNN을 학습시켜 이미지를 옮겼을 때를 비교한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9. 모델을 내려받지 않는다. 데이터는 scikit-learn에 들어 있는 손글씨 숫자(8×8 pixel, 1,797장)다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+
+nn, F = torch.nn, torch.nn.functional
+count = lambda m: sum(p.numel() for p in m.parameters())
+torch.manual_seed(0)
+
+# 1) parameter 수: 224x224x3 입력에서 출력 64개
+print(count(nn.Conv2d(3, 64, 3)), 3 * 3 * 3 * 64 + 64, count(nn.Linear(224 * 224 * 3, 64)))
+
+# 2) framework 의 'convolution' 은 kernel 을 뒤집지 않는다 (cross-correlation)
+f, k = torch.randn(1, 1, 6, 6), torch.randn(1, 1, 3, 3)
+out = F.conv2d(f, k)
+mine = sum(f[0, 0, 2 + m, 3 + n] * k[0, 0, m, n] for m in range(3) for n in range(3))   # 출력 [2, 3]
+flipped = sum(f[0, 0, 2 + m, 3 + n] * k[0, 0, 2 - m, 2 - n] for m in range(3) for n in range(3))
+print(round(out[0, 0, 2, 3].item(), 4), round(mine.item(), 4), round(flipped.item(), 4))
+
+# 3) 출력 크기 공식
+for I, K, P, S, D in [(224, 3, 1, 1, 1), (224, 7, 3, 2, 1), (224, 3, 0, 2, 1), (56, 3, 2, 1, 2), (15, 4, 1, 3, 1)]:
+    got = nn.Conv2d(1, 1, K, stride=S, padding=P, dilation=D)(torch.zeros(1, 1, I, I)).shape[-1]
+    print((I, K, P, S, D), got, (I + 2 * P - D * (K - 1) - 1) // S + 1)
+
+# 4) equivariance: 입력을 옮기고 conv 한 것과, conv 하고 옮긴 것이 같은가
+x = torch.randn(1, 1, 16, 16)
+shift = lambda t, s: torch.roll(t, s, dims=-1)
+for name, conv, s in [("순환 padding, stride 1, 1칸", nn.Conv2d(1, 4, 3, padding=1, padding_mode="circular"), 1),
+                      ("0 padding,   stride 1, 1칸", nn.Conv2d(1, 4, 3, padding=1), 1),
+                      ("순환 padding, stride 2, 1칸", nn.Conv2d(1, 4, 3, padding=1, padding_mode="circular", stride=2), 1),
+                      ("순환 padding, stride 2, 2칸", nn.Conv2d(1, 4, 3, padding=1, padding_mode="circular", stride=2), 2)]:
+    a, b = conv(shift(x, s)), shift(conv(x), s // conv.stride[0])
+    print(name, f"{(a - b).abs().max().item():.1e}", f"{(a[..., 2:-2] - b[..., 2:-2]).abs().max().item():.1e}")
+
+# 5) receptive field 를 재 본다: 가운데 출력 하나를 입력으로 미분해 0 이 아닌 범위를 센다
+def rf(layers):
+    net = nn.Sequential(*layers)
+    x = torch.randn(1, 1, 64, 64, requires_grad=True)
+    y = net(x)
+    y[0, 0, y.shape[2] // 2, y.shape[3] // 2].backward()
+    cols = (x.grad[0, 0].abs().sum(0) > 0).nonzero()
+    return (cols.max() - cols.min() + 1).item()
+
+c = lambda k=3, s=1, d=1: nn.Conv2d(1, 1, k, stride=s, dilation=d, padding=d * (k - 1) // 2)
+print(rf([c()]), rf([c(), c()]), rf([c(), c(), c()]), rf([c(5)]), rf([c(7)]))
+print(rf([c(s=2), c()]), rf([c(s=2), c(s=2), c()]), rf([c(), c(d=2), c(d=4)]))
+
+# 6) 3x3 두 층과 5x5 한 층 (channel 64, bias 없이)
+print(count(nn.Conv2d(64, 64, 5, bias=False)), 2 * count(nn.Conv2d(64, 64, 3, bias=False)))
+
+# 7) 1x1 convolution 은 위치마다 적용한 Linear 다
+conv1, lin = nn.Conv2d(8, 4, 1), nn.Linear(8, 4)
+with torch.no_grad():
+    lin.weight.copy_(conv1.weight[:, :, 0, 0]); lin.bias.copy_(conv1.bias)
+z = torch.randn(2, 8, 5, 5)
+print((conv1(z) - lin(z.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)).abs().max().item())
+
+# 8) 손글씨 숫자(8x8): MLP 와 작은 CNN 을 학습시키고, 시험 이미지를 한 칸 옆으로 민다
+d = load_digits()
+perm = np.random.default_rng(0).permutation(len(d.target))
+X = torch.tensor(d.images[perm] / 16.0, dtype=torch.float32)[:, None]      # (1797, 1, 8, 8)
+y = torch.tensor(d.target[perm])
+Xtr, ytr, Xte, yte = X[:1200], y[:1200], X[1200:], y[1200:]
+mlp = nn.Sequential(nn.Flatten(), nn.Linear(64, 128), nn.ReLU(), nn.Linear(128, 10))
+cnn = nn.Sequential(nn.Conv2d(1, 16, 3, padding=1), nn.ReLU(), nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(),
+                    nn.AdaptiveMaxPool2d(1), nn.Flatten(), nn.Linear(32, 10))
+for name, net in [("MLP", mlp), ("CNN", cnn)]:
+    torch.manual_seed(0)
+    opt = torch.optim.Adam(net.parameters(), lr=3e-3)
+    for _ in range(40):
+        for idx in torch.randperm(1200).split(64):
+            opt.zero_grad()
+            F.cross_entropy(net(Xtr[idx]), ytr[idx]).backward()
+            opt.step()
+    acc = lambda x: round((net(x).argmax(1) == yte).float().mean().item(), 3)
+    print(name, count(net), acc(Xte), acc(torch.roll(Xte, 1, dims=3)), acc(torch.roll(Xte, 2, dims=3)))
+
+# 1792 1792 9633856
+# 2.7847 2.7847 1.8903
+# (224, 3, 1, 1, 1) 224 224
+# (224, 7, 3, 2, 1) 112 112
+# (224, 3, 0, 2, 1) 111 111
+# (56, 3, 2, 1, 2) 56 56
+# (15, 4, 1, 3, 1) 5 5
+# 순환 padding, stride 1, 1칸 0.0e+00 0.0e+00
+# 0 padding,   stride 1, 1칸 9.9e-01 0.0e+00
+# 순환 padding, stride 2, 1칸 1.7e+00 1.6e+00
+# 순환 padding, stride 2, 2칸 0.0e+00 0.0e+00
+# 3 5 7 5 7
+# 7 15 15
+# 102400 73728
+# 1.7881393432617188e-07
+# MLP 9610 0.982 0.479 0.181
+# CNN 5130 0.983 0.97 0.918
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **parameter 수가 손으로 센 것과 같다 ("직접 해보기" ①).** 3×3 kernel 64개는 $3\cdot3\cdot3\cdot64 + 64 = 1{,}792$ 개다. 같은 입력을 펴서 `Linear` 에 넣으면 963만 개다.
+- **`conv2d` 는 kernel을 뒤집지 않는다 ("convolution 연산").** 이 장의 식대로 뒤집지 않고 계산한 값(2.7847)이 PyTorch의 출력과 같고, 180° 뒤집어 계산한 값(1.8903)은 다르다. 이름은 convolution이지만 계산은 cross-correlation이다.
+- **출력 크기 공식이 맞는다.** 다섯 가지 (입력, kernel, padding, stride, dilation) 조합에서 실제 출력 크기와 공식의 값이 모두 같다. 나누어떨어지지 않는 경우(224, 3, 0, 2 → 111)의 내림도 공식대로다.
+- **equivariance는 조건이 붙는다 ("직접 해보기" ②).** 가장자리를 순환시키는 padding에 stride 1이면 "옮기고 convolution"과 "convolution하고 옮기기"가 정확히 같다(차이 0). 0으로 채우는 보통의 padding에서는 가장자리에서 차이가 나고(0.99), 가장자리 두 칸을 빼면 다시 0이다. stride 2에서는 한 칸 옮기면 전체가 달라지고(1.7), 두 칸 옮겨야 같아진다. stride가 있는 망은 stride의 배수만큼 옮길 때만 equivariant하다.
+- **receptive field를 gradient로 잴 수 있다 (G4.0.3).** 출력 하나를 입력으로 미분해 0이 아닌 범위를 세면 3×3 한 층이 3, 두 층이 5, 세 층이 7이다. 5×5 한 층과 7×7 한 층도 각각 5와 7이다. stride 2를 한 번 넣으면 두 층에 7, 두 번 넣으면 세 층에 15가 되고, dilation 1·2·4를 쓴 세 층도 15다. 전부 본문의 공식 $r_l = r_{l-1} + (k_l-1)\prod s_i$ 가 주는 값이다.
+- **3×3 두 층이 5×5 한 층보다 싸다.** receptive field는 같은 5인데 parameter는 73,728개와 102,400개다(72%).
+- **1×1 convolution은 위치마다 적용한 `Linear` 다.** 같은 weight를 넣은 두 layer의 출력 차이가 $2\times10^{-7}$ 이다.
+- **옮긴 이미지에서 MLP와 CNN이 갈린다 ("MLP를 이미지에 쓰면").** 두 모델 모두 시험 정확도가 0.98이다. 시험 이미지를 옆으로 한 칸 밀면 MLP는 0.479, CNN은 0.970이다. 두 칸 밀면 0.181과 0.918이다. CNN의 parameter는 MLP의 절반쯤(5,130개와 9,610개)이다. MLP에게는 한 칸 옮긴 숫자가 본 적 없는 입력이고, convolution과 global max pooling을 쓰는 CNN에게는 거의 같은 입력이다.
+
+**이 코드가 보여 주지 못하는 것.**
+마지막 실험은 8×8 이미지, 작은 모델 둘, seed 하나에서 잰 것이다. CNN이 옮김에 강한 정도는 구조에 따라 다르다. 여기서는 stride 없이 global max pooling을 썼으므로 거의 invariant한 구조를 일부러 고른 셈이다. stride와 `Flatten` 뒤의 `Linear` 를 쓰는 CNN은 이보다 약하다. 또 `torch.roll` 은 밀려 나간 pixel이 반대쪽에서 돌아오는 순환 이동이다. 숫자 이미지는 가장자리가 대부분 비어 있어 큰 차이가 없지만, 실제 사진에서의 이동과 같지는 않다.
+receptive field를 gradient로 잰 값은 **이론상 닿을 수 있는 범위**다. 실제로 출력에 영향을 크게 주는 범위(effective receptive field)는 그보다 좁다고 보고돼 있고, 이 코드는 그것을 재지 않는다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
