@@ -681,6 +681,89 @@ byte 수준으로 내려가면 vocabulary가 256이고 OOV가 0%다 —
 
 ---
 
+## 실제 도구로: scikit-learn의 `CountVectorizer` 와 `TfidfVectorizer`
+
+이 장에서 직접 계산한 BoW와 TF-IDF를 scikit-learn의 도구로 다시 한다. 기본값이 무엇을 하는지, 그리고 그 기본값이 한국어에서 어디서 어긋나는지를 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install scikit-learn`).
+- 문장은 이 장의 `tfidf` 예제를 그대로 쓰고, 몇 개를 덧붙였다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import unicodedata as ud
+import numpy as np
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# 1) scikit-learn 의 기본 tokenizer 는 한국어에서 무엇을 단어로 보는가
+docs = ["고양이가 매트 위에 앉았다", "개가 매트 위에 앉았다", "고양이가 생선을 먹었다", "매트 매트 매트 매트"]
+cv = CountVectorizer().fit(docs)
+print(cv.get_feature_names_out().tolist())
+print(CountVectorizer().fit(["I love NLP!", "a cat and a dog"]).get_feature_names_out().tolist())   # 한 글자 단어가 빠진다
+
+# 2) 이 장의 TF-IDF 와 같은가: smooth_idf, sublinear_tf, norm 의 기본값
+tf = TfidfVectorizer().fit(docs)
+print(dict(zip(tf.get_feature_names_out(), np.round(tf.idf_, 3))))
+M = tf.transform(docs).toarray()
+print(np.round(np.linalg.norm(M, axis=1), 3), np.round(cosine_similarity(M)[0], 3))
+
+# 3) 반복에 취약하다: '매트' 를 반복한 문서. sublinear_tf=True 면 tf 대신 1 + log(tf)
+q = ["매트 위의 고양이"]
+for kw in [{}, {"sublinear_tf": True}]:
+    v = TfidfVectorizer(**kw).fit(docs)
+    print(kw, np.round(cosine_similarity(v.transform(q), v.transform(docs))[0], 3))
+
+# 4) normalization 을 안 하면 같은 단어가 다른 열이 된다
+nfd = [ud.normalize("NFD", d) for d in docs]
+mixed = docs[:2] + nfd[2:]                                  # 앞 두 문서는 NFC, 뒤 두 문서는 NFD
+v = CountVectorizer().fit(mixed)
+print(len(v.get_feature_names_out()), len(CountVectorizer().fit(docs).get_feature_names_out()))
+print([w for w in v.get_feature_names_out() if ud.normalize("NFC", w) == "고양이가"],
+      [len(w) for w in v.get_feature_names_out() if ud.normalize("NFC", w) == "고양이가"])
+v2 = CountVectorizer(preprocessor=lambda s: ud.normalize("NFKC", s).lower()).fit(mixed)
+print(len(v2.get_feature_names_out()))
+
+# 5) 조사가 붙은 한국어: 단어 대신 글자 n-gram 을 쓰면
+corpus = ["고양이가 생선을 먹었다", "고양이는 생선이 좋다", "개는 뼈를 좋아한다"]
+query = ["고양이를 봤다"]
+for name, v in [("단어", TfidfVectorizer()), ("글자 2~3-gram", TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 3)))]:
+    v.fit(corpus)
+    print(name, len(v.get_feature_names_out()), np.round(cosine_similarity(v.transform(query), v.transform(corpus))[0], 3))
+
+# 6) 어순을 버린다
+pair = ["개가 사람을 물었다", "사람을 개가 물었다"]
+print(cosine_similarity(TfidfVectorizer().fit_transform(pair))[0, 1])
+
+# ['개가', '고양이가', '매트', '먹었다', '생선을', '앉았다', '위에']
+# ['and', 'cat', 'dog', 'love', 'nlp']
+# {'개가': np.float64(1.916), '고양이가': np.float64(1.511), '매트': np.float64(1.223), '먹었다': np.float64(1.916), '생선을': np.float64(1.916), '앉았다': np.float64(1.511), '위에': np.float64(1.511)}
+# [1. 1. 1. 1.] [1.    0.673 0.255 0.423]
+# {} [0.423 0.392 0.    1.   ]
+# {'sublinear_tf': True} [0.423 0.392 0.    1.   ]
+# 9 7
+# ['고양이가', '고양이가'] [9, 4]
+# 7
+# 단어 9 [0. 0. 0.]
+# 글자 2~3-gram 51 [0.361 0.392 0.157]
+# 1.0000000000000002
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **기본 tokenizer는 공백으로 나눈 덩어리를 단어로 본다.** "고양이가"와 "고양이"는 다른 단어다. 조사가 붙은 어절이 그대로 vocabulary가 된다. 영어 쪽을 보면 기본 정규식이 두 글자 이상만 단어로 쳐서 "I"와 "a"가 빠지고, 대문자는 소문자로 바뀐다. 이런 기본값은 영어를 기준으로 정해져 있다.
+- **IDF는 이 장의 smoothing된 식과 같다 (G7.0.8).** `TfidfVectorizer` 의 기본값은 $\log\frac{1+N}{1+\text{df}}+1$ 이다. 네 문서 중 셋에 나오는 "매트"가 1.223, 한 문서에만 나오는 "개가"가 1.916이다. 그리고 각 문서 벡터를 길이 1로 정규화한다(norm 1.0). 본문은 TF를 문서 길이로 나눴는데, scikit-learn은 count를 그대로 쓰고 마지막에 L2 정규화를 한다는 점이 다르다.
+- **"매트 위의 고양이"를 검색하면 '매트 매트 매트 매트'가 1등이다.** cosine이 1.0으로, 실제로 고양이가 매트 위에 앉은 첫 문서(0.423)보다 높다. 이유는 두 가지가 겹친 것이다. 질의의 "위의"와 "고양이"가 문서의 "위에"와 "고양이가"와 다른 단어라 겹치는 것이 "매트" 하나뿐이고, '매트'만 있는 문서는 정규화하면 질의의 '매트' 방향과 정확히 같다. `sublinear_tf=True` (반복 횟수 대신 $1+\log$)로 바꿔도 결과가 같다. 반복이 아니라 조사가 문제였기 때문이다.
+- **normalization을 안 하면 같은 단어가 두 열이 된다 (G7.0.1).** NFC 문서와 NFD 문서를 섞으면 vocabulary가 7개가 아니라 9개다. "고양이가"가 두 번 나오는데 하나는 4글자, 하나는 9글자(자모로 풀린 것)다. 화면에서는 같아 보인다. `preprocessor` 에 NFKC normalization을 넣으면 7개로 돌아온다.
+- **한국어에서는 글자 n-gram이 조사를 넘어간다 (G7.0.4).** "고양이를 봤다"로 검색하면, 단어 단위로는 세 문서 모두 cosine 0이다. 겹치는 어절이 하나도 없다. 글자 2~3-gram(`analyzer="char_wb"`)으로 바꾸면 고양이 문서 둘이 0.36과 0.39, 개 문서가 0.16이다. "고양", "양이"가 공통 조각으로 잡힌다. 대신 vocabulary가 9개에서 51개로 늘었다.
+- **어순은 사라진다.** "개가 사람을 물었다"와 "사람을 개가 물었다"는 cosine 1.0이다. 이 경우는 한국어에서 실제로 같은 뜻이다. 하지만 "개가 사람을 물었다"와 "사람이 개를 물었다"를 구분하지 못하는 것도 같은 성질이다. 그쪽은 조사가 달라 다른 단어가 될 뿐, 순서를 보는 것이 아니다.
+
+**이 코드가 보여 주지 못하는 것.**
+문서 몇 개짜리 장난감 예다. 실제 한국어 검색에서는 형태소 분석기(KoNLPy, Kiwi 등)로 조사를 떼거나, subword tokenizer([7.1](01_tokenization.qmd))를 쓰는 경우가 많다. 그것과 글자 n-gram의 비교는 하지 않았다.
+본문의 MinHash와 edit distance는 scikit-learn에 없어서 다루지 않았다(`datasketch`, `rapidfuzz` 같은 library가 있다).
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
