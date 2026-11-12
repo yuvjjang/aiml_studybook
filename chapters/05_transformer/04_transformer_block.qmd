@@ -454,6 +454,119 @@ early exit(초기 종료 — 답이 확실하면 중간 층에서 멈추기), �
 
 ---
 
+## 실제 도구로: GPT-2의 block을 뜯어 본다
+
+학습된 GPT-2에서 block 하나를 꺼내 이 장의 식으로 다시 계산하고, residual stream에 층마다 무엇이 얼마나 쓰이는지를 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `gpt2`(12층, $d = 768$, $d_{ff} = 3072$, 약 550 MB)다. pre-LN 구조다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2").eval()
+T = model.transformer
+count = lambda m: sum(p.numel() for p in m.parameters())
+d, L = 768, 12
+
+# 1) parameter 는 어디에 있는가
+b = T.h[0]
+print(count(b.attn), 4 * d * d + 4 * d, count(b.mlp), 8 * d * d + 5 * d, round(count(b.mlp) / count(b.attn), 2))
+blocks, emb, total = count(T.h), count(T.wte) + count(T.wpe), count(T)
+print(blocks, 12 * d * d * L, emb, total, round(emb / total, 3))
+
+TEXT = ("The city council met on Tuesday evening to discuss the new budget. "
+        "Several residents spoke about the condition of the roads, and one asked why "
+        "the library would close earlier on weekends. The mayor said that no final "
+        "decision had been made and that the council would vote again next month. "
+        "After the meeting, a small group stayed behind to talk about the plans for the park.")
+ids = tok(TEXT, return_tensors="pt").input_ids
+with torch.no_grad():
+    out = model(ids, output_hidden_states=True, labels=ids)
+hs = out.hidden_states                                   # embedding 뒤 + 12층 = 13개
+base_ppl = math.exp(out.loss.item())
+
+# 2) block 하나를 이 장의 두 줄로 다시 계산한다 (pre-LN)
+with torch.no_grad():
+    x = hs[0]
+    x = x + b.attn(b.ln_1(x))[0]
+    x = x + b.mlp(b.ln_2(x))
+print((x - hs[1]).abs().max().item())
+
+# 3) FFN 은 token 마다 따로, attention 은 token 사이를 섞는다: 5번 token 만 떼어 넣어 본다
+with torch.no_grad():
+    h = b.ln_1(hs[0])
+    print((b.mlp(h)[0, 5] - b.mlp(h[:, 5:6])[0, 0]).abs().max().item(),
+          (b.attn(h)[0][0, 5] - b.attn(h[:, 5:6])[0][0, 0]).abs().max().item())
+
+# 4) residual stream: 층마다 무엇이 얼마나 더해지는가
+writes = {}
+def save(name):
+    def hook(mod, args, output):
+        writes[name] = output[0] if isinstance(output, tuple) else output
+    return hook
+handles = [blk.attn.register_forward_hook(save(("attn", i))) for i, blk in enumerate(T.h)]
+handles += [blk.mlp.register_forward_hook(save(("mlp", i))) for i, blk in enumerate(T.h)]
+with torch.no_grad():
+    model(ids)
+for hd in handles:
+    hd.remove()
+norm = lambda t: round(t[0, 1:].norm(dim=-1).mean().item(), 1)          # 0번 자리는 뺀다
+print([norm(h) for h in hs[:-1]])                                        # 층에 들어가는 stream 의 크기
+print([norm(writes["attn", i]) for i in range(L)])
+print([norm(writes["mlp", i]) for i in range(L)])
+
+# 5) 마지막 stream = embedding + 모든 sublayer 가 쓴 것의 합
+total_write = hs[0] + sum(writes["attn", i] + writes["mlp", i] for i in range(L))
+with torch.no_grad():
+    print((T.ln_f(total_write) - hs[-1]).abs().max().item())
+
+# 6) 층 하나를 건너뛰면 (그 block 이 쓴 것을 0 으로)
+def ppl_without(i):
+    zero = lambda mod, args, output: (torch.zeros_like(output[0]),) + tuple(output[1:]) if isinstance(output, tuple) else torch.zeros_like(output)
+    hd = [T.h[i].attn.register_forward_hook(zero), T.h[i].mlp.register_forward_hook(zero)]
+    with torch.no_grad():
+        v = math.exp(model(ids, labels=ids).loss.item())
+    for x in hd:
+        x.remove()
+    return round(v, 1)
+print(round(base_ppl, 1), [ppl_without(i) for i in range(L)])
+
+# 2362368 2362368 4722432 4722432 2.0
+# 85054464 84934656 39383808 124439808 0.316
+# 0.0
+# 4.76837158203125e-06 2.702361583709717
+# [4.7, 52.9, 57.3, 61.7, 67.0, 72.0, 78.7, 87.3, 102.0, 122.9, 156.6, 231.5]
+# [31.1, 8.9, 8.3, 8.5, 9.1, 9.9, 11.8, 13.2, 16.8, 21.7, 33.2, 249.4]
+# [28.4, 10.3, 12.2, 13.6, 14.3, 16.7, 19.6, 23.7, 30.2, 42.0, 81.1, 80.7]
+# 4.57763671875e-05
+# 17.7 [1685.6, 17.6, 18.9, 18.0, 18.1, 19.5, 20.4, 22.0, 21.2, 21.0, 20.7, 34.0]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **FFN이 attention의 두 배다 (G5.4.1, "직접 해보기" ①).** block 하나에서 attention이 $4d^2 + 4d = 2{,}362{,}368$ 개, FFN이 $8d^2 + 5d = 4{,}722{,}432$ 개다. 손으로 센 값과 같고 비가 2.0이다.
+- **$12d^2L$ 근사가 잘 맞는다.** 12개 block의 실제 parameter가 8,505만 개이고 $12d^2L$ 은 8,493만 개다. 차이는 bias와 LayerNorm이다. 이 크기의 모델에서는 embedding이 전체의 31.6%를 차지한다.
+- **block이 이 장의 두 줄 그대로다.** `x + attn(ln_1(x))`, 이어서 `x + mlp(ln_2(x))` 로 계산한 값이 모델이 내놓은 다음 층의 입력과 정확히 같다(차이 0.0).
+- **FFN은 token마다 따로 계산된다 ("FFN: attention이 못 하는 일").** 5번 token 하나만 떼어 FFN에 넣은 결과가 전체를 넣었을 때의 5번 자리와 같다($5\times10^{-6}$). attention에 같은 일을 하면 2.7만큼 다르다. 다른 token이 없으면 섞을 것이 없기 때문이다.
+- **residual stream은 층을 지나며 커진다.** stream의 크기(벡터 norm의 평균)가 첫 층 입력에서 4.7이고, 첫 block을 지나면 52.9, 마지막 block 입력에서 231.5다. [3.5](../03_deep_learning/05_normalization.qmd)에서 pre-LN의 성질로 든 것이다. 각 sublayer는 normalize된 입력을 읽으므로 stream이 커져도 계산은 흔들리지 않는다.
+- **첫 block과 마지막 block이 유난히 많이 쓴다.** 첫 block의 attention과 FFN이 쓰는 값의 크기가 31과 28로, 그때의 stream(4.7)보다 여섯 배 크다. 가운데 층들은 stream의 10~20% 크기를 쓴다. 마지막 attention은 249를 쓴다.
+- **마지막 stream은 정말로 합이다 ("residual connection과 residual stream").** embedding에 24개 sublayer가 쓴 값을 전부 더하고 마지막 LayerNorm을 걸면 모델의 최종 hidden state와 같다($5\times10^{-5}$, float32로 큰 수를 더한 오차). 본문의 $x_{\text{out}} = x_{\text{in}} + \sum(\text{MHA}_\ell + \text{FFN}_\ell)$ 이 실제 모델에서 성립한다.
+- **가운데 층은 하나쯤 빠져도 버틴다 ("block을 쌓으면").** block 하나가 쓴 것을 0으로 만들고 perplexity를 다시 재면, 원래 17.7이 가운데 층에서는 17.6~22.0이다. 첫 block을 빼면 1,686으로 무너지고, 마지막을 빼면 34.0이다. 층들이 서로 직접 연결되지 않고 stream을 통해서만 이어져 있어서, 하나가 빠져도 나머지가 읽을 것이 남아 있다.
+
+**이 코드가 보여 주지 못하는 것.**
+크기와 perplexity는 73 token짜리 문장 하나에서 잰 것이다. 어느 층이 얼마나 중요한지는 입력에 따라 달라질 수 있다.
+"가운데 층은 빠져도 버틴다"는 것은 **이 문장의 perplexity**에 대해서다. 본문 표의 "중반 층은 사실 지식 조회" 같은 역할 구분은 이 실험으로 확인되지 않는다. 그것을 보려면 그런 능력을 요구하는 입력으로 따로 재야 한다.
+stream의 크기가 커지는 이유도 여기서 가리지 않았다. norm이 크다는 것과 정보가 많다는 것은 다르다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
