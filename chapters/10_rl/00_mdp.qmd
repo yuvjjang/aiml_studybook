@@ -609,6 +609,113 @@ col = POM[0]
 
 ---
 
+## 실제 도구로: Gymnasium 환경의 MDP
+
+강화학습 환경의 표준 API인 Gymnasium으로 이 장의 MDP를 실제 환경에서 확인한다. 상태·행동 공간, 에피소드가 끝나는 두 가지 방식, discount factor와 horizon, 관측을 줄인 POMDP다. 환경은 미끄러운 FrozenLake 4×4다([10.1](01_dynamic_programming.qmd)의 "실제 도구로"와 같은 환경).
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `gymnasium` 1.4, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install gymnasium`).
+- 성공률을 수천 번의 에피소드로 재고, POMDP의 policy 256개를 다 시험해서 몇 분 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import gymnasium as gym
+
+# 1) 환경이 MDP 의 기호들을 어떻게 드러내는가: 상태 공간, 행동 공간, 시간 제한
+env = gym.make("FrozenLake-v1", is_slippery=True)
+print(env.observation_space, env.action_space, env.spec.max_episode_steps)
+print(env.unwrapped.desc.astype(str).tolist())                  # S 시작, F 얼음, H 구멍, G 목표
+
+# 2) terminated 와 truncated 는 다르다: 구멍·목표에서 끝난 것 / 시간 제한으로 잘린 것
+rng = np.random.default_rng(0)
+ends = {"terminated": 0, "truncated": 0}
+lengths = []
+short = gym.make("FrozenLake-v1", is_slippery=True, max_episode_steps=8)
+for ep in range(2000):
+    s, _ = short.reset(seed=ep)
+    for t in range(100):
+        s, r, term, trunc, _ = short.step(int(rng.integers(4)))
+        if term or trunc:
+            ends["terminated" if term else "truncated"] += 1; lengths.append(t + 1); break
+print(ends, round(float(np.mean(lengths)), 2))
+
+# 3) discount factor 와 effective horizon: 같은 보상열의 할인 합
+rewards = np.zeros(200); rewards[[5, 50, 150]] = 1.0             # 5, 50, 150 번째 step 에 보상
+for g in [0.5, 0.9, 0.99, 0.999]:
+    w = g ** np.arange(200)
+    print(g, round(1 / (1 - g), 1), np.round(w[[5, 50, 150]], 3).tolist(), round(float((w * rewards).sum()), 3))
+
+# 4) 최적 policy 는 gamma 에 따라 바뀐다: value iteration 으로 시작 칸의 가치와 성공률
+P = env.unwrapped.P
+def solve(gamma, iters=3000):
+    V = np.zeros(16)
+    for _ in range(iters):
+        Q = np.array([[sum(p * (r + gamma * V[s2] * (not d)) for p, s2, r, d in P[s][a]) for a in range(4)] for s in range(16)])
+        V = Q.max(1)
+    return Q.argmax(1), V
+def success(pi, episodes=3000):
+    wins, steps = 0, []
+    for ep in range(episodes):
+        s, _ = env.reset(seed=ep); done, n = False, 0
+        while not done:
+            s, r, term, trunc, _ = env.step(int(pi[s])); done = term or trunc; n += 1
+        wins += r; steps.append(n)
+    return round(wins / episodes, 3), round(float(np.mean(steps)), 1)
+for g in [0.5, 0.9, 0.99]:
+    pi, V = solve(g)
+    print(g, round(float(V[0]), 4), success(pi), pi[:4].tolist())
+
+# 5) 관측을 줄이면 (POMDP): 칸 번호 대신 '행' 만 보여 주는 wrapper
+class RowOnly(gym.ObservationWrapper):
+    def __init__(self, e):
+        super().__init__(e); self.observation_space = gym.spaces.Discrete(4)
+    def observation(self, obs):
+        return obs // 4
+row_env = RowOnly(gym.make("FrozenLake-v1", is_slippery=True))
+print(row_env.observation_space, row_env.reset(seed=0)[0])
+# 행만 보고 고를 수 있는 policy 4^4 = 256 개를 전부 시험한다
+best = 0
+for code_ in range(256):
+    acts = [(code_ >> (2 * k)) & 3 for k in range(4)]
+    wins = 0
+    for ep in range(300):
+        o, _ = row_env.reset(seed=ep); done = False
+        while not done:
+            o, r, term, trunc, _ = row_env.step(acts[o]); done = term or trunc
+        wins += r
+    best = max(best, wins / 300)
+print(round(best, 3))
+
+# Discrete(16) Discrete(4) 100
+# [['S', 'F', 'F', 'F'], ['F', 'H', 'F', 'H'], ['F', 'F', 'F', 'H'], ['H', 'F', 'F', 'G']]
+# {'terminated': 1336, 'truncated': 664} 5.76
+# 0.5 2.0 [0.031, 0.0, 0.0] 0.031
+# 0.9 10.0 [0.59, 0.005, 0.0] 0.596
+# 0.99 100.0 [0.951, 0.605, 0.221] 1.777
+# 0.999 1000.0 [0.995, 0.951, 0.861] 2.807
+# 0.5 0.0004 (0.431, 27.0) [2, 3, 2, 3]
+# 0.9 0.0689 (0.73, 41.3) [0, 3, 0, 3]
+# 0.99 0.542 (0.738, 44.6) [0, 3, 3, 3]
+# Discrete(4) 0
+# 0.14
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **환경이 MDP의 기호를 드러낸다 ("MDP: 다섯 개의 기호").** 상태 공간은 `Discrete(16)`, 행동 공간은 `Discrete(4)` 다. 지도는 시작(S), 얼음(F), 구멍(H), 목표(G)로 되어 있다. 전이 확률과 보상은 [10.1](01_dynamic_programming.qmd)에서 본 `P` 표에 있다. 이 환경에는 기본으로 100 step 시간 제한이 걸려 있다.
+- **끝나는 방식이 둘이다.** `terminated` 는 구멍이나 목표에 닿아 MDP 자체가 끝난 것이고, `truncated` 는 시간 제한으로 잘린 것이다. 시간 제한을 8로 줄이고 무작위로 걸으면 2,000번 중 1,336번이 terminated, 664번이 truncated다. 이 구분이 중요한 것은 학습할 때다. 잘린 에피소드의 마지막 상태는 끝난 상태가 아니므로, 그 다음 가치를 0으로 두면 안 된다.
+- **discount factor가 얼마나 멀리 보는지를 정한다 (G10.0.1, "직접 해보기" ①).** 5, 50, 150번째 step에 보상 1이 있는 열에서, $\gamma = 0.5$ 면 5번째 보상조차 0.031로 줄고 합이 0.031이다. $\gamma = 0.9$ 면 50번째가 0.005로 거의 사라진다. 0.99에서는 50번째 0.605, 150번째 0.221이 남고, 0.999면 150번째도 0.861이다. effective horizon $1/(1-\gamma)$ 가 2, 10, 100, 1,000과 같은 자릿수다.
+- **$\gamma$ 가 최적 policy를 바꾼다.** $\gamma$ = 0.5, 0.9, 0.99로 각각 푼 최적 policy의 실제 성공률이 43.1%, 73.0%, 73.8%다. $\gamma = 0.5$ 에서는 몇 step 뒤의 목표가 가치에 거의 반영되지 않아(시작 칸의 가치 0.0004), 그 가치로 고른 행동이 목표를 향하지 않는다. 0.9와 0.99는 성공률이 비슷하고, 0.99 쪽이 평균 44.6 step으로 더 오래 걸린다. 늦게 받는 보상의 손해가 작으니 오래 걸려도 성공 확률이 높은 길을 고른 것으로 보인다.
+- **관측을 줄이면 최선도 낮아진다 (G10.0.5, "직접 해보기" ③).** 칸 번호 대신 행 번호만 보여 주는 `ObservationWrapper` 를 씌우면, 행마다 행동 하나를 고르는 policy 256개를 다 시험해도 최고 성공률이 14%다. 전체를 볼 때(73.8%)의 5분의 1이다. 같은 행에서도 열에 따라 해야 할 행동이 달라서다. 관측이 Markov가 아니면 현재 관측만 보는 policy로는 최적에 닿을 수 없다.
+
+**이 코드가 보여 주지 못하는 것.**
+16칸짜리 환경이다. exploration과 exploitation(G10.0.4)은 학습하는 에이전트가 있어야 보여서 여기서는 다루지 않았다([10.2](02_model_free.qmd)의 "실제 도구로"가 그 예다).
+성공률은 3,000번(POMDP는 policy마다 300번) 에피소드에서 잰 것이라 소수점 둘째 자리는 흔들린다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
