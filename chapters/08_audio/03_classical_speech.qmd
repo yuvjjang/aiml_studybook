@@ -902,12 +902,12 @@ subword 출력(8.4)이 이 제약을 없앤다.
 최적 경로를 손으로 찾아라. 코드 결과와 같은가?
 
 **② triphone 폭발을 센다**
-phoneme 40개면 triphone은 몇 개인가? `triphone` 의 state tying 후
-실제 남는 state 수와 비교하라. 몇 배 줄었는가?
+phoneme 40개면 triphone은 몇 개인가? `triphone` 이 센 "학습에서 관측된 triphone" 수는 가능한 전체의 몇 %인가?
+(이 장의 코드는 state tying을 구현하지 않는다. 관측된 것만 따로 모형을 두면 보지 못한 triphone은 어떻게 되는지 생각해 보라.)
 
 **③ language model 가중치를 훑는다**
-`decode-word` 의 LM 가중치를 0·1·10으로 바꾸며 인식 결과를 보라.
-acoustic 점수만으로 decoding하면 무엇이 나오는가?
+`decode-word` 는 `word_decode(B, 1.0)` 으로 LM 가중치 1을 쓴다. 이 값을 0과 10으로 바꾸며 WER 표를 다시 보라.
+acoustic 점수만으로(가중치 0) decoding하면 noise 조건에서 무엇이 달라지는가?
 :::
 
 ## 요약
