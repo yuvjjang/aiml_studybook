@@ -353,6 +353,104 @@ deep learning에서는 대개 RGB를 그대로 넣는다 — 신경망이 필요
 
 ---
 
+## 실제 도구로: Pillow와 SciPy의 이미지 함수
+
+이미지를 읽고 쓰는 Pillow와 `scipy.ndimage` 로 이 장의 filter, frequency domain, 크기 줄이기, 색공간을 확인한다. 이미지는 seed를 고정해 코드로 만든다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `pillow` 13.0, `scipy` 1.18, `numpy` 2.5 (`pip install pillow`).
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from PIL import Image, ImageFilter
+from scipy import ndimage
+
+# 테스트 이미지: 밝은 사각형 하나와 대각선 줄무늬 (seed 고정 잡음)
+rng = np.random.default_rng(0)
+H = W = 128
+img = np.zeros((H, W), np.float32)
+img[32:96, 40:88] = 1.0
+yy, xx = np.mgrid[0:H, 0:W]
+img += 0.3 * (np.sin((xx + yy) / 2.0) > 0)                       # 고주파 무늬
+noisy = np.clip(img + rng.normal(0, 0.15, img.shape), 0, 1.3).astype(np.float32)
+
+# 1) 이미지는 배열이다: PIL ↔ numpy, 그리고 dtype 의 함정
+pil = Image.fromarray((np.clip(noisy, 0, 1) * 255).astype(np.uint8))
+arr = np.asarray(pil)
+print(pil.mode, pil.size, arr.shape, arr.dtype, arr.max())
+print((arr[:1, :2].astype(int) + 250).tolist(), (arr[:1, :2] + np.uint8(250)).tolist())   # uint8 끼리 더하면 256 을 넘는 만큼 돌아간다
+
+# 2) Sobel 과 단순 중앙차분: 잡음에 대한 반응
+def edges(a, kind):
+    if kind == "sobel":
+        gx, gy = ndimage.sobel(a, axis=1), ndimage.sobel(a, axis=0)
+    else:
+        k = np.array([[-1, 0, 1]], np.float32)
+        gx, gy = ndimage.convolve(a, k), ndimage.convolve(a, k.T)
+    return np.hypot(gx, gy)
+clean_sq = np.zeros_like(img); clean_sq[32:96, 40:88] = 1.0
+sq_noisy = clean_sq + rng.normal(0, 0.15, img.shape).astype(np.float32)
+border = (ndimage.binary_dilation(clean_sq > 0) ^ ndimage.binary_erosion(clean_sq > 0))
+for kind in ["central", "sobel"]:
+    e = edges(sq_noisy, kind)
+    print(kind, round(float(e[border].mean() / e[~border].mean()), 2))   # 가장자리 반응 / 나머지 반응
+
+# 3) frequency domain: 저주파만 / 고주파만 남기기
+F = np.fft.fftshift(np.fft.fft2(img))
+r = np.hypot(yy - H / 2, xx - W / 2)
+low = np.real(np.fft.ifft2(np.fft.ifftshift(F * (r < 10))))
+high = np.real(np.fft.ifft2(np.fft.ifftshift(F * (r >= 10))))
+stripes = 0.3 * (np.sin((xx + yy) / 2.0) > 0)
+print(round(float(np.corrcoef(low.ravel(), clean_sq.ravel())[0, 1]), 3), round(float(np.corrcoef(high.ravel(), stripes.ravel())[0, 1]), 3))
+
+# 4) resize 와 aliasing: 줄무늬를 1/4 로 줄일 때 거르지 않으면 (NEAREST) 가짜 무늬가 생긴다
+stripe_img = Image.fromarray(((np.sin(xx / 1.2) > 0) * 255).astype(np.uint8))
+for name, rs in [("NEAREST", Image.Resampling.NEAREST), ("LANCZOS", Image.Resampling.LANCZOS)]:
+    small = np.asarray(stripe_img.resize((32, 32), rs), np.float32) / 255
+    print(name, round(float(small.std()), 3))
+
+# 5) 색공간: 빨강과 초록을 회색으로, 그리고 HSV 로
+rgb = Image.new("RGB", (2, 1)); rgb.putpixel((0, 0), (255, 0, 0)); rgb.putpixel((1, 0), (0, 255, 0))
+print(np.asarray(rgb.convert("L")).tolist())
+print(np.asarray(rgb.convert("HSV")).tolist())
+
+# 6) blur 의 크기와 edge
+for radius in [0, 2, 4]:
+    b = np.asarray(Image.fromarray((clean_sq * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(radius)), np.float32) / 255
+    row = b[64, 30:50]
+    print(radius, int(((row > 0.1) & (row < 0.9)).sum()))       # 0 과 1 사이 '번진' pixel 의 폭
+
+# L (128, 128) (128, 128) uint8 255
+# [[254, 321]] [[254, 65]]
+# central 3.87
+# sobel 6.17
+# 0.97 0.844
+# NEAREST 0.499
+# LANCZOS 0.19
+# [[76, 150]]
+# [[[0, 255, 255], [85, 255, 255]]]
+# 0 0
+# 2 6
+# 4 10
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **이미지는 배열이고, 대개 `uint8` 이다 ("이미지는 배열이다").** Pillow 이미지를 `np.asarray` 로 바꾸면 (높이, 너비) 모양의 `uint8` 배열이다. Pillow는 크기를 (너비, 높이)로, NumPy는 (높이, 너비)로 적는다. `uint8` 끼리 더하면 255를 넘는 만큼 0부터 다시 센다. 첫 두 pixel(4와 71)에 250을 더하면 정수로는 254와 321인데, `uint8` 로는 254와 65다. 경고도 없다. 계산하기 전에 float로 바꾸는 이유다.
+- **Sobel은 잡음에 강하다 ("Sobel kernel은 근사 미분이다", "직접 해보기" ①).** 잡음 섞인 사각형에서 가장자리 pixel의 반응을 나머지 pixel의 반응으로 나누면, 단순 중앙차분 $[-1, 0, 1]$ 은 3.87, Sobel은 6.17이다. Sobel은 미분 방향과 수직으로 $[1, 2, 1]$ 의 smoothing을 함께 해서 잡음을 덜 키운다.
+- **저주파는 모양, 고주파는 무늬다 (G9.0.2, "직접 해보기" ②).** FFT에서 중심 반지름 10 안쪽만 남겨 되돌린 이미지는 원래 사각형과 상관 0.97이다. 그 바깥만 남긴 이미지는 대각선 줄무늬와 상관 0.84다. 큰 구조와 밝기는 저주파에, 가장자리와 촘촘한 무늬는 고주파에 있다.
+- **거르지 않고 줄이면 가짜 무늬가 생긴다 ("scale과 receptive field").** 주기 7.5 pixel의 줄무늬를 1/4로 줄이면 주기가 1.9 pixel이 되어, 표현할 수 있는 한계(2 pixel)보다 촘촘해진다. 이웃 pixel 하나를 고르는 `NEAREST` 로 줄이면 표준편차 0.499로 흑백 대비가 그대로 남은 엉뚱한 무늬가 된다. `LANCZOS` 는 줄이기 전에 걸러 0.19로 회색에 가깝게 만든다. 8.0의 aliasing과 같은 현상의 2차원 판이다.
+- **회색 변환은 초록을 더 밝게 친다 ("색공간").** 같은 밝기의 빨강과 초록을 회색으로 바꾸면 76과 150이다. Pillow는 사람 눈의 민감도를 반영한 가중치(빨강 0.299, 초록 0.587, 파랑 0.114)를 쓴다. HSV로 바꾸면 빨강의 색상이 0, 초록이 85다. Pillow는 0~360°를 0~255로 저장해서 120°가 85가 된다.
+- **blur의 반지름이 경계의 폭을 정한다.** 사각형 가장자리에서 0과 1 사이로 번진 pixel의 폭이 Gaussian blur 반지름 0, 2, 4에서 0, 6, 10 pixel이다.
+
+**이 코드가 보여 주지 못하는 것.**
+모두 코드로 만든 단순한 이미지다. 실제 사진은 색 채널이 셋이고, JPEG 압축의 흔적과 카메라 잡음이 있다.
+data augmentation("직접 해보기" ③)은 다루지 않았다. PyTorch에서는 `torchvision.transforms` 가 그 역할을 한다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
