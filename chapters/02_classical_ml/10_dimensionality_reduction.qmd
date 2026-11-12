@@ -713,6 +713,126 @@ fig.show()
 
 ---
 
+## 실제 도구로: scikit-learn의 PCA와 t-SNE
+
+이 장의 PCA 성질, scale의 함정, t-SNE 해석 규칙을 실제 데이터에서 숫자로 확인한다. t-SNE는 그림을 눈으로 보는 대신 "원래 공간의 무엇이 그림에 남았는가"를 순위상관으로 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install scikit-learn`).
+- 데이터는 scikit-learn에 들어 있는 손글씨 숫자(1,797장, 64차원)와 와인(178병, 특성 13개)이다. t-SNE 네 번에 CPU로 1분쯤 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from scipy.spatial.distance import pdist
+from scipy.stats import spearmanr
+from sklearn.datasets import load_digits, load_wine
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE, trustworthiness
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.random_projection import GaussianRandomProjection, johnson_lindenstrauss_min_dim
+
+X, y = load_digits(return_X_y=True)                         # 손글씨 숫자 1,797장, 64차원
+
+# 1) PCA = 중심화한 데이터의 SVD
+pca = PCA().fit(X)
+Xc = X - X.mean(0)
+U, s, Vt = np.linalg.svd(Xc, full_matrices=False)
+print(np.abs(pca.explained_variance_ - s ** 2 / (len(X) - 1)).max(),
+      np.abs(np.abs(pca.components_[:10]) - np.abs(Vt[:10])).max())
+cum = np.cumsum(pca.explained_variance_ratio_)
+print([round(float(v), 3) for v in cum[[1, 9, 19, 39]]], int(np.searchsorted(cum, 0.9)) + 1, int(np.searchsorted(cum, 0.99)) + 1)
+
+# 2) reconstruction error = 버린 성분의 분산 합
+for k in [2, 10, 20]:
+    p = PCA(k).fit(X)
+    err = ((X - p.inverse_transform(p.transform(X))) ** 2).sum(1).mean()
+    print(k, round(float(err), 2), round(float(pca.explained_variance_[k:].sum() * (len(X) - 1) / len(X)), 2))
+
+# 3) scale 의 함정: 와인 178병, 특성 13개 — 단위가 제각각이다
+W, wy = load_wine(return_X_y=True)
+names = load_wine().feature_names
+raw, std = PCA(2).fit(W), PCA(2).fit(StandardScaler().fit_transform(W))
+print(names[int(np.abs(raw.components_[0]).argmax())], round(float(np.abs(raw.components_[0]).max()), 4),
+      round(float(raw.explained_variance_ratio_[0]), 4), [round(float(v), 0) for v in W.std(0)[[0, 12]]])
+knn = KNeighborsClassifier(5)
+print(round(cross_val_score(knn, raw.transform(W), wy, cv=5).mean(), 3),
+      round(cross_val_score(knn, std.transform(StandardScaler().fit_transform(W)), wy, cv=5).mean(), 3))
+
+# 4) t-SNE: perplexity 와 seed 에 따라 그림이 달라진다
+X50 = PCA(50, random_state=0).fit_transform(X)              # 관례: PCA 로 먼저 줄인다
+D_hi = pdist(X50[:600])
+emb = {}
+for perp, seed in [(5, 0), (30, 0), (100, 0), (30, 1)]:
+    ts = TSNE(perplexity=perp, random_state=seed, init="random")
+    E = ts.fit_transform(X50)
+    emb[perp, seed] = E
+    print(perp, seed, round(float(ts.kl_divergence_), 3), round(trustworthiness(X50, E, n_neighbors=10), 3),
+          round(float(spearmanr(D_hi, pdist(E[:600]))[0]), 3))
+print(round(float(spearmanr(pdist(emb[30, 0][:600]), pdist(emb[30, 1][:600]))[0]), 3))
+
+# 5) cluster 사이의 거리와 cluster 의 크기: 원 공간과 t-SNE 그림을 비교한다
+def centroid_dists(Z):
+    C = np.array([Z[y == c].mean(0) for c in range(10)])
+    return pdist(C)
+def sizes(Z):
+    return np.array([np.linalg.norm(Z[y == c] - Z[y == c].mean(0), axis=1).mean() for c in range(10)])
+E = emb[30, 0]
+print(round(float(spearmanr(centroid_dists(X50), centroid_dists(E))[0]), 3),
+      round(float(spearmanr(centroid_dists(emb[30, 0]), centroid_dists(emb[30, 1]))[0]), 3),
+      round(float(spearmanr(sizes(X50), sizes(E))[0]), 3))
+print(round(float(sizes(X50).max() / sizes(X50).min()), 2), round(float(sizes(E).max() / sizes(E).min()), 2))
+
+# 6) random projection: 10,000 차원 → k 차원
+H = np.random.default_rng(1).normal(size=(300, 10000))
+d0 = pdist(H)
+for k in [50, 500, 2000]:
+    d1 = pdist(GaussianRandomProjection(k, random_state=0).fit_transform(H))
+    r = d1 / d0
+    print(k, round(float(np.abs(r - 1).mean()), 3), round(float(np.abs(r - 1).max()), 3))
+print(johnson_lindenstrauss_min_dim(300, eps=0.1), johnson_lindenstrauss_min_dim(300, eps=0.5))
+
+# 3.410605131648481e-13 3.70536934468646e-15
+# [0.285, 0.738, 0.894, 0.988] 21 41
+# 2 858.94 858.94
+# 10 314.51 314.51
+# 20 126.99 126.99
+# proline 0.9998 0.9981 [1.0, 314.0]
+# 0.691 0.966
+# 5 0 0.945 0.991 0.353
+# 30 0 0.749 0.993 0.427
+# 100 0 0.595 0.99 0.476
+# 30 1 0.757 0.992 0.407
+# 0.803
+# 0.741 0.758 0.636
+# 1.54 3.2
+# 50 0.08 0.437
+# 500 0.025 0.14
+# 2000 0.012 0.073
+# 4888 273
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **PCA는 중심화한 데이터의 SVD다.** `PCA` 가 돌려준 분산과 $s^2/(n-1)$ 의 차이가 $10^{-13}$ 이고, 성분 방향도 SVD의 $V$ 와 같다. 절댓값으로 비교한 것은 부호가 정해지지 않기 때문이다. 방향 $v$ 와 $-v$ 는 같은 축이고, 어느 쪽이 나올지는 구현이 정한다.
+- **성분 몇 개가 필요한지는 목표에 달렸다 ("성분 수 선택과 reconstruction").** 64차원 중 2개가 분산의 28.5%, 10개가 73.8%, 20개가 89.4%를 설명한다. 90%에 21개, 99%에 41개가 필요하다. 2차원 그림은 분산의 4분의 1만 보여 준다는 뜻이기도 하다.
+- **reconstruction error는 버린 성분의 분산 합과 같다.** $k = 2, 10, 20$ 에서 실제로 복원해 잰 오차와 버린 고유값의 합이 소수점 둘째 자리까지 같다.
+- **scale을 맞추지 않으면 단위가 큰 특성 하나가 PC1이 된다 ("세 가지 함정" 1).** 와인 데이터에서 standardization 없이 PCA를 하면 PC1이 사실상 proline 한 특성이고(loading 0.9998), 그것이 분산의 99.8%를 "설명"한다. proline의 표준편차가 314이고 다른 특성은 1 안팎이기 때문이다. 이 2차원으로 품종을 분류하면 정확도가 0.691이고, standardization한 뒤에는 0.966이다.
+- **t-SNE는 이웃은 지키고 먼 거리는 지키지 않는다.** 가까운 이웃이 보존되는 정도(trustworthiness)는 perplexity와 상관없이 0.99다. 원래 공간의 점 사이 거리와 그림에서의 거리의 순위상관은 0.35~0.48에 그친다. perplexity를 5, 30, 100으로 키우면 0.353, 0.427, 0.476으로 조금씩 오른다.
+- **KL divergence는 perplexity가 다르면 비교할 수 없다.** 0.945, 0.749, 0.595로 perplexity가 클수록 낮지만, perplexity가 맞추려는 목표 분포 자체를 바꾸기 때문이다. 이 값으로 perplexity를 고르면 안 된다.
+- **seed를 바꾸면 그림이 달라진다 ("네 가지 규칙" 4).** 같은 perplexity 30에서 seed만 바꾼 두 그림의 점 사이 거리는 순위상관이 0.80이다. 이웃 구조는 같아도 cluster가 놓인 자리가 다르다.
+- **cluster 사이 거리와 크기는 절반만 믿을 수 있다 ("네 가지 규칙" 1, 2).** 숫자 10종류의 중심 사이 거리 45쌍을 원래 공간과 그림에서 비교하면 순위상관이 0.74다. seed가 다른 두 그림끼리도 0.76이다. 완전히 무의미하지는 않지만, "3과 8이 가깝다" 같은 개별 판단을 그림 한 장으로 할 수 있는 수준이 아니다. cluster의 크기는 원래 공간에서 가장 큰 것이 가장 작은 것의 1.5배인데 그림에서는 3.2배다.
+- **random projection은 학습 없이 거리를 지킨다.** 10,000차원의 점 300개를 무작위 행렬로 500차원에 내리면 거리의 평균 왜곡이 2.5%, 최대 14%다. 2,000차원이면 1.2%와 7.3%다. Johnson–Lindenstrauss의 보장으로는 10% 이내에 4,888차원이 필요하다고 나온다. 보장은 최악의 경우에 대한 것이라 실제 왜곡은 그보다 훨씬 작다.
+
+**이 코드가 보여 주지 못하는 것.**
+t-SNE의 수치는 숫자 이미지 하나, perplexity 세 개, seed 두 개에서 잰 것이다. 특히 "cluster 사이 거리의 순위상관 0.74"는 class가 잘 나뉘는 이 데이터에서의 값이고, 다른 데이터에서 더 낮게 나올 수 있다.
+본문의 규칙 3, 곧 구조가 없는 잡음에서도 cluster가 보인다는 것은 여기서 확인하지 못했다. "cluster처럼 보인다"를 숫자 하나로 재는 방법을 정하지 못했고, 눈으로 그림을 봐야 하는 주장이다.
+UMAP은 scikit-learn에 없어서(`umap-learn` 이 따로 필요하다) 비교하지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
