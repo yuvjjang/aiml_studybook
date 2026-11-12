@@ -934,6 +934,117 @@ latent space에 prior(사전분포 — "z는 대략 이렇게 분포한다"는 �
 아무 z나 넣으면 데이터가 아닌 것이 나온다 (위 interpolation 실험의 t=0.6 지점).
 **다음 장의 VAE가 정확히 이 구멍을 메운다** — latent에 분포를 강제한다.
 
+---
+
+## 실제 도구로: PyTorch autoencoder와 scikit-learn PCA
+
+이 장의 주장들을 실제 손글씨 숫자 이미지에서 확인한다. 선형 autoencoder와 PCA, 비선형 autoencoder, overcomplete와 denoising, latent 공간의 interpolation이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9. 모델을 내려받지 않는다. 학습 일곱 번에 CPU로 몇 분 걸린다.
+- 데이터는 scikit-learn에 들어 있는 손글씨 숫자(8×8 = 64차원)다. 1,500장으로 학습하고 297장으로 잰다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+from sklearn.decomposition import PCA
+
+nn, F = torch.nn, torch.nn.functional
+d = load_digits()
+perm = np.random.default_rng(0).permutation(len(d.target))
+X = torch.tensor(d.data[perm] / 16.0, dtype=torch.float32)
+Xtr, Xte = X[:1500], X[1500:]
+mu = Xtr.mean(0)
+
+
+def train_ae(k, linear=True, epochs=300, noise=0.0, seed=0, data=None):
+    data = Xtr if data is None else data
+    torch.manual_seed(seed)
+    act = nn.Identity() if linear else nn.ReLU()
+    enc = nn.Sequential(nn.Linear(64, 128), act, nn.Linear(128, k)) if not linear else nn.Linear(64, k)
+    dec = nn.Sequential(nn.Linear(k, 128), act, nn.Linear(128, 64)) if not linear else nn.Linear(k, 64)
+    opt = torch.optim.Adam(list(enc.parameters()) + list(dec.parameters()), lr=3e-3)
+    for _ in range(epochs):
+        for idx in torch.randperm(len(data)).split(100):
+            xb = data[idx]
+            inp = xb + noise * torch.randn_like(xb)
+            opt.zero_grad(); F.mse_loss(dec(enc(inp)), xb).backward(); opt.step()
+    return enc.eval(), dec.eval()
+
+
+mse = lambda enc, dec, x: round(F.mse_loss(dec(enc(x)), x).item(), 5)
+
+# 1) 선형 autoencoder 의 reconstruction = PCA 의 reconstruction (G6.1.1)
+for k in [2, 8, 16]:
+    p = PCA(k).fit(Xtr.numpy())
+    pca_err = float(((p.inverse_transform(p.transform(Xte.numpy())) - Xte.numpy()) ** 2).mean())
+    enc, dec = train_ae(k)
+    with torch.no_grad():
+        # 학습된 decoder 의 열 공간과 PCA 성분 공간 사이의 가장 큰 principal angle (도)
+        Q1, _ = torch.linalg.qr(dec.weight)
+        Q2, _ = torch.linalg.qr(torch.tensor(p.components_.T, dtype=torch.float32))
+        s = torch.linalg.svdvals(Q1.T @ Q2)
+        angle = float(torch.rad2deg(torch.arccos(s.min().clamp(max=1))))
+        print(k, round(pca_err, 5), mse(enc, dec, Xte), round(angle, 1))
+
+# 2) 비선형으로 바꾸면 같은 k 에서 더 잘 복원하는가
+with torch.no_grad():
+    pass
+for k in [2, 8]:
+    enc, dec = train_ae(k, linear=False)
+    with torch.no_grad():
+        print(k, mse(enc, dec, Xte))
+
+# 3) overcomplete(k=128 > 64) 는 identity 를 배우는가: 학습 데이터 밖의 입력을 넣어 본다
+enc, dec = train_ae(128, linear=False)
+noise_in = torch.rand(500, 64)                                  # 숫자처럼 생기지 않은 입력
+with torch.no_grad():
+    print(mse(enc, dec, Xte), mse(enc, dec, noise_in))
+encd, decd = train_ae(128, linear=False, noise=0.3)              # denoising 으로 학습
+with torch.no_grad():
+    print(mse(encd, decd, Xte), mse(encd, decd, noise_in))
+    # 잡음 섞인 숫자를 넣으면 깨끗한 쪽으로 돌려놓는가
+    noisy = Xte + 0.3 * torch.randn(Xte.shape, generator=torch.Generator().manual_seed(1))
+    print(round(F.mse_loss(noisy, Xte).item(), 4), round(F.mse_loss(decd(encd(noisy)), Xte).item(), 4),
+          round(F.mse_loss(dec(enc(noisy)), Xte).item(), 4))
+
+# 4) latent 공간의 interpolation: 두 숫자 사이를 걸으면 중간 이미지가 숫자처럼 보이는가
+enc2, dec2 = train_ae(8, linear=False)
+a, b = Xte[(torch.tensor(d.target[perm][1500:]) == 0).nonzero()[0, 0]], Xte[(torch.tensor(d.target[perm][1500:]) == 1).nonzero()[0, 0]]
+with torch.no_grad():
+    za, zb = enc2(a), enc2(b)
+    mids_latent = torch.stack([dec2((1 - t) * za + t * zb) for t in torch.linspace(0, 1, 5)])
+    mids_pixel = torch.stack([(1 - t) * a + t * b for t in torch.linspace(0, 1, 5)])
+    # 각 중간 이미지에서 가장 가까운 실제 이미지(훈련 데이터)까지의 거리
+    near = lambda Z: [round(torch.cdist(z[None], Xtr).min().item(), 2) for z in Z]
+    print(near(mids_latent), near(mids_pixel))
+
+# 2 0.05391 0.05392 0.5
+# 8 0.02452 0.02472 25.1
+# 16 0.01149 0.01157 44.4
+# 2 0.03782
+# 8 0.01164
+# 0.00029 0.11809
+# 0.00996 0.14723
+# 0.0911 0.0169 0.0628
+# [0.78, 1.15, 1.32, 1.09, 0.95] [0.78, 1.22, 1.61, 1.11, 0.85]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **선형 autoencoder의 reconstruction은 PCA와 같다 (G6.1.1).** bottleneck $k$ = 2, 8, 16에서 시험 MSE가 PCA 0.05391, 0.02452, 0.01149이고 선형 autoencoder 0.05392, 0.02472, 0.01157이다. gradient descent로 학습했으니 정확히 같지는 않지만, Eckart–Young의 최적값에 거의 닿았다.
+- **reconstruction이 같아도 subspace는 다를 수 있다 ("직접 해보기" ①).** decoder가 펼치는 공간과 PCA 성분 공간 사이의 가장 큰 principal angle이 $k = 2$ 에서 0.5°, 8에서 25°, 16에서 44°다. 뒤쪽 성분은 분산이 작아서, 그 방향이 조금 틀려도 MSE가 거의 늘지 않는다. loss가 그 방향을 강하게 제약하지 않으니 학습도 그쪽을 덜 맞춘다. 본문이 말한 52°와 같은 현상이다.
+- **비선형이면 같은 $k$ 에서 더 잘 복원한다.** hidden 128의 ReLU autoencoder는 $k = 2$ 에서 0.0378(PCA 0.0539), $k = 8$ 에서 0.0116(PCA 0.0245)이다. 숫자 이미지가 평평한 subspace가 아니라 휘어진 manifold 위에 있기 때문이다.
+- **overcomplete($k = 128 > 64$)도 identity를 배우지 않는다 (G6.1.2).** 시험 숫자는 MSE 0.0003으로 거의 완벽히 복원하지만, 균등 난수로 만든 입력은 0.118이다. identity function이라면 어떤 입력이든 복원해야 한다. 본문의 실험과 같은 결론이다.
+- **denoising autoencoder는 잡음을 걷어 낸다 (G6.1.4).** 숫자에 표준편차 0.3의 잡음을 섞으면 깨끗한 원본과의 MSE가 0.091이다. 잡음을 섞어 학습한 DAE를 통과시키면 0.017로 줄어든다. 잡음 없이 학습한 autoencoder는 0.063이다.
+- **latent에서 걷는 것이 pixel에서 섞는 것보다 조금 낫다 (G6.1.5).** 숫자 0과 1 사이를 다섯 걸음으로 나눠, 각 중간 이미지에서 가장 가까운 실제 훈련 이미지까지의 거리를 쟀다. 한가운데에서 latent 경로는 1.32, pixel을 섞은 경로는 1.61이다. 다른 걸음에서는 차이가 작다(1.15와 1.22, 1.09와 1.11). latent 공간도 데이터 사이의 빈 곳을 지나가는 것은 마찬가지다. 본문의 "interpolation의 함정"과 같은 방향이다.
+
+**이 코드가 보여 주지 못하는 것.**
+8×8 숫자, seed 하나, 구조 하나의 결과다. subspace 각도는 학습을 더 오래 하면 줄어들 수 있고, 여기서는 확인하지 않았다.
+interpolation의 "숫자처럼 보이는가"를 가장 가까운 훈련 이미지까지의 거리로 잰 것은 이 절에서 정한 간단한 대리 지표다. 거리가 가깝다고 사람 눈에 숫자처럼 보인다는 보장은 없다. sparse autoencoder와 VQ-VAE는 다루지 않았다.
 
 ---
 
