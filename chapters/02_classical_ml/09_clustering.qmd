@@ -747,6 +747,111 @@ internal 지표로 알고리즘을 비교하면 그 지표의 가정과 맞는 �
 
 ---
 
+## 실제 도구로: scikit-learn의 clustering
+
+이 장의 알고리즘들을 scikit-learn으로 돌린다. 정답 label을 아는 합성 데이터를 쓰고, 결과가 정답과 얼마나 맞는지를 adjusted Rand index(ARI — 1이면 정답과 같은 묶음, 0이면 무작위 수준)로 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install scikit-learn`).
+- 데이터는 scikit-learn의 `make_blobs`, `make_moons` 와 seed를 고정한 난수로 만든다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
+from sklearn.datasets import make_blobs, make_moons
+from sklearn.metrics import adjusted_rand_score as ari
+from sklearn.metrics import silhouette_score
+from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import StandardScaler
+
+rng = np.random.default_rng(0)
+
+# 1) 초기화가 결과를 가른다: 덩어리 9개, seed 20개. n_init=1 이면 한 번만 시도한다
+B, bl = make_blobs(n_samples=900, centers=[[i, j] for i in (0, 5, 10) for j in (0, 5, 10)], cluster_std=0.7, random_state=0)
+for init in ["random", "k-means++"]:
+    runs = [KMeans(9, init=init, n_init=1, random_state=s).fit(B) for s in range(20)]
+    inertia = np.array([r.inertia_ for r in runs])
+    print(init, round(float(inertia.min()), 1), round(float(inertia.max()), 1),
+          int((inertia > inertia.min() * 1.05).sum()), round(min(ari(bl, r.labels_) for r in runs), 3))
+print(round(KMeans(9, n_init=10, random_state=0).fit(B).inertia_, 1))
+
+# 2) inertia 는 k 를 늘리면 항상 줄고, k = n 에서 0 이다
+small = B[:60]
+print([round(KMeans(k, n_init=5, random_state=0).fit(small).inertia_, 1) for k in (1, 2, 5, 9, 20, 60)])
+print([(k, round(silhouette_score(B, KMeans(k, n_init=5, random_state=0).fit_predict(B)), 3)) for k in (3, 6, 9, 12)])
+
+# 3) 구조가 없는 데이터에도 k 개를 돌려준다
+U = rng.uniform(0, 10, (900, 2))
+lu = KMeans(9, n_init=5, random_state=0).fit_predict(U)
+print(np.bincount(lu).tolist(), round(silhouette_score(U, lu), 3))
+
+# 4) 길쭉한 cluster: k-means 와 GMM
+E, el = make_blobs(n_samples=600, centers=[[0, 0], [0, 3], [0, 6]], cluster_std=0.6, random_state=0)
+E = E * [6.0, 1.0]                                              # 가로로 6배 늘린다
+gmm = lambda **kw: GaussianMixture(3, random_state=0, **kw).fit(E)
+g1, g30, gs = gmm(n_init=1), gmm(n_init=30, init_params="random_from_data"), gmm(n_init=30, covariance_type="spherical")
+print(round(ari(el, KMeans(3, n_init=10, random_state=0).fit_predict(E)), 3),
+      [(round(ari(el, g.predict(E)), 3), round(g.score(E), 3)) for g in (g1, g30, gs)])      # (ARI, 평균 log-likelihood)
+
+# 5) 단위가 다르면: 한 축만 1000 배
+S = B * [1.0, 1000.0]
+print(round(ari(bl, KMeans(9, n_init=10, random_state=0).fit_predict(S)), 3),
+      round(ari(bl, KMeans(9, n_init=10, random_state=0).fit_predict(StandardScaler().fit_transform(S))), 3))
+W = B * [1.0, 0.05]                                             # 이번에는 한 축의 차이를 거의 없앤다
+print(round(ari(bl, KMeans(9, n_init=10, random_state=0).fit_predict(W)), 3))
+
+# 6) 볼록하지 않은 모양: 초승달 두 개
+M, ml = make_moons(n_samples=600, noise=0.06, random_state=0)
+km = KMeans(2, n_init=10, random_state=0).fit_predict(M)
+db = DBSCAN(eps=0.15, min_samples=5).fit_predict(M)
+single = AgglomerativeClustering(2, linkage="single").fit_predict(M)
+ward = AgglomerativeClustering(2, linkage="ward").fit_predict(M)
+print([round(ari(ml, l), 3) for l in (km, db, single, ward)], int((db == -1).sum()))
+
+# 7) internal 지표의 함정: silhouette 은 틀린 쪽을 더 높게 준다
+print(round(silhouette_score(M, km), 3), round(silhouette_score(M, ml), 3))
+
+# 8) DBSCAN 은 eps 에 민감하고, 밀도가 다른 cluster 를 함께 못 잡는다
+print([(e, len(set(DBSCAN(eps=e, min_samples=5).fit_predict(M)) - {-1})) for e in (0.03, 0.08, 0.15, 0.3)])
+D = np.r_[rng.normal([0, 0], 0.2, (300, 2)), rng.normal([6, 0], 1.5, (300, 2))]     # 조밀한 것 + 성긴 것
+for e in (0.15, 0.6):
+    lab = DBSCAN(eps=e, min_samples=5).fit_predict(D)
+    print(e, len(set(lab) - {-1}), int((lab[:300] == -1).sum()), int((lab[300:] == -1).sum()))   # cluster 수, 조밀한 쪽 / 성긴 쪽의 noise 수
+
+# random 841.4 2099.8 18 0.833
+# k-means++ 841.4 841.4 0 1.0
+# 841.4
+# [1942.1, 1129.7, 283.1, 36.7, 14.7, 0.0]
+# [(3, 0.422), (6, 0.522), (9, 0.722), (12, 0.587)]
+# [117, 102, 105, 108, 91, 85, 90, 120, 82] 0.375
+# 0.277 [(0.492, -4.815), (0.966, -4.63), (0.062, -4.971)]
+# 0.262 1.0
+# 0.26
+# [0.255, 1.0, 1.0, 0.547] 0
+# 0.486 0.331
+# [(0.03, 19), (0.08, 3), (0.15, 2), (0.3, 2)]
+# 0.15 2 0 295
+# 0.6 3 0 31
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **초기화가 결과를 가른다 ("수렴은 global optimum을 뜻하지 않는다", "직접 해보기" ①).** 격자 모양 덩어리 9개에서 무작위 초기화로 한 번씩 20번 돌리면 inertia가 841에서 2,100까지 갈린다. 20번 중 18번이 최선보다 5% 넘게 나쁘고, 최악의 ARI는 0.833이다. k-means++로 초기화하면 20번 모두 841.4로 같다. scikit-learn의 기본값은 k-means++이고, 이때 시작은 한 번뿐이다(`n_init="auto"`). 무작위 초기화를 쓰거나 확실히 하고 싶으면 `n_init` 을 늘려 여러 번 시작하고 가장 좋은 것을 고르게 한다.
+- **inertia는 $k$ 를 늘리면 항상 줄고, $k = n$ 에서 0이다 ("k는 어떻게 정하는가", "직접 해보기" ③).** 점 60개에서 $k$ = 1, 2, 5, 9, 20, 60일 때 1,942, 1,130, 283, 37, 15, 0이다. 이 값이 가장 작은 $k$ 를 고르면 늘 $k = n$ 이다. silhouette은 참 개수인 $k = 9$ 에서 0.722로 가장 높았다.
+- **구조가 없어도 $k$ 개를 돌려준다 ("문제가 애초에 모호하다").** 균등분포에서 뽑은 점에 $k = 9$ 를 주면, 82~120개씩의 고른 cluster 9개를 내놓고 silhouette도 0.375다. 경고는 없다.
+- **k-means는 둥근 cluster를 가정한다 ("k-means가 실패하는 곳", "직접 해보기" ②).** 가로로 6배 늘인 덩어리 셋에서 k-means의 ARI는 0.277이다. 공분산을 통째로 배우는 GMM은 시작을 30번 시도하면 0.966이다. 한 번만 시도하면 0.492이고, 이때 log-likelihood(−4.815)가 30번 시도한 쪽(−4.630)보다 낮다. GMM도 local optimum에 빠지고, likelihood가 그것을 알려 준다. 공분산을 원형으로 제한한 GMM(`spherical`)은 0.062로 k-means보다 나빴다. 실패의 원인은 알고리즘이 아니라 둥글다는 가정이다.
+- **단위가 결과를 바꾼다.** 한 축을 1,000배 하면 ARI가 0.262이고, 표준화하면 1.0으로 돌아온다. 반대로 한 축을 0.05배로 눌러도 0.26이다. 거리를 쓰는 방법은 축의 크기를 가중치로 쓰는 셈이다.
+- **볼록하지 않은 모양에서는 밀도 기반과 single linkage만 맞힌다 ("DBSCAN").** 초승달 두 개에서 k-means 0.255, DBSCAN 1.0(noise 0개), single linkage 1.0, ward linkage 0.547이다.
+- **silhouette은 틀린 답에 더 높은 점수를 준다 ("internal 지표의 함정").** 같은 초승달에서 k-means의 틀린 묶음은 silhouette 0.486, 정답 묶음은 0.331이다. silhouette은 둥글고 떨어진 cluster를 좋다고 보는 지표라, 그 가정과 맞지 않는 정답을 낮게 평가한다.
+- **DBSCAN은 eps에 민감하고, 밀도가 다른 cluster를 한 번에 못 잡는다 ("DBSCAN의 약점").** 초승달에서 eps가 0.03이면 cluster 19개, 0.08이면 3개, 0.15와 0.3이면 2개다. 조밀한 덩어리와 성긴 덩어리를 섞으면, eps 0.15에서는 성긴 쪽 300개 중 295개가 noise로 버려지고, eps 0.6에서는 성긴 쪽의 noise가 31개로 줄지만 cluster가 3개로 쪼개진다. 두 밀도에 모두 맞는 eps가 없다.
+
+**이 코드가 보여 주지 못하는 것.**
+모든 실험이 정답을 아는 2차원 합성 데이터에서 했다. 실제 clustering에는 정답이 없어서 ARI를 쓸 수 없고, 남는 것은 silhouette 같은 internal 지표뿐인데, 위에서 본 대로 그것도 가정을 가진다.
+여기서 "맞혔다"는 것은 **데이터를 만든 사람이 정한 묶음과 같다**는 뜻이다. 다른 묶음이 틀렸다는 뜻이 아니다. 본문의 첫 절이 말하는 대로, 어떤 묶음이 옳은지는 목적이 정한다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
