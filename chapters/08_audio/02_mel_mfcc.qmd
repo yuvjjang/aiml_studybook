@@ -796,6 +796,94 @@ for nm, X in [("MFCC", M_clean), ("Δ", D1), ("ΔΔ", D2)]:
 
 ---
 
+## 실제 도구로: librosa의 mel과 MFCC
+
+음성 처리에서 가장 널리 쓰이는 library인 librosa로 이 장의 mel filterbank, MFCC, cepstrum, CMN을 확인한다. 실제 음성 대신, 기본 주파수 150 Hz에 모음 같은 formant(700 Hz와 1,200 Hz의 봉우리)를 준 합성 신호를 쓴다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `librosa` 1.0, `scipy` 1.18, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install librosa`).
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import librosa
+from scipy.fft import dct
+from scipy.signal import butter, sosfilt
+
+sr = 16000
+t = np.arange(sr) / sr
+
+# 1) mel scale: librosa 의 두 공식 (HTK / Slaney)
+for f in [100, 500, 1000, 4000, 8000]:
+    print(f, round(float(librosa.hz_to_mel(f, htk=True)), 1), round(float(2595 * np.log10(1 + f / 700)), 1),
+          round(float(librosa.hz_to_mel(f)), 2))
+
+# 2) mel filterbank: 40개 filter 의 중심 주파수와 폭
+fb = librosa.filters.mel(sr=sr, n_fft=400, n_mels=40)            # (40, 201)
+freqs = librosa.fft_frequencies(sr=sr, n_fft=400)
+centers = freqs[fb.argmax(1)]
+widths = [(freqs[row > 0].max() - freqs[row > 0].min()) for row in fb]
+print(fb.shape, [round(float(c)) for c in centers[[0, 10, 20, 30, 39]]], [round(float(w)) for w in np.array(widths)[[0, 10, 20, 30, 39]]])
+print(round(float(fb[0].sum()), 5), round(float(fb[39].sum()), 5))   # Slaney 정규화: filter 의 넓이가 같다
+
+# 3) 음성 비슷한 신호: 기본 주파수 150 Hz 의 배음 + 모음 formant (700, 1200 Hz) 를 흉내 낸 포락선
+f0 = 150
+harm = np.arange(1, 50)
+env = np.exp(-((harm * f0 - 700) / 150) ** 2) + 0.6 * np.exp(-((harm * f0 - 1200) / 200) ** 2) + 0.02
+x = sum(a * np.sin(2 * np.pi * h * f0 * t) for h, a in zip(harm, env))
+x = (x / np.abs(x).max()).astype(np.float32)
+S = np.abs(librosa.stft(x, n_fft=400, hop_length=160)) ** 2
+M = librosa.feature.melspectrogram(S=S, sr=sr, n_mels=40)
+logM = librosa.power_to_db(M)
+mfcc = librosa.feature.mfcc(S=logM, n_mfcc=13)
+print(S.shape, M.shape, mfcc.shape)
+# 직접: log-mel 에 DCT-II (orthonormal) 를 걸고 앞 13개
+print(f"{np.abs(dct(logM, type=2, norm='ortho', axis=0)[:13] - mfcc).max():.1e}")
+
+# 4) cepstrum 에서 source(배음 간격) 와 filter(포락선) 가 갈린다
+frame = x[4000:4000 + 1024] * np.hanning(1024)
+logspec = np.log(np.abs(np.fft.rfft(frame)) + 1e-9)
+ceps = np.fft.irfft(logspec)
+q = np.arange(30, 300)                                           # quefrency (sample): 0.002 ~ 0.019 초
+peak = q[ceps[q].argmax()]
+print(peak, round(sr / peak, 1))                                 # 피크 위치 → 기본 주파수
+
+# 5) CMN: 마이크(channel) 를 바꾸면 log-mel 에 상수가 더해진다. 평균을 빼면 지워진다
+sos = butter(4, [300, 3400], btype="band", fs=sr, output="sos")  # 전화선 같은 대역 제한
+xc = sosfilt(sos, x).astype(np.float32)
+mf = lambda s: librosa.feature.mfcc(y=s, sr=sr, n_mfcc=13, n_fft=400, hop_length=160, n_mels=40)
+A, B = mf(x), mf(xc)
+cmn = lambda F: F - F.mean(1, keepdims=True)
+print(round(float(np.sqrt(((A - B) ** 2).mean())), 2), round(float(np.sqrt(((cmn(A) - cmn(B)) ** 2).mean())), 2))
+
+# 100 150.5 150.5 1.5
+# 500 607.4 607.4 7.5
+# 1000 1000.0 1000.0 15.0
+# 4000 2146.1 2146.1 35.16
+# 8000 2840.0 2840.0 45.25
+# (40, 201) [80, 800, 1760, 3760, 7400] [80, 120, 240, 560, 1080]
+# 0.02481 0.02498
+# (201, 101) (40, 101) (13, 101)
+# 0.0e+00
+# 107 149.5
+# 28.97 2.19
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **mel 공식이 두 가지다 ("mel scale").** librosa의 `htk=True` 는 본문의 $2595\log_{10}(1+f/700)$ 과 같다(1,000 Hz → 1,000 mel). librosa의 **기본값**은 다른 공식(Slaney)이라 1,000 Hz가 15다. 1,000 Hz 아래는 선형, 위는 로그다. 두 공식의 숫자 크기가 전혀 달라서, 다른 library나 논문의 mel 값과 비교할 때는 어느 공식인지부터 확인해야 한다. torchaudio의 기본값은 HTK 쪽이다.
+- **filter는 고주파로 갈수록 넓어진다 (G8.2.1).** 40개 filter의 중심이 80, 800, 1,760, 3,760, 7,400 Hz이고, 폭이 80, 120, 240, 560, 1,080 Hz다. 저주파는 촘촘히, 고주파는 성기게 본다. librosa는 기본으로 filter마다 넓이를 맞춰(Slaney 정규화) 넓은 filter의 높이를 낮춘다. 첫 filter와 마지막 filter의 합이 0.0248과 0.0250으로 거의 같다.
+- **MFCC는 log-mel에 DCT를 건 것이다 ("MFCC").** log-mel(40×101)에 orthonormal DCT-II를 걸고 앞 13개를 남긴 값이 `librosa.feature.mfcc` 와 정확히 같다(차이 0.0).
+- **cepstrum이 source와 filter를 가른다 (G8.2.3).** 한 frame의 log spectrum을 다시 Fourier 변환하면, 107 sample(6.7 ms) 위치에 봉우리가 선다. $16000/107 = 149.5$ Hz로, 넣은 기본 주파수 150 Hz다. 배음이 만드는 주기적인 무늬(source)는 이 높은 quefrency에, formant가 만드는 완만한 포락선(filter)은 낮은 quefrency에 모인다. MFCC가 앞의 13개만 남기는 것은 포락선만 남기고 음높이를 버린다는 뜻이다.
+- **CMN이 마이크 차이를 지운다 (G8.2.6, "직접 해보기" ③).** 같은 신호를 300~3,400 Hz 대역 통과 filter(전화선 비슷한 것)에 통과시키면, 원래 신호와의 MFCC 차이(RMSE)가 28.97이다. 발화 전체의 평균을 계수마다 빼면(CMN) 2.19로 줄어든다. channel은 시간에 따라 변하지 않는 곱셈이라, log를 취하면 상수 덧셈이 되고 평균을 빼면 지워진다.
+
+**이 코드가 보여 주지 못하는 것.**
+신호가 한 음높이로 1초 동안 이어지는 합성음이다. 실제 음성은 음높이와 formant가 계속 움직이고, 잡음이 섞인다. 그런 신호에서 cepstrum으로 음높이를 찾는 것은 이렇게 깨끗하지 않다.
+CMN은 발화 전체에 걸친 상수 성분을 지우므로, 화자의 고유한 음색 일부도 함께 지울 수 있다. 본문의 "생각해 볼 것"이 그 문제이고, 여기서는 확인하지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
