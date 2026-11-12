@@ -658,6 +658,130 @@ for cr in cost_ratios:
 
 ---
 
+## 실제 도구로: scikit-learn의 `LogisticRegression`
+
+이 장의 내용을 실제 진단 데이터와 scikit-learn으로 확인한다. 기본값에 무엇이 들어 있는지, 출력이 정말 log-odds의 선형식인지, threshold와 AUC의 관계, complete separation이 실제 도구에서 어떻게 보이는지를 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `numpy` 2.5. PyTorch는 쓰지 않는다 (`pip install scikit-learn`).
+- 데이터는 scikit-learn에 들어 있는 유방암 진단 데이터(569건, 특성 30개)다. 내려받는 것이 없다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import warnings
+import numpy as np
+from sklearn.datasets import load_breast_cancer, load_iris
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_score, recall_score, roc_auc_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+# 데이터: 유방암 진단 569건, 특성 30개 (scikit-learn 에 들어 있다). 1 = 양성 종양(benign)
+X, y = load_breast_cancer(return_X_y=True)
+Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+
+# 1) 그냥 쓰면: 특성의 scale 이 제각각이라 최적화가 끝나지 않는다
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter("always")
+    raw = LogisticRegression().fit(Xtr, ytr)
+print([type(x.message).__name__ for x in w], raw.n_iter_, round(raw.score(Xte, yte), 3))
+clf = make_pipeline(StandardScaler(), LogisticRegression()).fit(Xtr, ytr)
+lr = clf[-1]
+print(lr.n_iter_, round(clf.score(Xte, yte), 3))
+
+# 2) 기본값에 이미 L2 regularization 이 들어 있다 (C = 1/λ = 1.0)
+for C in [0.01, 1.0, 100.0, 1e6]:
+    m = make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=20000)).fit(Xtr, ytr)
+    print(C, round(float(np.linalg.norm(m[-1].coef_)), 1), round(m.score(Xtr, ytr), 3), round(m.score(Xte, yte), 3))
+
+# 3) 출력은 log-odds 의 선형식이다: decision_function = x·β + b,  predict_proba = sigmoid
+Z = clf[0].transform(Xte)
+z = Z @ lr.coef_[0] + lr.intercept_[0]
+p = clf.predict_proba(Xte)[:, 1]
+print(np.abs(z - clf.decision_function(Xte)).max(), np.abs(1 / (1 + np.exp(-z)) - p).max(),
+      (clf.predict(Xte) == (p > 0.5)).all())
+
+# 4) threshold 를 옮기면 precision 과 recall 이 바뀌고 AUC 는 그대로다
+for t in [0.1, 0.5, 0.9]:
+    pred = (p > t).astype(int)
+    print(t, round(precision_score(yte, pred), 3), round(recall_score(yte, pred), 3), round(roc_auc_score(yte, p), 4))
+
+# 5) convex 문제다: solver 가 달라도 같은 해로 간다
+coefs = []
+for solver in ["lbfgs", "newton-cg", "newton-cholesky"]:
+    m = LogisticRegression(solver=solver, tol=1e-10, max_iter=10000).fit(clf[0].transform(Xtr), ytr)
+    coefs.append(m.coef_[0]); print(solver, m.n_iter_)
+print(np.abs(coefs[0] - coefs[1]).max(), np.abs(coefs[0] - coefs[2]).max())
+
+# 6) complete separation: 완전히 나뉘는 1차원 데이터에서 regularization 을 약하게 할수록
+xs = np.r_[np.linspace(-2, -0.5, 20), np.linspace(0.5, 2, 20)][:, None]
+ys = np.r_[np.zeros(20), np.ones(20)]
+for C in [1.0, 1e2, 1e4, 1e8]:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ConvergenceWarning)
+        m = LogisticRegression(C=C, max_iter=100000).fit(xs, ys)
+    print(C, round(float(m.coef_[0, 0]), 1))
+
+# 7) class_weight="balanced" 는 순위는 거의 두고 확률을 부풀린다 (양성을 5% 로 줄인 데이터)
+rng = np.random.default_rng(0)
+keep = np.r_[np.where(y == 0)[0], rng.choice(np.where(y == 1)[0], 11, replace=False)]   # 악성 212 : 양성 11
+Xi, yi = X[keep], y[keep]
+Xa, Xb, ya, yb = train_test_split(Xi, yi, test_size=0.5, random_state=0, stratify=yi)
+for cw in [None, "balanced"]:
+    m = make_pipeline(StandardScaler(), LogisticRegression(class_weight=cw)).fit(Xa, ya)
+    q = m.predict_proba(Xb)[:, 1]
+    print(cw, round(yb.mean(), 3), round(q.mean(), 3), round(roc_auc_score(yb, q), 3))
+
+# 8) multi-class: softmax
+Xi3, yi3 = load_iris(return_X_y=True)
+m3 = LogisticRegression(max_iter=1000).fit(Xi3, yi3)
+P = m3.predict_proba(Xi3[:2])
+logits = Xi3[:2] @ m3.coef_.T + m3.intercept_
+soft = np.exp(logits) / np.exp(logits).sum(1, keepdims=True)
+print(m3.coef_.shape, P.sum(1), np.abs(P - soft).max())
+
+# ['ConvergenceWarning'] [100] 0.936
+# [17] 0.959
+# 0.01 0.8 0.957 0.942
+# 1.0 3.5 0.992 0.959
+# 100.0 23.8 0.997 0.959
+# 1000000.0 403.1 1.0 0.953
+# 0.0 0.0 True
+# 0.1 0.915 1.0 0.9956
+# 0.5 0.972 0.963 0.9956
+# 0.9 0.99 0.897 0.9956
+# lbfgs [43]
+# newton-cg [10]
+# newton-cholesky [9]
+# 6.499338536247734e-07 6.503596298723657e-07
+# 1.0 2.4
+# 100.0 7.2
+# 10000.0 12.2
+# 100000000.0 12.5
+# None 0.054 0.048 1.0
+# balanced 0.054 0.073 1.0
+# (3, 4) [1. 1.] 1.1102230246251565e-16
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **scale을 맞추지 않으면 최적화가 끝나지 않는다.** 특성을 그대로 넣으면 `ConvergenceWarning` 이 나오고 반복 한도 100번을 다 쓴다. 시험 정확도는 0.936이다. `StandardScaler` 를 앞에 붙이면 17번에 끝나고 0.959다. 경고가 나와도 모델은 만들어지고 예측도 되므로, 경고를 무시하면 덜 풀린 모델을 쓰게 된다.
+- **기본값에 L2 regularization이 들어 있다 ("complete separation").** `C` 는 regularization 세기의 역수이고 기본값이 1.0이다. `C` 를 0.01에서 $10^6$ 으로 키우면 계수의 norm이 0.8에서 403으로 커진다. $10^6$ 에서는 훈련 정확도가 1.0이다. 이 데이터의 훈련 집합은 30차원에서 완전히 나뉘고, regularization이 없으면 계수가 계속 커진다. 시험 정확도는 오히려 0.959에서 0.953으로 내려간다.
+- **출력은 log-odds의 선형식이다 ("sigmoid와 log-odds").** `decision_function` 은 $\mathbf{x}^\top\boldsymbol\beta + b$ 와 차이가 0이고, `predict_proba` 는 거기에 sigmoid를 씌운 것과 차이가 0이다. `predict` 는 확률을 0.5에서 자른 것과 전부 같다.
+- **threshold를 옮겨도 AUC는 그대로다 ("직접 해보기" ②).** threshold가 0.1, 0.5, 0.9일 때 precision은 0.915, 0.972, 0.990으로 오르고 recall은 1.000, 0.963, 0.897로 내린다. AUC는 세 번 모두 0.9956이다. AUC는 확률로 계산하고 threshold를 쓰지 않는다.
+- **convex 문제라 solver가 달라도 같은 해로 간다.** 세 solver의 계수 차이가 $7\times10^{-7}$ 이다. 반복 횟수는 다르다. gradient만 쓰는 L-BFGS가 43번, Hessian을 쓰는 두 Newton 방법이 10번과 9번이다. 본문에서 Newton's method는 반복이 훨씬 적다고 한 것과 같은 방향이다.
+- **complete separation에서 계수는 `C` 를 따라 커진다.** 완전히 나뉘는 1차원 데이터에서 `C` 를 1, $10^2$, $10^4$, $10^8$ 로 키우면 계수가 2.4, 7.2, 12.2, 12.5다. 마지막에 12.5에서 멈춘 것은 해를 찾아서가 아니다. 계수가 이만큼 크면 gradient가 solver의 허용 오차보다 작아져 반복이 끝난다. 돌려받은 숫자는 "최적해"가 아니라 "멈춘 지점"이다.
+- **`class_weight="balanced"` 는 확률을 부풀린다 ("threshold 조정과 calibration은 다른 문제다").** class 1을 5.4%로 줄인 데이터에서, 기본 설정의 평균 예측 확률은 0.048로 실제 비율에 가깝고, balanced를 주면 0.073이다. AUC는 둘 다 1.0으로 같다. 순위는 그대로이고 확률만 올라갔다.
+- **multi-class는 softmax다.** class가 3개인 데이터에서 계수는 (3, 4) 행렬이고, 직접 계산한 softmax와 `predict_proba` 의 차이가 $10^{-16}$ 이다.
+
+**이 코드가 보여 주지 못하는 것.**
+정확도와 AUC는 split 하나에서 잰 것이다. 0.959와 0.953의 차이는 시험 데이터 171건에서 한 건이다. `C` 가 클수록 나쁘다는 결론을 이 숫자로 내릴 수 없고, 계수가 커진다는 것만 읽는다.
+`class_weight` 의 효과도 이 데이터가 거의 완전히 나뉘어서 작게 나왔다. 두 class가 많이 겹치는 데이터에서는 확률이 훨씬 크게 부풀려진다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
