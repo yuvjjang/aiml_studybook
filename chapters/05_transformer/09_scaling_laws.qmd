@@ -501,6 +501,69 @@ $p^6$ 이므로 $p$ 가 0.5→0.9로 완만히 오를 때 점수는 0.016→0.53
 
 ---
 
+## 실제 도구로: GPT-2 세 크기의 loss로 지수를 잰다
+
+같은 데이터(WebText)로 학습한 GPT-2 세 크기의 loss를 같은 글에서 재고, log-log 직선의 기울기를 구한다. 이 장의 그림들은 문헌의 식으로 그린 것이었다. 여기서는 공개된 실제 모델 셋으로 같은 일을 해 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `gpt2`(1.2억), `gpt2-medium`(3.5억), `gpt2-large`(7.7억)다. 내려받는 크기가 합쳐 5 GB쯤이다. 가장 큰 `gpt2-xl`(15.6억)은 float32로 6 GB가 넘어, 확인에 쓴 기계의 남은 메모리로 돌릴 수 없어 뺐다.
+- 시험 글(`eval_text.txt`)은 이 절을 위해 새로 쓴 영어 글 644 token이다. 모델이 이 글을 학습했을 수는 없다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import numpy as np
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# 같은 데이터(WebText)로 학습한 GPT-2 크기 셋의 loss 를 같은 글에서 잰다
+TEXT = open("eval_text.txt", encoding="utf-8").read()            # 이 절을 위해 새로 쓴 영어 글
+tok = AutoTokenizer.from_pretrained("gpt2")
+ids = tok(TEXT, return_tensors="pt").input_ids
+print(ids.shape[1])
+
+rows = []
+for name in ["gpt2", "gpt2-medium", "gpt2-large"]:          # gpt2-xl(1.5B)은 float32 로 6 GB 가 넘어 뺐다
+    model = AutoModelForCausalLM.from_pretrained(name).eval()
+    N = sum(p.numel() for n_, p in model.named_parameters() if "wte" not in n_ and "wpe" not in n_)   # embedding 제외
+    with torch.no_grad():
+        loss = model(ids, labels=ids).loss.item()
+    rows.append((name, N, loss))
+    print(name, f"{N / 1e6:.0f}M", round(loss, 4), round(math.exp(loss), 2))
+    del model
+
+N = np.array([r[1] for r in rows], float); L = np.array([r[2] for r in rows])
+# 1) log-log 직선: log L = a - alpha log N
+slope, icpt = np.polyfit(np.log(N), np.log(L), 1)
+print(round(-slope, 4))
+# 2) 그 직선으로 xl(15.6억, embedding 제외 약 14.8억) 을 외삽하면
+print(round(float(np.exp(icpt + slope * np.log(1.476e9))), 3))
+# 3) 바닥(E)이 있는 power law 는 parameter 가 셋이라, 점 셋이면 무엇이든 꼭 맞는다 — 맞춰 봐야 정보가 없다
+
+# 644
+# gpt2 85M 2.8837 17.88
+# gpt2-medium 302M 2.5792 13.19
+# gpt2-large 708M 2.427 11.33
+# 0.0819
+# 2.278
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **크기가 커지면 loss가 줄어든다 ("power law").** embedding을 뺀 parameter가 8,500만, 3억, 7억 개일 때 loss가 2.884, 2.579, 2.427이다(perplexity 17.9, 13.2, 11.3). Kaplan 등이 그랬듯 embedding parameter는 세지 않았다.
+- **log-log 기울기가 0.082다.** 세 점을 log-log 직선으로 맞춘 기울기의 절댓값이 0.082다. 본문 연습 문제에서 Kaplan이 보고한 지수가 $\alpha_N \approx 0.076$ 이다. 비슷한 값이 나왔다. 다만 아래 한계 때문에 이것을 Kaplan의 재현이라고 부를 수는 없다.
+- **같은 직선으로 xl을 외삽하면 2.278이다.** 직접 재지 못했으니 맞는지 확인하지 못했다.
+- **점 셋으로는 바닥($L_\infty$)을 정할 수 없다.** $L = E + A/N^\alpha$ 는 parameter가 셋이라 점 셋이면 어떤 값이든 정확히 지나는 곡선을 찾을 수 있다. 맞춰도 아무 정보가 없어서 하지 않았다. 바닥이 있으면 log-log에서 직선이 아니라 휘어진 곡선이 되고, 그 휨을 보려면 크기가 훨씬 다양한 모델이 필요하다.
+
+**이 코드가 보여 주지 못하는 것.**
+scaling law는 **같은 조건에서 크기만 바꿔** 학습한 모델들 사이의 관계다. 공개된 GPT-2 셋은 데이터는 같지만 학습 step 수, learning rate 등이 크기마다 다르게 정해졌을 수 있고, 그것이 compute-optimal이었다는 보장도 없다. 그래서 위의 0.082는 "이 세 모델 사이의 관계"이지 parameter 수만의 효과가 아니다.
+644 token의 글 하나에서 잰 loss다. 글을 바꾸면 기울기도 바뀐다. 점이 세 개뿐이라 기울기의 불확실성도 크다.
+본문의 핵심인 compute와 데이터의 배분(Chinchilla)은 모델을 직접 학습시켜야 볼 수 있어 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
