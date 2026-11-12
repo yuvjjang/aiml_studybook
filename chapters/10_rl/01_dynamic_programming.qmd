@@ -513,6 +513,113 @@ a, b = CURSE[0], CURSE[-1]
 
 ---
 
+## 실제 도구로: Gymnasium FrozenLake의 모델로 DP를 푼다
+
+Gymnasium의 일부 환경은 transition 모델을 공개한다. FrozenLake의 `P` 를 꺼내 이 장의 value iteration과 policy iteration을 돌리고, 얻은 policy를 실제 환경에서 걸어 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `gymnasium` 1.4, `numpy` 2.5. PyTorch는 쓰지 않는다.
+- FrozenLake 4×4는 미끄러운 얼음판이다. 의도한 방향으로는 1/3만 가고, 나머지 2/3는 양옆으로 미끄러진다. 목표에 닿으면 보상 1, 구멍(H)에 빠지면 0으로 끝난다. 시작은 왼쪽 위, 목표는 오른쪽 아래다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import gymnasium as gym
+
+# FrozenLake 4x4: 미끄러운 얼음(의도한 방향으로는 1/3 만 간다). 목표에 닿으면 +1, 구멍에 빠지면 끝
+env = gym.make("FrozenLake-v1", is_slippery=True)
+P = env.unwrapped.P                                           # 환경이 공개한 모델: P[s][a] = [(확률, 다음 상태, 보상, 끝?), ...]
+nS, nA = env.observation_space.n, env.action_space.n
+print(nS, nA, P[14][2])                                       # 목표 바로 왼쪽에서 오른쪽으로
+
+gamma = 0.99
+
+
+def q_from(V):
+    Q = np.zeros((nS, nA))
+    for s in range(nS):
+        for a in range(nA):
+            Q[s, a] = sum(p * (r + gamma * V[s2] * (not done)) for p, s2, r, done in P[s][a])
+    return Q
+
+
+# 1) value iteration: 오차가 반복마다 gamma 배로 줄어드는가
+V = np.zeros(nS); hist = []
+for k in range(2000):
+    V_new = q_from(V).max(1)
+    hist.append(V_new)
+    if np.abs(V_new - V).max() < 1e-12:
+        break
+    V = V_new
+V_star = V
+err = [np.abs(h - V_star).max() for h in hist]
+ratios = [err[i + 1] / err[i] for i in range(len(err) - 1) if err[i] > 1e-10]
+print(len(hist), round(float(np.median(ratios[-50:])), 4), gamma)
+print(np.round(V_star.reshape(4, 4), 3))
+
+# 2) policy 는 가치보다 훨씬 먼저 확정된다
+pi_star = q_from(V_star).argmax(1)
+first = next(k for k in range(len(hist)) if all((q_from(hist[j]).argmax(1) == pi_star).all() for j in range(k, len(hist), 25)))
+print(first, len(hist))
+
+# 3) policy iteration: 평가(선형 방정식) + 개선. 몇 번 만에 끝나는가
+def evaluate(pi):
+    Pm, R = np.zeros((nS, nS)), np.zeros(nS)
+    for s in range(nS):
+        for p, s2, r, done in P[s][pi[s]]:
+            R[s] += p * r
+            if not done:
+                Pm[s, s2] += p
+    return np.linalg.solve(np.eye(nS) - gamma * Pm, R)
+pi = np.zeros(nS, dtype=int); rounds = 0
+while True:
+    rounds += 1
+    new = q_from(evaluate(pi)).argmax(1)
+    if (new == pi).all():
+        break
+    pi = new
+print(rounds, (pi == pi_star).all(), f"{np.abs(evaluate(pi) - V_star).max():.1e}")
+
+# 4) 계산한 policy 를 실제 환경에서 돌려 성공률을 잰다 (모델을 쓰지 않고 step 만)
+def success(policy, episodes=10000, seed=0):
+    wins = 0
+    for ep in range(episodes):
+        s, _ = env.reset(seed=seed + ep)
+        done = False
+        while not done:
+            s, r, term, trunc, _ = env.step(int(policy[s]))
+            done = term or trunc
+        wins += r
+    return wins / episodes
+names = ["왼쪽", "아래", "오른쪽", "위"]
+print([names[a] for a in pi_star[:4]], round(V_star[0], 3), success(pi_star), success(np.full(nS, 2)))
+
+# 16 4 [(0.33333333333333337, 14, 0, False), (0.3333333333333333, 15, 1, True), (0.33333333333333337, 10, 0, False)]
+# 704 0.9625 0.99
+# [[0.542 0.499 0.471 0.457]
+#  [0.558 0.    0.358 0.   ]
+#  [0.592 0.643 0.615 0.   ]
+#  [0.    0.742 0.863 0.   ]]
+# 44 704
+# 7 True 2.9e-11
+# ['왼쪽', '위', '위', '위'] 0.542 0.7367 0.0326
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **모델이 표로 들어 있다 ("두 개의 연산자").** `P[s][a]` 는 (확률, 다음 상태, 보상, 끝났는가)의 목록이다. 목표 바로 왼쪽(14번)에서 오른쪽으로 가면 1/3 확률로 목표(15번, 보상 1)에, 1/3씩 제자리와 위 칸으로 간다. DP는 이 표가 있어야 돌아간다. 대부분의 실제 문제에는 이런 표가 없다는 것이 다음 장들의 출발점이다.
+- **수렴 비율은 $\gamma$ 보다 작다 (G10.1.1, "직접 해보기" ①).** 반복마다 $\|V_{k+1}-V^\star\|_\infty/\|V_k-V^\star\|_\infty$ 가 0.9625로, $\gamma = 0.99$ 보다 빠르다. 본문의 설명 그대로다. 구멍과 목표에서 에피소드가 끝나서 확률의 일부가 매 걸음 빠져나가고, 그만큼 contraction이 강해진다. 그래도 704번 반복이 필요했다.
+- **policy는 가치보다 훨씬 먼저 정해진다 (G10.1.2).** 704번 중 44번째 반복부터 greedy policy가 최종 policy와 같다(25회 간격으로 확인). 나머지 660번은 이미 정해진 행동의 가치를 소수점 아래로 다듬는 데 쓰였다.
+- **policy iteration은 7번이면 끝난다 (G10.1.3, "직접 해보기" ②).** 평가를 선형 방정식 $(I - \gamma P_\pi)V = R_\pi$ 로 정확히 풀고 개선하기를 7번 하면 policy가 더 바뀌지 않는다. value iteration의 결과와 같은 policy이고, 가치 차이는 $3\times10^{-11}$ 이다. 반복 수는 적지만 한 번마다 16×16 연립방정식을 푼다. 상태가 수백만 개면 이 풀이가 불가능해진다(G10.1.5).
+- **최적 policy는 직관과 다르다.** 시작 칸에서 최적 행동은 "왼쪽"이다. 왼쪽과 위가 벽이라, 왼쪽을 누르면 제자리에 있거나 아래로 미끄러질 뿐 오른쪽으로는 가지 않는다. 오른쪽 구멍 쪽으로 미끄러질 위험을 피하는 것이다. 이 policy로 환경을 1만 번 실제로 걸으면 성공률이 73.7%다. 시작 칸의 가치 0.542보다 높은 것은 가치에 $\gamma^t$ 할인이 들어가기 때문이다. 늘 오른쪽만 누르는 policy는 3.3%다.
+
+**이 코드가 보여 주지 못하는 것.**
+16칸짜리 환경이다. DP가 상태 수의 제곱 이상으로 비싸진다는 본문 G10.1.5는 이 크기에서 드러나지 않는다.
+비동기 갱신(G10.1.4)은 여기서 하지 않았다. 모든 상태를 한꺼번에 갱신하는 동기 방식만 썼다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
