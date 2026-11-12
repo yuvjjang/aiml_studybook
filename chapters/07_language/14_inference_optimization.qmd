@@ -762,6 +762,146 @@ G7.14.1에서 본 대로 batch가 커야 GPU를 다 쓰지만, batch가 커지�
 
 ---
 
+## 실제 도구로: GPT-2로 KV cache와 quantization을 잰다
+
+이 장의 식과 시뮬레이션을 실제 모델에서 확인한다. KV cache의 크기, cache가 줄이는 시간, prefix 재사용, quantization, speculative decoding이다. CPU에서 작은 모델로 재므로 시간의 절댓값에는 의미가 없고, 같은 조건에서의 비율만 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `gpt2`(12층, head 12개, head 차원 64, 약 550 MB)와 `distilgpt2`(6층)다.
+- 시간은 실행할 때마다, 기계마다 달라진다. 두 번 돌렸을 때 아래 값에서 10~30% 움직였다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import copy
+import math
+import time
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2").eval()      # 12층, head 12개, d_head 64
+torch.manual_seed(0)
+
+# 1) KV cache 의 크기를 본문 식으로 맞춰 본다
+ids = tok("The quick brown fox jumps over the lazy dog. " * 10, return_tensors="pt").input_ids
+with torch.no_grad():
+    out = model(ids, use_cache=True)
+cache = out.past_key_values
+k, v = cache.layers[0].keys, cache.layers[0].values
+n_bytes = sum(l.keys.numel() * 4 + l.values.numel() * 4 for l in cache.layers)
+print(ids.shape[1], tuple(k.shape), len(cache.layers))
+print(n_bytes, 2 * 12 * 12 * 64 * ids.shape[1] * 4, n_bytes / ids.shape[1])
+
+# 2) cache 를 쓰면 마지막 token 하나만 넣어도 같은 logit 이 나온다
+nxt = out.logits[:, -1:].argmax(-1)
+with torch.no_grad():
+    a = model(nxt, past_key_values=copy.deepcopy(cache)).logits[0, -1]          # token 1개만 입력
+    b = model(torch.cat([ids, nxt], 1)).logits[0, -1]                           # 전부 다시 계산
+print((a - b).abs().max().item(), a.argmax().item() == b.argmax().item())
+
+# 3) 생성 시간: cache 를 켠 것과 끈 것 (greedy, 새 token 200개)
+prompt = tok("The history of the city begins", return_tensors="pt")
+res = {}
+for use in [True, False]:
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        o = model.generate(**prompt, max_new_tokens=200, do_sample=False,
+                           use_cache=use, pad_token_id=tok.eos_token_id)
+    res[use] = (time.perf_counter() - t0, o)
+print(round(res[True][0], 1), round(res[False][0], 1), torch.equal(res[True][1], res[False][1]),
+      res[True][1].shape[1] - prompt.input_ids.shape[1])
+
+# 4) prompt caching: 같은 prefix 의 KV 를 한 번만 만들고 질문마다 다시 쓴다
+prefix = tok("You are a helpful assistant. " + "Answer briefly and politely. " * 60,
+             return_tensors="pt").input_ids
+with torch.no_grad():
+    t0 = time.perf_counter()
+    pre = model(prefix, use_cache=True).past_key_values
+    t_prefix = time.perf_counter() - t0
+    for q in [" What is the capital of France?", " How tall is Mount Everest?"]:
+        qi = tok(q, return_tensors="pt").input_ids
+        t0 = time.perf_counter()
+        full = model(torch.cat([prefix, qi], 1)).logits[0, -1]
+        t_full = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        hit = model(qi, past_key_values=copy.deepcopy(pre)).logits[0, -1]
+        t_hit = time.perf_counter() - t0
+        print(prefix.shape[1], qi.shape[1], round(t_full * 1000), round(t_hit * 1000),
+              (full - hit).abs().max().item())
+
+# 5) quantization: 행렬 weight 를 b bit 로 반올림하고 perplexity 를 다시 잰다
+TEXT = ("The city council met on Tuesday evening to discuss the new budget. "
+        "Several residents spoke about the condition of the roads, and one asked why "
+        "the library would close earlier on weekends. The mayor said that no final "
+        "decision had been made and that the council would vote again next month. "
+        "After the meeting, a small group stayed behind to talk about the plans for the park.")
+x = tok(TEXT, return_tensors="pt").input_ids
+ppl = lambda m: math.exp(m(x, labels=x).loss.item())
+base = {n: p.detach().clone() for n, p in model.named_parameters()}
+
+
+def quantize(W, bits, per_channel):
+    q = 2 ** (bits - 1) - 1
+    # GPT-2 의 Conv1D weight 는 (입력, 출력) 모양이다 — 출력 channel 은 열(dim 0 을 따라 최댓값)
+    s = W.abs().amax(dim=0, keepdim=True) / q if per_channel else W.abs().max() / q
+    return torch.round(W / s).clamp(-q, q) * s
+
+
+with torch.no_grad():
+    print("fp32", round(ppl(model), 2))
+    for bits in [8, 6, 4]:
+        row = []
+        for per_channel in [False, True]:
+            for n, p in model.named_parameters():
+                if n.startswith("transformer.h.") and p.dim() == 2:      # block 안의 행렬만
+                    p.copy_(quantize(base[n], bits, per_channel))
+            row.append(round(ppl(model), 2))
+        print(bits, row)
+    for n, p in model.named_parameters():
+        p.copy_(base[n])
+n_q = sum(p.numel() for n, p in model.named_parameters() if n.startswith("transformer.h.") and p.dim() == 2)
+print(n_q, sum(p.numel() for p in model.parameters()))
+
+# 6) speculative decoding: 작은 모델이 초안을 쓰고 큰 모델이 검증한다
+small = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+kw = dict(max_new_tokens=100, do_sample=False, pad_token_id=tok.eos_token_id)
+with torch.no_grad():
+    t0 = time.perf_counter(); plain = model.generate(**prompt, **kw); t_plain = time.perf_counter() - t0
+    t0 = time.perf_counter(); spec = model.generate(**prompt, assistant_model=small, **kw); t_spec = time.perf_counter() - t0
+print(torch.equal(plain, spec), plain.shape[1] - prompt.input_ids.shape[1], round(t_plain, 1), round(t_spec, 1))
+
+# 101 (1, 12, 101, 64) 12
+# 7446528 7446528 73728.0
+# 8.392333984375e-05 True
+# 5.9 29.8 True 200
+# 307 7 529 68 0.00011444091796875
+# 307 6 510 58 0.00012969970703125
+# fp32 17.73
+# 8 [20.89, 17.65]
+# 6 [894.68, 17.79]
+# 4 [2110.83, 25.0]
+# 84934656 124439808
+# True 100 3.0 5.1
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **KV cache의 크기가 본문 식과 byte 단위로 같다 (G7.14.2).** 층마다 K와 V가 (batch 1, head 12, 길이 101, head 차원 64) 모양으로 들어 있다. 실제로 센 크기 7,446,528 byte가 $2 \times 12 \times 12 \times 64 \times 101 \times 4$ 와 같다. token 하나에 약 72 KB다.
+- **cache를 쓰면 token 하나만 넣어도 같은 답이 나온다.** 새 token 하나와 cache를 넣은 결과와, 102 token을 전부 다시 계산한 결과의 logit 차이가 $8\times10^{-5}$ 이고 argmax가 같다. 차이가 정확히 0이 아닌 것은 float32 연산의 순서가 달라서다.
+- **cache를 끄면 5배 느리다.** 200 token을 생성하는 데 5.9초와 29.8초이고 결과는 같다. cache가 없으면 token을 하나 낼 때마다 앞의 전부를 다시 계산한다.
+- **prefix의 KV를 다시 쓰면 prefill이 줄어든다 ("prompt caching").** 307 token의 prefix 뒤에 7 token의 질문을 붙일 때, 전부 계산하면 529 ms이고 prefix의 cache를 다시 쓰면 68 ms다. 본문 식으로는 prefill의 $307/314 = 98\%$ 가 절약돼야 하는데 측정된 시간은 87% 줄었다. token 수와 무관한 고정 비용이 있어서다. 코드에서 `copy.deepcopy` 를 쓴 것은 모델이 cache에 새 token을 **덧붙이기** 때문이다. 복사하지 않으면 첫 질문이 둘째 질문의 문맥에 섞인다.
+- **per-tensor와 per-channel의 격차가 실제 모델에서도 난다 (G7.14.5).** block 안의 행렬(전체 1.24억 parameter 중 8,500만 개)을 반올림했다. fp32의 perplexity 17.73이 8 bit에서 per-tensor 20.89, per-channel 17.65다. 6 bit에서는 per-tensor가 895로 무너지고 per-channel은 17.79로 버틴다. 4 bit에서는 per-channel도 25.0으로 올라간다. 본문에서 "옮겨도 되는 것은 구조"라고 한 그 구조다. 한편 8 bit per-channel이 fp32보다 조금 낮게 나온 것(17.65)은 73 token짜리 시험 문장에서의 우연이다. quantization이 모델을 개선한 것이 아니다.
+- **speculative decoding은 출력이 같고, 여기서는 더 느렸다 (G7.14.6).** `distilgpt2` 를 draft로 쓴 결과가 greedy 결과와 100 token 모두 같다. 그런데 시간은 3.0초에서 5.1초로 늘었다. draft 모델이 target의 절반 크기라 draft 비용이 크고, CPU에서는 본문이 전제한 memory 병목 상황도 아니다. speculative decoding은 draft가 target보다 훨씬 작을 때만 이득이다. acceptance rate는 여기서 재지 않았다.
+
+**이 코드가 보여 주지 못하는 것.**
+quantization은 반올림한 값을 다시 float32로 저장했으므로 메모리가 줄지 않았고 속도도 그대로다. 여기서 본 것은 **품질 손실**뿐이다. 실제로 메모리와 속도를 얻으려면 정수로 저장하고 계산하는 runtime이 필요하다(bitsandbytes, GGUF, ONNX Runtime 등). perplexity도 73 token 문장 하나에서 잰 것이라 소수점 아래는 믿을 수 없다. 그리고 여기서 쓴 것은 보정 데이터 없이 그냥 반올림하는 가장 단순한 방법이다. GPTQ나 AWQ 같은 방법은 4 bit에서 이보다 훨씬 덜 잃는다고 보고돼 있지만, 이 코드로 확인한 것은 아니다.
+시간 측정은 CPU, batch 1에서 한 것이다. 이 장의 주제인 batching, PagedAttention, 여러 요청 사이의 trade-off는 이 코드에 없다. 그것을 보려면 vLLM 같은 serving 엔진과 GPU가 필요하다.
+또 이 버전의 `transformers` 는 `assistant_model` 을 쓸 때 library 내부에서 deprecation 경고를 하나 낸다. 결과에는 영향이 없었다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
