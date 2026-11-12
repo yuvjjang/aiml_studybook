@@ -393,6 +393,121 @@ encoder(양방향)에서는 이 신호가 없으므로 positional encoding이 �
 
 ---
 
+## 실제 도구로: GPT-2의 학습형 position embedding
+
+GPT-2는 위치마다 벡터를 하나씩 학습해 표로 갖고 있다. 이 표를 꺼내 이 장에서 말한 학습형 절대 위치의 성질을 확인한다. RoPE나 ALiBi를 쓰는 모델은 여기서 다루지 않는다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `gpt2`(약 550 MB)다. 문맥 길이는 1,024 token이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2").eval()
+P = model.transformer.wpe.weight.detach()          # 학습형 position embedding: 위치마다 벡터 하나
+E = model.transformer.wte.weight.detach()          # token embedding
+print(tuple(P.shape), tuple(E.shape))
+
+# 1) 표에 없는 위치는 넣을 수 없다
+for n in [1024, 1025]:
+    try:
+        with torch.no_grad():
+            model(torch.zeros(1, n, dtype=torch.long))
+        print(n, "ok")
+    except Exception as e:
+        print(n, type(e).__name__, str(e)[:60])
+
+# 2) 학습된 표에 구조가 있는가: 거리 k 만큼 떨어진 두 위치 벡터의 cosine (평균과 표준편차)
+def sinusoidal(n, d):
+    pos = torch.arange(n)[:, None]
+    freq = torch.exp(-math.log(10000.0) * torch.arange(0, d, 2) / d)
+    pe = torch.zeros(n, d)
+    pe[:, 0::2], pe[:, 1::2] = torch.sin(pos * freq), torch.cos(pos * freq)
+    return pe
+
+S = sinusoidal(1024, 768)
+cos = torch.nn.functional.cosine_similarity
+for k in [1, 2, 8, 64, 512]:
+    a = cos(P[1:-k], P[1 + k:], dim=-1)             # 0번 위치는 뺀다 (아래 3 참고)
+    b = cos(S[1:-k], S[1 + k:], dim=-1)
+    print(k, round(a.mean().item(), 3), round(a.std().item(), 3), "|",
+          round(b.mean().item(), 3), round(b.std().item(), 6))
+
+# 3) 위치 벡터의 크기
+norms = P.norm(dim=-1)
+print([round(v, 2) for v in norms[:4].tolist()], round(norms[100:900].mean().item(), 2),
+      round(norms[-1].item(), 2), round(E.norm(dim=-1).mean().item(), 2))
+
+# 4) 같은 token 열을 다른 '자리' 에 놓으면 예측이 달라지는가 (position_ids 만 옮긴다)
+TEXT = ("The city council met on Tuesday evening to discuss the new budget. "
+        "Several residents spoke about the condition of the roads, and one asked why "
+        "the library would close earlier on weekends.")
+body = tok(TEXT, return_tensors="pt").input_ids
+ids = torch.cat([torch.tensor([[tok.bos_token_id]]), body], dim=1)     # 맨 앞에 <|endoftext|> 를 둔다
+n = body.shape[1]
+labels = ids.clone(); labels[0, 0] = -100
+
+def run(body_pos, first_pos=0):
+    """맨 앞 token 은 first_pos 자리에, 본문 token 들은 body_pos 자리에 놓는다."""
+    pos = torch.cat([torch.tensor([first_pos]), body_pos])[None]
+    with torch.no_grad():
+        out = model(ids, position_ids=pos, labels=labels)
+    return out.logits[0, -1].softmax(-1), math.exp(out.loss.item())
+
+base = torch.arange(1, n + 1)
+p0, ppl0 = run(base)
+print(n, round(ppl0, 2))
+for off in [1, 100, 500, 1023 - n]:
+    p, ppl = run(base + off)
+    print(off, round(ppl, 2), round(0.5 * (p - p0).abs().sum().item(), 3))       # 마지막 예측의 total variation 거리
+
+# 5) 0번 자리에 아무것도 없으면: 전체를 한 칸만 밀어도
+print(round(run(base + 1, first_pos=1)[1], 1))
+
+# 6) 순서 정보를 지우면 (본문 token 을 전부 같은 자리에 / 자리를 뒤섞어)
+g = torch.Generator().manual_seed(0)
+print(round(run(torch.full((n,), 1))[1], 1), round(run(base[torch.randperm(n, generator=g)])[1], 1))
+
+# (1024, 768) (50257, 768)
+# 1024 ok
+# 1025 IndexError index out of range in self
+# 1 0.998 0.03 | 0.973 0.0
+# 2 0.998 0.031 | 0.906 0.0
+# 8 0.991 0.033 | 0.723 0.0
+# 64 0.73 0.101 | 0.486 0.0
+# 512 0.276 0.156 | 0.256 0.0
+# [9.88, 5.19, 4.59, 4.34] 3.35 0.12 3.96
+# 35 26.45
+# 1 26.29 0.011
+# 100 146.69 0.684
+# 500 681.44 0.786
+# 988 885.1 0.8
+# 241.2
+# 34.9 29.6
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **표에 없는 위치는 넣을 수 없다 ("절대 위치의 두 가지 문제").** position embedding은 1,024행짜리 표다. 1,024 token은 들어가고 1,025 token은 `IndexError` 가 난다. 성능이 떨어지는 것이 아니라 아예 계산이 안 된다. 본문에서 "2049번은 벡터가 없다"고 한 것이 이것이다.
+- **학습된 표에 매끄러운 구조가 생겼다.** 이웃한 위치의 벡터는 cosine이 0.998이고, 거리가 8이면 0.99, 64면 0.73, 512면 0.28로 멀수록 달라진다. 누가 이렇게 만들라고 한 적이 없는데 "가까운 위치는 비슷한 벡터"가 학습됐다. 오른쪽 열은 같은 크기의 sinusoidal encoding이다.
+- **sinusoidal은 거리만의 함수이고, 학습된 표는 그렇지 않다.** sinusoidal에서는 거리 $k$ 인 두 위치의 cosine이 어디서 재든 같다(표준편차 0.0). 연습 문제 C1의 "평행이동은 회전"에서 나오는 성질이다. 학습된 표는 같은 거리라도 위치에 따라 값이 다르다(거리 64에서 표준편차 0.10).
+- **0번 위치의 벡터가 유난히 크다.** 0번의 norm이 9.9, 가운데 위치들의 평균이 3.4다. 맨 끝 1,023번은 0.12로 거의 0이다. token embedding의 평균 norm은 4.0이므로, 위치 벡터는 token 벡터와 같은 크기 수준으로 더해진다.
+- **같은 문장을 다른 자리 번호에 놓으면 예측이 달라진다.** token과 순서는 그대로 두고 `position_ids` 만 옮겼다. 한 칸 옮기면 perplexity가 26.5에서 26.3으로 거의 같다. 100칸 옮기면 147, 500칸이면 681이다. 순서가 같아도 번호가 다르면 다른 입력이다. 이것이 "절대" 위치라는 말의 뜻이다. 다만 이 실험에서는 맨 앞 token은 0번에 두고 본문만 옮겼으므로 번호가 0에서 101로 건너뛴다. 학습 때는 없던 상황이고, 실제로 문서의 500번째 자리에서 GPT-2가 이만큼 나쁘다는 뜻이 아니다.
+- **0번 자리에 아무것도 없으면 무너진다.** 맨 앞 token까지 포함해 전체를 한 칸만 밀면(1번부터 시작) perplexity가 241이 된다. 본문만 한 칸 밀었을 때는 26.3이었다. GPT-2는 0번 자리에 무언가 있다는 것에 기대고 있다. 0번 벡터가 유난히 큰 것과 관련이 있어 보이지만, 왜 그런지는 이 실험이 말해 주지 않는다.
+- **위치 번호의 순서를 지워도 크게 나빠지지 않는다 ("NoPE").** 본문 token 35개를 전부 1번 자리에 놓으면 perplexity가 34.9이고, 1~35번을 무작위로 뒤섞어 붙이면 29.6이다. 원래는 26.5다. position embedding에서 순서 정보를 없앴는데도 모델이 문장을 거의 그대로 읽는다. 본문의 NoPE 설명대로 causal mask가 순서를 따로 알려 주기 때문으로 보인다. 앞의 결과와 합쳐 읽으면, 이 문장에서 GPT-2는 position embedding을 "token들의 순서"보다 "문서의 어디쯤인가"를 아는 데 쓰는 것처럼 보인다. 이것은 숫자를 읽은 해석이고, 한 문장에서 본 것이다.
+
+**이 코드가 보여 주지 못하는 것.**
+perplexity는 35 token짜리 문장 하나에서 쟀다. 숫자는 문장에 따라 달라진다. 특히 순서를 지워도 버틴다는 결과는 평범한 영어 문장이라 그럴 수 있다. 순서가 뜻을 정하는 입력(숫자 열, 코드, 긴 문서)에서는 다를 수 있고, 여기서는 확인하지 않았다.
+본문의 중심인 RoPE와 ALiBi, 그리고 학습 길이를 넘는 extrapolation은 이 코드에 없다. GPT-2로는 1,024를 넘는 입력을 넣을 수 없어서 extrapolation을 잴 방법이 없다. RoPE 모델의 extrapolation을 보려면 그 모델의 학습 길이보다 긴 평가 데이터가 필요하다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
