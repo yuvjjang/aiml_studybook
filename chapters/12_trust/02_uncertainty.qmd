@@ -724,6 +724,128 @@ fig
 - conformal은 생성에도 적용할 수 있다 — '정답을 포함할 확률 90%'인 **후보 집합**을 내는 식으로
 - **가장 실용적인 조합**: 검증 가능한 부분은 검증하고([11.6](../11_systems/06_monitoring.qmd)), 나머지는 거부 threshold로 사람에게 넘긴다
 
+---
+
+## 실제 도구로: PyTorch로 학습한 분류기를 보정한다
+
+이 장의 절차를 실제 이미지 데이터와 PyTorch로 밟는다. overconfidence를 재고, temperature scaling으로 고치고, ensemble과 비교하고, conformal prediction의 coverage를 확인하고, 마지막에 분포를 살짝 바꿔 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `scikit-learn` 1.9. 모델을 내려받지 않고, 데이터는 scikit-learn에 들어 있는 손글씨 숫자(8×8 pixel, 1,797장)다.
+- overconfidence가 드러나도록 일부러 150장만으로 학습시켰다. 500장은 보정용, 나머지 1,147장은 시험용이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+
+# 데이터: 8x8 손글씨 숫자 1,797장 (scikit-learn 에 들어 있다). 일부러 적은 데이터로 학습시킨다
+d = load_digits()
+perm = np.random.default_rng(0).permutation(len(d.target))
+X = torch.tensor(d.images[perm] / 16.0, dtype=torch.float32)       # (1797, 8, 8)
+y = torch.tensor(d.target[perm])
+tr, va, te = slice(0, 150), slice(150, 650), slice(650, None)       # 학습 150 / 보정 500 / 시험 1147
+
+
+def train(seed, epochs=500):
+    torch.manual_seed(seed)
+    net = torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(64, 256), torch.nn.ReLU(),
+                              torch.nn.Linear(256, 256), torch.nn.ReLU(), torch.nn.Linear(256, 10))
+    opt = torch.optim.Adam(net.parameters(), lr=3e-3)
+    for _ in range(epochs):
+        opt.zero_grad()
+        torch.nn.functional.cross_entropy(net(X[tr]), y[tr]).backward()
+        opt.step()
+    return net.eval()
+
+
+def report(P, t, bins=15):
+    """정확도, 평균 confidence, ECE, NLL"""
+    conf, pred = P.max(1)
+    ok = (pred == t).float()
+    edges = torch.linspace(0, 1, bins + 1)
+    ece = sum((ok[m].mean() - conf[m].mean()).abs() * m.float().mean()
+              for lo, hi in zip(edges[:-1], edges[1:]) if (m := (conf > lo) & (conf <= hi)).any())
+    nll = -torch.log(P[torch.arange(len(t)), t]).mean()
+    return [round(v, 3) for v in (ok.mean().item(), conf.mean().item(), float(ece), nll.item())]
+
+
+nets = [train(s) for s in range(5)]
+with torch.no_grad():
+    Zva = [n(X[va]) for n in nets]
+    Zte = [n(X[te]) for n in nets]
+print("단일 모델      ", report(Zte[0].softmax(1), y[te]))
+
+# 1) temperature scaling: 보정용 데이터에서 T 하나만 맞춘다
+logT = torch.zeros(1, requires_grad=True)
+opt = torch.optim.LBFGS([logT], lr=0.1, max_iter=200)
+def closure():
+    opt.zero_grad()
+    loss = torch.nn.functional.cross_entropy(Zva[0] / logT.exp(), y[va])
+    loss.backward()
+    return loss
+opt.step(closure)
+T = logT.exp().item()
+print("T =", round(T, 2))
+print("단일 + T       ", report((Zte[0] / T).softmax(1), y[te]))
+
+# 2) deep ensemble: seed 만 다른 5개의 확률을 평균한다
+Pens = torch.stack([z.softmax(1) for z in Zte]).mean(0)
+print("ensemble 5개   ", report(Pens, y[te]))
+
+# 3) split conformal: 보정용 데이터의 점수 분위수로 예측 집합을 만든다
+def conformal(Pcal, ycal, Ptest, ytest, alpha=0.1):
+    s = 1 - Pcal[torch.arange(len(ycal)), ycal]                   # 점수 = 1 - 정답에 준 확률
+    n = len(s)
+    q = torch.quantile(s, min(1.0, math.ceil((n + 1) * (1 - alpha)) / n), interpolation="higher")
+    sets = (1 - Ptest) <= q                                        # 점수가 q 이하인 class 를 전부 넣는다
+    cover = sets[torch.arange(len(ytest)), ytest].float().mean().item()
+    size = sets.sum(1)
+    return (round(cover, 3), round(size.float().mean().item(), 2),
+            [round((size == k).float().mean().item(), 3) for k in (0, 1, 2)])     # 크기 0, 1, 2 인 집합의 비율
+
+print("conformal      ", conformal(Zva[0].softmax(1), y[va], Zte[0].softmax(1), y[te]))
+print("conformal + T  ", conformal((Zva[0] / T).softmax(1), y[va], (Zte[0] / T).softmax(1), y[te]))
+
+# 4) 분포가 바뀌면: 시험 이미지를 한 칸(1 pixel) 옆으로 민다
+Xs = torch.roll(X[te], shifts=1, dims=2)
+with torch.no_grad():
+    Zs = nets[0](Xs)
+print("민 이미지      ", report(Zs.softmax(1), y[te]))
+print("민 이미지 + T  ", report((Zs / T).softmax(1), y[te]))
+print("conformal + T  ", conformal((Zva[0] / T).softmax(1), y[va], (Zs / T).softmax(1), y[te]))
+
+#                  [정확도, 평균 confidence, ECE, NLL]
+# 단일 모델       [0.923, 0.977, 0.054, 0.382]
+# T = 2.52
+# 단일 + T        [0.923, 0.922, 0.018, 0.237]
+# ensemble 5개    [0.944, 0.963, 0.022, 0.247]
+#                  (coverage, 평균 집합 크기, [크기 0, 1, 2 인 집합의 비율])
+# conformal       (0.922, 0.99, [0.007, 0.993, 0.0])
+# conformal + T   (0.921, 0.99, [0.016, 0.982, 0.003])
+# 민 이미지       [0.388, 0.912, 0.527, 8.162]
+# 민 이미지 + T   [0.388, 0.788, 0.401, 3.475]
+# conformal + T   (0.377, 0.96, [0.066, 0.912, 0.022])
+```
+
+(`[...]` 와 `(...)` 가 무엇인지 적은 두 줄은 읽기 쉽게 덧붙인 것이고 프로그램의 출력이 아니다.)
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **overconfidence가 재현된다 (G12.2.1).** 정확도는 0.923인데 평균 confidence는 0.977이다. 학습 데이터 150장을 24번째 epoch에 전부 맞혔는데 그 뒤로도 500 epoch까지 계속 학습시켰기 때문이다(따로 확인했다). 본문에서 말한 대로 cross-entropy는 이미 맞힌 예측의 logit을 계속 키운다.
+- **temperature 하나로 고쳐진다.** 보정용 데이터에서 찾은 $T = 2.52$ 로 logit을 나누면 평균 confidence가 0.922가 되어 정확도 0.923과 맞는다. ECE는 0.054에서 0.018로, NLL은 0.382에서 0.237로 내려간다. 정확도는 0.923 그대로다. $T$ 는 순서를 바꾸지 않는다.
+- **ensemble은 정확도를 올리고, calibration은 부수적으로만 고친다.** seed만 다른 5개를 평균하면 정확도가 0.944로 오른다. temperature가 못 하는 일이다. ECE도 0.022로 내려가지만 평균 confidence(0.963)는 여전히 정확도보다 높다. 본문 표와 같은 방향이다. 다만 본문에서는 ensemble의 ECE가 temperature보다 뚜렷이 나빴고 여기서는 비슷하다(0.022와 0.018). 어느 쪽이 얼마나 나은지는 과제에 따라 달라진다.
+- **conformal의 coverage는 목표에 얹힌다 (G12.2.3).** $\alpha = 0.1$ 로 만든 예측 집합에 정답이 들어 있는 비율이 0.922다. 보장은 "0.9 이상"이고 실제로 그렇다. 모델이 overconfident한 채로 써도(0.922), temperature로 고친 뒤에 써도(0.921) 같다. 보장은 모델의 calibration에 기대지 않는다.
+- **이 과제에서는 예측 집합이 거의 항상 하나짜리다.** 평균 크기가 0.99이고, 99%가 class 하나, 0.7%는 **빈 집합**이다. 모델의 정확도(0.923)가 이미 목표 coverage(0.9)보다 높아서, 집합을 키울 필요가 없고 오히려 자신 없는 예측 몇 개를 비워도 0.9가 채워진다. 빈 집합은 오류가 아니라 이 방법의 정상 동작이다. 실무에서는 "답하지 않음"으로 읽는다(본문 "selective prediction").
+- **이미지를 한 칸 밀면 전부 무너진다.** 시험 이미지를 옆으로 1 pixel 밀었을 뿐인데 정확도가 0.388이 된다. 평균 confidence는 0.912로 여전히 높아서 ECE가 0.527이다. 보정용 데이터에서 맞춘 $T$ 를 써도 ECE는 0.401이다. conformal의 coverage는 0.377로, 0.9라는 보장이 깨졌다. temperature도 conformal도 **보정용 데이터와 시험 데이터가 같은 분포에서 왔다**는 전제 위에 서 있다. "직접 해보기" ①과 ③이 묻는 것의 답이다.
+
+**이 코드가 보여 주지 못하는 것.**
+모델은 작은 MLP이고 데이터는 8×8 숫자 이미지다. 한 칸 밀었을 때 정확도가 0.92에서 0.39로 떨어지는 것은 MLP에 "옆 칸으로 옮겨도 같은 숫자"라는 구조가 없기 때문으로 보인다. [4.0](../04_architectures/00_cnn.qmd)의 "실제 도구로" 절에서 같은 데이터로 재 보면, 한 칸 밀었을 때 MLP는 0.98에서 0.48로 떨어지고 convolution과 global pooling을 쓴 작은 CNN은 0.97을 지킨다. 여기서 읽을 것은 숫자의 크기가 아니라 **분포가 바뀌면 보정과 보장이 함께 깨진다**는 방향이다.
+split 하나, 학습 seed 하나에서 잰 값이다. coverage 0.922는 시험 1,147장에서의 비율이고, 보정용 데이터를 다시 뽑으면 0.9 근처에서 오르내린다. conformal의 보장은 그 오르내림을 평균했을 때 0.9 이상이라는 뜻이다.
+본문의 aleatoric·epistemic 분해(G12.2.2)와 LLM의 uncertainty는 이 코드에 없다.
 
 ---
 
