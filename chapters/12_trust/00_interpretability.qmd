@@ -818,6 +818,157 @@ c_large = np.array([lime_coefs(mi, xl, 1.0, 1000, s, 3)[0] for s in range(5)])
 5. 설명의 hyperparameter(background 분포, σ, baseline)를 **함께 보고한다**
 6. 그리고 **'그러므로 이걸 바꾸면 결과가 달라진다'는 말을 하지 않는다** — 그건 인과의 영역이다
 
+---
+
+## 실제 도구로: permutation importance와 saliency를 실제 데이터에
+
+이 장의 경고 세 가지를 실제 데이터에서 다시 본다. 상관된 feature에서 중요도가 녹는 것, 같은 성능의 두 모델이 다른 설명을 내는 것, saliency의 sanity check와 deletion test다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `torch` 2.15 (CPU), `scipy` 1.18
+- 데이터는 scikit-learn에 들어 있는 유방암 진단 데이터(569건, 특성 30개)와 손글씨 숫자(8×8 pixel)다. 내려받는 것이 없다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from scipy.stats import spearmanr
+from sklearn.datasets import load_breast_cancer, load_digits
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.inspection import permutation_importance
+from sklearn.model_selection import train_test_split
+
+# ── A. 표 데이터: 유방암 진단 569건, 특성 30개 ──
+bc = load_breast_cancer()
+X, y, names = bc.data, bc.target, [str(n) for n in bc.feature_names]
+Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.4, random_state=0, stratify=y)
+
+def perm(model, Xe):
+    return permutation_importance(model, Xe, yte, n_repeats=30, random_state=0).importances_mean
+
+rf = RandomForestClassifier(300, random_state=0).fit(Xtr, ytr)
+p0 = perm(rf, Xte)
+top = int(p0.argmax())
+print(round(rf.score(Xte, yte), 3), names[top], round(float(p0[top]), 4), round(float(p0.sum()), 4))
+
+# 1) 가장 중요한 특성을 그대로 복사해 한 열 더 붙인다
+dup = lambda A: np.c_[A, A[:, top]]
+rf2 = RandomForestClassifier(300, random_state=0).fit(dup(Xtr), ytr)
+p2 = perm(rf2, dup(Xte))
+print(round(rf2.score(dup(Xte), yte), 3), round(float(p2[top]), 4), round(float(p2[-1]), 4))
+
+# 2) 원래 데이터에도 쌍둥이가 많다: 특성끼리의 상관
+C = np.abs(np.corrcoef(X.T)) - np.eye(30)
+i, j = np.unravel_index(C.argmax(), C.shape)
+print(names[i], names[j], round(float(C[i, j]), 3), int((C.max(0) > 0.9).sum()))
+# 하나씩 섞을 때와, 상관 0.9 이상으로 묶인 것들을 한꺼번에 섞을 때
+group = [k for k in range(30) if k == top or C[top, k] > 0.9]
+rng = np.random.default_rng(0)
+drops = []
+for _ in range(30):
+    Xp = Xte.copy()
+    Xp[:, group] = Xp[rng.permutation(len(Xp))][:, group]
+    drops.append(rf.score(Xte, yte) - rf.score(Xp, yte))
+print(len(group), round(float(p0[group].sum()), 4), round(float(np.mean(drops)), 4))
+
+# 3) seed 만 다른 두 모델의 설명
+rfb = RandomForestClassifier(300, random_state=1).fit(Xtr, ytr)
+pb = perm(rfb, Xte)
+print(round(rfb.score(Xte, yte), 3), names[int(pb.argmax())], round(float(spearmanr(p0, pb)[0]), 3),
+      [names[k] for k in np.argsort(-p0)[:3]], [names[k] for k in np.argsort(-pb)[:3]])
+
+# ── B. 이미지: 손글씨 숫자(8x8) 에서 gradient saliency ──
+nn, F = torch.nn, torch.nn.functional
+d = load_digits()
+perm_idx = np.random.default_rng(0).permutation(len(d.target))
+Xi = torch.tensor(d.images[perm_idx] / 16.0, dtype=torch.float32)[:, None]
+yi = torch.tensor(d.target[perm_idx])
+Xa, ya, Xb, yb = Xi[:1200], yi[:1200], Xi[1200:1400], yi[1200:1400]
+
+def make(kind):
+    torch.manual_seed(0)
+    if kind == "MLP":
+        return nn.Sequential(nn.Flatten(), nn.Linear(64, 128), nn.ReLU(), nn.Linear(128, 64), nn.ReLU(), nn.Linear(64, 10))
+    return nn.Sequential(nn.Conv2d(1, 16, 3, padding=1), nn.ReLU(), nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(),
+                         nn.AdaptiveMaxPool2d(1), nn.Flatten(), nn.Linear(32, 10))
+
+def saliency(net, x, t):
+    x = x.clone().requires_grad_(True)
+    net(x).gather(1, t[:, None]).sum().backward()
+    return x.grad.abs().flatten(1)
+
+def rank_corr(a, b):
+    return float(np.mean([spearmanr(u, v)[0] for u, v in zip(a.numpy(), b.numpy())]))
+
+for kind in ["MLP", "CNN"]:
+    net = make(kind)
+    opt = torch.optim.Adam(net.parameters(), lr=3e-3)
+    for _ in range(40):
+        for idx in torch.randperm(1200).split(64):
+            opt.zero_grad(); F.cross_entropy(net(Xa[idx]), ya[idx]).backward(); opt.step()
+    acc = lambda m: round((m(Xb).argmax(1) == yb).float().mean().item(), 3)
+    base = saliency(net, Xb, yb)
+    layers = [m for m in net if isinstance(m, (nn.Linear, nn.Conv2d))]
+    row = [acc(net)]
+    # 4) sanity check: 위층부터 차례로 가중치를 무작위로 바꾼다
+    torch.manual_seed(1)
+    for k in range(1, len(layers) + 1):
+        with torch.no_grad():
+            m = layers[-k]
+            m.weight.copy_(torch.randn_like(m.weight) * m.weight.std()); m.bias.zero_()
+        row.append((acc(net), round(rank_corr(base, saliency(net, Xb, yb)), 3)))
+    print(kind, row, round(rank_corr(base, Xb.flatten(1)), 3))
+
+# 5) deletion test (학습된 MLP 를 다시 만들어): 중요하다고 한 pixel k 개를 0 으로
+net = make("MLP")
+opt = torch.optim.Adam(net.parameters(), lr=3e-3)
+for _ in range(40):
+    for idx in torch.randperm(1200).split(64):
+        opt.zero_grad(); F.cross_entropy(net(Xa[idx]), ya[idx]).backward(); opt.step()
+prob = lambda x: net(x).softmax(1).gather(1, yb[:, None]).mean().item()
+xg = Xb.clone().requires_grad_(True)
+net(xg).gather(1, yb[:, None]).sum().backward()
+scores = {"gradient": xg.grad.abs().flatten(1), "grad×input": (xg.grad * Xb).flatten(1),
+          "pixel 밝기": Xb.flatten(1), "무작위": torch.rand(200, 64, generator=torch.Generator().manual_seed(0))}
+print("지우기 전", round(prob(Xb), 3))
+for name, s in scores.items():
+    out = []
+    for k in [4, 8, 16]:
+        xk = Xb.flatten(1).clone()
+        xk.scatter_(1, s.topk(k, dim=1).indices, 0.0)
+        out.append(round(prob(xk.view_as(Xb)), 3))
+    print(name, out)
+
+# 0.943 worst area 0.0054 0.0107
+# 0.947 0.0015 0.0044
+# mean radius mean perimeter 0.998 14
+# 6 0.0114 0.1823
+# 0.947 worst area 0.361 ['worst area', 'worst radius', 'worst smoothness'] ['worst area', 'worst radius', 'worst texture']
+# MLP [0.965, (0.12, 0.246), (0.175, 0.143), (0.1, -0.001)] 0.039
+# CNN [0.985, (0.085, 0.314), (0.105, 0.184), (0.14, 0.207)] 0.268
+# 지우기 전 0.961
+# gradient [0.856, 0.703, 0.504]
+# grad×input [0.229, 0.016, 0.0]
+# pixel 밝기 [0.732, 0.501, 0.187]
+# 무작위 [0.921, 0.896, 0.788]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **어느 feature도 중요해 보이지 않는다 (G12.0.2).** 정확도 0.943인 random forest에서 permutation importance가 가장 큰 feature(worst area)의 값이 0.0054다. 그 열을 섞어도 정확도가 0.5%p 떨어질 뿐이다. 30개를 다 더해도 0.011이다. 이 숫자만 보면 "이 모델은 어떤 feature에도 기대지 않는다"가 된다.
+- **쌍둥이가 있어서다.** 이 데이터는 종양의 반지름, 둘레, 넓이를 따로 잰 것이라 feature끼리 많이 겹친다. mean radius와 mean perimeter의 상관이 0.998이고, 상관 0.9를 넘는 짝이 있는 feature가 30개 중 14개다. 하나를 섞어도 같은 정보가 다른 열에 남아 있다.
+- **묶어서 섞으면 16배다.** worst area와 그것에 상관 0.9 이상으로 묶인 feature까지 6개를 **한꺼번에** 섞으면 정확도가 0.182 떨어진다. 하나씩 섞었을 때의 합은 0.011이다. 본문의 "해법은 지표를 바꾸는 게 아니라 feature를 묶는 것"이 실제 데이터에서 이만큼의 차이다.
+- **복사본을 붙이면 중요도가 그리로 옮겨 간다 ("직접 해보기" ①).** 가장 중요한 feature를 그대로 복사해 한 열 더 붙이고 다시 학습시키면, 원본의 중요도가 0.0054에서 0.0015로 내려가고 복사본이 0.0044를 가져간다. 정확도는 그대로다(0.947). 어느 쪽이 얼마를 갖는지는 데이터가 아니라 학습 과정이 정했다.
+- **seed만 바꿔도 설명이 달라진다 ("직접 해보기" ②).** seed가 다른 두 forest는 정확도가 0.943과 0.947로 거의 같은데, 30개 feature의 중요도 순위상관이 0.36이다. 1위와 2위는 같고 3위부터 갈린다. 중요도가 전부 0에 가까운 값이라 순위가 잡음에 흔들리기 때문이기도 하다.
+- **MLP의 saliency는 sanity check를 통과한다 (G12.0.4).** 마지막 층의 가중치를 무작위로 바꾸면 saliency 지도와 원래 지도의 순위상관이 0.25로 내려가고, 모든 층을 바꾸면 0.00이다. 모델이 바뀌면 설명도 바뀐다.
+- **CNN의 saliency는 가중치를 전부 뒤엎어도 0.2가 남는다.** 같은 조작에서 0.31, 0.18, 0.21이다. 세 층을 모두 무작위로 바꿔 정확도가 0.14가 된 모델의 지도가 원래 지도와 0.21의 상관을 유지한다. 그리고 CNN의 saliency는 입력 이미지 자체와도 0.27의 상관이 있다(MLP는 0.04). 지도의 일부는 학습된 내용이 아니라 구조와 입력이 그린 것이다. 본문의 실험만큼 뚜렷하지는 않고(본문은 1층을 고정한 모델이었다) 방향은 같다.
+- **deletion test에서 순수 gradient는 pixel 밝기만도 못하다 ("faithfulness").** 중요하다고 지목한 pixel 8개를 0으로 만들면 정답 class의 확률이 0.961에서, gradient 기준으로는 0.703, grad×input 기준으로는 0.016, 그냥 밝은 pixel 순으로는 0.501, 무작위로는 0.896이 된다. gradient의 크기만 보면 "값이 0인 pixel"도 고르게 된다. 실제로 gradient가 고른 pixel의 51%가 원래 값이 0이었고(따로 확인했다), 이미 0인 pixel은 지워도 달라지지 않는다. 본문 표에서 gradient의 주의점으로 "값 크기를 무시"라고 적은 것이 이것이다.
+
+**이 코드가 보여 주지 못하는 것.**
+deletion test는 pixel을 0으로 바꾸는 방식이라 **0을 기준으로 삼는 grad×input에 유리하다.** 기준값을 평균 이미지로 바꾸면 순위가 달라질 수 있다. "grad×input이 가장 충실하다"가 아니라 "이 검사, 이 기준값에서는 그렇다"까지만 읽는다.
+saliency 실험은 8×8 이미지와 작은 모델 둘, 무작위화 seed 하나다. CNN에서 남는 상관 0.2가 구조 때문인지는 여기서 가리지 않았다. 입력과의 상관 0.27이 그 일부를 설명할 것으로 보이지만 따로 확인하지 않았다.
+SHAP, LIME, PDP는 다루지 않았다. 각각 `shap`, `lime` library와 `sklearn.inspection.PartialDependenceDisplay` 가 있다.
 
 ---
 
