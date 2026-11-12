@@ -389,6 +389,133 @@ MHA(파랑)는 문맥 1만 token이 되기 전에 이미 **모델 weight보다 �
 
 ---
 
+## 실제 도구로: `nn.MultiheadAttention` 과 GPT-2의 head들
+
+먼저 PyTorch의 multi-head attention layer를 이 장의 식으로 다시 계산한다. 그다음 학습된 GPT-2에서 head별 기여, attention sink, head를 지웠을 때의 변화를 잰다. 본문에서 합성값으로 그린 "head를 지워도 버틴다"를 실제 모델에서 재 보는 것이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `gpt2`(12층 × head 12개 = 144개, 약 550 MB)다. 층과 head 번호는 0부터 센다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+nn = torch.nn
+torch.manual_seed(0)
+d, H = 768, 12
+dk = d // H
+
+# 1) head 수를 바꿔도 parameter 수는 같다
+count = lambda m: sum(p.numel() for p in m.parameters())
+print([count(nn.MultiheadAttention(d, h, batch_first=True)) for h in (1, 12, 768)], 4 * d * d + 4 * d)
+
+# 2) nn.MultiheadAttention 을 이 장의 식으로 다시 계산한다: projection → head 로 reshape → attention → 이어 붙여 W_O
+mha = nn.MultiheadAttention(d, H, batch_first=True).eval()
+x = torch.randn(1, 10, d)
+with torch.no_grad():
+    ref, attn_w = mha(x, x, x, average_attn_weights=False)
+    Wq, Wk, Wv = mha.in_proj_weight.chunk(3)                 # 한 행렬에 Q, K, V 가 이어 붙어 있다
+    bq, bk, bv = mha.in_proj_bias.chunk(3)
+    split = lambda t: t.view(10, H, dk).transpose(0, 1)      # (head, 위치, d_k)
+    Q, K, V = split(x[0] @ Wq.T + bq), split(x[0] @ Wk.T + bk), split(x[0] @ Wv.T + bv)
+    A = torch.softmax(Q @ K.transpose(1, 2) / math.sqrt(dk), dim=-1)
+    heads = (A @ V).transpose(0, 1).reshape(10, d)           # head 들을 옆으로 이어 붙인다
+    mine = heads @ mha.out_proj.weight.T + mha.out_proj.bias
+print((mine - ref[0]).abs().max().item(), (A - attn_w[0]).abs().max().item())
+
+# ── 여기부터 학습된 모델 ──
+tok = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2", attn_implementation="eager").eval()
+TEXT = ("The city council met on Tuesday evening to discuss the new budget. "
+        "Several residents spoke about the condition of the roads, and one asked why "
+        "the library would close earlier on weekends. The mayor said that no final "
+        "decision had been made and that the council would vote again next month. "
+        "After the meeting, a small group stayed behind to talk about the plans for the park.")
+ids = tok(TEXT, return_tensors="pt").input_ids
+n = ids.shape[1]
+
+# 3) 이어 붙인 뒤 W_O = head 별 기여의 합
+blk = model.transformer.h[5]
+grab = {}
+hk = blk.attn.c_proj.register_forward_hook(lambda m, a, o: grab.update(inp=a[0], out=o))
+with torch.no_grad():
+    out = model(ids, output_attentions=True, labels=ids)
+hk.remove()
+W, bias = blk.attn.c_proj.weight, blk.attn.c_proj.bias      # Conv1D: out = inp @ W + bias
+with torch.no_grad():
+    parts = torch.stack([grab["inp"][..., h * dk:(h + 1) * dk] @ W[h * dk:(h + 1) * dk] for h in range(H)])
+print((parts.sum(0) + bias - grab["out"]).abs().max().item())
+share = parts[:, 0, 1:].norm(dim=-1).mean(-1)                # head 마다 쓴 것의 평균 크기
+print([round(v, 1) for v in share.tolist()])
+
+# 4) attention sink: 맨 앞 token 으로 가는 가중치 (층마다, head 와 위치에 대해 평균)
+A = torch.stack(out.attentions)[:, 0]                        # (층, head, n, n)
+sink = A[:, :, 1:, 0].mean((1, 2))
+uniform = sum(1 / (i + 1) for i in range(1, n)) / (n - 1)    # 보이는 token 에 고르게 나눠 줄 때의 값
+print([round(v, 2) for v in sink.tolist()], round(uniform, 3))
+print(int((A[:, :, 1:, 0].mean(-1) > 0.5).sum()), 144)       # 가중치의 절반 이상을 맨 앞에 주는 head 수
+
+# 5) head 를 하나씩 지운다: perplexity 가 얼마나 변하는가
+def ppl(kill=()):
+    hooks = []
+    for l in {l for l, _ in kill}:
+        hs = [h for ll, h in kill if ll == l]
+        def pre(mod, args, hs=hs):
+            z = args[0].clone()
+            for h in hs:
+                z[..., h * dk:(h + 1) * dk] = 0
+            return (z,)
+        hooks.append(model.transformer.h[l].attn.c_proj.register_forward_pre_hook(pre))
+    with torch.no_grad():
+        v = math.exp(model(ids, labels=ids).loss.item())
+    for h in hooks:
+        h.remove()
+    return v
+
+base = ppl()
+single = {(l, h): ppl([(l, h)]) / base for l in range(12) for h in range(H)}
+r = torch.tensor(list(single.values()))
+print(round(base, 2), int((r < 1.01).sum()), int((r < 1.05).sum()), int((r < 1.0).sum()), round(r.max().item(), 2),
+      max(single, key=single.get))
+
+# 6) 덜 중요한 것부터 한꺼번에 지운다
+order = sorted(single, key=single.get)
+print([(k, round(ppl(order[:k]), 1)) for k in (14, 29, 43, 72, 101)])       # 10, 20, 30, 50, 70 %
+g = torch.Generator().manual_seed(0)
+rnd = [list(single)[i] for i in torch.randperm(144, generator=g).tolist()]
+print([(k, round(ppl(rnd[:k]), 1)) for k in (14, 29, 43, 72)])
+
+# [2362368, 2362368, 2362368] 2362368
+# 0.0 0.0
+# 2.384185791015625e-06
+# [4.5, 5.1, 3.9, 5.0, 3.6, 7.0, 3.0, 4.7, 5.4, 12.2, 7.4, 5.2]
+# [0.07, 0.18, 0.19, 0.44, 0.47, 0.67, 0.62, 0.74, 0.61, 0.67, 0.69, 0.55] 0.054
+# 81 144
+# 17.73 99 134 41 4.86 (0, 10)
+# [(14, 15.6), (29, 16.3), (43, 16.8), (72, 25.6), (101, 87.3)]
+# [(14, 19.7), (29, 112.2), (43, 93.8), (72, 124.9)]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **head 수는 parameter 수를 바꾸지 않는다 ("head로 쪼개기", "직접 해보기" ①).** head가 1개든 12개든 768개든 $4d^2 + 4d = 2{,}362{,}368$ 개다.
+- **구현은 projection 한 번과 `reshape` 이다 (G5.2.1).** $d \times d$ 행렬로 projection하고 head로 쪼개 attention을 계산한 뒤 이어 붙여 $W_O$ 를 곱한 값이 `nn.MultiheadAttention` 의 출력과 정확히 같다(차이 0.0). attention 가중치도 같다.
+- **이어 붙인 뒤 $W_O$ = head별 기여의 합 ("$W_O$ 는 무엇을 하는가").** GPT-2의 5번 층에서 head마다 $\text{head}_i W_O^{(i)}$ 를 따로 계산해 더하면 실제 출력과 같다($2\times10^{-6}$). head마다 쓰는 양은 고르지 않다. 9번 head가 12.2로 나머지(3.0~7.4)보다 두 배쯤 크다.
+- **attention sink가 뚜렷하다 ("attention sink는 버그가 아니라").** 맨 앞 token으로 가는 가중치의 평균이 첫 층에서 0.07이고 7번 층에서 0.74다. 보이는 token에 고르게 나눠 준다면 0.054다. 144개 head 중 81개가 가중치의 절반 이상을 맨 앞 token 하나에 준다. [5.3](03_positional_encoding.qmd)의 "실제 도구로"에서 0번 자리를 비우면 perplexity가 무너졌던 것과 같은 현상의 다른 면이다.
+- **head 하나를 지워서는 거의 달라지지 않는다 ("head는 몇 개가 좋은가").** 하나씩 지웠을 때 perplexity가 1% 미만으로 변하는 head가 144개 중 99개, 5% 미만이 134개다. 가장 큰 영향은 첫 층의 한 head(L0H10)로 4.9배다. 본문에서 문헌의 정성적 결과로 소개한 것이 여기서 숫자로 나온다.
+- **덜 중요한 순서로 지우면 30%까지 버틴다.** 영향이 작은 head부터 14개(10%)를 지우면 perplexity가 15.6, 43개(30%)를 지워도 16.8로 원래(17.7)보다 낮다. 72개(50%)에서 25.6, 101개(70%)에서 87.3이다. 무작위로 고른 head를 지우면 14개에 19.7, 29개에 112다. 지워도 되는 head가 많다는 것과 아무 head나 지워도 된다는 것은 다르다.
+
+**이 코드가 보여 주지 못하는 것.**
+head의 중요도를 잰 문장과 perplexity를 잰 문장이 **같다.** 그 문장에 맞춰 head를 고른 것이므로, 지운 뒤의 perplexity가 원래보다 낮게 나온 것(15.6, 16.8)은 낙관적인 값이다. 다른 글에서도 이 43개가 필요 없다는 뜻이 아니다. 제대로 하려면 중요도는 한 데이터에서 재고 성능은 다른 데이터에서 재야 한다.
+73 token짜리 문장 하나에서 잰 것이기도 하다. 어떤 head는 이 문장에 없는 종류의 입력(반복, 코드, 긴 문맥)에서만 일한다. [12.1](../12_trust/01_mechanistic.qmd)의 induction head가 그 예다.
+head의 출력을 0으로 만드는 것은 가장 거친 방법이고, 지운 뒤 다시 학습시키지 않았다. 실제 pruning은 지운 뒤 fine-tuning으로 손실을 회복시킨다([11.4](../11_systems/04_efficiency.qmd)).
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
