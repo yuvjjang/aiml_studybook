@@ -920,6 +920,94 @@ sampling(시간) + quantization(진폭) = Pulse Code Modulation
 - **학습 데이터에 배포 환경과 같은 codec을 통과시키는 것**이 흔한 augmentation이다
 - 1초 16 kHz 16-bit mono = 32 KB. 1만 시간이면 약 1.1 TB
 
+---
+
+## 실제 도구로: soundfile과 SciPy로 sampling과 quantization을 확인한다
+
+음성 파일을 읽고 쓰는 `soundfile` (libsndfile)과 SciPy의 신호 처리 함수로 이 장의 aliasing, quantization, clipping, 파일 형식을 확인한다. 파일은 메모리 안에서 쓰고 읽는다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `soundfile` 0.14, `scipy` 1.18, `numpy` 2.5 (`pip install soundfile`).
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import io
+import numpy as np
+import soundfile as sf
+from scipy import signal
+
+sr = 16000
+t = np.arange(sr) / sr
+
+def peak_hz(x, fs):
+    spec = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+    return round(float(np.fft.rfftfreq(len(x), 1 / fs)[spec.argmax()]))
+
+# 1) aliasing: 8 kHz 로 낮출 때 걸러 내지 않고 sample 만 건너뛰면 (decimation 없이)
+for f in [1500, 3000, 5000, 6000, 7500]:
+    x = np.sin(2 * np.pi * f * t)
+    naive = x[::2]                                               # 그냥 두 칸마다 하나
+    proper = signal.resample_poly(x, 1, 2)                       # anti-aliasing filter 를 거친 뒤 줄인다
+    print(f, peak_hz(naive, 8000), abs(f - 8000 * round(f / 8000)), round(float(np.abs(proper).max()), 3))
+
+# 2) quantization: b bit 로 저장했다 읽으면 SNR 이 약 6.02 b + 1.76 dB
+x = 0.9 * np.sin(2 * np.pi * 440 * t)
+for subtype, b in [("PCM_U8", 8), ("PCM_16", 16), ("PCM_24", 24)]:
+    buf = io.BytesIO()
+    sf.write(buf, x, sr, subtype=subtype, format="WAV"); buf.seek(0)
+    y, _ = sf.read(buf, dtype="float64")
+    snr = 10 * np.log10(np.mean(x ** 2) / np.mean((y - x) ** 2))
+    step = 2 / 2 ** b
+    q = np.round(x / step) * step                                # 반올림으로 직접 quantize 하면
+    snr_round = 10 * np.log10(np.mean(x ** 2) / np.mean((q - x) ** 2))
+    print(subtype, len(buf.getvalue()), round(snr, 1), round(snr_round, 1), round(6.02 * b + 1.76 + 20 * np.log10(0.9), 1),
+          round(float((y - x).mean() / step), 2))                 # 마지막: 오차의 평균 (step 단위)
+
+# 3) 너무 크게 저장하면 잘린다 (clipping)
+loud = 1.5 * np.sin(2 * np.pi * 440 * t)
+buf = io.BytesIO(); sf.write(buf, loud, sr, subtype="PCM_16", format="WAV"); buf.seek(0)
+y, _ = sf.read(buf)
+print(round(float(np.abs(y).max()), 4), round(float(np.mean(np.abs(y) > 0.999)), 3))
+spec = np.abs(np.fft.rfft(y)); f_axis = np.fft.rfftfreq(len(y), 1 / sr)
+harm = [round(float(spec[np.argmin(np.abs(f_axis - k * 440))] / spec.max()), 3) for k in (1, 3, 5)]
+print(harm)                                                       # 원래 없던 홀수 배음이 생긴다
+
+# 4) dB: 진폭이 절반이면 -6 dB, 에너지가 절반이면 -3 dB
+print(round(20 * np.log10(0.5), 2), round(10 * np.log10(0.5), 2))
+
+# 5) 파일 형식: 같은 1초를 저장할 때의 크기
+for fmt, sub in [("WAV", "PCM_16"), ("WAV", "FLOAT"), ("FLAC", "PCM_16")]:
+    buf = io.BytesIO(); sf.write(buf, x, sr, subtype=sub, format=fmt)
+    print(fmt, sub, len(buf.getvalue()))
+
+# 1500 1500 1500 1.0
+# 3000 3000 3000 1.007
+# 5000 3000 3000 0.263
+# 6000 2000 2000 0.142
+# 7500 500 500 0.032
+# PCM_U8 16044 43.0 49.4 49.0 -0.5
+# PCM_16 32044 91.3 96.9 97.2 -0.5
+# PCM_24 48044 139.4 145.3 145.3 -0.5
+# 1.0 0.535
+# [1.0, 0.15, 0.017]
+# -6.02 -3.01
+# WAV PCM_16 32044
+# WAV FLOAT 64080
+# FLAC PCM_16 9788
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **거르지 않고 줄이면 접힌다 (G8.0.2, "직접 해보기" ①).** 16 kHz 신호를 sample 두 개마다 하나만 남겨 8 kHz로 만들면, 1,500과 3,000 Hz는 그대로이고 5,000 Hz는 3,000 Hz로, 6,000은 2,000으로, 7,500은 500 Hz로 나타난다. 모두 $|f - k f_s|$ 공식의 값이다. 새 Nyquist(4 kHz)를 넘는 주파수가 아래로 접힌 것이다. `scipy.signal.resample_poly` 는 줄이기 전에 low-pass filter를 걸어, 5,000 Hz 이상의 진폭을 0.26, 0.14, 0.03으로 줄인다. 5,000 Hz가 완전히 사라지지 않은 것은 filter가 4 kHz에서 칼같이 끊기지 않기 때문이다.
+- **파일로 저장하면 SNR이 공식보다 6 dB 낮았다 (G8.0.3, "직접 해보기" ②).** 진폭 0.9인 sine을 8, 16, 24 bit WAV로 저장했다 읽으면 SNR이 43.0, 91.3, 139.4 dB다. 공식 $6.02b + 1.76$ (진폭 0.9만큼 보정)은 49.0, 97.2, 145.3 dB다. 직접 반올림해 quantize하면 49.4, 96.9, 145.3 dB로 공식과 맞는다. 차이는 libsndfile이 float를 정수로 바꿀 때 **반올림이 아니라 내림**을 하기 때문이다. 오차의 평균이 정확히 −0.5 step이다. 오차의 크기가 두 배가 되어 SNR이 6 dB 떨어진다. 16 bit에서 91 dB면 실용상 문제가 없지만, 같은 원리의 오차가 쌓이는 처리에서는 의미가 있을 수 있다.
+- **범위를 넘으면 잘린다 (G8.0.3의 headroom).** 진폭 1.5인 sine을 16 bit로 저장하면 최댓값이 1.0으로 잘리고 sample의 54%가 그 끝에 붙는다. 순수한 440 Hz였던 신호에 3배음(1,320 Hz)이 기본음의 0.15, 5배음이 0.017만큼 생긴다. 잘린 파형은 사각파에 가까워지고, 사각파는 홀수 배음으로 이루어져 있다.
+- **dB는 진폭에 20, 에너지에 10을 곱한다 ("decibel").** 진폭 절반은 −6.02 dB, 에너지 절반은 −3.01 dB다.
+- **파일 형식이 크기를 정한다 ("PCM과 파일 format").** 같은 1초(16 kHz)가 16 bit WAV로 32 KB, 32 bit float WAV로 64 KB, 무손실 압축 FLAC으로 9.8 KB다. FLAC은 무손실이다. 정수(int16) 배열을 FLAC으로 저장했다 읽으면 정확히 같다. 그런데 float 배열을 넘기면, 같은 16 bit라도 FLAC 쪽은 반올림해서 정수로 바꾸고 WAV 쪽은 내림해서, sample의 절반이 1씩 다르다(둘 다 따로 확인했다). 위에서 본 6 dB 차이는 WAV 쓰기에만 해당한다. sine처럼 예측하기 쉬운 신호라 크기가 많이 줄었고, 실제 음성에서는 압축률이 이보다 낮다.
+
+**이 코드가 보여 주지 못하는 것.**
+내림 동작은 이 버전의 libsndfile에서 확인한 것이다. 다른 library(예: `scipy.io.wavfile`, `torchaudio`)는 변환 방식이 다를 수 있다.
+dithering(G8.0.4)과 source-filter 모델(G8.0.6)은 다루지 않았다.
 
 ---
 
