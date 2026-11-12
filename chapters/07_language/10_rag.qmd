@@ -598,6 +598,92 @@ context window가 100만 token이면 RAG가 필요 없는가.
 GraphRAG는 entity·관계 graph와 community 요약을 미리 만들어 이를 다룬다.
 대가는 index 구축 비용이다 (문서마다 LLM 호출).
 
+---
+
+## 실제 도구로: BM25, 문장 embedding, RRF
+
+지금까지는 합성 benchmark 위에서 NumPy로 만든 검색기였다. 실제 텍스트에서는 sparse 쪽에 `rank_bm25`, dense 쪽에 `sentence-transformers` 를 흔히 쓴다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 그때 나온 출력을 그대로 적었다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다. 이 블록에는 `pip install sentence-transformers rank_bm25` 가 더 필요하다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `sentence-transformers` 6.3, `rank_bm25` 0.2.2
+- 처음 실행할 때 embedding 모델(`all-MiniLM-L6-v2`, 약 90 MB)을 내려받는다. 영어 모델이라 문서와 질문도 영어로 썼다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import re
+import numpy as np
+from rank_bm25 import BM25Okapi
+from sentence_transformers import SentenceTransformer
+
+docs = [
+    "The vehicle must be parked in the underground garage after 10 pm.",
+    "Employees can request a refund for travel expenses within 30 days.",
+    "Error code E4417 means the cooling fan has stopped.",
+    "Error code E4471 means the firmware update failed.",
+    "The cafeteria serves lunch from 11:30 to 13:30 on weekdays.",
+    "Annual leave must be approved by your manager two weeks in advance.",
+    "Laptops are replaced every four years by the IT department.",
+    "Visitors need to sign in at the front desk and wear a badge.",
+]
+queries = [                                   # (질문, 정답 문서 번호, 유형)
+    ("Where should I leave my car at night?", 0, "동의어"),
+    ("How do I get reimbursed for a business trip?", 1, "동의어"),
+    ("What does E4471 mean?", 3, "식별자"),
+]
+
+
+def tok(s):
+    return re.findall(r"\w+", s.lower())
+
+
+# sparse: BM25
+bm25 = BM25Okapi([tok(d) for d in docs])
+
+# dense: 문장 embedding의 cosine 유사도
+enc = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+D = enc.encode(docs, normalize_embeddings=True)          # (8, 384), 행마다 길이 1
+
+
+def rrf(rankings, k=60):
+    """Reciprocal Rank Fusion — 순위만 쓰므로 점수의 단위가 달라도 합칠 수 있다."""
+    s = np.zeros(len(docs))
+    for r in rankings:
+        for pos, i in enumerate(r):
+            s[i] += 1.0 / (k + pos + 1)
+    return np.argsort(-s)
+
+
+print(f"{'유형':<8}{'BM25':>6}{'dense':>7}{'hybrid':>8}   질문   (숫자 = 정답 문서의 순위)")
+for q, gold, kind in queries:
+    sb = bm25.get_scores(tok(q))
+    sd = D @ enc.encode([q], normalize_embeddings=True)[0]
+    rb, rd = np.argsort(-sb), np.argsort(-sd)
+    rh = rrf([rb, rd])
+    rank = lambda r: int(np.where(r == gold)[0][0]) + 1
+    print(f"{kind:<8}{rank(rb):>6}{rank(rd):>7}{rank(rh):>8}   {q}")
+    print("        BM25 점수", np.round(sb, 2), " dense top2", np.round(np.sort(sd)[::-1][:2], 3))
+
+# 유형        BM25  dense  hybrid   질문   (숫자 = 정답 문서의 순위)
+# 동의어          3      1       2   Where should I leave my car at night?
+#         BM25 점수 [0.   0.   0.   0.   0.   1.54 0.   1.48]  dense top2 [0.528 0.147]
+# 동의어          1      1       1   How do I get reimbursed for a business trip?
+#         BM25 점수 [0.   2.55 0.   0.   0.   0.   0.   0.88]  dense top2 [0.587 0.174]
+# 식별자          1      1       1   What does E4471 mean?
+#         BM25 점수 [0.   0.   0.   1.83 0.   0.   0.   0.  ]  dense top2 [0.544 0.507]
+```
+
+**출력을 본문의 주장과 맞춰 읽는다.**
+
+- **첫 질문 (car → vehicle).** 정답 문서의 BM25 점수가 **0**이다. 겹치는 단어가 하나도 없기 때문이다. 순위 3은 점수 0끼리의 동점 처리에서 나온 값이라 의미가 없다. 점수를 받은 두 문서는 엉뚱한 단어가 겹쳤다. 하나는 휴가를 뜻하는 "leave", 다른 하나는 "at"이다. dense는 정답을 1위에 놓았고 2위와의 차이도 크다(0.528 대 0.147). G7.10.1의 "vocabulary가 겹치지 않으면 BM25는 아무것도 못 한다"가 그대로 보인다.
+- **hybrid가 dense보다 나빴다.** 첫 질문에서 hybrid는 정답을 2위로 내렸다. BM25의 틀린 순위가 섞였기 때문이다. 본문에서 본 대로 hybrid는 최악의 경우를 줄이는 방법이지, 늘 가장 좋은 방법이 아니다.
+- **둘째 질문은 BM25가 맞혔지만 이유가 좋지 않다.** "reimbursed"와 "refund"는 겹치지 않는다. 점수는 "for", "a" 같은 기능어에서 나왔다. 문서가 8개뿐이라 그것으로도 1위가 됐을 뿐이고, 문서가 많아지면 통하지 않는다.
+- **셋째 질문 (E4471).** 두 방식 모두 1위지만 여유가 다르다. BM25는 정답 문서만 점수를 받았다. dense는 1위와 2위가 0.544 대 0.507로 거의 붙어 있다. 2위는 숫자 두 자리의 순서만 다른 E4417 문서다. embedding은 두 식별자를 거의 같은 것으로 본다. 문서가 많아지면 이 차이는 쉽게 뒤집힌다.
+
+**이 코드가 보여 주지 못하는 것.**
+문서 8개, 질문 3개는 예시이지 측정이 아니다. 순위 하나하나는 문장을 조금만 바꿔도 달라진다.
+본문의 Recall@5 표처럼 **질문 수백 개에 대한 평균**이 있어야 방식끼리 비교할 수 있다.
+그리고 여기에는 chunking, reranker, ANN index(G7.10.2~G7.10.3)가 없다. 문서가 수만 개를 넘으면 `D @ q` 를 전부 계산하는 대신 FAISS나 hnswlib 같은 ANN library를 쓴다.
 
 ---
 
