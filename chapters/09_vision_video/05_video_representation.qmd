@@ -489,8 +489,8 @@ frame 하나로는 절대 풀 수 없게 설계한 것이다 — G9.5.2의 오�
 ## 직접 해보기
 
 **① redundancy를 frame 간격으로 잰다**
-`redundancy` 에서 인접 frame의 상관을 재고, 간격을 1·5·30 frame으로
-늘리며 어떻게 떨어지는지 그려라. 어디까지가 "거의 같은 frame"인가?
+`redundancy` 는 물체의 속도 `sp` 를 `[0.1, 0.25, 0.5, 1.0, 2.0]` 으로 바꿔 가며 인접 frame의 상관을 잰다. 목록에 4.0과 8.0을 추가하라.
+속도가 얼마가 되어야 인접 frame이 "거의 같은 frame"이 아니게 되는가? frame 간격을 늘리는 것과 속도를 올리는 것은 어떤 점에서 같은가?
 
 **② uniform sampling과 dense sampling**
 `sampling` 의 두 전략을 짧은 동작과 긴 동작에 각각 적용하라.
