@@ -561,6 +561,83 @@ attention은 [2.5 kernel 방법](../02_classical_ml/05_svm_kernels.qmd)의 "명�
 
 ---
 
+## 실제 도구로: BERT의 attention을 꺼내 본다
+
+지금까지의 attention 행렬은 손으로 설계한 것이었다. 여기서는 학습된 모델의 attention을 직접 꺼내, 이 장의 식이 실제 모델에서 그대로 쓰이는지와 학습된 head가 어떻게 생겼는지를 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `bert-base-uncased`(12층, 층마다 head 12개, 약 440 MB)다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+from transformers import AutoModel, AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("bert-base-uncased")
+model = AutoModel.from_pretrained("bert-base-uncased", attn_implementation="eager").eval()
+
+enc = tok("the cat sat on the mat because it was tired", return_tensors="pt")
+toks = tok.convert_ids_to_tokens(enc.input_ids[0])
+with torch.no_grad():
+    out = model(**enc, output_attentions=True, output_hidden_states=True)
+A = torch.stack(out.attentions)[:, 0]              # (층 12, head 12, n, n)
+n = A.shape[-1]
+print(toks)
+print(A.shape, A.sum(-1).min().item(), A.sum(-1).max().item())     # 행마다 합이 1
+
+# 1) 이 장의 식을 실제 모델에서 다시 계산한다: 0층 0번 head
+layer = model.encoder.layer[0].attention.self
+x = out.hidden_states[0][0]                        # 0층의 입력 (n, 768)
+H, dk = 12, 768 // 12
+Q = layer.query(x).view(n, H, dk)[:, 0]            # 0번 head 의 query (n, 64)
+K = layer.key(x).view(n, H, dk)[:, 0]
+mine = torch.softmax(Q @ K.T / math.sqrt(dk), dim=-1)
+print((mine - A[0, 0]).abs().max().item())         # 모델이 내놓은 attention 과의 차이
+
+# 2) 위치만 보는 head 가 있는가: 바로 앞 / 바로 뒤 token 에 주는 평균 가중치
+prev = torch.stack([A[..., i, i-1] for i in range(1, n)]).mean(0)      # (12, 12)
+nxt = torch.stack([A[..., i, i+1] for i in range(n-1)]).mean(0)
+for name, M in [("앞 token", prev), ("뒤 token", nxt)]:
+    l, h = divmod(int(M.argmax()), 12)
+    print(name, f"최대 {M.max().item():.3f} (층 {l}, head {h})", f"전체 평균 {M.mean().item():.3f}", f"균등이면 {1/n:.3f}")
+
+# 3) [CLS]·[SEP] 로 가는 가중치: 층이 깊어지면
+special = (A[..., 0] + A[..., -1]).mean((1, 2))    # 층마다 평균
+print([round(v, 2) for v in special.tolist()])
+
+# 4) "it" 은 무엇을 보는가 — head 마다 가장 많이 보는 token 을 센다
+i_it = toks.index("it")
+top = A[:, :, i_it].argmax(-1).flatten().tolist()  # 144개 head
+count = {t: 0 for t in toks}
+for j in top:
+    count[toks[j]] += 1
+print(sorted(count.items(), key=lambda kv: -kv[1])[:6])
+
+# ['[CLS]', 'the', 'cat', 'sat', 'on', 'the', 'mat', 'because', 'it', 'was', 'tired', '[SEP]']
+# torch.Size([12, 12, 12, 12]) 0.9999997019767761 1.000000238418579
+# 0.0
+# 앞 token 최대 0.652 (층 3, head 5) 전체 평균 0.073 균등이면 0.083
+# 뒤 token 최대 0.911 (층 2, head 9) 전체 평균 0.117 균등이면 0.083
+# [0.28, 0.55, 0.53, 0.55, 0.58, 0.63, 0.63, 0.58, 0.61, 0.6, 0.66, 0.72]
+# [('[SEP]', 75), ('[CLS]', 21), ('because', 12), ('cat', 11), ('tired', 9), ('was', 8)]
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **이 장의 식이 그대로 쓰인다.** 모델에서 $W_Q$, $W_K$ 를 꺼내 $\text{softmax}(QK^\top/\sqrt{d_k})$ 를 직접 계산한 값과 모델이 내놓은 attention의 차이가 **0.0**이다. $d_k = 768/12 = 64$ 이고, 나누는 값은 $\sqrt{64} = 8$ 이다. 행의 합도 1이다(float32 반올림 범위 안에서).
+- **위치만 보는 head가 실제로 있다 (G5.0.3).** 2층의 9번 head는 가중치의 91%를 바로 뒤 token에 준다. 3층의 5번 head는 65%를 바로 앞 token에 준다. G5.0.3에서 "위치 채널"로 설계했던 것과 같은 종류의 head가 학습으로 생겼다. 다만 144개 head 전체의 평균은 균등 분포와 비슷하다. 그런 head는 소수다.
+- **[CLS]와 [SEP]로 가는 가중치가 크다.** 두 token에 주는 가중치의 합이 0층에서 0.28, 마지막 층에서 0.72다. 문장의 단어는 10개인데 가중치의 절반 이상이 특수 token 둘에 간다. Clark et al.(2019)은 이를 "볼 것이 없을 때 가는 기본값"으로 해석했다.
+- **"it"이 가리키는 말을 attention에서 읽기는 어렵다.** 144개 head 중 75개가 "it" 자리에서 [SEP]를 가장 많이 본다. "cat"을 가장 많이 보는 head는 11개다. 대명사가 가리키는 명사를 보는 head가 있을 수는 있지만, attention 전체를 평균 내거나 아무 head나 골라서는 그 관계가 보이지 않는다.
+
+**이 코드가 보여 주지 못하는 것.**
+문장 하나에서 본 것이다. head의 성격을 말하려면 문장 수백 개에서 같은 pattern이 반복되는지 봐야 한다. "2층 9번 head는 다음 token을 본다"는 이 문장에서의 관찰이다.
+그리고 본문의 "attention map을 모델의 설명으로 읽지 말 것"이 여기에도 그대로 적용된다. 어떤 head가 "cat"을 많이 본다고 해서 모델이 그 정보를 **써서** 답을 냈다는 뜻은 아니다. 그것을 확인하려면 head를 지우거나 값을 바꿔 출력이 달라지는지 봐야 한다 ([12.1](../12_trust/01_mechanistic.qmd)).
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
