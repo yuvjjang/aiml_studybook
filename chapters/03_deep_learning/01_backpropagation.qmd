@@ -725,6 +725,113 @@ for name, kw in [("relu + he (건강)",      dict(activation="relu", init="he"))
 
 ---
 
+## 실제 도구로: `torch.func` 와 `torch.utils.checkpoint`
+
+PyTorch는 backpropagation(reverse-mode)만이 아니라 forward-mode 자동 미분도 제공한다. `torch.func` 로 두 방식을 나란히 놓고, gradient check의 step, 층별 gradient, 메모리 비용을 실제로 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU). 모델을 내려받지 않고 바로 돌아간다.
+- 이 버전의 PyTorch는 forward-mode를 처음 쓸 때 라이브러리 내부에서 `torch.jit.script` 가 deprecated라는 경고를 한 번 낸다. 결과에는 영향이 없어 아래 출력에서 뺐다.
+- 시간은 CPU에서 잰 것이라 기계마다 다르다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import time
+import torch
+from torch.func import jacfwd, jacrev, jvp, vjp
+
+torch.manual_seed(0)
+
+# 1) 역방향 한 번 = vector-Jacobian product. 정방향 한 번 = Jacobian-vector product
+W = torch.randn(1000, 50)
+f = lambda x: torch.tanh(W @ x)                                   # 입력 50 → 출력 1000
+x = torch.randn(50)
+v_out, v_in = torch.randn(1000), torch.randn(50)
+J = jacrev(f)(x)                                                  # (1000, 50)
+_, jv = jvp(f, (x,), (v_in,))
+_, pull = vjp(f, x); (vj,) = pull(v_out)
+print(tuple(J.shape), f"{(jv - J @ v_in).abs().max().item():.1e}", f"{(vj - v_out @ J).abs().max().item():.1e}")
+
+# 2) Jacobian 전체를 만들 때: 입력이 적으면 forward-mode, 출력이 적으면 reverse-mode 가 싸다
+def bench(fn, *a, reps=5):
+    fn(*a); t0 = time.perf_counter()
+    for _ in range(reps): fn(*a)
+    return round((time.perf_counter() - t0) / reps * 1000, 1)
+W2 = torch.randn(3000, 3000) / 60
+f2 = lambda x: torch.tanh(W2[:, :20] @ x)                      # 입력 20 → 출력 3000
+g = lambda x: torch.tanh(W2 @ x).sum(0, keepdim=True)           # 입력 3000 → 출력 1
+x2, x1 = torch.randn(20), torch.randn(3000)
+print("입력 20 → 출력 3000:", bench(jacfwd(f2), x2), bench(jacrev(f2), x2))
+print("입력 3000 → 출력 1:", bench(jacfwd(g), x1), bench(jacrev(g), x1))
+print(f"{(jacfwd(f)(x) - jacrev(f)(x)).abs().max().item():.1e}")
+
+# 3) gradient check 의 step: 너무 크면 truncation, 너무 작으면 rounding (float64)
+w = torch.randn(30, 30, dtype=torch.float64, requires_grad=True)
+inp = torch.randn(20, 30, dtype=torch.float64)
+loss = lambda w: torch.tanh(inp @ w).pow(2).sum()
+ga, = torch.autograd.grad(loss(w), w)
+errs = []
+for eps in [1e-1, 1e-3, 1e-5, 1e-7, 1e-9, 1e-11]:
+    e = torch.zeros_like(w); e[3, 4] = eps
+    with torch.no_grad():
+        num = (loss(w + e) - loss(w - e)) / (2 * eps)
+    errs.append((eps, f"{abs(num.item() - ga[3, 4].item()) / abs(ga[3, 4].item()):.0e}"))
+print(errs)
+
+# 4) 층을 지나며 gradient 가 줄어든다 / skip connection 이 막는다
+def layer_grads(skip, depth=20):
+    torch.manual_seed(0)
+    layers = [torch.nn.Linear(64, 64) for _ in range(depth)]
+    h = torch.randn(32, 64)
+    acts = []
+    for l in layers:
+        h.retain_grad() if h.requires_grad else None
+        z = torch.sigmoid(l(h))
+        h = h + z if skip else z
+        acts.append(h); h.retain_grad()
+    h.sum().backward()
+    return [f"{acts[i].grad.norm().item():.0e}" for i in (0, 9, 19)]
+print(layer_grads(False), layer_grads(True))
+
+# 5) 메모리: backward 를 위해 forward 의 중간값을 저장한다. checkpoint 는 저장 대신 다시 계산한다
+from torch.utils.checkpoint import checkpoint
+blocks = [torch.nn.Sequential(torch.nn.Linear(512, 512), torch.nn.GELU()) for _ in range(16)]
+def saved_bytes(use_ckpt):
+    total = 0
+    def pack(t):
+        nonlocal total; total += t.numel() * t.element_size(); return t
+    xx = torch.randn(256, 512, requires_grad=True)
+    with torch.autograd.graph.saved_tensors_hooks(pack, lambda t: t):
+        h = xx
+        for b in blocks:
+            h = checkpoint(b, h, use_reentrant=False) if use_ckpt else b(h)
+    return round(total / 2**20, 1)
+print(saved_bytes(False), saved_bytes(True))
+
+# (1000, 50) 3.8e-06 7.6e-06
+# 입력 20 → 출력 3000: 1.1 6.3
+# 입력 3000 → 출력 1: 219.6 2.5
+# 0.0e+00
+# [(0.1, '3e-02'), (0.001, '3e-06'), (1e-05, '1e-10'), (1e-07, '3e-08'), (1e-09, '4e-06'), (1e-11, '5e-04')]
+# ['4e-15', '1e-07', '5e+01'] ['5e+01', '5e+01', '5e+01']
+# 32.0 8.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **backward 한 번은 vector-Jacobian product다 ("왜 역방향인가").** 입력 50, 출력 1,000인 함수의 Jacobian은 1000×50이다. `vjp` 는 출력 쪽 벡터 $v$ 에 대해 $v^\top J$ 를, `jvp` 는 입력 쪽 벡터에 대해 $Jv$ 를 Jacobian을 만들지 않고 계산한다. 둘 다 Jacobian을 직접 곱한 값과 $10^{-6}$ 수준에서 같다(float32). `loss.backward()` 는 출력이 scalar 하나인 경우의 `vjp` 다.
+- **Jacobian 전체를 만들 때는 입력과 출력의 수가 방식을 정한다 ("직접 해보기" ②).** 입력 20, 출력 3,000이면 forward-mode(`jacfwd`)가 1.1 ms, reverse-mode(`jacrev`)가 6.3 ms다. 입력 3,000, 출력 1이면 forward가 220 ms, reverse가 2.5 ms로 거꾸로 90배 차이가 난다. forward-mode는 입력 하나마다, reverse-mode는 출력 하나마다 한 번씩 계산한다. loss는 출력이 하나이고 parameter는 수백만 개라 딥러닝이 reverse-mode를 쓴다.
+- **gradient check의 step은 V자 곡선이다 ("gradient check", "직접 해보기" ①).** float64에서 중앙차분의 상대 오차가 step $10^{-1}$ 에서 $3\times10^{-2}$, $10^{-5}$ 에서 $10^{-10}$ 로 가장 작고, $10^{-11}$ 에서 다시 $5\times10^{-4}$ 로 커진다. step이 크면 Taylor 근사를 끊은 오차(truncation)가, 작으면 반올림 오차(rounding)가 지배한다.
+- **sigmoid 20층에서 gradient가 사라지고, skip connection이 막는다 ("residual connection이 하는 일", "직접 해보기" ③).** 층마다 activation이 받는 gradient의 norm이 마지막 층 50, 10번째 층 $10^{-7}$, 첫 층 $4\times10^{-15}$ 이다. $h + \sigma(Wh)$ 로 바꾸면 세 층 모두 50이다. 곱해지던 $\sigma'$ (최대 0.25)가 $1 + \sigma'$ 로 바뀌어 1 아래로 내려가지 않는다.
+- **backward를 위해 forward의 값을 저장한다 ("메모리").** 16층(폭 512, batch 256)의 forward에서 backward용으로 저장된 tensor가 32 MiB다. `torch.utils.checkpoint` 로 각 블록을 감싸면 8 MiB다. 블록 안의 중간값을 버리고 backward 때 다시 계산하기 때문이다. 메모리를 계산 시간과 맞바꾸는 것이다.
+
+**이 코드가 보여 주지 못하는 것.**
+`torch.func` 는 함수형 API라 `nn.Module` 의 parameter에 쓰려면 `functional_call` 로 감싸야 한다. 여기서는 간단한 함수에만 썼다.
+checkpoint가 늘리는 계산 시간은 재지 않았다. 대략 forward를 한 번 더 하는 만큼이 든다고 알려져 있다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
