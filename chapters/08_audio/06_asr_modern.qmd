@@ -73,11 +73,10 @@ print(f"{'상황':<22}{'edit distance':>14}{'WER':>9}")
 for name, hyp in cases:
     d, n = wer_detail(ref, hyp)
     print(f"{name:<22}{d:>14}{d/n:>9.3f}")
-
-print()
-print("마지막 줄이 요점이다 — 정답을 전부 맞혔는데도 덧붙인 말 때문에 WER이 커진다.")
-print("hallucination 탐지에 WER이 쓰이는 이유이자, 동시에 WER만으로는 부족한 이유이기도 하다.")
 ```
+
+마지막 줄이 요점이다 — 정답을 전부 맞혔는데도 덧붙인 말 때문에 WER이 커진다.  
+hallucination 탐지에 WER이 쓰이는 이유이자, 동시에 WER만으로는 부족한 이유이기도 하다.
 
 ::: {.callout-warning}
 ## WER을 비교할 때 반드시 확인할 것
@@ -226,13 +225,14 @@ TESTS = {
                 for _ in range(25)],
     "셋 다 다름": [make_utt(gT, rand_cond(gT)) for _ in range(25)],
 }
-print(f"학습 corpus 두 벌 — 각 {len(TRAIN_CLEAN)} 발화")
-print(f"  A: 깨끗한 조건만 (F0 150 고정, channel 없음, noise 0.01)")
-print(f"  B: 발화마다 화자·channel·noise를 무작위로")
-print()
-print(f"평가 set {len(TESTS)}종 (각 25 발화) — B의 학습 분포와도 같지 않다")
-print("  같은 문장, 같은 vocabulary. **조건만 다르다.**")
 ```
+
+학습 corpus 두 벌 — 각 `{python} f'{len(TRAIN_CLEAN)}'` 발화
+A: 깨끗한 조건만 (F0 150 고정, channel 없음, noise 0.01)  
+B: 발화마다 화자·channel·noise를 무작위로
+
+평가 set `{python} f'{len(TESTS)}'`종 (각 25 발화) — B의 학습 분포와도 같지 않다
+같은 문장, 같은 vocabulary. **조건만 다르다.**
 
 ---
 
@@ -354,47 +354,51 @@ for nm, ts in TESTS.items():
     a, b = per_on(M_CLEAN, ts), per_on(M_DIV, ts)
     ROB.append((nm, a, b))
     print(f"{nm:<26} {a:>22.4f} {b:>22.4f}")
-print()
 clean_row = ROB[0]
 hard_row = ROB[-1]
-print(f"**A는 학습 조건에서 PER {clean_row[1]:.4f}로 거의 완벽하다.**")
-print(f"  그런데 셋 다 바뀌면 {hard_row[1]:.4f}다 — "
-      f"phoneme 열 개 중 아홉 개를 틀린다.")
-print()
+```
+
+**A는 학습 조건에서 PER `{python} f'{clean_row[1]:.4f}'`로 거의 완벽하다.**
+
+그런데 셋 다 바뀌면 `{python} f'{hard_row[1]:.4f}'`다 — phoneme 열 개 중 아홉 개를 틀린다.
+
+```{python}
+#| label: robustness-2
+#| code-fold: false
+
 if hard_row[2] < hard_row[1]:
     print(f"**B는 같은 조건에서 {hard_row[2]:.4f}다** — "
           f"{(hard_row[1]-hard_row[2])/hard_row[1]:.0%} 낮다.")
 else:
     print(f"**B도 그 조건에서 {hard_row[2]:.4f}로 좋지 않다.**")
-print()
-print(f"그리고 B가 깨끗한 조건에서 치른 대가는 "
-      f"{clean_row[2]-clean_row[1]:+.4f}다.")
-print()
-print("**이것이 Whisper의 논지를 축소한 형태다.** 조용한 교실에서만 연습한 학생과 시장·지하철·빗속에서 연습한 학생의 차이다.")
-for s in ["모델 구조도, loss도, hyperparameter도 **완전히 같다**",
-          "바뀐 것은 학습 데이터의 **다양성**뿐이다",
-          "특화 모델(A)은 자기 조건에서 조금 낫고 밖에서는 쓸 수 없다",
-          "**범용 모델(B)은 어디서나 쓸 만하다** — 그것이 제품에서 중요한 성질이다"]:
-    print(f"  · {s}")
-print()
-print("**Whisper가 실제로 한 것**")
-print(f"{'선택':<26} {'내용'}")
-print("-" * 66)
-for a, b in [("데이터", "web의 자막·transcription 68만 시간 — **weakly supervised**"),
-             ("정제", "기계 생성 자막 제거, 언어 일치 확인 정도로 최소화"),
-             ("구조", "평범한 encoder-decoder Transformer"),
-             ("전용 장치", "**없다** — LM fusion도, 화자 adaptation도, 특화 전처리도"),
-             ("평가", "fine-tuning 없는 **zero-shot** 성능으로 비교")]:
-    print(f"{a:<26} {b}")
-print()
-print("**'weakly supervised(약지도)'가 핵심 단어다.**")
-for s in ["web 자막은 정확하지 않다 — 요약되거나, 어긋나거나, 다른 언어이기도 하다",
-          "정제를 세게 하면 데이터가 줄고, 약하게 하면 noise가 는다",
-          "Whisper의 선택은 **noise를 감수하고 규모와 다양성을 취하는 것**이었다",
-          "그 noise가 오히려 robustness로 이어졌다는 것이 결과가 말하는 바다",
-          "[7.5](../07_language/05_pretraining_data.qmd)의 데이터 논의와 같은 구조다"]:
-    print(f"  · {s}")
 ```
+
+그리고 B가 깨끗한 조건에서 치른 대가는 `{python} f'{clean_row[2] - clean_row[1]:+.4f}'`다.
+
+**이것이 Whisper의 논지를 축소한 형태다.** 조용한 교실에서만 연습한 학생과 시장·지하철·빗속에서 연습한 학생의 차이다.
+
+- 모델 구조도, loss도, hyperparameter도 **완전히 같다**
+- 바뀐 것은 학습 데이터의 **다양성**뿐이다
+- 특화 모델(A)은 자기 조건에서 조금 낫고 밖에서는 쓸 수 없다
+- **범용 모델(B)은 어디서나 쓸 만하다** — 그것이 제품에서 중요한 성질이다
+
+**Whisper가 실제로 한 것**
+
+| 선택 | 내용 |
+|---|---|
+| 데이터 | web의 자막·transcription 68만 시간 — **weakly supervised** |
+| 정제 | 기계 생성 자막 제거, 언어 일치 확인 정도로 최소화 |
+| 구조 | 평범한 encoder-decoder Transformer |
+| 전용 장치 | **없다** — LM fusion도, 화자 adaptation도, 특화 전처리도 |
+| 평가 | fine-tuning 없는 **zero-shot** 성능으로 비교 |
+
+**'weakly supervised(약지도)'가 핵심 단어다.**
+
+- web 자막은 정확하지 않다 — 요약되거나, 어긋나거나, 다른 언어이기도 하다
+- 정제를 세게 하면 데이터가 줄고, 약하게 하면 noise가 는다
+- Whisper의 선택은 **noise를 감수하고 규모와 다양성을 취하는 것**이었다
+- 그 noise가 오히려 robustness로 이어졌다는 것이 결과가 말하는 바다
+- [7.5](../07_language/05_pretraining_data.qmd)의 데이터 논의와 같은 구조다
 
 ---
 
@@ -416,8 +420,8 @@ AXES = {
     "셋 다 다양화": ("speaker", "channel", "noise"),
 }
 MODELS = {"깨끗한 데이터만": M_CLEAN}
-for nm, kinds in AXES.items():
-    g = np.random.default_rng(hash(nm) % 10000)
+for i, (nm, kinds) in enumerate(AXES.items()):
+    g = np.random.default_rng(i)          # seed 고정 (내장 hash()는 실행마다 값이 달라 쓰지 않는다)
     corp = [make_utt(g, rand_cond(g, kinds)) for _ in range(200)]
     MODELS[nm] = train_ctc(corp)
 
@@ -429,34 +433,49 @@ for mn, m in MODELS.items():
     row = [per_on(m, TESTS[c]) for c in cols]
     GRID[mn] = row
     print(f"{mn:<18} " + " ".join(f"{v:>9.4f}" for v in row))
-print()
-print("행별 최악의 조건 (제품에서 실제로 중요한 숫자)")
+```
+
+행별 최악의 조건 (제품에서 실제로 중요한 숫자)
+
+```{python}
+#| label: axes-2
+#| code-fold: false
+
 print(f"{'학습 데이터':<18} {'최악 PER':>10} {'평균 PER':>10}")
 print("-" * 42)
 for mn, row in GRID.items():
     print(f"{mn:<18} {max(row):>10.4f} {float(np.mean(row)):>10.4f}")
-print()
 best = min(GRID, key=lambda k: max(GRID[k]))
-print(f"**최악의 경우가 가장 좋은 것은 '{best}'다.**")
-print()
-print("읽는 법")
-for s in ["한 축만 다양화하면 **그 축에서만** 강해진다 — 표의 대각선",
-          "축을 섞으면 각 축의 최고에는 못 미쳐도 **최악이 크게 좋아진다**",
-          "[7.10](../07_language/10_rag.qmd)의 hybrid 검색과 정확히 같은 구조다 —",
-          "  평균이 아니라 **최악의 경우**를 사는 것이 다양성의 값어치다 (보험)",
-          "실무 함의: augmentation은 배포 환경에서 **실제로 마주칠 축**을 덮어야 한다"]:
-    print(f"  · {s}")
-print()
-print("**대응하는 실제 augmentation(증강 — 학습 데이터를 인위적으로 변형해 늘리는 것) 기법**")
-print(f"{'축':<16} {'augmentation 방법'}")
-print("-" * 62)
-for a, b in [("noise", "noise 합성(MUSAN 등), SNR 무작위화"),
-             ("channel·잔향", "실측 impulse response 합성(RIR), codec 통과"),
-             ("화자", "속도·pitch 변화(SpecAugment 이전의 고전 기법)"),
-             ("시간·주파수", "**SpecAugment** — spectrogram에 mask를 친다"),
-             ("전부", "실제로 다양한 데이터를 모으는 것 (Whisper의 선택)")]:
-    print(f"{a:<16} {b}")
 ```
+
+**최악의 경우가 가장 좋은 것은 '`{python} f'{best}'`'다.**
+
+읽는 법
+
+- 한 축만 다양화하면 **그 축에서만** 강해진다 — 표의 대각선
+- 축을 섞으면 각 축의 최고에는 못 미쳐도 **최악이 크게 좋아진다**
+- [7.10](../07_language/10_rag.qmd)의 hybrid 검색과 정확히 같은 구조다 —
+- 평균이 아니라 **최악의 경우**를 사는 것이 다양성의 값어치다 (보험)
+- 실무 함의: augmentation은 배포 환경에서 **실제로 마주칠 축**을 덮어야 한다
+
+::: {.callout-warning}
+## 이 표는 seed에 민감하다
+
+학습 발화가 200개뿐이라 숫자가 seed에 따라 크게 움직인다.
+학습 데이터의 seed를 다섯 가지로 바꿔 다시 재 보면 '셋 다 다양화'의 최악 PER은 0.06에서 0.19 사이였고(평균 0.11),
+'noise만 다양화'는 0.25에서 0.36 사이였다(평균 0.32). channel만, 화자만 다양화한 모델은 0.59에서 1.63까지 흩어졌다.
+다섯 번 모두 '셋 다 다양화'의 최악이 가장 좋았으므로 **순위**는 믿을 수 있지만, 위 표의 개별 숫자를 그대로 믿으면 안 된다 ([11.0](../11_systems/00_reproducibility.qmd)).
+:::
+
+**대응하는 실제 augmentation(증강 — 학습 데이터를 인위적으로 변형해 늘리는 것) 기법**
+
+| 축 | augmentation 방법 |
+|---|---|
+| noise | noise 합성(MUSAN 등), SNR 무작위화 |
+| channel·잔향 | 실측 impulse response 합성(RIR), codec 통과 |
+| 화자 | 속도·pitch 변화(SpecAugment 이전의 고전 기법) |
+| 시간·주파수 | **SpecAugment** — spectrogram에 mask를 친다 |
+| 전부 | 실제로 다양한 데이터를 모으는 것 (Whisper의 선택) |
 
 ---
 
@@ -551,17 +570,23 @@ latency가 $F$에 **선형**으로 는다는 것이 요점입니다. 아래 표�
 
 context window의 미래 쪽을 잘라 가며 정확도와 latency를 함께 잰다.
 
+context window = 과거 4 frame + 미래 F frame. F=0이면 완전 causal.
+
 ```{python}
 #| label: streaming
 #| code-fold: false
 
 import numpy as np
 
-print("context window = 과거 4 frame + 미래 F frame. F=0이면 완전 causal.")
-print()
 SEEDS = [0, 1, 2]
-print(f"seed {len(SEEDS)}개 평균 — 8.5에서 배운 대로 값 하나로는 방향도 못 본다")
-print()
+```
+
+seed `{python} f'{len(SEEDS)}'`개 평균 — 8.5에서 배운 대로 값 하나로는 방향도 못 본다
+
+```{python}
+#| label: streaming-2
+#| code-fold: false
+
 print(f"{'미래 문맥 F':>10} {'추가 latency':>12} {'입력 차원':>9} "
       f"{'깨끗한 조건 PER':>24} {'셋 다 다름 PER':>24}")
 print("-" * 82)
@@ -575,10 +600,16 @@ for F in [0, 1, 2, 4, 8]:
     print(f"{F:>10} {F*HOP/SR*1000:>10.0f}ms {(4+F+1)*13:>9} "
           f"{np.mean(a):>14.4f} [{np.min(a):.3f}~{np.max(a):.3f}] "
           f"{np.mean(b):>14.4f} [{np.min(b):.3f}~{np.max(b):.3f}]")
-print()
 f0_, f8_ = STREAM[0], STREAM[-1]
 mono = all(STREAM[i][1] >= STREAM[i+1][1] for i in range(len(STREAM)-1))
-print(f"**F=0 (완전 causal)에서 {f0_[1]:.4f}, F=8에서 {f8_[1]:.4f}.**")
+```
+
+**F=0 (완전 causal)에서 `{python} f'{f0_[1]:.4f}'`, F=8에서 `{python} f'{f8_[1]:.4f}'`.**
+
+```{python}
+#| label: streaming-3
+#| code-fold: false
+
 if f8_[1] < f0_[1]:
     print(f"  {(f0_[1]-f8_[1])/max(f0_[1], 1e-9):.0%} 개선을 "
           f"{f8_[0]*HOP/SR*1000:.0f}ms latency로 샀다.")
@@ -589,26 +620,26 @@ if not mono:
           "seed 간 범위가 그 차이만큼 넓다.")
     print("  이 실험이 확실히 말해 주는 것은 **방향**뿐이고, "
           "정확한 곡선 모양은 아니다.")
-print()
-print("**latency-정확도 교환은 조절 가능한 손잡이다.**")
-for s in ["미래 문맥 F frame = 최소 **F x 10ms**의 추가 latency",
-          "실제 system은 이것을 'chunk'로 다룬다 — 320ms chunk, 640ms chunk",
-          "**chunk가 클수록 정확하고 느리다.** 8.4의 CTC 출력 latency가 여기에 더해진다",
-          "RNN-T는 구조적으로 causal이라 streaming의 표준이 됐다 (8.4)",
-          "**Whisper는 streaming용이 아니다** — 30초 window를 통째로 본다",
-          "  실시간으로 쓰려면 chunk로 잘라 반복 호출해야 하고, 경계에서 오류가 난다"]:
-    print(f"  · {s}")
-print()
-print("실무에서 쓰는 절충")
-print(f"{'방법':<24} {'내용'}")
-print("-" * 66)
-for a, b in [("chunk 단위 causal attention", "chunk 안에서는 양방향, chunk 간에는 causal"),
-             ("look-ahead 제한", "미래 k frame까지만 (위 실험이 이것)"),
-             ("2-pass", "1-pass streaming 출력 → 발화 끝나면 rescoring"),
-             ("FastEmit류", "출력 latency 자체에 penalty를 준다"),
-             ("VAD로 분절", "발화 단위로 잘라 non-streaming 모델을 반복 호출")]:
-    print(f"{a:<24} {b}")
 ```
+
+**latency-정확도 교환은 조절 가능한 손잡이다.**
+
+- 미래 문맥 F frame = 최소 **F x 10ms**의 추가 latency
+- 실제 system은 이것을 'chunk'로 다룬다 — 320ms chunk, 640ms chunk
+- **chunk가 클수록 정확하고 느리다.** 8.4의 CTC 출력 latency가 여기에 더해진다
+- RNN-T는 구조적으로 causal이라 streaming의 표준이 됐다 (8.4)
+- **Whisper는 streaming용이 아니다** — 30초 window를 통째로 본다
+- 실시간으로 쓰려면 chunk로 잘라 반복 호출해야 하고, 경계에서 오류가 난다
+
+실무에서 쓰는 절충
+
+| 방법 | 내용 |
+|---|---|
+| chunk 단위 causal attention | chunk 안에서는 양방향, chunk 간에는 causal |
+| look-ahead 제한 | 미래 k frame까지만 (위 실험이 이것) |
+| 2-pass | 1-pass streaming 출력 → 발화 끝나면 rescoring |
+| FastEmit류 | 출력 latency 자체에 penalty를 준다 |
+| VAD로 분절 | 발화 단위로 잘라 non-streaming 모델을 반복 호출 |
 
 ---
 
@@ -618,6 +649,8 @@ Whisper의 가장 유명한 실패는 **없는 말을 만들어 내는 것** —
 무음 구간에서 "시청해 주셔서 감사합니다" 같은 자막 상용구가 튀어나온다.
 
 이것이 구조에서 오는 문제임을 CTC와 대비해 확인한다.
+
+음성이 아닌 3초 입력에 CTC 모델이 내는 token 수
 
 ```{python}
 #| label: hallucination
@@ -634,8 +667,6 @@ CASES = {
             for f in (220*k for k in (1, 1.26, 1.5))) / 3
         for _ in range(10)],
 }
-print("음성이 아닌 3초 입력에 CTC 모델이 내는 token 수")
-print()
 print(f"{'입력':<24} {'평균 출력 token':>14} {'blank frame 비율':>18}")
 print("-" * 60)
 for nm, xs in CASES.items():
@@ -646,41 +677,36 @@ for nm, xs in CASES.items():
         ntok.append(len(greedy(o)))
         bl.append(float(np.mean(o.argmax(1) == 0)))
     print(f"{nm:<24} {np.mean(ntok):>14.1f} {np.mean(bl):>18.3f}")
-print()
-print("참고: 실제 음성 3초에서는 약 "
-      f"{np.mean([len(target_of(l)) for _, l in TESTS['셋 다 다름']])/ (4*0.25):.0f}"
-      "개 정도의 token이 나온다.")
-print()
-print("**CTC는 입력이 없으면 blank를 낸다.** 낼 것이 없으면 안 낸다.")
-print("  frame마다 독립적으로 판단하고, 종료를 스스로 정하지 않기 때문이다.")
-print()
-print("**attention decoder는 구조가 다르다.**")
-for s in ["출력이 **autoregressive**다 — 이전 token을 보고 다음을 낸다 (7.9의 decoding)",
-          "**EOS를 낼 때까지 멈추지 않는다** — 종료가 모델의 결정이다",
-          "입력에 근거가 없으면 **language model prior(사전분포)**가 출력을 지배한다",
-          "  학습 데이터에 흔한 자막 상용구가 그 prior의 최빈값이다",
-          "그래서 무음·음악 구간에서 그럴듯한 문장이 나온다 — 아무 말도 안 들리는데 '뭐라도 써야 한다'는 받아쓰기 학생",
-          "**이것은 7.15의 hallucination과 정확히 같은 mechanism이다** — "
-          "모른다고 말할 자리가 없다"]:
-    print(f"  · {s}")
-print()
-print("**Whisper의 완화 기법과 그 성격**")
-print(f"{'기법':<26} {'무엇을 하는가':<28} {'한계'}")
-print("-" * 80)
-for a, b, c in [
-    ("no_speech 확률 threshold", "무음 token 확률로 구간을 버린다", "threshold 조정이 필요"),
-    ("압축률 검사", "출력이 지나치게 반복되면 폐기", "사후 탐지 — 근본 해결 아님"),
-    ("logprob threshold", "평균 로그확률이 낮으면 폐기", "calibration이 안 된 확률 (7.15)"),
-    ("temperature fallback", "실패하면 temperature를 올려 재시도", "느려진다"),
-    ("**VAD 전처리**", "음성 구간만 모델에 넣는다", "**가장 효과적**"),
-    ("timestamp 제약", "구간이 겹치거나 뒤집히면 폐기", "부분적"),
-]:
-    print(f"{a:<26} {b:<28} {c}")
-print()
-print("**마지막 줄이 8.0과 이어진다** — VAD는 에너지·zero-crossing rate 같은")
-print("  아주 단순한 신호 처리다. 68만 시간짜리 모델의 가장 흔한 실패를")
-print("  50년 된 기법으로 막는 것이 실무의 현실이다.")
 ```
+
+참고: 실제 음성 3초에서는 약 `{python} f'{np.mean([len(target_of(l)) for _, l in TESTS['셋 다 다름']]) / (4 * 0.25):.0f}'`개 정도의 token이 나온다.
+
+**CTC는 입력이 없으면 blank를 낸다.** 낼 것이 없으면 안 낸다.  
+frame마다 독립적으로 판단하고, 종료를 스스로 정하지 않기 때문이다.
+
+**attention decoder는 구조가 다르다.**
+
+- 출력이 **autoregressive**다 — 이전 token을 보고 다음을 낸다 (7.9의 decoding)
+- **EOS를 낼 때까지 멈추지 않는다** — 종료가 모델의 결정이다
+- 입력에 근거가 없으면 **language model prior(사전분포)**가 출력을 지배한다
+- 학습 데이터에 흔한 자막 상용구가 그 prior의 최빈값이다
+- 그래서 무음·음악 구간에서 그럴듯한 문장이 나온다 — 아무 말도 안 들리는데 '뭐라도 써야 한다'는 받아쓰기 학생
+- **이것은 7.15의 hallucination과 정확히 같은 mechanism이다** — 모른다고 말할 자리가 없다
+
+**Whisper의 완화 기법과 그 성격**
+
+| 기법 | 무엇을 하는가 | 한계 |
+|---|---|---|
+| no_speech 확률 threshold | 무음 token 확률로 구간을 버린다 | threshold 조정이 필요 |
+| 압축률 검사 | 출력이 지나치게 반복되면 폐기 | 사후 탐지 — 근본 해결 아님 |
+| logprob threshold | 평균 로그확률이 낮으면 폐기 | calibration이 안 된 확률 (7.15) |
+| temperature fallback | 실패하면 temperature를 올려 재시도 | 느려진다 |
+| **VAD 전처리** | 음성 구간만 모델에 넣는다 | **가장 효과적** |
+| timestamp 제약 | 구간이 겹치거나 뒤집히면 폐기 | 부분적 |
+
+**마지막 줄이 8.0과 이어진다** — VAD는 에너지·zero-crossing rate 같은
+아주 단순한 신호 처리다. 68만 시간짜리 모델의 가장 흔한 실패를
+50년 된 기법으로 막는 것이 실무의 현실이다.
 
 ---
 
@@ -784,12 +810,12 @@ ASR은 pipeline의 한 조각일 뿐이다
 어떤 오류가 지배적인가? 그것이 모델의 어떤 약점을 가리키는가?
 
 **② streaming latency를 조인다**
-`streaming` 의 lookahead를 0·160·640ms로 바꾸며 WER을 재라.
-latency 100ms를 줄이는 데 WER 몇 %p를 지불하는가?
+`streaming` 은 미래 frame 수 `F` 를 `[0, 1, 2, 4, 8]` 로 바꿔 가며 PER을 잰다. frame 하나가 10 ms다. 목록에 16을 추가하라.
+lookahead를 80 ms에서 160 ms로 늘릴 때 PER이 더 내려가는가? latency 10 ms를 줄이는 데 PER을 얼마나 지불하는가?
 
 **③ hallucination을 유도한다**
-`hallucination` 에서 무음이나 noise만 있는 구간을 넣어 보라.
-모델이 그럴듯한 문장을 만들어내는가? 어떻게 탐지하겠는가?
+`hallucination` 의 `CASES` 에는 무음, noise, 화음 세 가지가 있다. noise의 세기 `g.normal(0, 0.3, ...)` 를 0.05와 1.0으로 바꿔 보라.
+"평균 출력 token"이 0이 아닌 경우가 생기는가? "blank frame 비율"을 탐지 신호로 쓸 수 있겠는가?
 :::
 
 ## 요약
