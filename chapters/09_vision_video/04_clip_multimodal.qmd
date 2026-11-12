@@ -641,12 +641,12 @@ print(f"  batch 256 : {SL[-1][2]-SL[-1][1]:+.4f}")
 ## 직접 해보기
 
 **① batch 크기가 negative pair 수다**
-`batch` 를 256·1024·32768로 바꾸며 contrastive learning의 성능을 재라.
-negative pair가 $B-1$개인 것이 왜 큰 batch를 요구하는가?
+`batch` 는 batch 크기를 `[8, 16, 32, 64, 128, 256]` 으로 바꿔 가며 잰다. 목록에 512와 1024를 추가하라(학습 쌍은 6,000개다).
+성능이 계속 오르는가, 어디서 멈추는가? negative pair가 $B-1$개인 것이 왜 큰 batch를 요구하는가?
 
 **② temperature를 고정해 본다**
-`temp` 의 학습 가능한 temperature를 상수로 고정하고 값을 훑어라.
-최적값이 학습된 값과 가까운가?
+`temp` 는 temperature를 상수로 고정하고 `[0.01, 0.03, 0.07, 0.15, 0.3, 1.0]` 을 훑는다. 목록에 0.003과 3.0을 추가해 양 끝을 더 밀어 보라.
+너무 작을 때와 너무 클 때 각각 무엇이 무너지는가? (실제 CLIP은 temperature를 학습한다. 이 장의 코드는 학습하지 않고 고정값만 비교한다.)
 
 **③ modality gap을 잰다**
 `gap` 에서 이미지 embedding과 텍스트 embedding의 중심 거리를 재라.
