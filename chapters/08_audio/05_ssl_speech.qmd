@@ -785,16 +785,16 @@ SUPERB benchmark는 이 가중치를 과제마다 학습하게 한다.
 ## 직접 해보기
 
 **① label efficiency를 곡선으로 본다**
-`label-efficiency` 에서 label 데이터를 10분·1시간·10시간으로 바꾸며
-pretraining 유무의 격차를 재라. 어디서 격차가 좁혀지는가?
+`label-efficiency` 는 transcription이 달린 발화 수를 `[3, 5, 10, 25, 50]` 으로 바꿔 가며 잰다. 목록에 100과 200을 추가하라.
+pretraining 유무의 격차가 어디서 좁혀지는가? (이 실험의 단위는 시간이 아니라 발화 개수다.)
 
 **② cluster 수를 바꾼다**
 `kmeans` 의 $k$를 50·100·500으로 바꾸면 HuBERT류 목표의 품질이
 어떻게 되는가? phoneme 수와 비교하면 적절한 $k$는?
 
 **③ 층별 표현을 probing한다**
-`probe` 를 층마다 돌려 phoneme 정보와 화자 정보가 각각 어느 층에
-몰려 있는지 그려라. 중간 층이 왜 phoneme에 좋은가?
+`probe` 의 linear probe 학습 `steps=400` 을 50으로 줄여 보라. probe 정확도가 표현의 차이보다 probe 학습량에 얼마나 좌우되는가?
+(실제 연구에서는 층마다 probe를 돌려 phoneme 정보와 화자 정보가 어느 층에 있는지 본다. 이 장의 encoder는 2층이고 화자 label이 없어서 그 실험은 할 수 없다.)
 :::
 
 ## 요약
