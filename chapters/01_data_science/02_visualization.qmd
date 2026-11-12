@@ -691,6 +691,97 @@ r12 = float(np.corrcoef(y1, y2)[0, 1])
 
 ---
 
+## 실제 도구로: matplotlib과 Plotly의 기본값
+
+이 책은 Plotly로 그림을 그린다. 실무에서 가장 많이 쓰이는 것은 matplotlib이다. 두 library의 **기본값**이 이 장의 왜곡과 어떻게 이어지는지를, 그림을 그린 뒤 축 범위와 크기 값을 꺼내 숫자로 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `matplotlib` 3.11, `plotly` 7.1, `numpy` 2.5. 그림을 화면에 띄우지 않고(`Agg`) 객체의 값만 읽는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import matplotlib
+matplotlib.use("Agg")                                            # 화면 없이 그린다
+import matplotlib.pyplot as plt
+import numpy as np
+import plotly.graph_objects as go
+
+# 1) 기본값이 축을 어디서 시작하는가: 막대는 0 에서, 선과 점은 데이터 근처에서
+v = [100, 104, 108]
+fig, ax = plt.subplots(1, 3)
+ax[0].bar(["A", "B", "C"], v); ax[1].plot(v); ax[2].scatter([0, 1, 2], v)
+print([tuple(round(float(x), 1) for x in a.get_ylim()) for a in ax])
+lie = lambda lo: round(((v[2] - lo) / (v[0] - lo)) / (v[2] / v[0]), 2)       # 보이는 비 / 실제 비
+print(lie(ax[0].get_ylim()[0]), lie(ax[1].get_ylim()[0]))
+plt.close(fig)
+
+# 2) 점의 크기: matplotlib 의 s 는 넓이(point²), Plotly 의 size 는 지름(pixel)
+vals = np.array([1, 4])
+fig, ax = plt.subplots()
+sc = ax.scatter([0, 1], [0, 0], s=vals * 100)
+print(sc.get_sizes().tolist(), round(float(np.sqrt(sc.get_sizes()[1] / sc.get_sizes()[0])), 2))   # 지름 비
+plt.close(fig)
+pf = go.Figure(go.Scatter(x=[0, 1], y=[0, 0], mode="markers", marker=dict(size=vals * 10)))
+s = pf.data[0].marker.size
+print([int(v) for v in s], round(float((s[1] / s[0]) ** 2), 1))                                                # 넓이 비
+pf2 = go.Figure(go.Scatter(x=[0, 1], y=[0, 0], mode="markers", marker=dict(size=vals * 10, sizemode="area")))
+print(pf2.data[0].marker.sizemode)
+
+# 3) 기본 색 순서와 colormap: 순서형 값에 쓰면 안 되는 것
+print([matplotlib.colors.to_hex(c) for c in plt.rcParams["axes.prop_cycle"].by_key()["color"][:4]])
+for name in ["viridis", "jet"]:
+    cm = plt.get_cmap(name)
+    rgb = cm(np.linspace(0, 1, 11))[:, :3]
+    lum = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]      # 대략적인 밝기
+    print(name, np.round(lum, 2).tolist(), bool(np.all(np.diff(lum) > 0)))
+
+# 4) overplotting: 점 10만 개를 투명도 없이 그리면 / hexbin 으로 세면
+rng = np.random.default_rng(0)
+x = np.r_[rng.normal(0, 1, 99000), rng.normal(3, 0.1, 1000)]
+y = np.r_[rng.normal(0, 1, 99000), rng.normal(3, 0.1, 1000)]
+fig, ax = plt.subplots()
+hb = ax.hexbin(x, y, gridsize=30)
+counts = hb.get_array()
+print(int(counts.max()), int(counts[(np.abs(hb.get_offsets() - [3, 3]).sum(1) < 0.3)].max()))
+plt.close(fig)
+
+# 5) 이중 y축: 두 축의 범위를 바꾸면 같은 데이터가 반대 인상을 준다
+t = np.arange(10); a = 100 + 2 * t; b = 50 + 0.1 * t + rng.normal(0, 0.05, 10)
+fig, ax1 = plt.subplots(); ax2 = ax1.twinx()
+ax1.plot(t, a); ax2.plot(t, b)
+print(round(float(np.corrcoef(a, b)[0, 1]), 3), tuple(round(float(x), 1) for x in ax2.get_ylim()))
+ax2.set_ylim(b.max() + 5, b.min() - 5)                                      # 축을 뒤집으면 반대로 움직이는 것처럼 보인다
+print(tuple(round(float(x), 1) for x in ax2.get_ylim()), ax2.yaxis_inverted())
+plt.close(fig)
+
+# [(0.0, 113.4), (99.6, 108.4), (99.6, 108.4)]
+# 1.0 19.44
+# [100, 400] 2.0
+# [10, 40] 16.0
+# area
+# ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+# viridis [0.08, 0.19, 0.28, 0.35, 0.41, 0.47, 0.54, 0.62, 0.71, 0.79, 0.87] True
+# jet [0.04, 0.07, 0.29, 0.57, 0.81, 0.85, 0.9, 0.76, 0.5, 0.22, 0.11] False
+# 1246 679
+# 0.976 (50.0, 51.0)
+# (56.0, 45.0) True
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **matplotlib은 막대만 0에서 시작한다 (G1.2.1).** 100, 104, 108을 막대로 그리면 y축이 0~113이고, 선이나 점으로 그리면 99.6~108.4다. 선 그래프의 축 아래 끝에서 보이는 높이의 비는 실제 비(1.08)의 19.4배다. lie factor 19다. matplotlib이 선 그래프에서 0을 포함하지 않는 것은 잘못이 아니다. 선은 변화를 보는 그림이다. 다만 같은 데이터를 막대로 바꿀 때 축을 직접 자르면 이 왜곡이 막대에 실린다("직접 해보기" ①).
+- **점 크기의 단위가 library마다 다르다 ("직접 해보기" ②).** 값 1과 4를 크기로 줄 때, matplotlib `scatter(s=...)` 는 넓이(point²)라 지름 비가 2배다. Plotly `marker.size` 는 기본으로 지름(pixel)이라 넓이 비가 16배다. 같은 값을 넣었는데 한쪽은 4배, 한쪽은 16배로 보인다. Plotly에서 `sizemode="area"` 를 주면 넓이 기준이 된다. 값을 넓이에 비례시키는 것이 본문 "지각의 정확도 순위"의 관점에서 가깝다.
+- **jet은 밝기가 단조롭지 않다 (G1.2.2).** colormap을 11단계로 나눠 밝기를 재면, viridis는 0.08에서 0.87로 계속 오르고, jet은 0.04에서 0.90까지 올랐다가 0.11로 다시 내려간다. 순서가 있는 값을 jet으로 칠하면 가운데 노란 부분이 가장 밝아 경계처럼 보이고, 양 끝(파랑과 빨강)은 둘 다 어둡다. matplotlib의 기본 colormap이 2.0부터 viridis인 이유다.
+- **overplotting은 세어 보면 드러난다 (G1.2.3).** 정규분포 점 99,000개 옆의 작은 군집(1,000개, 표준편차 0.1)은 그냥 산점도에서는 점 덩어리 속 작은 얼룩이다. `hexbin` 으로 세면 그 군집의 칸 하나에 679개가 들어 있다. 전체에서 가장 많이 든 칸(1,246개)의 절반이 넘는 밀도다.
+- **이중 y축은 축 범위 하나로 인상을 뒤집는다 ("이중 y축", "직접 해보기" ③).** 상관 0.976으로 함께 오르는 두 계열을 이중 축에 그리면 matplotlib은 오른쪽 축을 50~51로 잡아 둘이 나란히 오르는 것처럼 보인다. 오른쪽 축의 범위를 뒤집어(56~45) 주면 같은 데이터가 반대로 움직이는 것처럼 보인다. 상관은 그대로다.
+
+**이 코드가 보여 주지 못하는 것.**
+그림을 실제로 보지 않고 숫자만 확인했다. "어떻게 보이는가"는 결국 눈으로 확인할 일이다.
+밝기는 sRGB 값에 가중치를 곱한 근사(감마 보정 없이)다. 지각적으로 정확한 밝기는 CIELAB 같은 색공간에서 재야 한다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
