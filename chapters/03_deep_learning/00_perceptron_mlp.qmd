@@ -683,6 +683,100 @@ fig.show()
 
 ---
 
+## 실제 도구로: scikit-learn의 perceptron과 MLP, PyTorch의 층
+
+이 장의 perceptron, XOR, hidden layer, linear collapse를 scikit-learn과 PyTorch로 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `torch` 2.15 (CPU), `numpy` 2.5. 모델을 내려받지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from sklearn.datasets import make_circles
+from sklearn.linear_model import Perceptron
+from sklearn.neural_network import MLPClassifier
+
+# 1) perceptron: 선형으로 나뉘는 데이터에서 몇 번 갱신하는가. margin 을 줄이면? (Novikoff: 갱신 수 <= (R/gamma)^2)
+def perceptron_updates(gamma, seed=0):
+    r = np.random.default_rng(seed)
+    P = r.uniform(-1, 1, (4000, 2))
+    P = P[np.abs(P[:, 0] + 0.5 * P[:, 1]) / np.hypot(1, 0.5) > gamma][:300]   # 경계 x0 + 0.5 x1 = 0 에서 gamma 이상 떨어진 점만
+    s = np.sign(P[:, 0] + 0.5 * P[:, 1])
+    w, updates = np.zeros(2), 0                                    # 경계가 원점을 지나므로 bias 없이
+    while True:
+        wrong = [k for k in range(len(P)) if s[k] * (P[k] @ w) <= 0]
+        if not wrong:
+            break
+        for k in wrong:
+            if s[k] * (P[k] @ w) <= 0:
+                w += s[k] * P[k]; updates += 1
+    R = np.linalg.norm(P, axis=1).max()
+    return updates, int((R / gamma) ** 2)
+for gamma in [0.2, 0.1, 0.05]:
+    print(gamma, [perceptron_updates(gamma, s) for s in range(3)])
+
+# 2) XOR: perceptron 은 못 풀고, 특성 x1*x2 를 더하면 풀리고, hidden layer 가 있으면 풀린다
+X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=float); y = np.array([0, 1, 1, 0])
+Xs = 2 * X - 1                                                   # ±1 로
+print(Perceptron(max_iter=1000, random_state=0).fit(Xs, y).score(Xs, y),
+      Perceptron(max_iter=1000, random_state=0).fit(np.c_[Xs, Xs[:, 0] * Xs[:, 1]], y).score(np.c_[Xs, Xs[:, 0] * Xs[:, 1]], y),
+      MLPClassifier((4,), activation="tanh", solver="lbfgs", random_state=0).fit(Xs, y).score(Xs, y))
+
+# 3) 동심원: hidden unit 수에 따라
+C, cy = make_circles(n_samples=1000, noise=0.1, factor=0.5, random_state=0)
+Ct, cyt = make_circles(n_samples=2000, noise=0.1, factor=0.5, random_state=1)
+for h in [1, 2, 3, 8, 64]:
+    m = MLPClassifier((h,), activation="relu", max_iter=3000, random_state=0).fit(C, cy)
+    print(h, round(m.score(Ct, cyt), 3))
+
+# 4) activation 이 없으면 층을 쌓아도 행렬 하나다 (linear collapse)
+torch.manual_seed(0)
+layers = [torch.nn.Linear(8, 8, bias=False) for _ in range(10)]
+net = torch.nn.Sequential(*layers)
+W = torch.eye(8)
+for l in layers:
+    W = l.weight @ W
+x = torch.randn(5, 8)
+with torch.no_grad():
+    print(f"{(net(x) - x @ W.T).abs().max().item():.1e}", torch.linalg.matrix_rank(W).item())
+    narrow = torch.nn.Sequential(torch.nn.Linear(8, 2, bias=False), *[torch.nn.Linear(2, 2, bias=False) for _ in range(3)], torch.nn.Linear(2, 8, bias=False))
+    J = torch.autograd.functional.jacobian(narrow, torch.zeros(8))
+    print(torch.linalg.matrix_rank(J).item())
+    relu_narrow = torch.nn.Sequential(torch.nn.Linear(8, 2, bias=False), torch.nn.ReLU(), torch.nn.Linear(2, 64), torch.nn.ReLU(), torch.nn.Linear(64, 8))
+    pts = relu_narrow(torch.randn(500, 8))
+    print(torch.linalg.matrix_rank(pts - pts.mean(0)).item())       # 2차원을 지나도 ReLU 뒤에서는 펼쳐진다
+
+# 0.2 [(3, 47), (4, 48), (3, 46)]
+# 0.1 [(6, 191), (4, 192), (14, 184)]
+# 0.05 [(6, 765), (4, 770), (20, 738)]
+# 0.5 1.0 1.0
+# 1 0.369
+# 2 0.747
+# 3 0.971
+# 8 0.993
+# 64 0.995
+# 1.2e-09 8
+# 2
+# 8
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **Novikoff 경계는 상한일 뿐이다 (G3.0.1, "직접 해보기" ①).** 경계에서 $\gamma$ 이상 떨어진 점 300개만 남긴 데이터에서 perceptron이 수렴하기까지의 갱신 횟수가, $\gamma$ = 0.2, 0.1, 0.05일 때 seed 셋에서 3~4, 4~14, 4~20번이다. 경계 $(R/\gamma)^2$ 는 47, 191, 765로 $\gamma$ 를 절반으로 할 때마다 4배가 된다. 실제 횟수는 4배로 늘지 않았고 경계보다 수십 배 작다. 경계는 "아무리 나빠도 이 이상은 안 간다"는 보장이고, 평균적인 데이터에서의 예측이 아니다.
+- **XOR은 perceptron이 못 풀고, 곱 하나 또는 hidden layer로 풀린다 ("XOR", "직접 해보기" ②).** `sklearn.linear_model.Perceptron` 이 XOR 네 점에서 정확도 0.5다. $x_1x_2$ 를 세 번째 특성으로 넣으면 1.0이다. 공간을 바꿔 선형으로 만든 것으로, [2.5](../02_classical_ml/05_svm_kernels.qmd)의 kernel과 같은 생각이다. hidden unit 4개짜리 `MLPClassifier` 도 1.0이다. 특성을 손으로 만들지 않고 학습으로 만든다.
+- **hidden unit이 몇 개 필요한가 (G3.0.2).** 동심원 두 개에서 ReLU hidden unit이 1개면 0.369, 2개면 0.747, 3개면 0.971이다. unit 하나가 직선 경계 하나를 만들고, 원을 둘러싸려면 직선이 적어도 셋 필요하다. 8개, 64개에서 0.993, 0.995다. unit 하나일 때 우연 수준(0.5)보다 낮은 것은, 경계 하나로 원의 한쪽을 잘라 그쪽을 틀리게 칠하기 때문으로 보인다.
+- **activation이 없으면 10층도 행렬 하나다 ("activation이 없으면 층은 무의미하다", "직접 해보기" ③).** bias 없는 `Linear` 10층을 통과한 결과와, 10개의 weight를 곱한 행렬 하나를 곱한 결과의 차이가 $10^{-9}$ 다. 그 행렬의 rank는 8로 가득 차 있다. 중간에 폭 2인 층이 끼면 Jacobian의 rank가 2로 떨어진다. 선형 망에서는 가장 좁은 층이 전체의 rank를 정한다.
+- **ReLU가 끼면 좁은 통로를 지나도 2차원 평면에 갇히지 않는다.** 같은 폭 2의 통로 뒤에 ReLU를 넣은 망의 출력 500개는 8차원을 다 쓴다(rank 8). 점들이 2차원 곡면 위에 놓이지만 그 곡면이 휘어져 평평한 부분공간에 담기지 않는다.
+
+**이 코드가 보여 주지 못하는 것.**
+perceptron 실험은 seed 셋, 한 가지 데이터 생성 방식이다. 경계가 얼마나 느슨한지는 점이 경계 근처에 얼마나 몰려 있느냐에 달렸다.
+universal approximation theorem과 깊이의 효율(본문 후반)은 이 크기의 실험으로는 보이지 않아 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
