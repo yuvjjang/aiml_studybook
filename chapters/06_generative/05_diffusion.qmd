@@ -638,6 +638,77 @@ loss = mse(model(xt, t), eps)
 **loss가 그냥 내려가고, 내려가면 좋아진다.**
 diffusion model이 이긴 가장 큰 이유가 이 안정성이다.
 
+---
+
+## 실제 도구로: diffusers의 scheduler
+
+Hugging Face `diffusers` 의 scheduler는 이 장의 forward process와 reverse step을 구현한 부분이다. 모델 없이 scheduler만 불러, noise schedule의 숫자를 확인하고, 정답 noise를 아는 "완벽한 denoiser"로 reverse process가 정말 원래 데이터로 돌아오는지 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `diffusers` 0.43, `torch` 2.15 (CPU) (`pip install diffusers`). 모델을 내려받지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+from diffusers import DDIMScheduler, DDPMScheduler
+
+torch.manual_seed(0)
+
+# 1) diffusers 의 scheduler 는 이 장의 식을 그대로 갖고 있다: alpha_bar_t = prod(1 - beta_s)
+lin = DDPMScheduler(num_train_timesteps=1000, beta_schedule="linear")
+cos = DDPMScheduler(num_train_timesteps=1000, beta_schedule="squaredcos_cap_v2")
+for name, s in [("linear", lin), ("cosine", cos)]:
+    ab = s.alphas_cumprod
+    print(name, f"{(ab - torch.cumprod(1 - s.betas, 0)).abs().max().item():.1e}",
+          [round(ab[t].item(), 4) for t in (0, 250, 500, 750, 999)])
+
+# 2) forward process: add_noise 는 sqrt(ab) x0 + sqrt(1 - ab) eps
+x0 = torch.randn(4, 3, 8, 8); eps = torch.randn_like(x0); t = torch.tensor([10, 300, 600, 999])
+xt = lin.add_noise(x0, eps, t)
+ab = lin.alphas_cumprod[t].view(-1, 1, 1, 1)
+print(f"{(xt - (ab.sqrt() * x0 + (1 - ab).sqrt() * eps)).abs().max().item():.1e}")
+# 신호 대 잡음비 SNR = ab / (1 - ab): linear 는 끝 무렵 거의 순수 잡음에 너무 일찍 도달한다
+snr = lambda s: s.alphas_cumprod / (1 - s.alphas_cumprod)
+for name, s in [("linear", lin), ("cosine", cos)]:
+    r = snr(s)
+    print(name, int((r < 1e-2).sum()), f"{r[-1].item():.1e}")        # SNR 이 0.01 아래인(거의 잡음인) step 수, 마지막 step 의 SNR
+
+# 3) 정답 noise 를 아는 '완벽한 denoiser' 로 reverse 를 돌리면 x0 로 돌아오는가 (DDPM 1000 step / DDIM 50 step)
+#    scheduler 의 기본값 clip_sample=True 는 x0 추정을 [-1, 1] 로 자른다 (이미지를 [-1, 1] 로 둔다는 가정)
+target = torch.randn(1, 3, 8, 8)
+def oracle(x, t, s):
+    a = s.alphas_cumprod[t]
+    return (x - a.sqrt() * target) / (1 - a).sqrt()               # 이 x 를 만든 noise 를 정확히 맞힌다
+for name, s, steps in [("DDPM", DDPMScheduler(num_train_timesteps=1000, clip_sample=False), 1000),
+                       ("DDIM", DDIMScheduler(num_train_timesteps=1000, clip_sample=False), 50),
+                       ("DDIM, clip 켬", DDIMScheduler(num_train_timesteps=1000), 50)]:
+    s.set_timesteps(steps)
+    g = torch.Generator().manual_seed(1)
+    x = torch.randn(1, 3, 8, 8, generator=g)
+    for tt in s.timesteps:
+        x = s.step(oracle(x, tt, s), tt, x, generator=g).prev_sample if name == "DDPM" else s.step(oracle(x, tt, s), tt, x).prev_sample
+    print(name, len(s.timesteps), f"{(x - target).abs().max().item():.1e}")
+
+# linear 0.0e+00 [0.9999, 0.5214, 0.0778, 0.0033, 0.0]
+# cosine 0.0e+00 [1.0, 0.8459, 0.4923, 0.1432, 0.0]
+# 0.0e+00
+# linear 326 4.0e-05
+# cosine 64 2.4e-09
+# DDPM 1000 9.3e-10
+# DDIM 50 9.3e-10
+# DDIM, clip 켬 50 1.7e+00
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **scheduler가 이 장의 식을 그대로 갖고 있다 ("forward process").** `alphas_cumprod` 가 $\prod(1-\beta_s)$ 와 정확히 같고, `add_noise` 가 $\sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\epsilon$ 과 정확히 같다(차이 0.0).
+- **linear schedule은 너무 일찍 잡음이 된다 (G6.5.1, "직접 해보기" ①).** $\bar\alpha_t$ 가 linear에서는 step 250, 500, 750에 0.52, 0.078, 0.003이고, cosine에서는 0.85, 0.49, 0.14다. 신호 대 잡음비(SNR)가 0.01 아래, 곧 거의 순수한 잡음인 step이 linear는 1,000개 중 326개, cosine은 64개다. linear schedule은 학습 step의 3분의 1을 이미 정보가 없는 입력에 쓴다.
+- **완벽한 denoiser면 reverse가 정확히 돌아온다 (G6.5.3).** 각 step에서 정답 noise를 알려 주면 DDPM 1,000 step과 DDIM 50 step 모두 목표 $x_0$ 로 $10^{-9}$ 까지 돌아온다. DDIM이 step을 20분의 1로 줄여도 같은 곳에 도착하는 것은, 완벽한 noise 예측에서는 결정적(deterministic) 경로가 정확하기 때문이다. 실제 모델은 noise를 틀리게 예측하고, step을 줄이면 그 오차가 쌓인다.
+- **기본값 `clip_sample=True` 를 조심한다.** 같은 실험을 scheduler의 기본 설정으로 하면 오차가 1.7이다. 이 설정은 매 step 추정한 $x_0$ 를 [−1, 1]로 자른다. 이미지를 [−1, 1]로 정규화해 쓴다는 가정이고, 목표가 그 범위를 벗어나면(여기서는 표준정규) 틀린 곳으로 간다. 데이터의 범위와 scheduler의 가정이 맞는지 확인해야 한다.
+
+**이 코드가 보여 주지 못하는 것.**
+noise를 예측하는 신경망(U-Net이나 DiT)이 없다. 학습(G6.5.2)과 classifier-free guidance(G6.5.4)는 모델이 있어야 해서 다루지 않았다. 실제 이미지 생성 pipeline(`DiffusionPipeline`)은 수 GB짜리 모델을 내려받아야 하고 CPU로는 매우 느려서, 이 절의 범위 밖으로 두었다.
 
 ---
 
