@@ -711,6 +711,102 @@ linear probing을 보면 'augmentation이 결정적이다'가 된다. **같은 �
 
 ---
 
+## 실제 도구로: DINOv2와 MAE를 불러 써 본다
+
+self-supervised로 학습한 공개 모델 둘을 불러, 이 장의 평가 protocol(표현을 고정하고 그 위에 kNN과 linear probe)과 MAE의 masking을 확인한다. 데이터는 scikit-learn의 8×8 손글씨 숫자를 224×224로 키운 것이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `scikit-learn` 1.9
+- 모델은 `facebook/dinov2-small`(2,200만 parameter, 약 90 MB)과 `facebook/vit-mae-base`(약 450 MB)다. CPU로 몇 분 걸린다.
+- `torchvision` 이 없으면 MAE의 image processor가 대체 구현을 쓴다는 경고를 낸다. 여기서는 정규화 상수만 꺼내 써서 결과에 영향이 없고, 아래 출력에서는 뺐다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from sklearn.datasets import load_digits
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.neighbors import KNeighborsClassifier
+from transformers import AutoImageProcessor, AutoModel, ViTMAEForPreTraining
+
+F = torch.nn.functional
+d = load_digits()
+idx = np.random.default_rng(0).permutation(len(d.target))[:600]
+imgs = torch.tensor(d.images[idx] / 16.0, dtype=torch.float32)          # (600, 8, 8)
+y = d.target[idx]
+# 8x8 흑백 숫자를 224x224 RGB 로 키운다 (모델이 기대하는 입력 모양)
+big = F.interpolate(imgs[:, None], size=224, mode="bilinear").repeat(1, 3, 1, 1)
+
+def features(model, proc, x, bs=50):
+    mean, std = torch.tensor(proc.image_mean)[:, None, None], torch.tensor(proc.image_std)[:, None, None]
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(x), bs):
+            h = model(pixel_values=(x[i:i + bs] - mean) / std).last_hidden_state
+            out.append(h[:, 0])                                         # CLS token
+    return torch.cat(out).numpy()
+
+def probe(X):
+    return (round(float(cross_val_score(KNeighborsClassifier(5), X, y, cv=5).mean()), 3),
+            round(float(cross_val_score(LogisticRegression(max_iter=3000), X, y, cv=5).mean()), 3))
+
+# 1) 기준: pixel 그대로 (64차원)
+print("pixel", probe(imgs.flatten(1).numpy()))
+
+# 2) self-supervised 로 학습한 표현을 고정하고 그 위에 kNN / linear probe (G9.3.4)
+proc = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
+dino = AutoModel.from_pretrained("facebook/dinov2-small").eval()
+Xd = features(dino, proc, big)
+print("DINOv2-small", Xd.shape[1], probe(Xd))
+torch.manual_seed(0)
+rand = AutoModel.from_config(dino.config).eval()                        # 같은 구조, 학습하지 않은 weight
+print("무작위 weight", probe(features(rand, proc, big)))
+
+# 3) 표현의 collapse 여부: 차원별 표준편차와 평균 cosine
+Z = torch.tensor(Xd)
+print(round(Z.std(0).mean().item(), 3), round(F.cosine_similarity(Z[:300], Z[300:]).mean().item(), 3))
+
+# 4) MAE: 75% 를 가린 뒤 복원한다
+mproc = AutoImageProcessor.from_pretrained("facebook/vit-mae-base")
+mae = ViTMAEForPreTraining.from_pretrained("facebook/vit-mae-base").eval()
+print(mae.config.mask_ratio)
+x0 = (big[:8] - torch.tensor(mproc.image_mean)[:, None, None]) / torch.tensor(mproc.image_std)[:, None, None]
+with torch.no_grad():
+    for ratio in [0.25, 0.75, 0.9]:
+        mae.config.mask_ratio = ratio
+        mae.vit.embeddings.config.mask_ratio = ratio
+        torch.manual_seed(0)
+        o = mae(pixel_values=x0)
+        print(ratio, int(o.mask[0].sum()), o.mask.shape[1], round(o.loss.item(), 4))
+
+# pixel (0.96, 0.948)
+# DINOv2-small 384 (0.862, 0.92)
+# 무작위 weight (0.378, 0.608)
+# 0.954 0.838
+# 0.75
+# 0.25 49 196 0.002
+# 0.75 147 196 0.0273
+# 0.9 177 196 0.3169
+```
+
+괄호 안의 두 숫자는 5-fold (kNN 정확도, linear probe 정확도)다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **이 데이터에서는 DINOv2의 표현이 pixel보다 나빴다 (G9.3.4).** pixel 64개를 그대로 쓰면 kNN 0.960, linear probe 0.948이다. DINOv2의 [CLS] 표현(384차원)을 쓰면 0.862와 0.920이다. DINOv2는 자연 사진으로 학습한 모델이고, 8×8 흑백 숫자를 224로 키운 이미지는 그 분포에서 멀다. 원래 64 pixel밖에 정보가 없는 이미지라 pixel 자체가 이미 좋은 표현이기도 하다. "사전학습 표현이 늘 낫다"는 데이터가 학습 분포와 가까울 때의 이야기다.
+- **그래도 학습한 weight가 무작위보다 훨씬 낫다.** 같은 구조에 학습하지 않은 weight를 넣으면 0.378과 0.608이다. 표현이 숫자를 가르는 정보를 담는 것은 self-supervised 학습의 결과다.
+- **kNN과 linear probe가 다른 순위를 줄 수 있다.** DINOv2 표현에서 kNN(0.862)과 linear probe(0.920)의 차이가 pixel(0.960, 0.948)보다 크고 순서도 반대다. 어느 평가를 쓰느냐로 "어느 표현이 나은가"의 답이 흔들릴 수 있다. 본문 G9.3.4의 주제다.
+- **표현은 collapse하지 않았다 (G9.3.2).** 차원별 표준편차의 평균이 0.95이고, 서로 다른 이미지 쌍의 평균 cosine이 0.84다. 상수로 무너지지는 않았지만 모두 꽤 비슷한 방향을 가리킨다. 비슷한 숫자 이미지들이라 그럴 수도 있다.
+- **MAE는 기본으로 75%를 가린다 (G9.3.3, "직접 해보기" ③).** `mask_ratio` 가 0.75이고, 196개 patch 중 147개를 가린다. 가리는 비율을 25%, 75%, 90%로 바꾸면 복원 loss가 0.002, 0.027, 0.317이다. 90%에서 크게 나빠진다. 다만 이 loss는 가려진 patch에서만 재므로 비율이 다르면 직접 비교하기 어렵고, 숫자 이미지의 대부분이 검은 배경이라 낮은 비율에서는 쉽게 맞힌다.
+
+**이 코드가 보여 주지 못하는 것.**
+데이터가 모델의 학습 분포와 멀다. 자연 사진으로 재면 결과가 완전히 다를 수 있다. 사진 데이터를 내려받지 않으려고 이렇게 했다.
+본문의 augmentation 실험(G9.3.1)과 학습 중 collapse(G9.3.2의 negative pair 제거)는 모델을 직접 학습시켜야 해서 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
