@@ -430,7 +430,7 @@ flowchart LR
   Z0["latent noise<br/>4 × 64 × 64"] --> UNET
   CLIP -->|cross-attention의 K, V| UNET["U-Net<br/>× 50 step<br/>860M"]
   UNET -->|"denoising된 latent"| ZT["4 × 64 × 64"]
-  ZT --> VAE["VAE decoder<br/>83M"]
+  ZT --> VAE["VAE decoder<br/>49M"]
   VAE --> IMG["이미지<br/>512 × 512 × 3"]
   UNET -.->|반복| UNET
   style CLIP fill:#3D3D3D,color:#fff
@@ -444,7 +444,7 @@ flowchart LR
 |---|---|---|---|
 | CLIP 텍스트 encoder | 77 × 768 = 59,136 | 123M | 동결(frozen — weight를 고정) |
 | U-Net (step당) | 4 × 64 × 64 = 16,384 | 860M | **학습** |
-| VAE decoder | 3 × 512 × 512 = 786,432 | 83M | 동결 |
+| VAE decoder | 3 × 512 × 512 = 786,432 | 49M (encoder까지 84M) | 동결 |
 
 U-Net이 도는 latent space는 최종 이미지의 1/48 차원이다 (786,432 / 16,384 = 48).
 50 step을 반복하는 것이 이 작은 공간에서라 감당된다 —
@@ -571,6 +571,95 @@ convolution → Transformer 전환이 vision(4.x)·언어(5.x)에 이어 생성�
 
 Part 12 (신뢰성) 에서 이 문제들을 다시 다룬다.
 
+---
+
+## 실제 도구로: Stable Diffusion의 autoencoder로 48배 압축을 직접 해 본다
+
+이 장의 "perceptual compression" 단계를 Stable Diffusion이 실제로 쓰는 autoencoder로 해 본다. 실제 이미지를 latent로 줄였다 되살려, 무엇을 잃는지, 같은 개수의 숫자로 그냥 축소한 것과 얼마나 다른지 본다. diffusion 부분(U-Net)은 CPU에서 무거워 다루지 않는다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `diffusers` 0.43, `scikit-image` 0.26, `pillow` 13
+- 모델은 `stabilityai/sd-vae-ft-mse`(8,400만 parameter, 약 335 MB)다. SD 1.x의 autoencoder를 decoder 쪽만 더 학습한 판이다.
+- 시험 이미지는 `scikit-image` 에 들어 있는 공개 이미지 두 장(우주비행사 512×512, 커피잔 400×600)이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import time
+import numpy as np
+import torch
+from diffusers import AutoencoderKL
+from PIL import Image
+from skimage import data
+
+vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval()
+count = lambda m: sum(p.numel() for p in m.parameters())
+print(count(vae), count(vae.encoder), count(vae.decoder), vae.config.latent_channels, vae.config.scaling_factor)
+
+def psnr(a, b): return float(10 * np.log10(1.0 / ((a - b) ** 2).mean()))
+
+def high_share(e, img, cut=1 / 8):
+    """오차와 이미지의 에너지 중 고주파(Nyquist 의 1/8 위) 비율."""
+    def share(x):
+        F = np.abs(np.fft.fft2(x - x.mean(), axes=(0, 1))) ** 2
+        fy, fx = np.meshgrid(np.fft.fftfreq(x.shape[0]), np.fft.fftfreq(x.shape[1]), indexing="ij")
+        hi = np.sqrt(fy ** 2 + fx ** 2) > 0.5 * cut
+        return float(F[hi].sum() / F.sum())
+    return round(share(e), 3), round(share(img), 3)
+
+for name, img in [("astronaut", data.astronaut()), ("coffee", data.coffee())]:   # scikit-image 에 들어 있는 공개 이미지
+    x = img.astype(np.float32) / 255                                         # (H, W, 3), 0~1
+    t = torch.from_numpy(x).permute(2, 0, 1)[None] * 2 - 1                   # VAE 는 -1~1 을 받는다
+    with torch.no_grad():
+        t0 = time.perf_counter(); z = vae.encode(t).latent_dist.mean; t1 = time.perf_counter()
+        y = vae.decode(z).sample; t2 = time.perf_counter()
+    rec = ((y[0].permute(1, 2, 0).numpy() + 1) / 2).clip(0, 1)
+    H, W = x.shape[:2]
+    print(name, tuple(x.shape), tuple(z.shape[1:]), round(x.size / z.numel(), 1),              # 숫자 개수 비율
+          round(float(z.std()), 2), round(float((z * vae.config.scaling_factor).std()), 2),     # scaling_factor 를 곱하면 분산이 1 근처
+          round(t1 - t0, 2), round(t2 - t1, 2))
+
+    # 같은 개수의 숫자로 그냥 줄였다 늘리면: z 가 16,384 개면 RGB 74×74 정도
+    s = int(round(np.sqrt(z.numel() / 3 * W / H))), int(round(np.sqrt(z.numel() / 3 * H / W)))
+    small = Image.fromarray(img).resize(s, Image.BICUBIC).resize((W, H), Image.BICUBIC)
+    bic = np.asarray(small).astype(np.float32) / 255
+    print("  PSNR vae", round(psnr(x, rec), 2), "bicubic", s, round(psnr(x, bic), 2))
+    print("  고주파 비율 (오차, 원본)", high_share(rec - x, x), "bicubic 오차", high_share(bic - x, x)[0])
+
+# latent 한 칸은 원본의 어디를 담는가: latent 한 칸만 바꾸고 decode 해서 바뀐 pixel 범위를 본다
+x = data.astronaut().astype(np.float32) / 255
+t = torch.from_numpy(x).permute(2, 0, 1)[None] * 2 - 1
+with torch.no_grad():
+    z = vae.encode(t).latent_dist.mean; base = vae.decode(z).sample
+    z2 = z.clone(); z2[:, :, 32, 32] += 3.0
+    diff = (vae.decode(z2).sample - base).abs().amax(1)[0].numpy()
+ys, xs = np.where(diff > 0.02)
+print(ys.min(), ys.max(), xs.min(), xs.max())                    # latent (32, 32) ↔ pixel (256~263, 256~263) 근처
+
+# 83653863 34163592 49490179 4 0.18215
+# astronaut (512, 512, 3) (4, 64, 64) 48.0 5.16 0.94 7.22 14.12
+#   PSNR vae 27.74 bicubic (74, 74) 22.31
+#   고주파 비율 (오차, 원본) (0.945, 0.071) bicubic 오차 0.914
+# coffee (400, 600, 3) (4, 50, 75) 48.0 4.71 0.86 6.03 13.24
+#   PSNR vae 26.62 bicubic (87, 58) 24.08
+#   고주파 비율 (오차, 원본) (0.97, 0.056) bicubic 오차 0.961
+# 232 290 215 282
+```
+
+이미지 줄은 (이름, 이미지 모양, latent 모양, 숫자 개수 비율, latent 표준편차, `scaling_factor` 를 곱한 뒤의 표준편차, encoding 초, decoding 초)다. 마지막 줄은 latent 한 칸을 바꿨을 때 바뀐 pixel의 (위, 아래, 왼쪽, 오른쪽) 경계다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **48배가 정확히 숫자 개수의 비율이다.** 512×512×3 = 786,432개가 4×64×64 = 16,384개가 된다. 가로세로 8배씩 줄이고 channel을 3에서 4로 늘린 결과다. 해상도가 다른 커피잔(400×600)도 50×75 latent가 되어 똑같이 48배다.
+- **parameter는 encoder와 decoder로 나뉜다.** 전체 8,365만 중 decoder가 4,949만, encoder가 3,416만이다. 생성할 때는 decoder만 쓴다(위 "Stable Diffusion의 전체 구조" 표의 값).
+- **오차는 고주파에 몰려 있다 (도입의 "대부분 bit는 고주파 detail").** 복원 오차 에너지의 94~97%가 고주파(Nyquist 주파수의 1/8 위)에 있다. 원본 이미지 에너지 중 고주파는 6~7%뿐이다. 버린 것이 주로 눈에 덜 띄는 세부라는 뜻이다. 다만 아래 bicubic도 오차의 91~96%가 고주파라서, 이것은 "학습한 autoencoder만의 성질"이 아니라 압축 일반의 성질에 가깝다.
+- **같은 개수의 숫자라면 학습한 latent가 낫다.** 같은 1만 6천여 개의 숫자로 이미지를 그냥 줄였다 늘리면(74×74 RGB, bicubic) PSNR이 22.3 dB, autoencoder는 27.7 dB다. 커피잔에서는 24.1 대 26.6 dB다. 숫자를 어디에 쓸지 배운 압축이 균일하게 줄인 것보다 낫다. G6.7.1에서 autoencoder가 데이터의 실제 자유도로 옮겨 주던 것의 실제 이미지 판이다.
+- **`scaling_factor` 0.18215의 역할.** latent의 표준편차가 4.7~5.2인데, 이 값을 곱하면 0.86~0.94가 된다. diffusion은 분산이 1 근처인 데이터를 가정하므로 이렇게 맞춘다. G6.7.1 실험의 "latent 표준화"와 같은 일이다.
+- **latent 한 칸은 8×8 pixel 덩어리가 아니다.** 가운데 latent 한 칸(32, 32)만 바꿨는데 바뀐 pixel이 세로 232~290, 가로 215~282로 약 60×70 영역이다. 그 칸이 "대응하는" 8×8 block(256~263)보다 훨씬 넓다. decoder의 convolution이 주변 칸과 섞어 그리기 때문이다.
+- **autoencoder 비용 (G6.7.2).** 이 CPU에서 512×512 한 장의 encoding이 7.2초, decoding이 14.1초다. 본문의 비용 모형에서 "autoencoder를 앞뒤로 한 번씩"이 이것이다. 생성할 때는 decoding만 한 번 하면 된다.
+
+**이 코드가 보여 주지 못하는 것.**
+이미지 두 장이고, 품질을 PSNR로만 쟀다. 이 autoencoder는 perceptual loss와 adversarial loss로 학습해 PSNR보다 "그럴듯함"을 노린 것이라 PSNR은 품질의 일부만 보여 준다. diffusion U-Net(8억 6천만 parameter, 50 step)은 CPU에서 무거워 돌리지 않았고, 그래서 latent 공간에서 생성하는 이득을 직접 재지 않았다. 텍스트 조건(cross-attention, G6.7.3)도 다루지 않았다.
 
 ---
 
