@@ -132,8 +132,15 @@ kernel은 `ai-ml-study` 를 고른다.
 
 이 책의 본문 코드는 PyTorch를 쓰지 않는다. 빌드할 때마다 같은 그림이 나오도록 의존성을 NumPy·SciPy·Plotly로 제한했기 때문이다.
 대신 장 끝의 **실제 도구로** 절이, 그 장에서 NumPy로 만든 것을 PyTorch·Hugging Face·scikit-learn으로는 어떻게 쓰는지 보여 준다.
-지금 그 절이 있는 장은 91개다.
+지금 그 절이 있는 장은 101개다.
 
+- **Part 0 수학 기초**
+    - [0.0 선형대수](chapters/00_foundations/00_linear_algebra.qmd) — torch.linalg
+    - [0.1 미적분과 최적화](chapters/00_foundations/01_calculus_optimization.qmd) — autograd의 Hessian과 scipy.optimize
+    - [0.2 확률](chapters/00_foundations/02_probability.qmd) — torch.distributions 와 scipy.stats
+    - [0.3 통계적 추론](chapters/00_foundations/03_statistics.qmd) — scipy.stats 와 statsmodels로 검정한다
+    - [0.4 정보이론](chapters/00_foundations/04_information_theory.qmd) — scipy.stats.entropy 와 PyTorch의 KL·cross-entropy
+    - [0.5 수치 컴퓨팅](chapters/00_foundations/05_numerical_computing.qmd) — PyTorch의 부동소수점 형식
 - **Part 1 데이터 과학**
     - [1.0 데이터의 구조](chapters/01_data_science/00_data_and_types.qmd) — pandas로 타입, tidy data, 결측, 집계를 다룬다
     - [1.1 EDA: 탐색적 데이터 분석](chapters/01_data_science/01_eda.qmd) — pandas와 SciPy로 EDA를 한다
@@ -185,6 +192,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [5.6 GPT를 처음부터 만들기](chapters/05_transformer/06_build_gpt.qmd) — PyTorch로 옮기면
     - [5.7 efficient attention과 긴 문맥](chapters/05_transformer/07_efficient_attention.qmd) — scaled_dot_product_attention
     - [5.9 scaling law](chapters/05_transformer/09_scaling_laws.qmd) — GPT-2 세 크기의 loss로 지수를 잰다
+    - [5.10 Transformer의 대안](chapters/05_transformer/10_alternatives_ssm.qmd) — Mamba-130m과 GPT-2를 나란히 놓는다
 - **Part 6 생성 모델**
     - [6.0 generative model 지형도](chapters/06_generative/00_generative_overview.qmd) — scikit-learn의 density 모델로 평가의 함정을 본다
     - [6.1 autoencoder](chapters/06_generative/01_autoencoder.qmd) — PyTorch autoencoder와 scikit-learn PCA
@@ -211,6 +219,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [8.2 mel scale과 MFCC](chapters/08_audio/02_mel_mfcc.qmd) — librosa의 mel과 MFCC
     - [8.3 고전 음성 인식](chapters/08_audio/03_classical_speech.qmd) — hmmlearn의 Gaussian HMM
     - [8.4 CTC와 RNN-T](chapters/08_audio/04_ctc_rnnt.qmd) — nn.CTCLoss 와 wav2vec2의 CTC 출력
+    - [8.5 음성 self-supervised learning](chapters/08_audio/05_ssl_speech.qmd) — wav2vec2의 사전학습 과제를 직접 돌린다
     - [8.6 현대 음성 인식](chapters/08_audio/06_asr_modern.qmd) — Whisper로 받아쓰기
 - **Part 9 비전·비디오**
     - [9.0 이미지의 표현과 처리](chapters/09_vision_video/00_image_basics.qmd) — Pillow와 SciPy의 이미지 함수
@@ -223,6 +232,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [10.0 Markov decision process](chapters/10_rl/00_mdp.qmd) — Gymnasium 환경의 MDP
     - [10.1 dynamic programming](chapters/10_rl/01_dynamic_programming.qmd) — Gymnasium FrozenLake의 모델로 DP를 푼다
     - [10.2 model-free 학습](chapters/10_rl/02_model_free.qmd) — Gymnasium의 CliffWalking
+    - [10.3 deep reinforcement learning](chapters/10_rl/03_deep_rl.qmd) — CartPole에서 DQN을 학습시킨다
     - [10.4 policy gradient](chapters/10_rl/04_policy_gradient.qmd) — CartPole에서 REINFORCE
 - **Part 11 시스템**
     - [11.0 reproducibility와 실험 관리](chapters/11_systems/00_reproducibility.qmd) — PyTorch에서 seed와 흔들림을 잰다
@@ -231,6 +241,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [11.3 hardware와 성능](chapters/11_systems/03_hardware.qmd) — 이 CPU에서 재 보는 roofline
     - [11.4 모델 efficiency](chapters/11_systems/04_efficiency.qmd) — PyTorch로 quantization, pruning, distillation
     - [11.5 모델 serving과 배포](chapters/11_systems/05_serving.qmd) — ONNX로 내보내고 ONNX Runtime으로 서빙한다
+    - [11.6 monitoring과 운영](chapters/11_systems/06_monitoring.qmd) — river로 drift를 감지한다
 - **Part 12 신뢰성**
     - [12.0 explainability](chapters/12_trust/00_interpretability.qmd) — permutation importance와 saliency를 실제 데이터에
     - [12.1 mechanistic interpretability](chapters/12_trust/01_mechanistic.qmd) — GPT-2에서 같은 절차를 밟는다
@@ -245,7 +256,7 @@ python -m venv venv-torch
 venv-torch/bin/pip install torch transformers peft          # Windows: venv-torch\Scripts\pip
 ```
 
-장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. Part 1의 절들은 `pandas` 와 `statsmodels` 를, 강화학습 장들은 `gymnasium` 을, 음성 장들은 `librosa`·`soundfile` 을, 9.0은 `pillow` 를, 4.1·9.1은 `torchvision` 을, 1.2는 `matplotlib` 을, 11.1은 `pyarrow` 를, 8.3은 `hmmlearn` 을, 7.5는 `datasketch` 를, 9.7은 `filterpy` 를, 6.5는 `diffusers` 를, 11.5는 `onnx`·`onnxruntime`·`onnxscript` 를 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)는 `sentencepiece` 가 필요하다.
+장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. Part 1의 절들은 `pandas` 와 `statsmodels` 를, 강화학습 장들은 `gymnasium` 을, 음성 장들은 `librosa`·`soundfile` 을, 9.0은 `pillow` 를, 4.1·9.1은 `torchvision` 을, 1.2는 `matplotlib` 을, 11.1은 `pyarrow` 를, 8.3은 `hmmlearn` 을, 7.5는 `datasketch` 를, 9.7은 `filterpy` 를, 6.5는 `diffusers` 를, 11.5는 `onnx`·`onnxruntime`·`onnxscript` 를, 11.6은 `river` 를 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)는 `sentencepiece` 가 필요하다.
 GPU가 있으면 [pytorch.org](https://pytorch.org/get-started/locally/) 의 안내대로 자기 CUDA 버전에 맞는 `torch` 를 설치한다.
 
 **이 절의 코드를 읽을 때 알아 둘 것**
