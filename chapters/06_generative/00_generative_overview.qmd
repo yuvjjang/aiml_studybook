@@ -510,6 +510,83 @@ Stable Diffusion = VAE(latent space) + diffusion(생성) + Transformer(텍스트
 
 ---
 
+## 실제 도구로: scikit-learn의 density 모델로 평가의 함정을 본다
+
+scikit-learn의 Gaussian mixture와 kernel density로 2차원 데이터(초승달 두 개)의 $p(x)$ 를 맞추고, 이 장의 두 경고를 확인한다. likelihood와 sample 품질이 따로 놀 수 있다는 것, 그리고 외운 모델이 평가 지표를 속일 수 있다는 것이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `scikit-learn` 1.9, `scipy` 1.18, `numpy` 2.5. PyTorch는 쓰지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from scipy import stats
+from sklearn.datasets import make_moons
+from sklearn.mixture import GaussianMixture
+from sklearn.neighbors import KernelDensity, NearestNeighbors
+
+rng = np.random.default_rng(0)
+X, _ = make_moons(3000, noise=0.05, random_state=0)
+Xtr, Xte = X[:2000], X[2000:]
+
+# 1) 같은 데이터에 맞춘 density 모델들: 시험 log-likelihood
+models = {f"GMM {k}": GaussianMixture(k, random_state=0).fit(Xtr) for k in (1, 4, 16, 64)}
+models["KDE 0.05"] = KernelDensity(bandwidth=0.05).fit(Xtr)
+models["KDE 0.5"] = KernelDensity(bandwidth=0.5).fit(Xtr)
+for name, m in models.items():
+    print(name, round(float(m.score_samples(Xte).mean()), 3))
+
+# 2) likelihood 가 높아도 sample 이 쓰레기일 수 있다: 좋은 모델에 아주 넓은 noise 성분을 1% 섞으면
+good = models["GMM 64"]
+def mix_logp(Z, eps):
+    return np.logaddexp(np.log1p(-eps) + good.score_samples(Z), np.log(eps) + stats.multivariate_normal([0, 0], 100 * np.eye(2)).logpdf(Z))
+for eps in [0.01, 0.1]:
+    loss = good.score_samples(Xte).mean() - mix_logp(Xte, eps).mean()
+    print(eps, round(float(loss), 4), round(float(-np.log1p(-eps)), 4))
+# 그 혼합 모델에서 sample 을 1,000개 그리면 몇 개가 데이터 근처를 벗어나는가
+nn = NearestNeighbors(n_neighbors=1).fit(Xtr)
+s_good = good.sample(1000)[0]
+noise_n = rng.binomial(1000, 0.01)
+s_mix = np.r_[good.sample(1000 - noise_n)[0], rng.normal(0, 10, (noise_n, 2))]
+far = lambda S: int((nn.kneighbors(S)[0][:, 0] > 0.3).sum())
+print(far(s_good), far(s_mix), noise_n)
+
+# 3) 외운 모델: 훈련 데이터 50개를 복제해 내놓는다. 평가 지표가 잡는가
+memo = np.repeat(Xtr[:50], 20, axis=0)
+def nn_dist(S, ref):
+    return float(NearestNeighbors(n_neighbors=1).fit(ref).kneighbors(S)[0].mean())
+def coverage(S, ref, r=0.1):                                     # 시험 데이터 중 sample 근처(r 안)에 있는 비율
+    return float((NearestNeighbors(n_neighbors=1).fit(S).kneighbors(ref)[0][:, 0] < r).mean())
+for name, S in [("GMM 64 sample", s_good), ("외운 50개", memo), ("KDE 0.5 sample", models["KDE 0.5"].sample(1000, random_state=0))]:
+    print(name, round(nn_dist(S, Xte), 3), round(coverage(S, Xte), 3), round(nn_dist(S, Xtr), 4))
+
+# GMM 1 -1.886
+# GMM 4 -1.082
+# GMM 16 -0.33
+# GMM 64 -0.442
+# KDE 0.05 -0.412
+# KDE 0.5 -1.972
+# 0.01 0.0099 0.0101
+# 0.1 0.104 0.1054
+# 0 11 11
+# GMM 64 sample 0.019 1.0 0.0123
+# 외운 50개 0.018 0.664 0.0
+# KDE 0.5 sample 0.238 0.992 0.2284
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **시험 log-likelihood로 모델을 비교할 수 있다 ("어떻게 $p(x)$ 를 다룰 것인가").** Gaussian 1개는 −1.89, 4개 −1.08, 16개 −0.33, 64개 −0.44다. 64개는 훈련 데이터에 과하게 맞춰 시험에서 16개보다 나빠졌다. kernel density는 bandwidth 0.05에서 −0.41, 0.5에서 −1.97이다.
+- **1%의 넓은 noise는 likelihood를 거의 해치지 않는다 (G6.0.1, "직접 해보기" ①).** 가장 좋은 모델에 $\mathcal{N}(0, 100I)$ 를 1% 섞으면 평균 log-likelihood가 0.0099 줄어든다. 상한 $-\log(1-\varepsilon) = 0.0101$ 안이다. 10%를 섞어도 0.104 줄어든다(상한 0.105). 그런데 sample 1,000개를 그리면 원래 모델은 데이터에서 0.3 넘게 떨어진 sample이 0개이고, 섞은 모델은 11개가 엉뚱한 곳에 떨어진다. likelihood로는 거의 같은 두 모델이 sample로는 분명히 다르다.
+- **외운 모델이 지표 하나를 속인다 (G6.0.3, "직접 해보기" ③).** 훈련 데이터 50개를 20번씩 복제해 내놓는 "모델"은, sample마다 가장 가까운 시험 데이터까지의 평균 거리가 0.018로 좋은 GMM(0.019)과 같다. 품질(precision) 쪽 지표는 이 모델을 잡지 못한다. 시험 데이터 중 sample 근처에 있는 비율(coverage)을 재면 0.664로, GMM의 1.0보다 낮아 다양성이 부족한 것이 드러난다. **훈련 데이터까지의 거리**를 재면 0.0으로 외웠다는 것이 바로 보인다.
+- **너무 퍼진 모델은 반대로 걸린다.** bandwidth 0.5의 KDE는 coverage가 0.992로 높지만 sample이 시험 데이터에서 평균 0.238 떨어져 있다. 품질과 다양성을 함께 봐야 하는 이유다.
+
+**이 코드가 보여 주지 못하는 것.**
+2차원 장난감이다. 이미지 생성 모델에서는 이 거리들을 pixel이 아니라 Inception 같은 네트워크의 feature 공간에서 재고(FID 등), 그 feature가 무엇을 보느냐에 따라 결과가 바뀐다. 여기서 쓴 거리 0.1, 0.3의 기준은 이 데이터에 맞춰 정한 것이다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
