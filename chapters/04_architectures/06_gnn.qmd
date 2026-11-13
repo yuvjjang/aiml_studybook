@@ -780,6 +780,135 @@ Transformer를 "complete graph GNN"으로 읽으면 여러 설계가 한 줄로 
 
 ---
 
+## 실제 도구로: PyTorch Geometric으로 Cora에서 깊이를 바꾼다
+
+이 장의 실험은 node 120개짜리 합성 graph였다. GNN 표준 library인 PyTorch Geometric(PyG)으로, 논문 인용 graph인 Cora(node 2,708개)에서 같은 질문을 던진다. 층을 쌓으면 어떻게 되는가, 초기 특성을 다시 넣으면(APPNP) 어떤가, attention(GAT)은 나은가.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `torch_geometric` 2.8 (`pip install torch_geometric`)
+- Cora는 처음 실행할 때 내려받는다(수 MB). node는 논문, edge는 인용, 특성은 단어 1,433개의 유무, class는 분야 7개다. 표준 분할대로 label 140개로 학습하고 validation 500개로 시점을 골라 test 1,000개로 잰다.
+- 결과는 seed 3개의 평균이다. 전체 실행은 이 CPU에서 수십 분 걸린다(대부분 16층, 32층 모델).
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+import torch.nn.functional as F
+from torch_geometric.datasets import Planetoid
+from torch_geometric.nn import APPNP, GATConv, GCNConv
+
+data = Planetoid("data", "Cora")[0]                              # 논문 인용 graph: node 2,708개, edge 10,556개(양방향)
+print(data.num_nodes, data.num_edges, data.num_features, int(data.y.max()) + 1,
+      int(data.train_mask.sum()), int(data.val_mask.sum()), int(data.test_mask.sum()))
+
+def mad(h):
+    """연결된 node 쌍의 평균 cosine 거리 (작을수록 이웃끼리 같은 표현)."""
+    h = F.normalize(h, dim=1); s, d = data.edge_index
+    return float((1 - (h[s] * h[d]).sum(1)).mean())
+
+class GCN(torch.nn.Module):
+    def __init__(self, depth, hid=64, residual=False):
+        super().__init__()
+        dims = [data.num_features] + [hid] * (depth - 1) + [7]
+        self.convs = torch.nn.ModuleList(GCNConv(dims[i], dims[i + 1]) for i in range(depth))
+        self.residual = residual
+    def forward(self, x, ei):
+        for i, c in enumerate(self.convs[:-1]):
+            h = F.dropout(F.relu(c(x, ei)), 0.5, self.training)
+            x = x + h if (self.residual and i > 0) else h        # residual: 두 번째 hidden 층부터 입력을 더한다
+        self.hidden = x                                          # 마지막 층에 들어가는 표현
+        return self.convs[-1](x, ei)
+
+class PPNP(torch.nn.Module):                                     # MLP 로 특성을 만든 뒤 K 번 전파, 매번 초기 특성을 α 만큼 다시 넣는다
+    def __init__(self, K):
+        super().__init__()
+        self.l1, self.l2, self.prop = torch.nn.Linear(data.num_features, 64), torch.nn.Linear(64, 7), APPNP(K, alpha=0.1)
+    def forward(self, x, ei):
+        x = F.dropout(F.relu(self.l1(F.dropout(x, 0.5, self.training))), 0.5, self.training)
+        self.hidden = x
+        return self.prop(self.l2(x), ei)
+
+class GAT(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.c1, self.c2 = GATConv(data.num_features, 8, heads=8), GATConv(64, 7, heads=1)
+    def forward(self, x, ei):
+        x = F.dropout(F.elu(self.c1(F.dropout(x, 0.6, self.training), ei)), 0.6, self.training)
+        self.hidden = x
+        return self.c2(x, ei)
+
+def run(make, seeds=(0, 1, 2), epochs=200):
+    accs, mads = [], []
+    for s in seeds:
+        torch.manual_seed(s)
+        m = make(); opt = torch.optim.Adam(m.parameters(), lr=0.01, weight_decay=5e-4)
+        best_val, test_at_best = -1, 0
+        for _ in range(epochs):
+            m.train(); opt.zero_grad()
+            F.cross_entropy(m(data.x, data.edge_index)[data.train_mask], data.y[data.train_mask]).backward(); opt.step()
+            m.eval()
+            with torch.no_grad():
+                pred = m(data.x, data.edge_index).argmax(1)
+            val = float((pred[data.val_mask] == data.y[data.val_mask]).float().mean())
+            if val > best_val:                                   # validation 으로 고른 시점의 test 정확도
+                best_val, test_at_best = val, float((pred[data.test_mask] == data.y[data.test_mask]).float().mean())
+        accs.append(test_at_best); mads.append(mad(m.hidden))
+    return round(sum(accs) / len(accs), 3), round(sum(mads) / len(mads), 3)
+
+# 1) 층 수: 학습한 GCN (label 140개)
+for depth in [1, 2, 4, 8, 16, 32]:
+    print("GCN", depth, *run(lambda: GCN(depth)))
+for depth in [16, 32]:                                           # 같은 깊이에 residual 만 더한다
+    print("GCN+residual", depth, *run(lambda: GCN(depth, residual=True)))
+
+# 2) 같은 거리(K 번 전파)를 APPNP 로: 매 step 초기 특성을 10% 다시 넣는다
+for K in [2, 8, 32]:
+    print("APPNP", K, *run(lambda: PPNP(K)))
+
+# 3) GAT (이웃마다 다른 가중치, 8 head)
+print("GAT", *run(GAT))
+
+# 4) permutation equivariance: node 번호를 섞으면 출력도 같은 순서로 섞일 뿐이다
+torch.manual_seed(0)
+m = GCN(2).eval(); perm = torch.randperm(data.num_nodes); inv = torch.argsort(perm)
+with torch.no_grad():
+    out = m(data.x, data.edge_index)
+    out_p = m(data.x[perm], inv[data.edge_index])               # 새 번호 i 의 node 는 옛 번호 perm[i]
+print(float((out_p - out[perm]).abs().max()))
+
+# 2708 10556 1433 7 140 500 1000
+# GCN 1 0.747 0.832
+# GCN 2 0.806 0.046
+# GCN 4 0.805 0.034
+# GCN 8 0.783 0.048
+# GCN 16 0.25 0.113
+# GCN 32 0.276 0.103
+# GCN+residual 16 0.684 0.053
+# GCN+residual 32 0.378 0.07
+# APPNP 2 0.818 0.164
+# APPNP 8 0.821 0.149
+# APPNP 32 0.821 0.147
+# GAT 0.804 0.151
+# 5.960464477539063e-08
+```
+
+모델 줄은 (모델, 층 수 또는 전파 횟수, test 정확도, 마지막 층에 들어가는 표현에서 연결된 node끼리의 평균 cosine 거리)다. 거리가 작을수록 이웃끼리 같은 표현이다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **2층이 가장 좋고, 16층에서 무너진다.** test 정확도가 1층 0.747, 2층 0.806, 4층 0.805, 8층 0.783, 16층 0.25다. 이웃 정보를 한 번 더 모으는 2층까지는 이득이고, 그 뒤로는 이득이 없다.
+- **그런데 16층의 붕괴는 over-smoothing으로 보이지 않는다 ("그런데 학습된 GCN은 어떤가").** 무너진 16층, 32층 모델의 이웃 간 거리는 0.11로, 잘 되는 2층(0.046)보다 오히려 크다. 표현이 서로 같아져서 실패한 것이 아니다. residual도 normalization도 없는 16층을 label 140개로 학습하는 것 자체가 어렵다는 쪽에 가깝다. 본문의 "깊은 GCN의 성능 저하를 전부 over-smoothing으로 돌리면 안 된다"가 실제 데이터에서도 나타난다. 1층의 거리 0.832는 hidden 층이 없어 입력 특성 그대로를 잰 것이라 비교에서 뺀다.
+- **residual 연결만 더하면 상당 부분 회복한다.** 같은 16층에 residual을 더하면 정확도가 0.25에서 0.684로 오른다. 32층은 0.276에서 0.378이다. 무너짐의 상당 부분이 학습의 어려움에서 왔다는 쪽을 뒷받침한다. 다만 2층(0.806)까지는 돌아오지 못한다. 깊이를 늘려서 얻는 것은 이 데이터에서는 없다.
+- **2층 GCN의 이웃 거리가 이미 작다.** 0.046이다. Cora는 인용하는 논문끼리 분야가 같은 경우가 많아서(homophily), 이웃을 평균하는 smoothing이 이 데이터에서는 도움이 된다. G4.6.2의 "community 안의 흩어짐을 지우는 좋은 효과"다.
+- **초기 특성을 다시 넣으면 멀리 전파해도 괜찮다 ("직접 해보기 ①").** APPNP는 전파할 때마다 처음 특성을 10% 다시 섞는다. 32번 전파해도 정확도가 0.821로, 2번(0.818)과 같다. 깊이를 늘려 멀리 보더라도 표현이 한 점으로 모이지 않는다. 이 모델의 거리 값은 전파 전 MLP 출력에서 쟀으므로 GCN의 값과 비교하지 않는다.
+- **GAT는 이 데이터에서 GCN과 같다 (G4.6.4).** 0.804 대 0.806이다. 이웃 대부분이 같은 class인 graph에서는 이웃마다 가중치를 다르게 줄 이유가 적다. 원 논문은 83.0% 대 81.5%로 GAT가 조금 높았다고 보고했는데, 여기서는 그 차이가 나오지 않았다(learning rate 등 설정을 원 논문과 똑같이 맞추지는 않았다).
+- **node 번호를 섞어도 출력은 같은 순서로 섞일 뿐이다 ("permutation invariance").** 차이가 $6 \times 10^{-8}$, float32 반올림 수준이다.
+
+**이 코드가 보여 주지 못하는 것.**
+Cora 하나, 분할 하나다. Cora는 homophily가 높은 쉬운 graph라서, 이웃이 다른 class인 graph에서는 GAT나 다른 설계가 유리할 수 있다("직접 해보기 ③"). residual로 회복한 폭이 크지만, residual은 학습을 쉽게 할 뿐 아니라 앞 층의 표현을 그대로 전달해 smoothing 자체도 줄인다. 그래서 두 원인을 완전히 갈라낸 것은 아니다. over-squashing(G4.6.3)은 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
