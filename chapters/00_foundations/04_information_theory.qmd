@@ -646,6 +646,76 @@ mutual information의 **하한**을 최대화한다고 말할 때도,
 
 ---
 
+## 실제 도구로: `scipy.stats.entropy` 와 PyTorch의 KL·cross-entropy
+
+entropy, KL divergence, cross-entropy를 SciPy와 PyTorch의 함수로 계산한다. 특히 PyTorch의 `kl_div` 는 인자 순서가 헷갈리기로 유명해서, 무엇을 넣어야 하는지 숫자로 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `numpy` 2.5, `scipy` 1.18. 모델을 내려받지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import numpy as np
+import torch
+from scipy import stats
+from scipy.special import rel_entr
+
+F = torch.nn.functional
+
+# 1) entropy: scipy 의 기본은 자연로그(nat). base=2 로 bit
+p = np.array([0.5, 0.25, 0.25])
+print(round(stats.entropy(p), 4), round(stats.entropy(p, base=2), 4), round(math.log2(3), 4))
+
+# 2) KL 은 비대칭이다
+q = np.array([0.8, 0.1, 0.1])
+print(round(stats.entropy(p, q), 4), round(stats.entropy(q, p), 4), round(float(rel_entr(p, q).sum()), 4))
+
+# 3) PyTorch 의 kl_div 는 인자 순서와 형식이 헷갈린다: kl_div(log q, p) = KL(p || q)
+P, Q = torch.tensor(p), torch.tensor(q)
+print(round(F.kl_div(Q.log(), P, reduction="sum").item(), 4), round(F.kl_div(P.log(), Q, reduction="sum").item(), 4),
+      round(F.kl_div(Q, P, reduction="sum").item(), 4))           # 마지막: log 를 안 씌운 흔한 실수
+print(round(torch.distributions.kl_divergence(torch.distributions.Categorical(P), torch.distributions.Categorical(Q)).item(), 4))
+
+# 4) cross-entropy = entropy + KL
+ce = -(P * Q.log()).sum().item()
+print(round(ce, 4), round(stats.entropy(p) + stats.entropy(p, q), 4))
+# 분류 loss 로 쓰는 F.cross_entropy 는 정답이 one-hot 인 경우: -log q(정답)
+logits = torch.tensor([[2.0, 0.5, -1.0]])
+print(round(F.cross_entropy(logits, torch.tensor([0])).item(), 4), round(-F.log_softmax(logits, 1)[0, 0].item(), 4))
+# soft target (확률 분포) 도 받는다
+print(round(F.cross_entropy(logits, torch.tensor([[0.7, 0.2, 0.1]])).item(), 4))
+
+# 5) perplexity = exp(cross-entropy): 균등하게 k 개 중 고르면 perplexity 는 k
+for k in [2, 10, 50257]:
+    u = torch.full((1, k), 0.0)
+    print(k, round(math.exp(F.cross_entropy(u, torch.tensor([0])).item()), 1))
+
+# 1.0397 1.5 1.585
+# 0.2231 0.1927 0.2231
+# 0.2231 0.1927 -1.4897
+# 0.2231
+# 1.2629 1.2629
+# 0.2413 0.2413
+# 0.8413
+# 2 2.0
+# 10 10.0
+# 50257 50257.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **단위는 로그의 밑이 정한다 ("엔트로피").** $p = (0.5, 0.25, 0.25)$ 의 entropy가 `scipy.stats.entropy` 기본값(자연로그)으로 1.040 nat, `base=2` 로 1.5 bit다. 3개 균등이면 $\log_2 3 = 1.585$ bit로 최대다(G0.4.1).
+- **KL은 비대칭이다 (G0.4.2).** $\mathrm{KL}(p\|q) = 0.223$, $\mathrm{KL}(q\|p) = 0.193$ 이다. `scipy.stats.entropy(p, q)` 는 KL$(p\|q)$ 를 계산한다.
+- **`F.kl_div(input, target)` 은 KL(target ‖ input)이고, input은 log 확률이다.** `kl_div(q.log(), p)` 가 KL$(p\|q)$ = 0.223이다. 순서를 바꾸면 KL$(q\|p)$ = 0.193이 된다. input에 log를 씌우지 않고 확률을 그대로 넣으면 −1.49라는, KL로는 나올 수 없는 음수가 나온다. 오류는 나지 않는다. `torch.distributions.kl_divergence` 는 분포 객체를 받아 이런 혼동이 없다.
+- **cross-entropy = entropy + KL ("cross-entropy").** $H(p, q) = 1.263 = H(p) + \mathrm{KL}(p\|q)$ 이다. 분류 loss `F.cross_entropy` 는 정답이 하나일 때 $-\log q(\text{정답})$ (0.241)이고, 확률 분포를 target으로 줄 수도 있다(0.841).
+- **perplexity는 유효 선택지 개수다 ("perplexity").** 모든 class에 같은 logit을 주면 cross-entropy의 exp가 class 수와 같다(2, 10, 50,257). [7.2](../07_language/02_language_models.qmd)에서 GPT-2의 perplexity 17.7을 "약 18개 중 고르는 셈"이라고 읽은 근거다.
+
+**이 코드가 보여 주지 못하는 것.**
+모두 작은 이산 분포다. 연속 분포의 entropy(differential entropy)는 음수가 될 수 있고 단위 변환에 따라 값이 바뀌는 등 성질이 다른데, 여기서는 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
