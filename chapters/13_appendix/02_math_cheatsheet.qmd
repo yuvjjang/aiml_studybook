@@ -513,6 +513,92 @@ union bound 상한: `{python} f'{K}'`×`{python} f'{alpha}'` = `{python} f'{K * 
 
 ---
 
+## 실제 도구로: 계산기를 실제 모델 구조와 대조한다
+
+G13.2.1의 parameter 공식과 G13.2.2의 FLOPs 근사를, `transformers` 로 만든 실제 모델 구조와 PyTorch의 연산량 측정기(`FlopCounterMode`)에 대 본다. 가중치는 내려받지 않는다. 구조만 있으면 parameter 수와 연산량은 정해지기 때문이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 7B 모델은 `meta` device에 만든다. 모양만 있고 메모리를 잡지 않아 바로 만들어진다. LLaMA의 config 값은 공개된 숫자를 직접 넣었다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+from torch.utils.flop_counter import FlopCounterMode
+from transformers import AutoModelForCausalLM, GPT2Config, LlamaConfig
+
+def build(cfg):
+    with torch.device("meta"):                                   # 가중치 메모리를 잡지 않고 구조만 만든다 (7B 도 즉시)
+        return AutoModelForCausalLM.from_config(cfg)
+count = lambda m: sum(p.numel() for p in m.parameters())         # tie 된 weight 는 한 번만 센다
+
+# 1) 이 장의 공식 n_params 와 실제로 만든 모델의 parameter 수
+def n_params(L, d, V, ctx=0, d_ff=None, n_ffn_mat=2, bias=True, tie=True, learned_pos=True, norm_params=2):
+    dff = d_ff or 4 * d
+    per = 4 * d * d + (4 * d if bias else 0) + n_ffn_mat * d * dff + ((dff + d) if bias and n_ffn_mat == 2 else 0) + 2 * norm_params * d
+    return per * L + V * d + (ctx * d if learned_pos else 0) + (0 if tie else V * d) + norm_params * d
+
+for name, L, d in [("gpt2", 12, 768), ("gpt2-medium", 24, 1024), ("gpt2-xl", 48, 1600)]:
+    m = build(GPT2Config(n_layer=L, n_embd=d, n_head=d // 64))
+    print(name, count(m), n_params(L, d, 50257, 1024))
+
+llama7 = dict(hidden_size=4096, intermediate_size=11008, num_hidden_layers=32, num_attention_heads=32, vocab_size=32000)
+f7 = n_params(32, 4096, 32000, d_ff=11008, n_ffn_mat=3, bias=False, tie=False, learned_pos=False, norm_params=1)
+print("llama-7b", count(build(LlamaConfig(**llama7))), f7)
+
+# 2) grouped-query attention: key·value head 를 32 → 8 로 줄이면 공식의 4d² 가 틀린다
+gqa = dict(llama7, num_key_value_heads=8)
+diff = count(build(LlamaConfig(**llama7))) - count(build(LlamaConfig(**gqa)))
+print("gqa", count(build(LlamaConfig(**gqa))), diff, 32 * 2 * 4096 * (4096 - 1024))   # 층마다 W_k, W_v 가 d×d → d×(d/4)
+
+# 3) FLOPs: GPT-2 small 을 실제로 돌려서 센다 (가중치는 무작위여도 연산량은 같다)
+torch.manual_seed(0)
+gpt = AutoModelForCausalLM.from_config(GPT2Config())
+N = sum(p.numel() for n, p in gpt.named_parameters() if "wte" not in n and "wpe" not in n)   # non-embedding
+L, d, V = 12, 768, 50257
+for T in [128, 1024]:
+    ids = torch.randint(0, V, (1, T))
+    with FlopCounterMode(display=False) as fc:
+        with torch.no_grad():
+            gpt(ids)
+    fwd = fc.get_total_flops()
+    est_2N = 2 * N * T
+    attn = 2 * 2 * L * T * T * d                                  # QKᵀ 와 (softmax)V 두 번, 곱셈+덧셈
+    head = 2 * V * d * T                                         # 마지막 vocabulary 투영
+    print(T, f"{fwd:.3e}", f"{est_2N:.3e}", f"{est_2N + attn + head:.3e}", round(attn / fwd, 3), round(head / fwd, 3))
+
+# 4) forward + backward 는 forward 의 몇 배인가 (6N 대 2N 이면 3배)
+ids = torch.randint(0, V, (1, 1024))
+with FlopCounterMode(display=False) as fc:
+    gpt(ids, labels=ids).loss.backward()
+print(f"{fc.get_total_flops():.3e}", round(fc.get_total_flops() / fwd, 2))
+
+# gpt2 124439808 124439808
+# gpt2-medium 354823168 354823168
+# gpt2-xl 1557611200 1557611200
+# llama-7b 6738415616 6738415616
+# gqa 5933109248 805306368 805306368
+# 128 3.223e+10 2.177e+10 3.226e+10 0.019 0.307
+# 1024 2.916e+11 1.742e+11 2.919e+11 0.133 0.271
+# 8.749e+11 3.0
+```
+
+출력의 FLOPs 줄은 (길이, 측정값, $2NT$, $2NT$ + attention + 출력 투영, 측정값에서 attention의 비율, 출력 투영의 비율)이다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **공식이 한 개 단위까지 맞는다 (G13.2.1).** GPT-2 세 크기와 LLaMA-7B 모두 이 장의 `n_params` 와 실제 모델의 parameter 수가 정확히 같다(124,439,808 등). 본문 표의 오차는 공개값이 반올림된 탓이다.
+- **grouped-query attention(GQA)에서는 공식을 고쳐야 한다.** key·value head를 32개에서 8개로 줄이면 $W_k, W_v$ 가 $d \times d$ 에서 $d \times d/4$ 가 되어 805,306,368개(층마다 $2 \times 4096 \times 3072$)가 줄어든다. 공식의 attention 항 $4d^2$ 는 모든 head가 따로 key·value를 갖는다는 가정이다. 최근 모델 대부분이 GQA를 쓰므로 그대로 넣으면 크게 셈한다.
+- **$2N$ 은 작은 모델에서 크게 빗나간다 (G13.2.2).** GPT-2 small에 128 token을 넣고 잰 forward 연산량은 $3.22 \times 10^{10}$ 인데, $2NT$ 는 $2.18 \times 10^{10}$ 이다. 차이의 대부분(31%)은 마지막 vocabulary 투영이다. 이 투영은 token embedding과 weight를 공유해 non-embedding $N$ 에 들어가지 않지만 연산은 매 token 한다. 본문의 "작은 모델일수록 embedding이 상당 부분"이 연산량에서도 그대로다. 그 항과 attention 항을 더하면 측정값과 0.1% 안으로 맞는다.
+- **attention 항은 길이에 따라 커진다.** 128 token에서 2%, 1,024 token에서 13%다. "직접 해보기 ②"의 10% 경계가 GPT-2 small에서는 이 사이에 있다. 모델이 커지면($d$ 가 크면) 같은 길이에서 비율이 작아진다.
+- **backward는 forward의 2배다.** forward와 backward를 합친 연산량이 forward의 정확히 3.0배다. 학습 6N = forward 2N + backward 4N의 근거다.
+
+**이 코드가 보여 주지 못하는 것.**
+연산량만 셌다. 실제 걸리는 시간은 memory 대역폭과 kernel 효율에 따라 달라서 FLOPs에 비례하지 않는다(특히 decode, [11.3](../11_systems/03_hardware.qmd)). 메모리 계산기(activation, optimizer 상태)는 실제로 재지 않았다. `FlopCounterMode` 는 행렬곱 같은 주요 연산만 세고 softmax, LayerNorm 같은 원소별 연산은 세지 않는다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
