@@ -971,6 +971,78 @@ print(f"   n={len(data)} 에서 차이: {abs(sigma_unbiased-sigma_hat):.5f}")
 
 ---
 
+## 실제 도구로: `torch.distributions` 와 `scipy.stats`
+
+확률분포는 PyTorch(`torch.distributions`)와 SciPy(`scipy.stats`) 양쪽에 있다. 같은 계산이 두 library에서 같은지 확인하고, 이 장의 주장들을 실제 함수로 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `numpy` 2.5, `scipy` 1.18. 모델을 내려받지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from scipy import stats
+from torch.distributions import Beta, Binomial, Normal
+
+torch.manual_seed(0)
+
+# 1) 밀도는 확률이 아니다: 좁은 정규분포의 pdf 는 1 을 넘는다. 확률은 cdf 의 차이다
+n = Normal(0.0, 0.1)
+print(round(n.log_prob(torch.tensor(0.0)).exp().item(), 3), round((n.cdf(torch.tensor(0.05)) - n.cdf(torch.tensor(-0.05))).item(), 3))
+print(round(stats.norm(0, 0.1).pdf(0), 3), round(stats.norm(0, 0.1).cdf(0.05) - stats.norm(0, 0.1).cdf(-0.05), 3))
+
+# 2) 같은 분포를 두 library 로: log-likelihood 가 같은가
+x = torch.randn(1000) * 2 + 1
+print(round(Normal(1.0, 2.0).log_prob(x).sum().item(), 3), round(float(stats.norm(1, 2).logpdf(x.numpy()).sum()), 3))
+
+# 3) covariance 0 이 독립을 뜻하지 않는다
+u = np.random.default_rng(0).normal(size=100000)
+print(round(float(np.cov(u, u ** 2)[0, 1]), 3), round(float(np.corrcoef(np.abs(u), u ** 2)[0, 1]), 3))
+
+# 4) 베이즈 갱신: Beta prior 와 동전 던지기 (conjugate 라 식으로 바로 된다)
+prior = Beta(2.0, 2.0)
+heads, n_toss = 7, 10
+post = Beta(2.0 + heads, 2.0 + n_toss - heads)
+grid = torch.linspace(0.001, 0.999, 999)
+unnorm = prior.log_prob(grid).exp() * Binomial(n_toss, probs=grid).log_prob(torch.tensor(float(heads))).exp()
+num_post = unnorm / (unnorm.sum() * (grid[1] - grid[0]))
+print(round(post.mean.item(), 4), round(float((grid * num_post).sum() * (grid[1] - grid[0])), 4),
+      f"{(num_post - post.log_prob(grid).exp()).abs().max().item():.1e}")
+lo, hi = stats.beta(9, 5).ppf([0.025, 0.975])
+print(round(lo, 3), round(hi, 3))
+
+# 5) CLT: 지수분포 표본 n 개의 평균 — n 이 커지면 정규에 가까워진다 (왜도)
+rng = np.random.default_rng(1)
+for k in [1, 5, 30, 300]:
+    m = rng.exponential(1.0, (20000, k)).mean(1)
+    print(k, round(float(stats.skew(m)), 3), round(float(m.std() * np.sqrt(k)), 3))
+
+# 3.989 0.383
+# 3.989 0.383
+# -2141.082 -2141.082
+# -0.007 0.935
+# 0.6429 0.6429 5.0e-06
+# 0.386 0.861
+# 1 1.962 0.996
+# 5 0.883 0.998
+# 30 0.381 0.996
+# 300 0.144 1.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **밀도는 확률이 아니다 ("밀도는 확률이 아니다").** 표준편차 0.1인 정규분포의 밀도가 0에서 3.989로 1을 넘는다. 확률은 구간에서 재야 하고, $[-0.05, 0.05]$ 에 있을 확률은 0.383이다. PyTorch와 SciPy가 같은 값을 준다.
+- **두 library의 log-likelihood가 같다.** 같은 표본 1,000개에서 `Normal(1, 2).log_prob` 의 합과 `stats.norm(1, 2).logpdf` 의 합이 −2,141.082로 같다. PyTorch 쪽은 autograd가 되어 parameter를 학습할 때 쓰고, SciPy 쪽은 분위수·검정 같은 통계 함수가 많다.
+- **covariance 0이 독립이 아니다 ("covariance 0은 독립이 아니다").** $u$ 와 $u^2$ 의 covariance가 −0.007로 0에 가깝지만, $u^2$ 은 $u$ 로 완전히 정해진다. $|u|$ 와 $u^2$ 의 상관은 0.935다.
+- **베이즈 갱신 (G0.2.2).** Beta(2, 2) prior에서 10번 중 7번 앞면이 나오면 사후분포는 Beta(9, 5)이고 평균이 0.643이다. 격자 위에서 prior × likelihood를 직접 계산해 정규화한 것과 식으로 쓴 사후분포가 $5\times10^{-6}$ 까지 같다. 95% 신용구간은 [0.386, 0.861]이다.
+- **CLT (G0.2.3).** 오른쪽으로 긴 지수분포에서 표본 평균의 왜도가 표본 크기 1, 5, 30, 300에서 1.96, 0.88, 0.38, 0.14로 0에 다가간다. $\sqrt{n}$ 을 곱한 표준편차는 늘 1 근처다. 30개에서도 왜도가 0.38로 남아 있다. "30개면 정규"라는 규칙은 분포에 따라 틀린다.
+
+**이 코드가 보여 주지 못하는 것.**
+`torch.distributions` 와 `scipy.stats` 는 parameter 이름이 다르다(예: SciPy의 지수분포는 `scale`, PyTorch는 `rate`). 같은 분포를 옮길 때 정의를 확인해야 하고, 여기서는 정규분포와 Beta처럼 이름이 같은 경우만 썼다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
