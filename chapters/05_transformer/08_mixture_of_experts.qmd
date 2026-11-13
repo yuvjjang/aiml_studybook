@@ -421,6 +421,113 @@ MoE가 등장하면서 parameter 수는 단일 지표로서 의미를 잃었다.
 
 ---
 
+## 실제 도구로: Switch Transformer의 router를 들여다본다
+
+공개된 MoE 모델 Switch Transformer(expert 8개, token마다 1개만 고르는 top-1)를 불러, 실제 글을 넣었을 때 router가 token을 어떻게 나누는지 본다. 이 장의 load imbalance, auxiliary loss의 값, capacity와 token drop, 그리고 expert가 무엇을 맡는지를 실제 모델에서 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `sentencepiece`
+- 모델은 `google/switch-base-8`(6억 1,900만 parameter, 약 2.5 GB)이다. T5 구조의 encoder-decoder이고, encoder 12층 중 6층의 FFN이 MoE다. 여기서는 encoder만 쓴다.
+- 넣은 글은 세 가지다. [5.9](09_scaling_laws.qmd)에서 쓴 `eval_text.txt`, 이 script 자체(code), 무작위 숫자 300개다. 각각 앞 512 token만 쓴다. T5 tokenizer에는 한국어가 없어 code 안의 한국어 주석은 알 수 없는 token이 된다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import collections
+import numpy as np
+import torch
+from transformers import AutoTokenizer, SwitchTransformersForConditionalGeneration
+
+tok = AutoTokenizer.from_pretrained("google/switch-base-8")
+model = SwitchTransformersForConditionalGeneration.from_pretrained("google/switch-base-8").eval()
+cfg = model.config
+total = sum(p.numel() for p in model.parameters())
+expert = sum(p.numel() for n, p in model.named_parameters() if ".experts." in n)
+active = total - expert * (cfg.num_experts - 1) // cfg.num_experts      # token 하나가 실제로 거치는 parameter (top-1)
+print(cfg.num_experts, cfg.expert_capacity, total, expert, active)     # expert_capacity: 문장 하나에서 expert 가 받는 token 상한 (추론 때도 적용)
+
+# encoder 에 글 세 종류를 넣고, 층마다 router 가 고른 expert 를 모은다
+TEXTS = {"글": open("eval_text.txt", encoding="utf-8").read(),
+         "code": open(__file__, encoding="utf-8").read(),                   # 이 script 자체
+         "숫자": " ".join(str(n) for n in np.random.default_rng(0).integers(0, 10 ** 6, 300))}
+route = {}
+for name, text in TEXTS.items():
+    ids = tok(text, return_tensors="pt", truncation=True, max_length=512).input_ids
+    with torch.no_grad():
+        out = model.encoder(input_ids=ids, output_router_logits=True)
+    logits = out.router_logits                                   # sparse 층마다 (1, token 수, expert 수) 의 router logit
+    route[name] = (ids[0], [torch.softmax(l[0].float(), -1) for l in logits])
+print(len(logits), round(float(logits[0][0].sum(-1).mean()), 2),    # sparse 층 수, 행 합 (1 이 아니면 확률이 아니라 logit)
+      {k: len(v[0]) for k, v in route.items()})                    # 글마다 token 수
+
+# 1) 부하: 층마다 expert 별 token 비율 f_i, 그리고 load balance loss N·Σ f_i P_i (균등하면 1, 독점이면 N)
+ids, probs = route["글"]
+for li, P in enumerate(probs):
+    f = np.bincount(P.argmax(-1).numpy(), minlength=cfg.num_experts) / len(ids)
+    lb = cfg.num_experts * float((torch.tensor(f) * P.mean(0)).sum())
+    print(li, np.round(f, 2).tolist(), round(lb, 2))
+
+# 2) capacity factor: expert 하나가 받는 token 상한 = cf × token 수 / N. 넘치면 drop (그 층을 건너뛴다)
+#    512 token 이면 이 모델의 상한 64 가 곧 cf 1.0 이다: 아래 첫 줄은 위 실행에서 실제로 일어난 drop
+for cf in [1.0, 1.25, 2.0]:
+    drops = []
+    for P in probs:
+        cnt = np.bincount(P.argmax(-1).numpy(), minlength=cfg.num_experts)
+        cap = int(cf * len(ids) / cfg.num_experts)
+        drops.append(np.maximum(cnt - cap, 0).sum() / len(ids))
+    print(cf, round(float(np.mean(drops)), 3), round(float(np.max(drops)), 3))
+
+# 3) 글 종류별로 expert 분포가 다른가 (첫 sparse 층)
+for name, (ids, probs) in route.items():
+    print(name, np.round(np.bincount(probs[0].argmax(-1).numpy(), minlength=cfg.num_experts) / len(ids), 2).tolist())
+
+# 4) expert 가 무엇을 맡는가: 첫 sparse 층에서 expert 마다 가장 자주 받은 token
+ids, probs = route["글"]
+by = collections.defaultdict(collections.Counter)
+for t, e in zip(ids.tolist(), probs[0].argmax(-1).tolist()):
+    by[e][tok.convert_ids_to_tokens(t)] += 1
+for e in range(cfg.num_experts):
+    print(e, [w for w, _ in by[e].most_common(6)])
+
+# 8 64 619339008 452984832 222977280
+# 6 3.12 {'글': 512, 'code': 512, '숫자': 512}
+# 0 [0.11, 0.07, 0.16, 0.11, 0.22, 0.13, 0.14, 0.07] 1.01
+# 1 [0.13, 0.08, 0.15, 0.18, 0.13, 0.13, 0.14, 0.06] 1.07
+# 2 [0.11, 0.14, 0.13, 0.15, 0.12, 0.1, 0.16, 0.09] 1.02
+# 3 [0.16, 0.13, 0.17, 0.06, 0.06, 0.17, 0.11, 0.15] 1.12
+# 4 [0.11, 0.1, 0.03, 0.15, 0.06, 0.09, 0.36, 0.1] 1.57
+# 5 [0.12, 0.08, 0.08, 0.15, 0.23, 0.13, 0.12, 0.09] 1.14
+# 1.0 0.147 0.262
+# 1.25 0.066 0.203
+# 2.0 0.018 0.109
+# 글 [0.11, 0.07, 0.16, 0.11, 0.22, 0.13, 0.14, 0.07]
+# code [0.16, 0.3, 0.23, 0.06, 0.04, 0.09, 0.07, 0.05]
+# 숫자 [0.17, 0.01, 0.01, 0.0, 0.0, 0.09, 0.67, 0.06]
+# 0 ['▁', '▁the', 's', '▁to', '▁not', '▁become']
+# 1 ['a', '▁years', '▁people', '▁half', 'argued', 'lasted']
+# 2 ['.', ',', '▁and', '▁Mill', 'brook', '▁but']
+# 3 ['▁for', '▁of', '▁in', '▁with', '▁about', '▁at']
+# 4 ['▁was', '▁town', '▁mill', '▁is', '▁had', '▁market']
+# 5 ['▁', '▁small', '▁larger', '▁local', '▁building', '▁community']
+# 6 ['▁the', '▁that', '▁it', '▁who', '▁where', '▁two']
+# 7 ['▁The', '▁the', '▁When', '▁A', '▁In', '▁For']
+```
+
+1)의 줄은 (sparse 층 번호, expert별 token 비율, load balance 값)이다. 2)의 줄은 (capacity factor, 층 평균 drop 비율, 가장 나쁜 층의 drop 비율)이다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **parameter는 많고, token 하나가 쓰는 것은 일부다 (G5.8.2).** 전체 6억 1,900만 중 expert가 4억 5,300만(73%)이다. token 하나는 층마다 expert 하나만 거치므로 실제로 쓰는 parameter는 2억 2,300만이다. 같은 구조의 dense 모델 T5-base(약 2억 2천만)와 거의 같다. 연산은 T5-base 수준인데 parameter는 그 세 배라는 것이 이 장의 비용 구조다.
+- **학습한 모델의 부하는 꽤 고르다 (G5.8.1).** 보통 글에서 층마다 expert 8개의 몫이 대체로 0.06~0.23이다(균등하면 0.125). load balance 값 $N \sum_i f_i P_i$ 는 6층 중 5층이 1.01~1.14로 최솟값 1에 가깝다. auxiliary loss로 학습한 결과다. 다만 다섯 번째 sparse 층(4번)은 한 expert가 36%를 받아 값이 1.57이다. 균형이 완벽하지는 않다.
+- **글의 종류가 바뀌면 쏠린다.** 무작위 숫자를 넣으면 첫 sparse 층에서 token의 67%가 6번 expert로 간다. 학습 때 맞춘 균형은 학습 데이터 분포에서의 균형이다. 입력이 치우치면 부하도 치우친다.
+- **capacity 때문에 token이 실제로 버려진다 ("expert capacity와 token drop").** 이 모델은 문장 하나에서 expert당 64 token까지만 받는다. 추론 때도 그렇다. 512 token이면 균등할 때 몫이 정확히 64라 capacity factor 1.0이다. 그래서 2)의 첫 줄, 곧 층마다 평균 15%(가장 나쁜 층 26%)의 token이 expert를 거치지 못하고 residual 연결로만 지나간 것이 이 실행에서 실제로 일어난 일이다. 숫자 글의 첫 sparse 층이라면 6번 expert에 343 token이 몰려 그중 279개(54%)가 버려진다. capacity factor를 1.25, 2.0으로 키우면 drop이 7%, 2%로 준다. 본문에서 본 drop과 buffer 낭비 사이의 절충이다. 같은 모델에 128 token을 넣으면 64가 capacity factor 4가 되어, 한 expert에 절반 넘게 몰리지 않는 한 drop이 없다. 같은 모델의 출력이 입력 길이에 따라 달라지는 이유가 하나 더 있는 셈이다.
+- **expert는 주제가 아니라 단어 종류를 맡는다.** 첫 sparse 층에서 3번 expert는 전치사(for, of, in, with), 2번은 문장 부호와 접속사(., ,, and, but), 7번은 문장 첫 단어(The, When, A), 4번은 동사(was, is, had)와 일부 명사를 주로 받는다. 이 장의 비유 "병원의 접수처"와 달리, "역사 담당", "과학 담당" 같은 주제별 전문화가 아니다. ST-MoE(2022)와 Mixtral(2024) 논문의 분석에서도 expert가 주제보다 token 종류나 문법 구조를 따라 나뉜다고 보고했다.
+
+**이 코드가 보여 주지 못하는 것.**
+글 세 개를 넣은 encoder만 봤고, decoder의 MoE는 보지 않았다. 학습 중의 부하 변화, auxiliary loss의 weight $\alpha$ 를 바꿨을 때의 효과는 학습을 해야 볼 수 있어 다루지 않았다. expert parallelism의 통신 비용은 GPU 여러 장이 있어야 잴 수 있다. Mixtral 같은 최근 MoE(top-2, decoder 전용)는 CPU에서 돌리기에 너무 크다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
