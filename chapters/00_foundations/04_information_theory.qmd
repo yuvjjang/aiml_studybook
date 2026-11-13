@@ -510,14 +510,21 @@ numeric = np.array([(loss(z + eps*e) - loss(z - eps*e)) / (2*eps) for e in np.ey
 print("q        ", np.round(q, 5))
 print("q - y    ", np.round(q - y, 6), "  ← 유도한 공식")
 print("수치미분  ", np.round(numeric, 6), "  ← 양쪽으로 조금 움직여 잰 기울기")
-print(f"최대 오차  {np.abs((q - y) - numeric).max():.1e}")
 
 # Jacobian 도 함께 확인
 J_ana = np.diag(q) - np.outer(q, q)
 J_num = np.array([[(softmax(z + eps*np.eye(K)[j])[i]
                     - softmax(z - eps*np.eye(K)[j])[i]) / (2*eps)
                    for j in range(K)] for i in range(K)])
-print(f"Jacobian 오차 {np.abs(J_ana - J_num).max():.1e}")
+```
+
+최대 오차 `{python} f'{np.abs(q - y - numeric).max():.1e}'`
+Jacobian 오차 `{python} f'{np.abs(J_ana - J_num).max():.1e}'`
+
+```{python}
+#| label: softmax-grad-2
+#| code-fold: false
+
 print(f"gradient 의 합 {(q - y).sum():.1e}  ← 항상 0")
 ```
 
