@@ -544,6 +544,101 @@ Shumailov et al.(2024): 모델 출력으로 다시 학습하기를 반복하면
 
 Part 12(신뢰성)에서 암기·유출 측정과 완화를 다시 다룬다.
 
+---
+
+## 실제 도구로: datasketch로 near-duplicate를 찾는다
+
+사전학습 데이터 정제에서 중복 제거는 MinHash와 LSH로 한다. [7.0](00_text_representation.qmd)에서 직접 구현한 MinHash를 실무 library인 `datasketch` 로 쓰고, 문서 2,000개에서 거의-복제본을 찾는다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `datasketch` 2.0, `numpy` 2.5 (`pip install datasketch`). PyTorch는 쓰지 않는다.
+- 문서는 단어 69개에서 무작위로 뽑아 만든 120단어짜리 가짜 문서다. 거의-복제본은 원본의 단어 일부를 바꿔 만든다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import hashlib
+import re
+import numpy as np
+from datasketch import MinHash, MinHashLSH
+
+rng = np.random.default_rng(0)
+WORDS = ("the of and to in a is that for it as was with be by on not he this are or his from at which but have an they "
+         "you were her she there been one all we their has would when if more so who what them will no can out other "
+         "data model training language text web page news science history city river music game school market").split()
+
+def doc(n=120):
+    return " ".join(rng.choice(WORDS, n))
+
+def near_dup(d, frac):
+    w = d.split()
+    for i in rng.choice(len(w), int(frac * len(w)), replace=False):
+        w[i] = rng.choice(WORDS)                                # 단어 일부만 바꾼 '거의 같은' 문서
+    return " ".join(w)
+
+def shingles(text, n=5):
+    w = re.findall(r"\w+", text.lower())
+    return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
+
+def jaccard(a, b):
+    A, B = shingles(a), shingles(b)
+    return len(A & B) / len(A | B)
+
+def mh(text, num_perm):
+    m = MinHash(num_perm=num_perm, seed=1)
+    for s in shingles(text):
+        m.update(s.encode())
+    return m
+
+# 1) MinHash 는 Jaccard 를 추정한다. permutation 수가 많을수록 정확하다
+base = doc()
+for frac in [0.02, 0.1, 0.3]:
+    other = near_dup(base, frac)
+    est = [round(mh(base, k).jaccard(mh(other, k)), 3) for k in (16, 128, 1024)]
+    print(frac, round(jaccard(base, other), 3), est)
+
+# 2) LSH: 문서 2,000 개(중복 200 개 포함)에서 비슷한 쌍을 모든 쌍 비교 없이 찾는다
+originals = [doc() for _ in range(1800)]
+dups = [near_dup(originals[i], 0.03) for i in range(200)]       # 앞 200 개의 거의-복제본
+corpus = originals + dups
+lsh = MinHashLSH(threshold=0.5, num_perm=128)
+sigs = []
+for i, t in enumerate(corpus):
+    s = mh(t, 128); sigs.append(s); lsh.insert(str(i), s)
+found = set()
+for i in range(len(corpus)):
+    for j in lsh.query(sigs[i]):
+        j = int(j)
+        if j != i:
+            found.add(tuple(sorted((i, j))))
+truth = {(i, 1800 + i) for i in range(200)}
+tp = len(found & truth)
+print(len(found), tp, round(tp / len(truth), 3), round(tp / max(len(found), 1), 3), len(corpus) * (len(corpus) - 1) // 2)
+
+# 3) 정확히 같은지만 보는 hash 로는 거의-복제본을 못 잡는다
+h = lambda t: hashlib.sha1(t.encode()).hexdigest()
+print(len(corpus) - len({h(t) for t in corpus}))                # 거의-복제본 200 개 중 정확 hash 가 잡은 수
+variants = [originals[0], originals[0].upper(), originals[0] + "  ", originals[0].replace(" ", "  ")]
+norm = lambda t: " ".join(t.lower().split())                     # 대소문자와 공백을 정규화한 뒤 hash
+print(len({h(t) for t in variants}), len({h(norm(t)) for t in variants}))
+
+# 0.02 0.841 [0.688, 0.867, 0.834]
+# 0.1 0.389 [0.375, 0.398, 0.399]
+# 0.3 0.172 [0.125, 0.195, 0.173]
+# 200 200 1.0 1.0 1999000
+# 0
+# 4 1
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **MinHash는 Jaccard를 추정한다.** 단어 5개짜리 shingle 집합의 Jaccard 유사도가 0.841인 쌍(단어 2%를 바꾼 것)에서, permutation 16개로 추정하면 0.688, 128개면 0.867, 1,024개면 0.834다. 0.389인 쌍은 0.375, 0.398, 0.399다. permutation이 적으면 추정이 흔들린다. 단어 2%만 바꿔도 Jaccard가 0.84로 떨어지는 것은, 단어 하나가 그 단어를 포함한 shingle 5개를 모두 바꾸기 때문이다.
+- **LSH는 모든 쌍을 비교하지 않고 찾는다 (G7.5.1의 중복 제거).** 문서 2,000개(그중 200개가 거의-복제본)를 threshold 0.5의 `MinHashLSH` 에 넣고 문서마다 질의하면, 찾은 쌍 200개가 모두 진짜 복제 쌍이다(recall 1.0, precision 1.0). 모든 쌍을 비교하면 약 200만 번이다. LSH는 signature를 band로 나눠 같은 bucket에 떨어진 것만 후보로 본다.
+- **정확한 hash는 거의-복제본을 하나도 못 잡는다.** 같은 2,000개 문서를 SHA-1로 비교하면 중복이 0개다. 한 글자만 달라도 hash가 전혀 다르기 때문이다. 대소문자와 공백만 다른 변형 4개도 hash 4개로 갈리고, 소문자화와 공백 정규화를 한 뒤 hash하면 1개로 모인다. [7.0](00_text_representation.qmd)의 "normalization이 왜 먼저인가"다.
+
+**이 코드가 보여 주지 못하는 것.**
+가짜 문서는 어휘가 69단어뿐이고 문서끼리 독립이라, 진짜 웹 문서처럼 템플릿·상용구를 공유하는 "애매한" 쌍이 없다. 실제로는 threshold와 shingle 크기를 정하는 것이 어렵고, precision이 이렇게 깔끔하지 않다.
+반복 학습의 효과(G7.5.1), mixture 비율(G7.5.2), contamination 탐지(G7.5.3)는 모델을 학습시켜야 해서 다루지 않았다.
 
 ---
 
