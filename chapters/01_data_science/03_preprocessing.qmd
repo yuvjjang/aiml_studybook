@@ -108,16 +108,23 @@ fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 fig.show()
 ```
 
+범주 `{python} f'{CARD}'`개, 표본 `{python} f'{N}'`개 (범주당 평균 `{python} f'{N / CARD:.1f}'`개)
+
 ```{python}
 #| label: target-leakage-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"범주 {CARD}개, 표본 {N}개 (범주당 평균 {N/CARD:.1f}개)")
-print()
 auc_leak, auc_ok = cv_auc(feat_leak), cv_auc(feat_ok)
-print(f"  전체 데이터로 encoding (leakage)  : AUC {auc_leak:.4f}")
+```
+
+전체 데이터로 encoding (leakage) : AUC `{python} f'{auc_leak:.4f}'`
+
+```{python}
+#| label: target-leakage-numbers-2
+#| code-fold: false
+
 print(f"  fold 밖 데이터로만 encoding    : AUC {auc_ok:.4f}")
 print()
 print(f"{'범주 수':>8} {'범주당 표본':>11} {'leakage AUC':>11} {'정상 AUC':>11} {'과대평가':>10}")
@@ -221,8 +228,14 @@ rng = np.random.default_rng(0)
 
 global_mean = 0.30
 m = 20.0                                   # 가상 관측 수 (smoothing 강도)
+```
 
-print(f"전체 평균 {global_mean:.2f},  smoothing 강도 m = {m:.0f}\n")
+전체 평균 `{python} f'{global_mean:.2f}'`, smoothing 강도 m = `{python} f'{m:.0f}'`
+
+```{python}
+#| label: target-smoothing-2
+#| code-fold: false
+
 print(f"{'범주 크기 n_c':>13}{'원 평균':>10}{'가중치 w':>10}{'shrink 후':>10}{'이동량':>10}")
 for n_c in [1, 3, 10, 20, 100, 1000]:
     raw = 0.90                             # 우연히 매우 높게 나온 범주
@@ -273,6 +286,8 @@ $$d(\mathbf{a},\mathbf{b})^2 = \sum_j (a_j-b_j)^2$$
 즉 **scaling을 안 하면 regularization의 세기가 특성마다 달라진다.**
 그래서 regularization을 쓰는 모델에서는 standardization이 선택이 아니라 필수다.
 
+① 최적화 — XᵀX 의 condition number
+
 ```{python}
 #| label: why-scale
 #| code-fold: false
@@ -287,21 +302,26 @@ income = rng.normal(5_000_000, 1_500_000, n)   # 수백만 단위
 X = np.c_[age, income]
 Xs = (X - X.mean(0)) / X.std(0)                # 표준화
 
-print("① 최적화 — XᵀX 의 condition number")
 print(f"   원본     κ = {np.linalg.cond(X.T @ X):>12.3e}")
 print(f"   표준화   κ = {np.linalg.cond(Xs.T @ Xs):>12.3e}")
 
-print("\n② 거리 — 무작위 점쌍 5000개에서 각 특성이 거리에 기여하는 평균 비율")
 i, j = rng.integers(0, n, 5000), rng.integers(0, n, 5000)
+```
+
+② 거리 — 무작위 점쌍 5000개에서 각 특성이 거리에 기여하는 평균 비율
+
+```{python}
+#| label: why-scale-2
+#| code-fold: false
+
 for name, M in [("원본", X), ("표준화", Xs)]:
     d2 = (M[i] - M[j]) ** 2
     share = d2.mean(0) / d2.mean(0).sum()
     print(f"   {name:<8} 나이 {share[0]:>7.2%}   소득 {share[1]:>7.2%}")
-
-print("\n③ regularization — 같은 효과를 내는 계수의 크기")
-print(f"   나이 1 표준편차 = 소득 1 표준편차 효과를 내는 원본 계수 비율 "
-      f"{X.std(0)[1]/X.std(0)[0]:,.0f} : 1")
 ```
+
+③ regularization — 같은 효과를 내는 계수의 크기
+나이 1 표준편차 = 소득 1 표준편차 효과를 내는 원본 계수 비율 `{python} f'{X.std(0)[1] / X.std(0)[0]:,.0f}'` : 1
 
 ③ 에서 원본 눈금의 두 계수는 크기가 십만 배 다르다.
 $\lambda\sum\beta_j^2$ 는 이 둘을 똑같이 벌하므로, 큰 눈금 특성이 사실상 벌점을 면제받는다.
@@ -370,14 +390,14 @@ fig.update_layout(legend=dict(x=0.02, y=1.12, orientation="h", font=dict(size=10
 fig.show()
 ```
 
+데이터: N(50, 8) 200개 + outlier 2개 (500, 480)
+
 ```{python}
 #| label: scaling-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"데이터: N(50, 8) 200개 + outlier 2개 (500, 480)")
-print()
 print(f"{'방법':<20} {'정상값 범위':>22} {'정상값 표준편차':>15} {'정상값 IQR':>12} "
       f"{'outlier 위치':>12}")
 print("-" * 86)
@@ -460,6 +480,8 @@ log-likelihood를 최대화하는 $\lambda$ 를 찾는데, 변수변환이므로
 $(\lambda-1)\sum_i \ln x_i$ 가 함께 들어간다
 ([0.2의 변수변환](../00_foundations/02_probability.qmd)과 같은 이유다).
 
+① λ → 0 에서 로그로 수렴하는가
+
 ```{python}
 #| label: boxcox-why
 #| code-fold: false
@@ -468,14 +490,19 @@ import numpy as np
 
 x = np.array([0.5, 1.0, 2.0, 5.0, 10.0])
 
-print("① λ → 0 에서 로그로 수렴하는가\n")
 print(f"{'λ':>10}" + "".join(f"{v:>9.1f}" for v in x))
 for lam in [1.0, 0.5, 0.1, 0.01, 0.0001]:
     t = (x ** lam - 1) / lam
     print(f"{lam:>10.4f}" + "".join(f"{v:>9.4f}" for v in t))
 print(f"{'ln x':>10}" + "".join(f"{v:>9.4f}" for v in np.log(x)))
+```
 
-print("\n② λ < 0 에서도 순서가 보존되는가\n")
+② λ < 0 에서도 순서가 보존되는가
+
+```{python}
+#| label: boxcox-why-2
+#| code-fold: false
+
 for lam in [-1.0, -0.5]:
     t = (x ** lam - 1) / lam
     mono = np.all(np.diff(t) > 0)
@@ -536,10 +563,14 @@ fig.show()
 
 import numpy as np
 from scipy import stats
+```
 
-print(f"원본 분포: 로그정규, skewness {stats.skew(raw):.3f}, "
-      f"초과첨도 {stats.kurtosis(raw):.3f}")
-print()
+원본 분포: 로그정규, skewness `{python} f'{stats.skew(raw):.3f}'`, 초과첨도 `{python} f'{stats.kurtosis(raw):.3f}'`
+
+```{python}
+#| label: power-transform-numbers-2
+#| code-fold: false
+
 print(f"{'λ':>7} {'skewness':>10} {'ex.kurt':>11} {'정규성 검정 통계량':>18}  {'비고'}")
 print("-" * 62)
 best_lam, best_skew = None, np.inf
@@ -551,15 +582,14 @@ for lam in LAMS:
     if abs(sk) < abs(best_skew):
         best_lam, best_skew = lam, sk
     print(f"{lam:>7.2f} {sk:>10.4f} {stats.kurtosis(t):>11.4f} {ks:>18.4f}  {note}")
-print()
-print(f"skewness 가 0 에 가장 가까운 λ: {best_lam} (skewness {best_skew:+.4f})")
-print()
 # scipy 의 maximum likelihood 추정과 비교
 fitted, lam_mle = stats.boxcox(raw)
-print(f"scipy.stats.boxcox 의 maximum likelihood λ: {lam_mle:.4f}")
-print(f"  그때 skewness {stats.skew(fitted):+.4f}, "
-      f"초과첨도 {stats.kurtosis(fitted):+.4f}")
 ```
+
+skewness 가 0 에 가장 가까운 λ: `{python} f'{best_lam}'` (skewness `{python} f'{best_skew:+.4f}'`)
+
+scipy.stats.boxcox 의 maximum likelihood λ: `{python} f'{lam_mle:.4f}'`
+그때 skewness `{python} f'{stats.skew(fitted):+.4f}'`, 초과첨도 `{python} f'{stats.kurtosis(fitted):+.4f}'`
 
 **로그정규를 로그 변환하면 정확히 정규가 된다** — $\lambda=0$ 이 이론적 정답이고,
 maximum likelihood 추정도 `{python} f"{lam_mle:.3f}"` 로 거의 그 값을 찾아냈다.
@@ -640,15 +670,16 @@ fig.update_layout(legend=dict(x=0.02, y=0.35, font=dict(size=10)))
 fig.show()
 ```
 
+참값: 표준편차 `{python} f'{TRUE_SD:.4f}'`, 상관 `{python} f'{TRUE_R:.4f}'`
+
+결측률 50% 에서의 결과
+
 ```{python}
 #| label: imputation-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"참값: 표준편차 {TRUE_SD:.4f}, 상관 {TRUE_R:.4f}")
-print()
-print("결측률 50% 에서의 결과")
 print(f"{'방법':<20} {'표준편차':>10} {'오차':>9} {'상관':>10} {'오차':>9}")
 print("-" * 62)
 k50 = RATES.index(0.5)
