@@ -79,9 +79,14 @@ for name, enc in encodings.items():
     w = "A팀" if ma > mb else ("B팀" if mb > ma else "동점")
     winners.append(w)
     print(f"{name:<24} {ma:>10.3f} {mb:>10.3f} {w:>8}")
+```
 
-print()
-print("ordinal scale가 지지하는 요약")
+ordinal scale가 지지하는 요약
+
+```{python}
+#| label: ordinal-danger-2
+#| code-fold: false
+
 for name, t in teams.items():
     med = levels[np.searchsorted(np.cumsum(t), t.sum()/2)]
     print(f"  {name}: 중앙값 {med},  4점 이상 비율 {t[3:].sum()/t.sum():>6.1%},  "
@@ -184,6 +189,8 @@ ordinal scale에는 간격이 정의되어 있지 않으므로, **평균은 없�
 2. **각 관측은 하나의 행** (거래 하나가 한 줄)
 3. **각 observational unit(관측 단위 — 한 행이 나타내는 대상)은 하나의 테이블** (거래 표와 계좌 표는 따로)
 
+wide 포맷 — 사람이 읽기 좋다
+
 ```{python}
 #| label: tidy-wide-long
 #| code-fold: false
@@ -198,26 +205,31 @@ wide = np.array(
     dtype=[("도시", "U6"), ("Q1", "i4"), ("Q2", "i4"), ("Q3", "i4"), ("Q4", "i4")])
 
 quarters = ["Q1", "Q2", "Q3", "Q4"]
-print("wide 포맷 — 사람이 읽기 좋다")
 print(f"  {'도시':<6}" + "".join(f"{q:>7}" for q in quarters))
 for r in wide:
     print(f"  {r['도시']:<6}" + "".join(f"{r[q]:>7}" for q in quarters))
-print()
 
 # long(tidy) 포맷으로 변환: melt
 long = np.array(
     [(r["도시"], q, r[q]) for r in wide for q in quarters],
     dtype=[("도시", "U6"), ("분기", "U2"), ("매출", "i4")])
+```
 
-print("long 포맷 — 기계가 다루기 좋다")
+long 포맷 — 기계가 다루기 좋다
+
+```{python}
+#| label: tidy-wide-long-2
+#| code-fold: false
+
 print(f"  {'도시':<6} {'분기':<5} {'매출':>6}")
 for r in long[:5]:
     print(f"  {r['도시']:<6} {r['분기']:<5} {r['매출']:>6}")
-print(f"  ... 총 {len(long)}행")
-print()
-print(f"wide: {len(wide)}행 × {len(quarters)}개 값 열")
-print(f"long: {len(long)}행 × 값 열 1개")
 ```
+
+... 총 `{python} f'{len(long)}'`행
+
+wide: `{python} f'{len(wide)}'`행 × `{python} f'{len(quarters)}'`개 값 열
+long: `{python} f'{len(long)}'`행 × 값 열 1개
 
 ```python
 # pandas 로는 한 줄이다 — 실행하지 않음
@@ -258,8 +270,14 @@ long은 행만 늘어난다. 그래서 저장·파이프라인은 long이 안전
 import numpy as np
 
 raw = np.array([23.5, -999.0, 31.2, np.nan, 0.0, 27.8, -1.0, 45.1])
-print(f"원시 배열: {raw}")
-print()
+```
+
+원시 배열: `{python} f'{raw}'`
+
+```{python}
+#| label: missing-representation-2
+#| code-fold: false
+
 print(f"{'처리 방식':<28} {'개수':>6} {'평균':>10} {'표준편차':>10}")
 print("-" * 58)
 variants = {
@@ -341,8 +359,14 @@ truth = income.mean()
 p_mcar = np.full(n, 0.5)                              # 데이터와 무관
 p_mar = 1 / (1 + np.exp(-(age - 45) / 10))            # 나이(관측)에 의존
 p_mnar = 1 / (1 + np.exp(-(income - truth) / 2000))   # 소득(결측될 값)에 의존
+```
 
-print(f"참 평균 {truth:,.0f}\n")
+참 평균 `{python} f'{truth:,.0f}'`
+
+```{python}
+#| label: missing-mechanism-2
+#| code-fold: false
+
 print(f"{'메커니즘':<28}{'완전사례 평균':>14}{'편향':>10}")
 for name, p in [("MCAR", p_mcar), ("MAR", p_mar), ("MNAR", p_mnar)]:
     r = rng.random(n) < p
@@ -449,9 +473,14 @@ for gi in range(G):
     r = np.corrcoef(x[m], y[m])[0, 1]
     print(f"{GLBL[gi]:<14} {f[0]:>+10.3f} {r:>+10.3f}   많이 일할수록 만족도 상승")
 slopes = [np.polyfit(x[g == gi], y[g == gi], 1)[0] for gi in range(G)]
+```
 
-print()
-print("그룹별 평균 위치")
+그룹별 평균 위치
+
+```{python}
+#| label: simpson-numbers-2
+#| code-fold: false
+
 print(f"  {'그룹':<8} {'x 평균':>9} {'y 평균':>9}")
 for gi in range(G):
     m = g == gi
@@ -658,35 +687,53 @@ fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 fig.show()
 ```
 
+① selection bias — 응답률이 측정하려는 값에 의존할 때
+
 ```{python}
 #| label: sampling-bias-numbers
 #| code-fold: false
 
 import numpy as np
 
-print("① selection bias — 응답률이 측정하려는 값에 의존할 때")
 print(f"  모집단 평균 소득 : {income.mean():>9,.0f} 만원   (중앙값 {np.median(income):,.0f})")
 print(f"  응답자 평균 소득 : {income[responded].mean():>9,.0f} 만원   "
       f"(중앙값 {np.median(income[responded]):,.0f})")
-print(f"  응답률 {responded.mean():.1%},  과대추정 "
-      f"{income[responded].mean()/income.mean()-1:+.1%}")
-print()
+```
 
-print("② survivorship bias — 사라진 것은 데이터에 없다")
-print(f"  전체 {N_POP:,}개 중 생존 {alive.sum():,}개 ({alive.mean():.1%})")
+응답률 `{python} f'{responded.mean():.1%}'`, 과대추정 `{python} f'{income[responded].mean() / income.mean() - 1:+.1%}'`
+
+② survivorship bias — 사라진 것은 데이터에 없다
+전체 `{python} f'{N_POP:,}'`개 중 생존 `{python} f'{alive.sum():,}'`개 (`{python} f'{alive.mean():.1%}'`)
+
+```{python}
+#| label: sampling-bias-numbers-2
+#| code-fold: false
+
 print(f"  전체 평균 누적수익률   : {(cum[:, -1]-1).mean():>+8.1%}")
 print(f"  생존 펀드만 평균       : {(cum[alive, -1]-1).mean():>+8.1%}")
-print(f"  survivorship bias 크기 : "
-      f"{(cum[alive, -1]-1).mean() - (cum[:, -1]-1).mean():>+8.1%}p")
-print()
 
-print("③ Berkson 역설 — collider 에 조건화하면 없던 상관이 생긴다")
 r_pop = np.corrcoef(talent, looks)[0, 1]
 r_sel = np.corrcoef(talent[casted], looks[casted])[0, 1]
+```
+
+survivorship bias 크기 : `{python} f'{(cum[alive, -1] - 1).mean() - (cum[:, -1] - 1).mean():>+8.1%}'`p
+
+③ Berkson 역설 — collider 에 조건화하면 없던 상관이 생긴다
+
+```{python}
+#| label: sampling-bias-numbers-3
+#| code-fold: false
+
 print(f"  모집단에서 재능과 외모의 상관 : {r_pop:>+7.4f}  (설계상 독립)")
 print(f"  캐스팅된 배우들 사이의 상관   : {r_sel:>+7.4f}")
-print(f"  선택 비율 {casted.mean():.1%}")
-print()
+```
+
+선택 비율 `{python} f'{casted.mean():.1%}'`
+
+```{python}
+#| label: sampling-bias-numbers-4
+#| code-fold: false
+
 print(f"{'선택 문턱':>10} {'선택 비율':>10} {'선택 집단 상관':>15}")
 print("-" * 40)
 for thr in [0.5, 1.0, 1.5, 2.0, 2.5]:
@@ -758,18 +805,22 @@ dwell = [rng.normal(300 - 5*n_sess[u], 40, n_sess[u])       # heavy user 는 짧
 flat = np.concatenate(dwell)
 per_user = np.array([d.mean() for d in dwell])
 corr = np.corrcoef(n_sess, per_user)[0, 1]
+```
 
-print(f"사용자 {n_user}명, 총 세션 {len(flat)}개")
-print()
+사용자 `{python} f'{n_user}'`명, 총 세션 `{python} f'{len(flat)}'`개
+
+```{python}
+#| label: unit-of-observation-2
+#| code-fold: false
+
 print(f"{'집계 방식':<28} {'평균 체류시간':>14} {'한 관측 = ?'}")
 print("-" * 62)
 print(f"{'세션 단위 평균':<28} {flat.mean():>13.1f}초  세션")
 print(f"{'사용자 단위 평균':<28} {per_user.mean():>13.1f}초  사용자")
-print()
-print(f"차이: {abs(flat.mean() - per_user.mean()):.1f}초 "
-      f"({abs(flat.mean()/per_user.mean()-1):.1%})")
-print(f"세션 수와 사용자별 평균 체류시간의 상관: {corr:+.3f}")
 ```
+
+차이: `{python} f'{abs(flat.mean() - per_user.mean()):.1f}'`초 (`{python} f'{abs(flat.mean() / per_user.mean() - 1):.1%}'`)  
+세션 수와 사용자별 평균 체류시간의 상관: `{python} f'{corr:+.3f}'`
 
 세션 단위 평균은 **세션이 많은 사용자에게 더 큰 가중치**를 준다.
 여기서는 heavy user(세션이 많은 사용자)의 체류시간이 짧으므로 세션 평균이 아래로 끌린다.
