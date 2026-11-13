@@ -819,6 +819,76 @@ fold들이 훈련 데이터를 대부분 공유하므로 점수들이 같은 방
 
 ---
 
+## 실제 도구로: `scipy.stats` 와 statsmodels로 검정한다
+
+이 장의 신뢰구간, 검정, power, 다중 비교 보정, bootstrap을 실무에서 쓰는 함수로 확인한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `scipy` 1.18, `statsmodels` 0.15, `numpy` 2.5. PyTorch는 쓰지 않는다. 시뮬레이션이 1분쯤 걸린다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
+from statsmodels.stats.power import TTestIndPower
+
+rng = np.random.default_rng(0)
+
+# 1) 신뢰구간이 뜻하는 것: 같은 실험을 2,000 번 되풀이하면 95% 구간이 참값을 몇 번 포함하는가
+cover = 0
+for _ in range(2000):
+    s = rng.normal(5.0, 2.0, 20)
+    lo, hi = stats.t.interval(0.95, df=19, loc=s.mean(), scale=stats.sem(s))
+    cover += lo <= 5.0 <= hi
+print(round(cover / 2000, 3))
+
+# 2) t 검정과 effect size, power
+a, b = rng.normal(0, 1, 30), rng.normal(0.5, 1, 30)
+t = stats.ttest_ind(a, b)
+d = (b.mean() - a.mean()) / np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
+print(round(t.statistic, 3), round(t.pvalue, 4), round(d, 3))
+pw = TTestIndPower()
+print(round(pw.power(effect_size=0.5, nobs1=30, alpha=0.05), 3), int(np.ceil(pw.solve_power(effect_size=0.5, power=0.8, alpha=0.05))))
+
+# 3) multiple comparisons: 효과 없는 검정 1,000 개 + 효과 있는 검정 50 개
+p_null = np.array([stats.ttest_ind(rng.normal(size=30), rng.normal(size=30)).pvalue for _ in range(1000)])
+p_alt = np.array([stats.ttest_ind(rng.normal(size=30), rng.normal(0.8, 1, 30)).pvalue for _ in range(50)])
+p = np.r_[p_null, p_alt]; is_alt = np.r_[np.zeros(1000, bool), np.ones(50, bool)]
+for name, method in [("보정 없음", None), ("Bonferroni", "bonferroni"), ("Benjamini-Hochberg", "fdr_bh")]:
+    rej = p < 0.05 if method is None else multipletests(p, alpha=0.05, method=method)[0]
+    print(name, int(rej.sum()), int((rej & ~is_alt).sum()), int((rej & is_alt).sum()))
+
+# 4) bootstrap: 분포 가정 없이 중앙값의 신뢰구간
+x = rng.lognormal(0, 1, 200)
+for method in ["percentile", "BCa"]:
+    r = stats.bootstrap((x,), np.median, n_resamples=5000, method=method, random_state=0)
+    print(method, np.round([r.confidence_interval.low, r.confidence_interval.high], 3).tolist())
+print(round(float(np.median(x)), 3), 1.0)                         # 표본 중앙값, 참 중앙값 e^0 = 1
+
+# 0.95
+# -1.382 0.1722 0.357
+# 0.478 64
+# 보정 없음 85 43 42
+# Bonferroni 6 0 6
+# Benjamini-Hochberg 17 0 17
+# percentile [0.817, 1.162]
+# BCa [0.817, 1.162]
+# 0.976 1.0
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **95% 신뢰구간은 되풀이했을 때 95%가 참값을 포함한다 (G0.3.1).** 표본 20개의 t 구간을 2,000번 만들면 정확히 95.0%가 참 평균을 포함한다. 구간 하나가 참값을 포함할 확률이 95%라는 뜻이 아니다.
+- **효과가 있어도 유의하지 않을 수 있다 (G0.3.2).** 참 효과 크기 0.5(Cohen의 $d$)인 두 집단에서 30개씩 뽑은 이 표본의 $p$ 는 0.17이다. statsmodels로 계산한 power가 0.478이라, 이런 실험의 절반 이상이 효과를 놓친다. power 0.8을 얻으려면 집단마다 64명이 필요하다.
+- **다중 비교 보정 ("multiple comparisons").** 효과 없는 검정 1,000개와 효과 있는 검정 50개를 섞으면, 보정 없이 $p < 0.05$ 로 85개가 유의하고 그중 43개가 거짓이다. 절반이 틀린 발견이다. Bonferroni는 6개만 남기고 거짓이 0개지만 진짜 효과 44개를 놓친다. Benjamini–Hochberg는 17개를 남기고 거짓이 0개다. 무엇을 통제할지(전체 오류율인가, 발견 중 거짓 비율인가)에 따라 방법을 고른다.
+- **bootstrap ("bootstrap: 분포 가정 없이").** 치우친 분포의 중앙값에 대해 `scipy.stats.bootstrap` 의 percentile 구간과 BCa 구간이 모두 [0.817, 1.162]이고 참 중앙값 1.0을 포함한다. 이 표본에서는 두 방법의 차이가 없었다.
+
+**이 코드가 보여 주지 못하는 것.**
+모든 표본이 독립이고 분포를 알고 만든 것이다. 실제 데이터의 상관 구조(같은 사람의 반복 측정 등)는 이 검정들의 가정을 깬다. bootstrap이 실패하는 경우(최댓값 같은 통계량, 본문 "bootstrap이 실패하는 경우")도 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
