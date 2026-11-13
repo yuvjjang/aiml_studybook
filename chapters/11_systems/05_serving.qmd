@@ -586,6 +586,95 @@ throughput이 곧 단가다. **continuous batching 하나가 비용을 몇 분�
 - 믿을 수 있는 것은 **모양**이다. utilization이 1에 가까워지면 대기가 발산한다, 처리 시간의 변동성이 꼬리를 만든다, 출력 길이가 제각각일수록 continuous batching의 이득이 크다. 자기 시스템의 실제 값은 직접 부하 시험으로 재야 한다.
 :::
 
+---
+
+## 실제 도구로: ONNX로 내보내고 ONNX Runtime으로 서빙한다
+
+학습한 PyTorch 모델을 serving용 형식인 ONNX로 내보내고, 추론 전용 엔진인 ONNX Runtime으로 돌린다. 같은 답이 나오는지, batch 크기에 따라 latency와 처리량이 어떻게 바뀌는지, latency의 꼬리가 얼마나 긴지, 요청이 몰리면 대기 시간이 어떻게 되는지를 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `onnx` 1.23, `onnxruntime` 1.31, `onnxscript` (새 exporter가 쓴다).
+- 모델은 무작위 weight의 MLP(parameter 530만 개)다. 학습은 하지 않았다. 형식과 속도만 본다.
+- 시간은 CPU에서 잰 것이라 실행마다 흔들린다. `torch.onnx.export` 가 진행 상황을 몇 줄 출력하는데 아래에서는 뺐다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import time
+import numpy as np
+import onnxruntime as ort
+import torch
+
+torch.manual_seed(0)
+model = torch.nn.Sequential(torch.nn.Linear(512, 2048), torch.nn.GELU(), torch.nn.Linear(2048, 2048), torch.nn.GELU(),
+                            torch.nn.Linear(2048, 10)).eval()
+
+# 1) 학습한 모델을 serving 용 형식(ONNX)으로 내보내고, ONNX Runtime 으로 같은 답이 나오는지 본다
+prog = torch.onnx.export(model, (torch.zeros(2, 512),), input_names=["x"], output_names=["y"],
+                         dynamic_shapes=({0: torch.export.Dim("batch")},), dynamo=True)
+onnx_bytes = prog.model_proto.SerializeToString()
+sess = ort.InferenceSession(onnx_bytes, providers=["CPUExecutionProvider"])
+x = np.random.default_rng(0).normal(size=(8, 512)).astype(np.float32)
+with torch.no_grad():
+    ref = model(torch.from_numpy(x)).numpy()
+print(len(onnx_bytes) // 1024, f"{np.abs(sess.run(None, {'x': x})[0] - ref).max():.1e}")
+
+def bench(fn, reps=50):
+    fn(); t0 = time.perf_counter()
+    for _ in range(reps): fn()
+    return (time.perf_counter() - t0) / reps * 1000
+
+# 2) batching: 요청 하나의 latency 와 초당 처리량
+for b in [1, 8, 64, 256]:
+    xb = np.random.default_rng(1).normal(size=(b, 512)).astype(np.float32)
+    t_ort = bench(lambda: sess.run(None, {"x": xb}))
+    with torch.no_grad():
+        t_pt = bench(lambda: model(torch.from_numpy(xb)))
+    print(b, round(t_pt, 2), round(t_ort, 2), int(b / t_ort * 1000))
+
+# 3) tail latency: 같은 요청 1,000 번의 latency 분포
+lat = []
+x1 = x[:1]
+for _ in range(1000):
+    t0 = time.perf_counter(); sess.run(None, {"x": x1}); lat.append((time.perf_counter() - t0) * 1000)
+lat = np.array(lat)
+print([round(float(np.percentile(lat, p)), 3) for p in (50, 90, 99, 99.9)], round(float(lat.max()), 3))
+
+# 4) 대기열: 요청이 처리 속도에 가깝게 들어오면 대기 시간이 폭발한다 (M/D/1 시뮬레이션, 처리 1 ms)
+rng = np.random.default_rng(0)
+for load in [0.5, 0.8, 0.95, 0.99]:
+    gaps = rng.exponential(1.0 / load, 100000)                     # 평균 도착 간격 (ms)
+    arrive = np.cumsum(gaps); done = np.empty_like(arrive); free = 0.0
+    for i, a in enumerate(arrive):
+        start = max(a, free); free = start + 1.0; done[i] = free
+    wait = done - arrive
+    print(load, round(float(np.median(wait)), 2), round(float(np.percentile(wait, 99)), 2))
+
+# 20582 1.2e-07
+# 1 9.43 0.46 2169
+# 8 12.56 0.96 8354
+# 64 14.21 4.89 13085
+# 256 24.45 12.3 20813
+# [0.277, 0.511, 4.087, 7.333] 11.055
+# 0.5 1.01 4.41
+# 0.8 2.3 11.39
+# 0.95 7.09 35.55
+# 0.99 35.67 268.91
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **ONNX로 내보내도 같은 답이 나온다.** 20 MB짜리 ONNX 파일을 ONNX Runtime으로 돌린 출력이 PyTorch와 $1.2\times10^{-7}$ 까지 같다. batch 차원을 dynamic으로 지정해서 batch 크기를 바꿔 넣을 수 있다. 이 버전의 PyTorch에서는 `dynamo=True` 의 새 exporter를 쓴다. 예전 방식(TorchScript 기반)은 deprecated 경고를 낸다.
+- **batch를 키우면 처리량이 오르고 latency도 오른다 (G11.5.2, "직접 해보기" ②).** ONNX Runtime에서 batch 1은 0.46 ms(초당 2,200개), batch 64는 4.9 ms(초당 13,000개), batch 256은 12.3 ms(초당 21,000개)다. 처리량이 10배 가까이 오르는 대신 요청 하나가 기다리는 시간도 길어진다. 같은 모델을 PyTorch로 그냥 돌리면 batch 1에 9.4 ms로 훨씬 느렸다. 이 CPU에서의 결과이고, PyTorch의 thread 설정 등에 따라 차이가 줄 수 있다.
+- **latency에는 꼬리가 있다 (G11.5.1).** 같은 요청을 1,000번 보냈을 때 중앙값 0.28 ms, 90분위 0.51 ms인데 99분위는 4.1 ms, 99.9분위는 7.3 ms다. 15배다. 같은 계산인데도 OS의 스케줄링, 메모리, 다른 프로세스 때문에 가끔 오래 걸린다. 평균만 보면 이 꼬리가 안 보인다.
+- **부하가 처리 능력에 가까워지면 대기열이 폭발한다 ("직접 해보기" ①).** 처리 1 ms짜리 서버에 요청이 무작위로 들어올 때, 부하 50%면 대기 포함 시간이 중앙값 1.0 ms, 99분위 4.4 ms다. 80%면 2.3과 11.4, 95%면 7.1과 36, 99%면 36과 269 ms다. 처리 능력의 95%를 쓰면 99분위가 처리 시간의 36배가 된다. 서버를 100% 가깝게 쓰도록 잡으면 안 되는 이유다.
+
+**이 코드가 보여 주지 못하는 것.**
+HTTP 서버, 동적 batching(요청을 모았다가 묶어 처리하는 것), GPU, 여러 replica는 없다. 실제 serving은 Triton, TorchServe, vLLM 같은 서버가 이것들을 한다.
+대기열은 처리 시간이 늘 1 ms로 일정한 단순한 시뮬레이션이다. 실제로는 처리 시간도 꼬리를 가져서 대기열이 이보다 더 빨리 길어진다. model cascade(G11.5.4)는 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
