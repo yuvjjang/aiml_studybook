@@ -405,6 +405,88 @@ $$y_t = \sum_{s \le t} \alpha(t, s)\, v_s$$
 
 ---
 
+## 실제 도구로: Mamba-130m과 GPT-2를 나란히 놓는다
+
+공개된 Mamba 모델(1.3억 parameter)을 비슷한 크기의 GPT-2와 비교한다. 같은 글의 perplexity, 추론 때 들고 다니는 상태의 크기, 생성 결과를 본다. 이 장 G5.10.2의 "상수 vs 선형"을 실제 모델에서 확인하는 것이 중심이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22
+- 모델은 `state-spaces/mamba-130m-hf`(약 520 MB)와 `gpt2`(약 550 MB)다. 두 모델은 학습 데이터가 다르다(Mamba는 the Pile, GPT-2는 WebText).
+- Mamba의 빠른 kernel(`mamba_ssm`, `causal_conv1d`)은 GPU용이라 CPU에서는 느린 참조 구현으로 돈다는 경고가 나온다. 결과는 같다. 아래 출력에서는 경고를 뺐다.
+- 시험 글은 [5.9](09_scaling_laws.qmd)에서 쓴 `eval_text.txt` 다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import time
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("state-spaces/mamba-130m-hf")
+mamba = AutoModelForCausalLM.from_pretrained("state-spaces/mamba-130m-hf").eval()
+gtok = AutoTokenizer.from_pretrained("gpt2")
+gpt = AutoModelForCausalLM.from_pretrained("gpt2").eval()
+count = lambda m: sum(p.numel() for p in m.parameters())
+print(count(mamba), count(gpt), mamba.config.state_size, mamba.config.num_hidden_layers, mamba.config.hidden_size)
+
+TEXT = open("eval_text.txt", encoding="utf-8").read()            # 5.9 에서 쓴, 이 절을 위해 새로 쓴 글
+ids_m, ids_g = tok(TEXT, return_tensors="pt").input_ids, gtok(TEXT, return_tensors="pt").input_ids
+with torch.no_grad():
+    lm = mamba(ids_m, labels=ids_m).loss.item(); lg = gpt(ids_g, labels=ids_g).loss.item()
+print(ids_m.shape[1], ids_g.shape[1], round(math.exp(lm), 2), round(math.exp(lg), 2))
+
+# 1) inference 때 들고 다니는 상태의 크기: 길이에 상수 (Mamba) / 길이에 비례 (Transformer 의 KV cache)
+def tensors(obj, seen=None):
+    """cache 객체 안의 tensor 를 모두 모은다 (library 버전마다 구조가 달라서 재귀로 훑는다)."""
+    seen = set() if seen is None else seen
+    if id(obj) in seen: return []
+    seen.add(id(obj))
+    if torch.is_tensor(obj): return [obj]
+    if isinstance(obj, (list, tuple)): return [t for o in obj for t in tensors(o, seen)]
+    if isinstance(obj, dict): return [t for o in obj.values() for t in tensors(o, seen)]
+    if hasattr(obj, "__dict__"): return [t for o in vars(obj).values() for t in tensors(o, seen)]
+    return []
+
+def state_bytes(model, ids):
+    with torch.no_grad():
+        out = model(ids, use_cache=True)
+    cache = out.cache_params if getattr(out, "cache_params", None) is not None else out.past_key_values
+    return sum(t.numel() * t.element_size() for t in tensors(cache))
+for n in [64, 256, 640]:
+    print(n, state_bytes(mamba, ids_m[:, :n]), state_bytes(gpt, ids_g[:, :n]))
+
+# 2) 생성: 같은 prompt 로 greedy 40 token
+p = "The history of the small town begins"
+for name, m, t in [("mamba", mamba, tok), ("gpt2", gpt, gtok)]:
+    with torch.no_grad():
+        t0 = time.perf_counter()
+        o = m.generate(**t(p, return_tensors="pt"), max_length=48, do_sample=False, pad_token_id=t.eos_token_id)
+        dt = time.perf_counter() - t0
+    print(name, round(dt, 2), repr(t.decode(o[0])[len(p):len(p) + 90]))
+
+# 129135360 124439808 16 24 768
+# 653 644 15.92 17.88
+# 64 2949120 4718592
+# 256 2949120 18874368
+# 640 2949120 47185920
+# mamba 3.1 ' with the arrival of the first settlers in 1776. The first settlers were the people of the'
+# gpt2 1.22 ' with the arrival of the first settlers. The first settlers arrived in 1829, and the first'
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **크기가 비슷한 두 모델이다.** Mamba-130m은 1억 2,900만, GPT-2는 1억 2,400만 parameter다. Mamba는 24층, hidden 768, 상태 크기 16이다.
+- **같은 글에서 perplexity가 비슷하다.** Mamba 15.9, GPT-2 17.9다. tokenizer가 달라 token 수가 653과 644로 조금 다르므로 정확한 비교는 아니다([7.2](../07_language/02_language_models.qmd)의 "token당 PPL은 tokenizer가 다르면 비교할 수 없다"). 학습 데이터도 다르다. "Mamba가 낫다"가 아니라 "이 크기에서 비슷한 수준"까지만 읽는다.
+- **들고 다니는 상태가 길이에 무관하다 (G5.10.2).** 입력 64, 256, 640 token에서 Mamba의 cache는 늘 2,949,120 byte(약 2.9 MB)다. 24층 × (SSM 상태 $1536 \times 16$ + convolution 상태 $1536 \times 4$) × 4 byte와 정확히 같다. GPT-2의 KV cache는 4.7 MB, 18.9 MB, 47.2 MB로 길이에 비례해 는다. 640 token에서 이미 16배 차이다.
+- **생성 결과는 둘 다 그럴듯하다.** 같은 prompt에 greedy로 이어 쓰면 둘 다 "the arrival of the first settlers"로 시작한다. 이 CPU에서는 Mamba가 3.1초, GPT-2가 1.2초로 Mamba가 느렸다. 빠른 kernel 없이 참조 구현으로 돌았기 때문이다. GPU의 전용 kernel에서는 긴 문맥일수록 Mamba가 유리하다고 보고된다.
+
+**이 코드가 보여 주지 못하는 것.**
+글 하나의 perplexity다. 본문 "그런데 왜 아직 Transformer가 지배하는가"의 핵심인 문맥 안의 정보를 정확히 꺼내는 능력(예: 긴 글 속 특정 문장 복사)은 이 비교로 드러나지 않는다. 그것을 재려면 그런 과제를 따로 만들어야 한다.
+상태가 상수라는 것은 메모리 이야기이고, 그 고정된 크기에 긴 문맥을 얼마나 잘 담는지는 별개의 문제다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
