@@ -522,6 +522,92 @@ label이 필요 없고, 즉시 관측되며, 모델 품질과 상관이 높다.
 - 규제 대응 — 설명 요구([12.0](../12_trust/00_interpretability.qmd)), 삭제 요구, 자동 결정에 대한 이의 제기
 - 이 문서들은 사고가 난 뒤에 만들 수 없다 — **배포 pipeline의 일부**여야 한다
 
+---
+
+## 실제 도구로: river로 drift를 감지한다
+
+배포한 분류기에 60일 동안 데이터를 흘려 넣고, 20일째부터 입력 분포만 바꾸고(covariate shift), 40일째부터 입력은 그대로 두고 정답 규칙을 바꾼다(concept drift). 입력을 보는 지표와, 오류를 한 건씩 보는 온라인 drift 탐지기(`river` 의 ADWIN, Page–Hinkley)가 각각 무엇을 잡는지 본다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `river` 0.26, `scikit-learn` 1.9, `scipy` 1.18 (`pip install river`). PyTorch는 쓰지 않는다.
+- 입력 drift를 KS 검정과 PSI로 재는 것은 [2.12](../02_classical_ml/12_practical_issues.qmd)의 "실제 도구로"에서 다뤘다. 여기서는 두 종류의 drift를 나눠 본다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from river import drift
+from scipy import stats
+from sklearn.linear_model import LogisticRegression
+
+rng = np.random.default_rng(0)
+
+def make(n, shift=0.0, flip=False):
+    X = rng.normal(shift, 1, (n, 2))
+    y = (X[:, 0] + X[:, 1] > 0).astype(int) if not flip else (X[:, 0] - X[:, 1] > 0).astype(int)   # covariate shift 는 규칙을 그대로 둔다
+    return X, y
+
+X0, y0 = make(5000)
+clf = LogisticRegression().fit(X0, y0)
+
+# 하루 1,000 건씩 60 일. 20 일째부터 covariate shift(입력만 이동), 40 일째부터 concept drift(규칙이 바뀜)
+days = []
+for d in range(60):
+    if d < 20:   X, y = make(1000)
+    elif d < 40: X, y = make(1000, shift=1.0)
+    else:        X, y = make(1000, flip=True)
+    p = clf.predict_proba(X)[:, 1]
+    days.append(dict(acc=float((p.round() == y).mean()), ks=stats.ks_2samp(X0[:, 0], X[:, 0]).pvalue,
+                     conf=float(np.abs(p - 0.5).mean() * 2), pos=float(p.round().mean()), err=(p.round() != y)))
+
+# 1) 지표마다 무엇을 보는가: 구간별 평균
+for name, lo, hi in [("정상", 0, 20), ("covariate shift", 20, 40), ("concept drift", 40, 60)]:
+    seg = days[lo:hi]
+    print(name, round(np.mean([d["acc"] for d in seg]), 3), round(float(np.median([d["ks"] for d in seg])), 4),
+          round(np.mean([d["conf"] for d in seg]), 3), round(np.mean([d["pos"] for d in seg]), 3))
+
+# 2) ADWIN: 오류(0/1) 를 한 건씩 흘려 넣으면 오류율이 바뀐 지점을 찾는다 (label 이 있다는 가정)
+adwin = drift.ADWIN()
+alarms = []
+for i, e in enumerate(np.concatenate([d["err"] for d in days]).astype(int)):
+    adwin.update(int(e))
+    if adwin.drift_detected:
+        alarms.append(i)
+print([round(a / 1000, 2) for a in alarms])                     # 경보가 울린 '날'
+
+# 3) 같은 일을 PageHinkley 로
+ph = drift.PageHinkley()
+alarms_ph = []
+for i, e in enumerate(np.concatenate([d["err"] for d in days]).astype(int)):
+    ph.update(int(e))
+    if ph.drift_detected:
+        alarms_ph.append(i)
+print([round(a / 1000, 2) for a in alarms_ph])
+
+# 4) label 이 늦게 오면: 정답이 30 일 늦게 도착한다면, concept drift(40 일)를 언제 아는가
+first = min([a for a in alarms if a >= 40000], default=None)
+print(None if first is None else round(first / 1000 + 30, 2))
+
+# 정상 0.998 0.4486 0.924 0.499
+# covariate shift 0.999 0.0 0.972 0.921
+# concept drift 0.498 0.4192 0.925 0.499
+# [40.03]
+# [40.09, 47.4, 52.59]
+# 70.03
+```
+
+구간별 줄은 (정확도, 첫 입력 feature의 KS 검정 $p$ 의 중앙값, 평균 confidence, 양성 예측 비율)이다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **covariate shift는 입력 지표에 잡히지만 성능은 멀쩡했다 (G11.6.1).** 20~39일에 입력이 이동하자 KS 검정의 $p$ 가 0이 되고 양성 예측 비율이 0.50에서 0.92로 뛴다. 그런데 정확도는 0.999로 그대로다. 정답 규칙이 그대로라 모델이 여전히 맞기 때문이다. 입력 지표만 보면 이것을 사고로 오인해 경보를 울린다.
+- **concept drift는 입력 지표에 전혀 안 잡힌다.** 40일부터 정확도가 0.498(동전 던지기)로 무너지는데, KS $p$ 는 0.42, confidence는 0.925, 양성 비율은 0.499로 정상 구간과 구별되지 않는다. 입력과 출력의 분포가 모두 그대로이고 바뀐 것은 $P(y|x)$ 뿐이다. 본문의 표에서 "label이 필요한가"의 마지막 줄이 이것이다.
+- **오류를 보면 바로 잡힌다.** 예측 오류(0/1)를 한 건씩 ADWIN에 넣으면 40.03일, 곧 drift가 시작되고 30건 만에 경보가 울린다. 앞의 covariate shift에는 울리지 않는다. Page–Hinkley도 40.09일에 잡는데, 그 뒤 47.4일과 52.6일에 경보를 더 울린다. 오류율이 높은 채로 머무는 것을 계속 새로운 변화로 본 것이다. 탐지기마다 경보를 다시 울리는 방식이 달라 alert fatigue(G11.6.3)와 이어진다.
+- **그런데 오류를 알려면 정답이 있어야 한다 (G11.6.2).** 정답이 30일 늦게 도착하는 domain이라면, ADWIN이 아무리 빨라도 drift를 아는 것은 70일째다. 그동안 모델은 동전 던지기 수준으로 답한다.
+
+**이 코드가 보여 주지 못하는 것.**
+drift가 갑자기, 한 번에 일어나는 단순한 경우다. 실제 drift는 서서히 오거나 계절에 따라 오가고, 그러면 탐지가 늦어지고 경보가 흔들린다. 경보 기준과 재학습 주기(G11.6.4)는 다루지 않았다.
+입력 2개짜리 장난감 분류기다. 실제 운영에서는 수백 개 feature를 함께 봐야 해서, 2.12에서 본 다중 비교 문제가 겹친다.
 
 ---
 
