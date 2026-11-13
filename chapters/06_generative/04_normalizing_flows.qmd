@@ -589,6 +589,86 @@ $$\frac{dx}{dt} = v_\theta(x, t), \qquad
 대가는 매 평가마다 ODE를 풀어야 한다는 것이었고,
 flow matching이 그 대가마저 없앤다 (simulation 없는 학습).
 
+---
+
+## 실제 도구로: `torch.distributions` 의 transform
+
+PyTorch의 `torch.distributions` 는 분포에 가역 변환을 씌운 `TransformedDistribution` 을 제공한다. normalizing flow의 change of variables가 바로 이것이다. 내장 변환으로 공식을 확인하고, coupling 층 하나를 직접 transform으로 정의해 쓴다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU). 모델을 내려받지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import math
+import torch
+from torch.distributions import Normal, TransformedDistribution, Independent, MultivariateNormal
+from torch.distributions.transforms import AffineTransform, ExpTransform, ComposeTransform, TanhTransform
+
+torch.manual_seed(0)
+
+# 1) change of variables: z ~ N(0,1), x = exp(2 + 0.5 z) 이면 x 는 log-normal 이다
+base = Normal(0.0, 1.0)
+flow = TransformedDistribution(base, [AffineTransform(2.0, 0.5), ExpTransform()])
+x = torch.tensor([1.0, 5.0, 20.0])
+by_hand = base.log_prob((torch.log(x) - 2) / 0.5) - math.log(0.5) - torch.log(x)   # log p(z) + log|dz/dx|
+lognormal = torch.distributions.LogNormal(2.0, 0.5).log_prob(x)
+print(flow.log_prob(x).tolist(), by_hand.tolist(), lognormal.tolist())
+
+# 2) 적분하면 1 이 되는가 (Jacobian 항이 있을 때 / 없을 때)
+grid = torch.linspace(1e-3, 200, 400001); dx = grid[1] - grid[0]
+with_j = (flow.log_prob(grid).exp() * dx).sum().item()
+without_j = (base.log_prob((torch.log(grid) - 2) / 0.5).exp() * dx).sum().item()
+print(round(with_j, 4), round(without_j, 2))
+
+# 3) 2차원 coupling 층 하나: 앞 차원은 그대로, 뒤 차원은 앞 차원에 따라 늘이고 민다
+class Coupling(torch.distributions.transforms.Transform):
+    domain = codomain = torch.distributions.constraints.real_vector
+    bijective = True
+    def __init__(self):
+        super().__init__(cache_size=0)
+    def _call(self, z):
+        s, t = torch.tanh(z[..., :1]), 2 * z[..., :1] ** 2     # 조건부 scale(log)과 shift
+        return torch.cat([z[..., :1], z[..., 1:] * s.exp() + t], -1)
+    def _inverse(self, x):
+        s, t = torch.tanh(x[..., :1]), 2 * x[..., :1] ** 2
+        return torch.cat([x[..., :1], (x[..., 1:] - t) * (-s).exp()], -1)
+    def log_abs_det_jacobian(self, z, x):
+        return torch.tanh(z[..., :1]).squeeze(-1)                # 삼각 Jacobian: 대각의 곱 = exp(s)
+base2 = MultivariateNormal(torch.zeros(2), torch.eye(2))
+banana = TransformedDistribution(base2, [Coupling()])
+S = banana.sample((5,))
+print([[round(v, 3) for v in r] for r in S.tolist()])
+z = Coupling().inv(S)
+print(f"{(Coupling()(z) - S).abs().max().item():.1e}")
+# 격자 위에서 적분이 1 인가
+g1, g2 = torch.meshgrid(torch.linspace(-5, 5, 801), torch.linspace(-6, 30, 2881), indexing="ij")
+P = torch.stack([g1, g2], -1).reshape(-1, 2)
+print(round((banana.log_prob(P).exp().sum() * (10 / 800) * (36 / 2880)).item(), 4))
+# Jacobian 을 수치로 재서 log|det J| 와 비교
+zz = torch.tensor([0.7, -0.3])
+J = torch.autograd.functional.jacobian(Coupling(), zz)
+print(round(torch.log(torch.det(J).abs()).item(), 5), round(Coupling().log_abs_det_jacobian(zz, None).item(), 5))
+
+# [-8.225791931152344, -2.1403067111968994, -5.204489231109619] [-8.225791931152344, -2.1403067111968994, -5.204489231109619] [-8.225790977478027, -2.1403067111968994, -5.204489231109619]
+# 1.0 4.19
+# [[1.541, 4.019], [-2.179, 9.709], [-1.085, 1.721], [0.403, 1.554], [-0.719, 0.817]]
+# 0.0e+00
+# 0.9999
+# 0.60437 0.60437
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **change of variables가 그대로 들어 있다 ("change of variables 공식", G6.4.1).** 표준정규 $z$ 에 $x = \exp(2 + 0.5z)$ 를 씌운 분포의 `log_prob` 가, 손으로 쓴 $\log p(z) + \log|dz/dx|$ 와 소수점 끝까지 같고, PyTorch의 `LogNormal(2, 0.5)` 와도 같다. 변환을 거꾸로 따라가 $z$ 를 구하고 Jacobian 항을 더하는 계산을 `TransformedDistribution` 이 대신 한다.
+- **Jacobian 항을 빼면 확률이 아니다 ("직접 해보기" ①).** 그 density를 0~200에서 적분하면 1.0이다. Jacobian 항을 빼고 $p(z(x))$ 만 적분하면 4.19다. 변환이 공간을 늘이고 줄인 만큼을 되돌리지 않으면 전체 확률이 1이 아니게 된다.
+- **coupling 층은 Jacobian이 싸다 ("coupling layer (RealNVP)").** 앞 차원은 그대로 두고 뒤 차원을 앞 차원에 따라 $x_2 = z_2 e^{s(z_1)} + t(z_1)$ 로 바꾸는 transform을 직접 정의했다. Jacobian이 삼각행렬이라 $\log|\det J| = s(z_1)$ 이다. autograd로 Jacobian 전체를 구해 행렬식을 계산한 값(0.60437)과 같다. 역변환도 정확하다(차이 0.0).
+- **바나나 모양의 분포가 된다.** 표준정규에 이 층 하나를 씌우면 $x_2$ 가 $x_1$ 의 제곱만큼 밀려 휜 모양이 된다(sample의 둘째 좌표가 $2x_1^2$ 근처로 커진다). 격자에서 적분하면 0.9999로 확률 분포다.
+
+**이 코드가 보여 주지 못하는 것.**
+$s$ 와 $t$ 를 고정된 함수로 두었다. 실제 flow는 이것을 신경망으로 두고 데이터의 log-likelihood를 최대화하도록 학습한다. 층을 여러 개 쌓고 차원을 번갈아 바꾸는 것(본문 G6.4.2)도 하지 않았다. 학습 가능한 flow library로는 `nflows`, `zuko` 등이 있다.
+topology 제약(G6.4.4)은 학습을 해야 보여서 다루지 않았다.
 
 ---
 
