@@ -588,21 +588,24 @@ import numpy as np
 from scipy import stats
 
 eps = 0.5
+```
 
-# 표준정규(σ=1)의 표본평균은 정확히 N(0, 1/n) 이라 꼬리확률을 정확히 계산할 수 있다.
-print(f"표본평균이 μ 로부터 {eps} 이상 벗어날 확률 (σ = 1)")
-print()
+표본평균이 μ 로부터 `{python} f'{eps}'` 이상 벗어날 확률 (σ = 1)
+
+```{python}
+#| label: chebyshev-2
+#| code-fold: false
+
 print(f"{'n':>6}  {'정확한 값':>13}  {'Chebyshev 상한':>14}  {'헐거운 정도':>12}")
 for n in [10, 30, 100, 300, 1000]:
     exact = 2 * stats.norm.sf(eps * np.sqrt(n))     # P(|X̄| ≥ ε)
     bound = min(1.0 / (n * eps ** 2), 1.0)          # σ²/(n ε²)
     print(f"{n:>6}  {exact:>13.3e}  {bound:>14.5f}  {bound/exact:>11.1e}배")
-
-print()
-print("상한은 1/n 로 천천히 줄지만 실제 확률은 지수적으로 줄어든다.")
-print("Chebyshev 는 '분산만 아는' 최악의 분포를 상정하기 때문이다 —")
-print("느슨한 대신 어떤 분포에도 성립한다. 정규분포라는 정보를 쓰면 훨씬 날카로워진다.")
 ```
+
+상한은 1/n 로 천천히 줄지만 실제 확률은 지수적으로 줄어든다.  
+Chebyshev 는 '분산만 아는' 최악의 분포를 상정하기 때문이다 —
+느슨한 대신 어떤 분포에도 성립한다. 정규분포라는 정보를 쓰면 훨씬 날카로워진다.
 
 ### CLT는 "얼마나 빨리"까지 말한다
 
@@ -771,9 +774,15 @@ X = mu + Z @ L.T                           # affine 변환 한 번
 
 print(f"L Lᵀ = Σ ?           {np.allclose(L @ L.T, Sigma)}")
 print(f"표본 평균            {np.round(X.mean(0), 3)}   목표 {mu}")
-print(f"표본 covariance          {np.round(np.cov(X.T), 2).tolist()}")
-print(f"목표                 {Sigma.tolist()}")
-print()
+```
+
+표본 covariance `{python} f'{np.round(np.cov(X.T), 2).tolist()}'`
+목표 `{python} f'{Sigma.tolist()}'`
+
+```{python}
+#| label: mvn-affine-2
+#| code-fold: false
+
 print(f"|Σ|^(1/2) = {np.sqrt(np.linalg.det(Sigma)):.4f}"
       f"   det(L) = {np.prod(np.diag(L)):.4f}   ← 같다 (부피 배율)")
 
@@ -964,10 +973,10 @@ sigma_unbiased = data.std(ddof=1)     # unbiased 추정량은 n-1
 print(f"참값        μ=5.000  σ=2.000")
 print(f"MLE         μ={mu_hat:.3f}  σ={sigma_hat:.3f}   (n 으로 나눔)")
 print(f"unbiased 추정량        σ={sigma_unbiased:.3f}   (n-1 로 나눔)")
-print()
-print("→ MLE 는 분산을 약간 과소추정한다 (bias). n 이 크면 차이가 사라진다.")
-print(f"   n={len(data)} 에서 차이: {abs(sigma_unbiased-sigma_hat):.5f}")
 ```
+
+→ MLE 는 분산을 약간 과소추정한다 (bias). n 이 크면 차이가 사라진다.  
+n=`{python} f'{len(data)}'` 에서 차이: `{python} f'{abs(sigma_unbiased - sigma_hat):.5f}'`
 
 ---
 
@@ -1254,8 +1263,9 @@ for M in [1, 5, 10, 50]:
     e_bar = (shared + own).mean(axis=1)
     theory = rho * sigma**2 + (1 - rho) / M * sigma**2
     print(f"M={M:>3}   시뮬레이션 {e_bar.var():.4f}   이론 {theory:.4f}")
-print(f"M→∞ 한계 ρσ² = {rho * sigma**2:.4f}")
 ```
+
+M→∞ 한계 ρσ² = `{python} f'{rho * sigma ** 2:.4f}'`
 :::
 
 ### C1. 동전 posterior 읽기
@@ -1334,9 +1344,14 @@ p, n, polls = 0.5, 1000, 10_000
 estimates = rng.binomial(n, p, size=polls) / n
 margin = 1.96 * np.sqrt(p * (1 - p) / n)
 covered = np.mean(np.abs(estimates - p) <= margin)
+```
 
-print(f"오차 범위 ±{margin * 100:.1f}%p")
-print(f"참값이 범위 안에 든 비율 = {covered:.3f}")
+오차 범위 ±`{python} f'{margin * 100:.1f}'`%p
+참값이 범위 안에 든 비율 = `{python} f'{covered:.3f}'`
+
+```{python}
+#| label: ex-poll-2
+
 print(f"±1%p 에 필요한 n:  CLT {(1.96 / 0.01) ** 2 * 0.25:,.0f}명   Chebyshev {0.25 / (0.01**2 * 0.05):,.0f}명")
 ```
 :::
