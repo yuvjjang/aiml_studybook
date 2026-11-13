@@ -536,6 +536,119 @@ single-frame baseline의 VLM 판이다.
 - **생성까지 겸하는 통합 모델** — 같은 모델이 보고 말하고 그린다
 - 대가: 이미 학습된 강력한 LLM을 재사용할 수 없다
 
+---
+
+## 실제 도구로: 작은 VLM에게 정답을 아는 장면을 묻는다
+
+공개된 작은 vision-language model인 SmolVLM-256M으로 이 장의 질문을 실제로 던진다. 이미지 한 장이 visual token 몇 개가 되는가, 그리고 이 장 "준비"와 같은 성격의 격자 장면에서 존재, 없는 물체, 개수, 좌우 관계를 얼마나 맞히는가.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `pillow` 13
+- 모델은 `HuggingFaceTB/SmolVLM-256M-Instruct`(2억 5,600만 parameter, 약 1 GB)다. 이미지 encoder(SigLIP 계열)와 작은 언어모델을 connector로 이은 구조다.
+- 장면은 448×448 흰 바탕의 4×4 격자에 색 4가지 × 모양 3가지 중 2~5개를 무작위로 놓은 30장이다. 질문은 장면마다 네 개이고, 2) 이후는 tile 분할 없이(visual token 64개) 물었다.
+- 모든 답은 greedy decoding이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import re
+import numpy as np
+import torch
+from PIL import Image, ImageDraw
+from transformers import AutoModelForImageTextToText, AutoProcessor
+
+MID = "HuggingFaceTB/SmolVLM-256M-Instruct"
+proc = AutoProcessor.from_pretrained(MID)
+model = AutoModelForImageTextToText.from_pretrained(MID, dtype=torch.float32).eval()
+print(sum(p.numel() for p in model.parameters()))
+IMG_TOK = proc.tokenizer.convert_tokens_to_ids("<image>")
+
+def ask(img, q, split=False, max_new=8):
+    msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": q}]}]
+    text = proc.apply_chat_template(msgs, add_generation_prompt=True)
+    inp = proc(text=text, images=[img], return_tensors="pt", do_image_splitting=split)
+    with torch.no_grad():
+        out = model.generate(**inp, max_new_tokens=max_new, do_sample=False)
+    return proc.decode(out[0, inp.input_ids.shape[1]:], skip_special_tokens=True).strip(), int((inp.input_ids == IMG_TOK).sum())
+
+# 1) visual token 예산: 해상도와 tile 분할 (G9.9.1)
+for size in [(256, 256), (512, 512), (1024, 1024), (1536, 768)]:
+    img = Image.new("RGB", size, "white")
+    print(size, ask(img, "Hi", split=False, max_new=1)[1], ask(img, "Hi", split=True, max_new=1)[1])
+
+# 2) 정답을 아는 장면: 4×4 격자에 물체 2~5 개 (G9.9.2·G9.9.4)
+COLORS = {"red": (220, 30, 30), "blue": (30, 60, 220), "green": (30, 160, 60), "yellow": (230, 200, 20)}
+SHAPES = ["circle", "square", "triangle"]
+def scene(rng):
+    n = int(rng.integers(2, 6))
+    kinds = [(c, s) for c in COLORS for s in SHAPES]
+    pick = [kinds[i] for i in rng.choice(len(kinds), n, replace=False)]
+    cells = rng.choice(16, n, replace=False)
+    img = Image.new("RGB", (448, 448), "white"); d = ImageDraw.Draw(img)
+    objs = []
+    for (c, s), cell in zip(pick, cells):
+        r, k = divmod(int(cell), 4); x0, y0 = k * 112 + 26, r * 112 + 26; x1, y1 = x0 + 60, y0 + 60
+        if s == "circle": d.ellipse([x0, y0, x1, y1], fill=COLORS[c])
+        elif s == "square": d.rectangle([x0, y0, x1, y1], fill=COLORS[c])
+        else: d.polygon([(x0 + 30, y0), (x0, y1), (x1, y1)], fill=COLORS[c])
+        objs.append((c, s, k))
+    absent = [kd for kd in kinds if kd not in pick]
+    return img, objs, absent[int(rng.integers(len(absent)))]
+
+yes = lambda a: a.lower().startswith("yes")
+WORDS = {w: i for i, w in enumerate("zero one two three four five six seven eight nine".split())}
+def num(a):
+    m = re.search(r"\d+", a)
+    return int(m.group()) if m else next((v for w, v in WORDS.items() if w in a.lower()), -1)
+
+rng = np.random.default_rng(0)
+score = {"있는 물체": [], "없는 물체": [], "개수": [], "좌우": []}
+answers_absent, lr_said, lr_true = [], [], []
+for _ in range(30):
+    img, objs, (ac, as_) = scene(rng)
+    c, s, _ = objs[0]
+    score["있는 물체"].append(yes(ask(img, f"Is there a {c} {s} in the image? Answer yes or no.")[0]))
+    a = ask(img, f"Is there a {ac} {as_} in the image? Answer yes or no.")[0]
+    score["없는 물체"].append(not yes(a)); answers_absent.append(a.split()[0] if a else "")
+    score["개수"].append(num(ask(img, "How many shapes are in the image? Answer with a number.")[0]) == len(objs))
+    pair = [(o1, o2) for o1 in objs for o2 in objs if o1[2] != o2[2]]   # 다른 열에 있는 두 물체
+    if not pair:
+        continue
+    (c1, s1, k1), (c2, s2, k2) = pair[int(rng.integers(len(pair)))]
+    said = yes(ask(img, f"Is the {c1} {s1} to the left of the {c2} {s2}? Answer yes or no.")[0])
+    score["좌우"].append(said == (k1 < k2)); lr_said.append(said); lr_true.append(k1 < k2)
+for k, v in score.items():
+    print(k, round(float(np.mean(v)), 2))
+print(sorted(set(answers_absent)))
+
+# 3) 좌우 질문에서 '예' 라고 답한 비율과, 정답이 '예' 인 비율
+print(round(float(np.mean(lr_said)), 2), round(float(np.mean(lr_true)), 2))
+
+# 256484928
+# (256, 256) 64 1088
+# (512, 512) 64 1088
+# (1024, 1024) 64 1088
+# (1536, 768) 64 576
+# 있는 물체 0.57
+# 없는 물체 0.83
+# 개수 0.53
+# 좌우 0.52
+# ['No.', 'Yes.']
+# 0.59 0.48
+```
+
+1)의 줄은 (이미지 크기, tile 분할 없이 visual token 수, 분할했을 때의 수)다. 2)의 줄은 질문 종류별 정답률, 그다음 줄은 없는 물체를 물었을 때 나온 답의 종류다. 마지막 줄은 좌우 질문에 "예"라고 답한 비율과 정답이 "예"인 비율이다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **visual token 예산은 분할 방식이 정한다 (G9.9.1).** tile 분할을 끄면 이미지 크기와 상관없이 64 token이다. 켜면 정사각형 이미지가 4×4 tile과 전체 축소본 하나, 곧 17 × 64 = 1,088 token이 된다. 256×256처럼 작은 이미지도 먼저 키운 뒤 잘라서 똑같이 1,088 token이다. 2:1 이미지는 8 tile + 축소본으로 576 token이다. 본문 "AnyRes가 하는 일"의 "세부는 tile이, 전체 맥락은 축소본이"를 이 모델도 그대로 하고, 대가로 token이 17배가 된다.
+- **좌우 관계는 우연 수준이다 (G9.9.2).** 좌우 질문의 정답률이 0.52다. "예"라고 답한 비율(0.59)이 정답이 "예"인 비율(0.48)보다 높아서, 위치를 보고 답한다기보다 "예" 쪽으로 기운 추측에 가깝다. 본문의 장난감 connector에서 평균을 내면 위치가 지워진 것과 같은 결과다. 다만 이 모델이 왜 위치를 놓치는지(connector의 압축인지, 작은 언어모델의 한계인지)는 이 실험으로 가를 수 없다.
+- **개수도 절반쯤만 맞힌다.** 2~5개를 세는 질문의 정답률이 0.53이다. 본문 ③의 "개수는 셋 다 못 센다"와 같은 방향이다.
+- **없는 물체를 있다고 한다 (G9.9.4).** 장면에 없는 물체를 물었을 때 17%(30번 중 5번)는 "Yes"라고 답했다. 이 장면들은 흰 바탕에 도형 몇 개뿐인 아주 단순한 그림인데도 그렇다.
+- **있는 물체도 자주 놓친다.** 장면에 있는 물체를 물었을 때 "Yes"는 57%뿐이다. 색과 모양을 함께 맞혀야 하는 질문이라, 색은 맞고 모양이 다른 물체 등과 헷갈릴 수 있다. 이 모델이 무엇과 헷갈렸는지는 따로 확인하지 않았다.
+
+**이 코드가 보여 주지 못하는 것.**
+2억 5,600만 parameter짜리 아주 작은 모델이다. 큰 VLM에서는 숫자가 다를 것이다. 다만 좌우 관계와 개수는 큰 모델에서도 약점으로 자주 보고된다. 질문 종류마다 30개 안팎이라 정답률마다 표준오차가 0.09 정도다. tile 분할을 켜면(1,088 token) 정답률이 오르는지는 CPU 시간 때문에 재지 않았다. 본문의 Q-Former 실험(G9.9.3)에 해당하는 비교도 하지 않았다.
 
 ---
 
