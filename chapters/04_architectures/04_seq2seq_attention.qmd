@@ -512,6 +512,78 @@ Vaswani et al.(2017)의 답은 제목 그대로였다 —
 
 ---
 
+## 실제 도구로: 번역 모델의 cross-attention
+
+이 장의 attention은 seq2seq 번역에서 나왔다. 공개된 영어→독일어 번역 모델(MarianMT)로 문장을 번역하고, 번역문의 token마다 원문의 어디를 보는지(alignment)를 꺼내 본다. 이 모델은 RNN이 아니라 Transformer encoder-decoder이지만, decoder가 원문을 보는 cross-attention은 이 장의 attention과 같은 역할을 한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `sentencepiece`, `sacremoses` (Marian tokenizer가 권장한다)
+- 모델은 `Helsinki-NLP/opus-mt-en-de`(7,400만 parameter, 약 300 MB)다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+from transformers import MarianMTModel, MarianTokenizer
+
+name = "Helsinki-NLP/opus-mt-en-de"
+tok = MarianTokenizer.from_pretrained(name)
+model = MarianMTModel.from_pretrained(name, attn_implementation="eager").eval()
+
+src = "The black cat sleeps on the old sofa."
+enc = tok(src, return_tensors="pt")
+with torch.no_grad():
+    out = model.generate(**enc, num_beams=1, do_sample=False, max_length=40)
+print(tok.decode(out[0], skip_special_tokens=True))
+
+# 1) cross-attention: 번역문의 token 마다 원문의 어느 token 을 보는가 (마지막 층, head 평균)
+with torch.no_grad():
+    o = model(**enc, decoder_input_ids=out[:, :-1], output_attentions=True)
+A = o.cross_attentions[-1][0].mean(0)                           # (번역 길이, 원문 길이)
+s_tok = tok.convert_ids_to_tokens(enc.input_ids[0])
+t_tok = tok.convert_ids_to_tokens(out[0, 1:])
+for i, t in enumerate(t_tok):
+    j = int(A[i].argmax())
+    print(f"{t:>10} -> {s_tok[j]:<10} {A[i, j].item():.2f}")
+
+# 2) 층에 따라 alignment 가 얼마나 뾰족한가: 행마다 entropy 의 평균 (낮을수록 한 곳을 본다)
+ent = lambda M: float(-(M * M.clamp_min(1e-9).log()).sum(-1).mean())
+print([round(ent(L[0].mean(0)), 2) for L in o.cross_attentions], round(float(torch.log(torch.tensor(A.shape[1], dtype=torch.float))), 2))
+
+# 3) 원문이 길어지면: encoder 의 마지막 상태 하나에 모아 둘 필요가 없다
+long = "The black cat, which my grandmother adopted from a small shelter near the river many years ago, sleeps on the old sofa."
+with torch.no_grad():
+    lo = model.generate(**tok(long, return_tensors="pt"), num_beams=1, do_sample=False, max_length=80)
+print(tok.decode(lo[0], skip_special_tokens=True))
+
+# Die schwarze Katze schläft auf dem alten Sofa.
+#       ▁Die -> </s>       0.39
+#  ▁schwarze -> ▁black     0.48
+#     ▁Katze -> ▁cat       0.74
+#   ▁schläft -> ▁sleep     0.61
+#       ▁auf -> </s>       0.51
+#       ▁dem -> </s>       0.58
+#     ▁alten -> ▁old       0.39
+#      ▁Sofa -> ▁sofa      0.75
+#          . -> </s>       0.65
+#       </s> -> </s>       0.81
+# [1.6, 1.55, 1.81, 1.89, 1.17, 1.25] 2.4
+# Die schwarze Katze, die meine Großmutter vor vielen Jahren aus einem kleinen Tierheim nahe dem Fluss adoptierte, schläft auf dem alten Sofa.
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **내용어는 대응하는 원문 단어를 본다 (G4.4.2).** "schwarze"는 "black"(0.48), "Katze"는 "cat"(0.74), "schläft"는 "sleep"(0.61), "alten"은 "old"(0.39), "Sofa"는 "sofa"(0.75)를 가장 많이 본다. 본문의 alignment 행렬에서 본 대각선 모양이다. 독일어와 영어의 어순이 이 문장에서는 같아서 대각선이 깨지지 않았다.
+- **기능어는 문장 끝 기호를 본다.** "Die", "auf", "dem", 마침표는 원문의 `</s>` (문장 끝)에 가장 많은 가중치를 준다(0.39~0.65). 대응하는 단어가 뚜렷하지 않을 때 가중치를 흘려보내는 자리로 쓰는 것으로 보인다. [5.2](../05_transformer/02_multi_head.qmd)의 attention sink와 같은 모습이다. 그래서 attention 가중치를 그대로 단어 정렬로 읽으면 기능어에서 틀린다.
+- **층마다 뾰족한 정도가 다르다.** cross-attention 가중치의 entropy(head 평균)가 6개 층에서 1.60, 1.55, 1.81, 1.89, 1.17, 1.25다. 원문 token 11개에 고르게 나눠 줄 때의 2.40보다 모두 낮고, 마지막 두 층이 가장 뾰족하다.
+- **긴 원문도 번역된다 ("bottleneck을 수치로").** 관계절이 끼어 원문이 세 배쯤 길어진 문장도 관계절까지 제대로 번역했다. 원문 전체를 벡터 하나에 담지 않고 매 step 원문의 모든 위치를 다시 볼 수 있기 때문이라는 것이 이 장의 논지다. 다만 이 문장 하나로 그 원인을 가린 것은 아니다.
+
+**이 코드가 보여 주지 못하는 것.**
+문장 둘이고, 어순이 거의 같은 언어 쌍이다. 독일어 부문장의 동사 후치처럼 어순이 크게 바뀌는 경우 alignment가 어떻게 되는지는 확인하지 않았다.
+head를 평균한 attention이다. head마다 보는 곳이 다르고, 평균은 그 차이를 지운다. attention 가중치가 번역 결정의 "이유"라는 해석은 [12.0](../12_trust/00_interpretability.qmd)에서 본 것처럼 조심해야 한다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
