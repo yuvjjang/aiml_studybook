@@ -85,6 +85,8 @@ $s$ 를 계산할 때 이미 $\bar{x}$ 를 데이터에서 추정해 자유도 �
 이 차이는 작은 표본에서 무시할 수 없다. 정규분포의 1.96을 그냥 쓰면 구간이 좁아져
 **실제 coverage(구간이 참값을 덮는 비율)가 95%에 못 미친다.**
 
+표준정규에서 n개를 뽑아 95% 구간을 만들고, 참값 0을 덮는 비율
+
 ```{python}
 #| label: t-vs-z
 #| code-fold: false
@@ -95,7 +97,6 @@ from scipy import stats
 rng = np.random.default_rng(0)
 trials = 100_000
 
-print("표준정규에서 n개를 뽑아 95% 구간을 만들고, 참값 0을 덮는 비율\n")
 print(f"{'n':>4}  {'z critical value':>9}  {'t critical value':>9}  {'z coverage':>11}  {'t coverage':>11}")
 for n in [3, 5, 10, 30, 100]:
     S = rng.normal(0.0, 1.0, size=(trials, n))
@@ -105,10 +106,10 @@ for n in [3, 5, 10, 30, 100]:
     cov_z = (np.abs(S.mean(1)) <= zc * se).mean()
     cov_t = (np.abs(S.mean(1)) <= tc * se).mean()
     print(f"{n:>4}  {zc:>9.3f}  {tc:>9.3f}  {cov_z:>11.4f}  {cov_t:>11.4f}")
-
-print("\nn=3 에서 z 를 쓰면 95%가 아니라 81% 밖에 덮지 못한다.")
-print("t 는 어느 n 에서도 95%를 지킨다. n 이 커지면 둘이 같아진다.")
 ```
+
+n=3 에서 z 를 쓰면 95%가 아니라 81% 밖에 덮지 못한다.  
+t 는 어느 n 에서도 95%를 지킨다. n 이 커지면 둘이 같아진다.
 
 $n=100$ 이면 critical value 차이가 1.984 대 1.960으로 사실상 없다.
 "큰 표본에서는 t 든 z 든 상관없다"는 말이 여기서 나온다 — 다만 그 '큼'의 기준이
@@ -200,10 +201,10 @@ for n in sizes:
     lo, hi, mean, miss = results[n]
     print(f"{n:>10} {miss.sum():>10} {(1-miss.mean())*100:>13.0f}% "
           f"{(hi-lo).mean():>13.2f}")
-print()
-print("→ 커버리지는 표본 크기와 무관하게 95% 부근을 유지한다.")
-print("  바뀌는 것은 구간의 폭이다 — n 이 4배면 폭은 절반.")
 ```
+
+→ 커버리지는 표본 크기와 무관하게 95% 부근을 유지한다.  
+바뀌는 것은 구간의 폭이다 — n 이 4배면 폭은 절반.
 
 ::: {.interaction-hint}
 $n$ 을 키우면 구간이 **좁아지지만** 놓치는 비율은 여전히 5% 근처입니다. 신뢰수준은 "얼마나 자주 맞히는가"이고, 표본 크기는 "얼마나 정밀한가"를 정합니다 — 다른 축입니다.
@@ -406,6 +407,8 @@ $\alpha=0.05$, power 80%로 흔히 쓰는 조합에서는 $z$ 값이 각각 1.96
 $2(1.96+0.84)^2 \approx 15.7$ 이 되어 **$n \approx 16\,\sigma^2/\Delta^2$** 라는 어림이 나온다.
 effect size를 $d = \Delta/\sigma$ 로 두면 $n \approx 16/d^2$ 로 더 외우기 쉽다. 예컨대 $d=0.5$ 면 군당 64명, $d=0.2$ 면 400명이다.
 
+공식이 준 n 으로 실제 t-검정을 돌려 power 를 재본다
+
 ```{python}
 #| label: power-n
 #| code-fold: false
@@ -417,7 +420,6 @@ rng = np.random.default_rng(1)
 alpha, sigma = 0.05, 1.0
 za = stats.norm.ppf(1 - alpha / 2)
 
-print("공식이 준 n 으로 실제 t-검정을 돌려 power 를 재본다\n")
 print(f"{'Δ':>5}  {'목표 power':>10}  {'공식이 준 군당 n':>16}  {'시뮬레이션':>10}")
 for delta, target in [(0.5, 0.80), (0.5, 0.90), (0.2, 0.80)]:
     zb = stats.norm.ppf(target)
@@ -428,10 +430,10 @@ for delta, target in [(0.5, 0.80), (0.5, 0.90), (0.2, 0.80)]:
     B = rng.normal(delta, sigma, size=(T, n_req))     # treatment group (처치군, 참 효과 Δ)
     _, p = stats.ttest_ind(B, A, axis=1)
     print(f"{delta:>5}  {target:>10.0%}  {n_req:>16}  {(p < alpha).mean():>10.3f}")
-
-print("\nΔ 가 0.5 → 0.2 (2.5배 작아짐) 일 때 필요한 n 은 63 → 393 (약 6.25배).")
-print("2.5² = 6.25 — n ∝ 1/Δ² 가 그대로 보인다.")
 ```
+
+Δ 가 0.5 → 0.2 (2.5배 작아짐) 일 때 필요한 n 은 63 → 393 (약 6.25배).  
+2.5² = 6.25 — n ∝ 1/Δ² 가 그대로 보인다.
 
 ::: {.callout-warning}
 ## power가 낮은 연구는 유의해도 믿기 어렵다
@@ -535,17 +537,23 @@ below = np.where(pvals[order] <= alpha * np.arange(1, m + 1) / m)[0]
 bh = np.zeros(m, dtype=bool)
 if len(below):
     bh[order[: below[-1] + 1]] = True
+```
 
-print(f"검정 {m}개 중 진짜 효과는 {m_true}개\n")
+검정 `{python} f'{m}'`개 중 진짜 효과는 `{python} f'{m_true}'`개
+
+```{python}
+#| label: bonferroni-bh-2
+#| code-fold: false
+
 print(f"{'방법':<14}{'발견':>5}{'참':>7}{'거짓':>6}{'거짓 비율':>10}")
 for name, sel in [("보정 없음", naive), ("Bonferroni", bonf), ("BH (FDR)", bh)]:
     d = int(sel.sum()); f = int((sel & ~is_true).sum())
     print(f"{name:<14}{d:>5}{d - f:>7}{f:>6}{(f / d if d else 0):>10.3f}")
-
-print("\n보정 없음: 발견의 절반이 거짓이다.")
-print("Bonferroni: 거짓은 0이지만 진짜 효과의 절반을 놓쳤다.")
-print("BH: 거짓 비율을 5% 아래로 누르면서 진짜의 대부분을 건졌다.")
 ```
+
+보정 없음: 발견의 절반이 거짓이다.  
+Bonferroni: 거짓은 0이지만 진짜 효과의 절반을 놓쳤다.  
+BH: 거짓 비율을 5% 아래로 누르면서 진짜의 대부분을 건졌다.
 
 ::: {.key-concept}
 머신러닝에서는 이 multiple comparisons 문제가 **하이퍼파라미터 탐색**이라는 형태로 나타난다.
@@ -605,17 +613,11 @@ fig.update_layout(legend=dict(x=0.02, y=0.98))
 fig.show()
 ```
 
-```{python}
-#| label: mt-numbers
-#| code-fold: false
+효과가 전혀 없는 데이터로 `{python} f'{M_TESTS}'`회 검정 × `{python} f'{N_SIM}'`회 시뮬레이션
+false positive 평균: `{python} f'{false_pos.mean():.2f}'`개 (기댓값 `{python} f'{M_TESTS * ALPHA:.1f}'`)  
+하나 이상 나온 비율 : `{python} f'{(false_pos > 0).mean() * 100:.1f}'`% (이론 `{python} f'{(1 - (1 - ALPHA) ** M_TESTS) * 100:.1f}'`%)
 
-print(f"효과가 전혀 없는 데이터로 {M_TESTS}회 검정 × {N_SIM}회 시뮬레이션")
-print(f"  false positive 평균: {false_pos.mean():.2f}개  (기댓값 {M_TESTS*ALPHA:.1f})")
-print(f"  하나 이상 나온 비율 : {(false_pos > 0).mean()*100:.1f}%  "
-      f"(이론 {(1-(1-ALPHA)**M_TESTS)*100:.1f}%)")
-print()
-print("→ 20개 지표를 보면 3번 중 2번은 '유의한 발견'이 나온다. 전부 우연이다.")
-```
+→ 20개 지표를 보면 3번 중 2번은 '유의한 발견'이 나온다. 전부 우연이다.
 
 ::: {.key-concept}
 **보정 방법**
@@ -1104,8 +1106,9 @@ print(f"95% CI [{(diff - 1.96 * se) * 100:.1f}%p, {(diff + 1.96 * se) * 100:.1f}
 p_bar = (pA + pB) / 2
 za, zb = stats.norm.ppf(0.975), stats.norm.ppf(0.80)
 n_req = 2 * (za + zb) ** 2 * p_bar * (1 - p_bar) / diff ** 2
-print(f"Δ=2.5%p 를 power 80% 로 검출하려면 군당 {np.ceil(n_req):,.0f}명")
 ```
+
+Δ=2.5%p 를 power 80% 로 검출하려면 군당 `{python} f'{np.ceil(n_req):,.0f}'`명
 :::
 
 ### C2. p-값의 분포를 직접 그려 보기
