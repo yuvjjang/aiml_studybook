@@ -179,15 +179,18 @@ for a, b in [(23, 0), (0, 1), (11, 12), (3, 4), (0, 6), (0, 12), (6, 18)]:
 d23 = float(np.linalg.norm(cyc[23]-cyc[0]))
 d01 = float(np.linalg.norm(cyc[0]-cyc[1]))
 adj = [float(np.linalg.norm(cyc[h]-cyc[(h+1) % 24])) for h in range(24)]
-print()
-print(f"인접한 24쌍의 거리: 최소 {min(adj):.6f}, 최대 {max(adj):.6f}")
 ```
+
+인접한 24쌍의 거리: 최소 `{python} f'{min(adj):.6f}'`, 최대 `{python} f'{max(adj):.6f}'`
 
 **23시↔0시 거리가 0시↔1시 거리와 정확히 같다** (`{python} f"{d23:.4f}"` = `{python} f"{d01:.4f}"`).
 원본 좌표에서는 23 대 1 이었다 — 23배 왜곡이다.
 인접한 모든 쌍의 거리가 동일하다는 것도 마지막 줄에서 확인된다.
 
 **그런데 실제 과제에서 항상 최선은 아니다.** 직접 재보자.
+
+과제: 심야(22\~4시)에 확률이 높은 이벤트 예측
+진짜 구조: 심야 75%, 그 외 25% (달성 가능한 최대 정확도 ≈ 0.75)
 
 ```{python}
 #| label: cyclical-task
@@ -214,9 +217,6 @@ ENCODINGS = {
     "one-hot (24차원)": np.eye(24)[t_hour],
     "도메인 지식: is_night": is_night[:, None].astype(float),
 }
-print("과제: 심야(22~4시)에 확률이 높은 이벤트 예측")
-print(f"  진짜 구조: 심야 75%, 그 외 25%  (달성 가능한 최대 정확도 ≈ 0.75)")
-print()
 print(f"{'인코딩':<24} {'차원':>5} {'CV 정확도':>11}")
 print("-" * 44)
 res_e = {}
@@ -307,9 +307,9 @@ c = np.cos(2 * np.pi * np.array([3, 9]) / 24)
 print()
 print(f"sin 만 쓸 때   sin(3시)={s[0]:+.4f}  sin(9시)={s[1]:+.4f}  "
       f"구별 가능={not np.isclose(s[0], s[1])}")
-print(f"cos 을 더하면  cos(3시)={c[0]:+.4f}  cos(9시)={c[1]:+.4f}  "
-      f"구별 가능={not np.isclose(c[0], c[1])}")
 ```
+
+cos 을 더하면 cos(3시)=`{python} f'{c[0]:+.4f}'` cos(9시)=`{python} f'{c[1]:+.4f}'` 구별 가능=`{python} f'{not np.isclose(c[0], c[1])}'`
 
 마지막 열이 식 $\sqrt{2(1-\cos\Delta\theta)}$ 로 계산한 값이고, 실측 거리와 정확히 일치한다.
 그리고 3시와 9시는 $\sin$ 값이 같지만 $\cos$ 값이 달라 두 좌표를 함께 쓰면 구별된다.
@@ -517,18 +517,24 @@ print(f"{'선택 수':>8} {'CV 정확도':>11} {'진짜 특성 포함':>15} {'�
 print("-" * 50)
 for k, a, h in zip(KS, accs, hits):
     print(f"{k:>8} {a:>11.4f} {h:>10}/{min(k, D_USE)} {k-h:>10}")
-print()
 best_k = KS[int(np.argmax(accs))]
 acc_best, acc_true, acc_all = max(accs), accs[KS.index(D_USE)], accs[-1]
-print(f"최고 성능: 특성 {best_k}개 ({acc_best:.4f})")
-print(f"진짜 특성 {D_USE}개만: {acc_true:.4f}")
-print(f"전부 {KS[-1]}개: {acc_all:.4f}  (최고보다 {acc_best-acc_all:.4f} 낮음)")
-print()
-print(f"진짜 특성의 |상관|: {filt[:D_USE].min():.4f} ~ {filt[:D_USE].max():.4f}")
-print(f"잡음 특성의 |상관|: {filt[D_USE:].min():.4f} ~ {filt[D_USE:].max():.4f}")
-gap = float(filt[:D_USE].min() - filt[D_USE:].max())
-print(f"가장 약한 진짜 특성과 가장 강한 잡음의 차이: {gap:+.4f}")
 ```
+
+최고 성능: 특성 `{python} f'{best_k}'`개 (`{python} f'{acc_best:.4f}'`)  
+진짜 특성 `{python} f'{D_USE}'`개만: `{python} f'{acc_true:.4f}'`
+
+```{python}
+#| label: feature-selection-numbers-2
+#| code-fold: false
+
+print(f"전부 {KS[-1]}개: {acc_all:.4f}  (최고보다 {acc_best-acc_all:.4f} 낮음)")
+gap = float(filt[:D_USE].min() - filt[D_USE:].max())
+```
+
+진짜 특성의 |상관|: `{python} f'{filt[:D_USE].min():.4f}'` \~ `{python} f'{filt[:D_USE].max():.4f}'`
+잡음 특성의 |상관|: `{python} f'{filt[D_USE:].min():.4f}'` \~ `{python} f'{filt[D_USE:].max():.4f}'`
+가장 약한 진짜 특성과 가장 강한 잡음의 차이: `{python} f'{gap:+.4f}'`
 
 **최적이 진짜 특성 수(`{python} f"{D_USE}"`)가 아니라 `{python} f"{best_k}"`개라는 점에 주목하라.**
 `{python} f"{best_k}"`개를 고르면 잡음 `{python} f"{best_k - D_USE}"`개가 섞이는데도 점수가 조금 높다.
@@ -655,17 +661,28 @@ DF = (TF > 0).sum(0)
 IDF = np.log(len(docs)/(1 + DF)) + 1.0
 TFIDF = TF_norm*IDF
 TFIDF = TFIDF/(np.linalg.norm(TFIDF, axis=1, keepdims=True) + 1e-12)
+```
 
-print(f"문서 {len(docs)}개, 어휘 {len(vocab)}개")
-print()
+문서 `{python} f'{len(docs)}'`개, 어휘 `{python} f'{len(vocab)}'`개
+
+```{python}
+#| label: tfidf-2
+#| code-fold: false
+
 print(f"{'단어':<10} {'DF':>4} {'IDF':>8}  {'해석'}")
 print("-" * 46)
 for t in sorted(vocab, key=lambda w: DF[vi[w]], reverse=True)[:8]:
     note = "모든 문서에 등장 — 정보 없음" if DF[vi[t]] == len(docs) else ""
     print(f"{t:<10} {DF[vi[t]]:>4} {IDF[vi[t]]:>8.4f}  {note}")
-print()
-print("문서 간 cosine similarity (TF-IDF)")
 S = TFIDF @ TFIDF.T
+```
+
+문서 간 cosine similarity (TF-IDF)
+
+```{python}
+#| label: tfidf-3
+#| code-fold: false
+
 print(f"{'':<6}" + "".join(f"{f'문서{j}':>8}" for j in range(len(docs))))
 for i in range(len(docs)):
     print(f"문서{i:<3}" + "".join(f"{S[i, j]:>8.3f}" for j in range(len(docs))))
@@ -725,8 +742,14 @@ for w, df in words:
     idf = np.log(N / (1 + df))
     tag = "거의 정보 없음" if idf < 1 else ("보통" if idf < 4 else "매우 특이")
     print(f"{w:<10}{df:>7}{p:>10.4f}{idf:>14.3f}   {tag}")
+```
 
-print("\ntf damping — 같은 단어가 여러 번 나올 때")
+tf damping — 같은 단어가 여러 번 나올 때
+
+```{python}
+#| label: idf-information-2
+#| code-fold: false
+
 print(f"{'원 빈도':>8}{'log(1+tf)':>12}{'sqrt(tf)':>11}")
 for tf in [1, 2, 5, 20, 100]:
     print(f"{tf:>8}{np.log1p(tf):>12.3f}{np.sqrt(tf):>11.3f}")
