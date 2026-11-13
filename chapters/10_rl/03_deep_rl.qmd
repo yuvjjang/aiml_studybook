@@ -620,6 +620,91 @@ TD3의 '두 critic 중 최솟값'이 G10.3.1과 같은 처방이다 —
 마지막 줄은 이 장의 실험에서도 보였다 — seed 8개의 표준편차가 평균의 10~20%였다.
 **deep reinforcement learning 논문을 읽을 때 seed 수를 먼저 확인해야 하는 이유다.**
 
+---
+
+## 실제 도구로: CartPole에서 DQN을 학습시킨다
+
+Gymnasium의 CartPole에서 DQN을 PyTorch로 학습시킨다. experience replay, ε-greedy, target network를 갖춘 기본 DQN과, target network를 뺀 것, Double DQN을 seed 둘씩 비교한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `gymnasium` 1.4
+- 각각 300 에피소드다. 6번의 학습에 CPU로 수십 분 걸렸다. 실무에서는 Stable-Baselines3 같은 library의 검증된 구현을 쓴다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import copy
+import random
+from collections import deque
+import numpy as np
+import torch
+import gymnasium as gym
+
+nn, F = torch.nn, torch.nn.functional
+
+
+def run(target_net=True, double=False, episodes=300, seed=0):
+    torch.manual_seed(seed); random.seed(seed); rng = np.random.default_rng(seed)
+    env = gym.make("CartPole-v1")
+    q = nn.Sequential(nn.Linear(4, 128), nn.ReLU(), nn.Linear(128, 128), nn.ReLU(), nn.Linear(128, 2))
+    tgt = copy.deepcopy(q)
+    opt = torch.optim.Adam(q.parameters(), lr=5e-4)
+    buf = deque(maxlen=20000)
+    steps, lengths, qvals = 0, [], []
+    for ep in range(episodes):
+        s, _ = env.reset(seed=seed * 10000 + ep); done, n = False, 0
+        while not done:
+            eps = max(0.05, 1.0 - steps / 10000)
+            with torch.no_grad():
+                a = int(rng.integers(2)) if rng.random() < eps else int(q(torch.tensor(s)).argmax())
+            s2, r, term, trunc, _ = env.step(a); done = term or trunc
+            buf.append((s, a, r, s2, float(term))); s = s2; steps += 1; n += 1
+            if len(buf) >= 1000:
+                S, A, R, S2, D = map(np.array, zip(*random.sample(buf, 64)))
+                S, S2 = torch.tensor(S, dtype=torch.float32), torch.tensor(S2, dtype=torch.float32)
+                with torch.no_grad():
+                    net = tgt if target_net else q
+                    if double:                                       # 행동은 온라인 망이 고르고, 값은 target 망이 매긴다
+                        a2 = q(S2).argmax(1, keepdim=True); nxt = net(S2).gather(1, a2).squeeze(1)
+                    else:
+                        nxt = net(S2).max(1).values
+                    y = torch.tensor(R, dtype=torch.float32) + 0.99 * nxt * (1 - torch.tensor(D, dtype=torch.float32))
+                pred = q(S).gather(1, torch.tensor(A)[:, None]).squeeze(1)
+                loss = F.smooth_l1_loss(pred, y)
+                opt.zero_grad(); loss.backward(); opt.step()
+                if steps % 500 == 0:
+                    tgt.load_state_dict(q.state_dict())
+        lengths.append(n)
+        with torch.no_grad():
+            qvals.append(q(torch.tensor(env.reset(seed=999)[0])).max().item())
+    return np.array(lengths), np.array(qvals)
+
+
+# 1) DQN (target network 있음) / 없음 / Double DQN: 마지막 50 에피소드의 평균 길이와, 시작 상태의 Q 추정
+for name, kw in [("DQN", {}), ("target 없음", {"target_net": False}), ("Double DQN", {"double": True})]:
+    res = [run(seed=s, **kw) for s in range(2)]
+    print(name, [int(L[-50:].mean()) for L, _ in res], [round(float(Q[-1]), 1) for _, Q in res])
+# 할인 수익의 상한: 매 step 보상 1, 최대 500 step, gamma 0.99
+print(round(sum(0.99 ** k for k in range(500)), 1))
+
+# DQN [108, 125] [35.1, 35.2]
+# target 없음 [14, 13] [338623.2, 435777.3]
+# Double DQN [106, 167] [35.2, 42.3]
+# 99.3
+```
+
+각 줄은 seed 둘의 (마지막 50 에피소드 평균 길이)와 (시작 상태의 Q 추정)이다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **target network를 빼면 Q가 폭발한다 (G10.3.3).** target network 없이 같은 망으로 목표값을 만들면, 시작 상태의 Q 추정이 34만, 44만으로 터지고 에피소드 길이가 13~14 step(무작위 수준)에 머문다. 매 step 갱신되는 망을 목표로 쓰면 목표가 계속 따라 움직이며 값이 부풀어 오른다. 본문 제목대로 "이건 확실히 일한다".
+- **기본 DQN은 학습되지만 300 에피소드로는 끝나지 않았다.** 마지막 50 에피소드 평균이 108, 125 step이다. 최대 500에 한참 못 미친다. CartPole은 DQN으로 풀리는 문제이지만, 이 설정(학습률, ε 감소 속도, 에피소드 수)으로는 수렴하지 않았다. hyperparameter를 맞추지 않은 결과를 그대로 적는다.
+- **Q 추정은 실제보다 작았다.** 매 step 보상 1에 $\gamma = 0.99$ 면 500 step을 다 버틸 때 할인 수익이 99.3이다. DQN의 시작 상태 Q 추정은 35 근처다. 실제로 약 110 step을 버티면 할인 수익이 $\sum_{k<110} 0.99^k \approx 67$ 이므로, 이 시점의 Q는 과대가 아니라 과소 추정이다. 학습이 덜 끝나서 값이 아직 따라오는 중인 것으로 보인다.
+- **Double DQN은 이 실험에서 큰 차이를 내지 않았다 (G10.3.1).** 평균 길이가 106, 167로 seed 하나에서는 나았지만 seed 사이의 차이가 더 크다. Q 추정도 35, 42로 비슷하다. maximization bias를 줄이는 효과는 Q가 과대 추정될 때 보이는데, 이 학습은 아직 과소 추정 구간에 있었다.
+
+**이 코드가 보여 주지 못하는 것.**
+seed 둘, 300 에피소드다. 강화학습 결과는 seed에 따라 크게 흔들려서, 이 숫자로 방법끼리 순위를 매길 수 없다. target network의 효과처럼 차이가 압도적인 경우만 읽을 수 있다.
+replay buffer의 효과(G10.3.2)와 Dueling(G10.3.4)은 시험하지 않았다.
 
 ---
 
