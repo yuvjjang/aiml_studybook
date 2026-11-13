@@ -50,11 +50,10 @@ for name, dt, e_bits, m_bits in fmts:
     digits = m_bits * np.log10(2)
     print(f"{name:<10} {e_bits:>5} {m_bits:>5} {float(info.max):>12.2e} "
           f"{float(info.tiny):>13.2e} {float(info.eps):>11.2e} {digits:>7.1f}자리")
-
-print()
-print("bfloat16 : exponent 8, mantissa 7  → float32 와 같은 범위, 낮은 정밀도")
-print("           그래서 딥러닝 학습에서 fp16 보다 안전하다 (overflow 가 적다)")
 ```
+
+bfloat16 : exponent 8, mantissa 7 → float32 와 같은 범위, 낮은 정밀도
+그래서 딥러닝 학습에서 fp16 보다 안전하다 (overflow 가 적다)
 
 ::: {.key-concept}
 **이 표가 bfloat16이 딥러닝의 기본이 된 이유를 보여준다.**
@@ -117,10 +116,11 @@ for v in [1.0, 1e3, 1e6, 1e8]:
     pred = eps * 2.0 ** np.floor(np.log2(v))
     print(f"{v:>10.0e}  {gap:>12.3e}  {pred:>14.3e}")
 
-print("\n간격이 크기에 비례해 벌어지므로, 큰 수에 작은 수를 더하면 사라진다:")
 big = np.float32(1e8)
-print(f"  float32에서 1e8 + 1 == 1e8 ?  {big + np.float32(1.0) == big}")
 ```
+
+간격이 크기에 비례해 벌어지므로, 큰 수에 작은 수를 더하면 사라진다:  
+float32에서 1e8 + 1 == 1e8 ? `{python} f'{big + np.float32(1.0) == big}'`
 
 ::: {.key-concept}
 $\mathrm{fl}(x)=x(1+\delta)$ 라는 모델이 알려주는 것은
@@ -181,24 +181,38 @@ viz.fig_defaults(fig, height=410, title="floating point 격자의 간격")
 fig.show()
 ```
 
+float32 에서 1을 더해도 값이 안 변하는 지점:
+
 ```{python}
 #| label: spacing-demo
 #| code-fold: false
 
 import numpy as np
 
-print("float32 에서 1을 더해도 값이 안 변하는 지점:")
 for v in [1e6, 1e7, 1.7e7, 1e8]:
     a = np.float32(v)
     print(f"  {v:>8.1e}: {v:.0f} + 1 == {v:.0f} ?  {np.float32(a + 1) == a}")
 
-print()
-print("누적합(값을 하나씩 계속 더해 가기)의 위험 (같은 값 100만 번 더하기):")
 x = np.full(1_000_000, 0.1, dtype=np.float32)
 naive = np.float32(0)
+```
+
+누적합(값을 하나씩 계속 더해 가기)의 위험 (같은 값 100만 번 더하기):
+
+```{python}
+#| label: spacing-demo-2
+#| code-fold: false
+
 for i in range(0, 1_000_000, 1000):     # 샘플링해서 빠르게
     naive += x[i:i+1000].sum(dtype=np.float32)
-print(f"  단순 float32 합 : {float(np.float32(x).sum(dtype=np.float32)):.4f}")
+```
+
+단순 float32 합 : `{python} f'{float(np.float32(x).sum(dtype=np.float32)):.4f}'`
+
+```{python}
+#| label: spacing-demo-3
+#| code-fold: false
+
 print(f"  float64 합      : {x.astype(np.float64).sum():.4f}")
 print(f"  참값            : 100000.0000")
 ```
@@ -239,10 +253,10 @@ for offset in [0, 1e3, 1e6, 1e8]:
     x = (rng.normal(0, 1, 10000) + offset).astype(np.float32)
     print(f"평균 {offset:>8.0e} 근처 데이터  {var_naive(x):>16.6f} "
           f"{var_stable(x):>14.6f} {1.0:>10.4f}")
-print()
-print("→ 큰 상수가 더해진 데이터에서 naive 공식은 완전히 무너진다.")
-print("  E[X²] 과 (E[X])² 가 거의 같은 큰 수라서, 빼면 유효숫자가 사라진다.")
 ```
+
+→ 큰 상수가 더해진 데이터에서 naive 공식은 완전히 무너진다.  
+E[X²] 과 (E[X])² 가 거의 같은 큰 수라서, 빼면 유효숫자가 사라진다.
 
 ### 얼마나 날아가는지 계산할 수 있다
 
@@ -271,10 +285,10 @@ for x, y in [(1.0, 0.5), (1.0, 0.9), (1.0, 0.999), (1.0, 0.9999999)]:
     amp = (abs(x) + abs(y)) / abs(x - y)
     lost = np.log10(amp)
     print(f"{x:>12.7f}{y:>14.7f}{amp:>14.2e}{lost:>10.1f}{7 - lost:>18.1f}")
-
-print("\n마지막 줄은 float32 유효자리를 전부 소진한다.")
-print("빼기 전에는 두 수 모두 7자리가 정확했는데, 뺀 결과에는 정확한 자리가 없다.")
 ```
+
+마지막 줄은 float32 유효자리를 전부 소진한다.  
+빼기 전에는 두 수 모두 7자리가 정확했는데, 뺀 결과에는 정확한 자리가 없다.
 
 여기서 실무 규칙이 나온다. **cancellation은 뺄셈 자체가 아니라 "가까운 두 수의 뺄셈"이 문제다.**
 그리고 대개 식을 다시 쓰면 피할 수 있다.
@@ -354,10 +368,10 @@ for name, val in [("순차 루프", naive),
                   ("Kahan 보정", kahan(a))]:
     print(f"{name:<22}{float(val):>16.4f}{abs(float(val)-exact)/exact:>14.2e}")
 print(f"{'참값 (float64)':<22}{exact:>16.4f}")
-
-print("\npairwise 만으로 순차 루프보다 27배 정확하다 — 공짜다.")
-print("Kahan 은 거기서 다시 10배 줄이지만 덧셈 횟수가 늘어난다.")
 ```
+
+pairwise 만으로 순차 루프보다 27배 정확하다 — 공짜다.  
+Kahan 은 거기서 다시 10배 줄이지만 덧셈 횟수가 늘어난다.
 
 실무 지침은 단순하다. **직접 루프로 누적하지 말고 `np.sum`/`torch.sum` 을 쓴다.**
 그래도 부족하면 누적기만 float64로 올린다(`np.sum(a, dtype=np.float64)`) —
@@ -458,18 +472,25 @@ fig.update_layout(legend=dict(x=0.02, y=0.55))
 fig.show()
 ```
 
+float64 에서 exp 가 overflow 하는 지점: exp(709) 는 되고 exp(710) 은 inf
+
 ```{python}
 #| label: softmax-numbers
 #| code-fold: false
 
 import numpy as np
 
-print("float64 에서 exp 가 overflow 하는 지점: exp(709) 는 되고 exp(710) 은 inf")
 print(f"  exp(709) = {np.exp(709):.3e}")
 with np.errstate(over="ignore"):
     print(f"  exp(710) = {np.exp(710)}")
-print()
-print("float32 라면 훨씬 일찍 무너진다:")
+```
+
+float32 라면 훨씬 일찍 무너진다:
+
+```{python}
+#| label: softmax-numbers-2
+#| code-fold: false
+
 with np.errstate(over="ignore"):
     print(f"  float32 exp(88) = {np.exp(np.float32(88)):.3e}")
     print(f"  float32 exp(89) = {np.exp(np.float32(89))}")
@@ -477,9 +498,9 @@ print()
 z = np.array([1000.0, 1001.0, 999.0])
 with np.errstate(over="ignore", invalid="ignore"):
     print(f"naive softmax([1000, 1001, 999]) = {np.exp(z)/np.exp(z).sum()}")
-print(f"안정  softmax([1000, 1001, 999]) = "
-      f"{np.exp(z-z.max())/np.exp(z-z.max()).sum()}")
 ```
+
+안정 softmax([1000, 1001, 999]) = `{python} f'{np.exp(z - z.max()) / np.exp(z - z.max()).sum()}'`
 
 ::: {.key-concept}
 **attention에서 최댓값 빼기가 왜 중요한가**
@@ -520,14 +541,26 @@ rng = np.random.default_rng(0)
 probs = rng.uniform(0.001, 0.05, 1000)
 
 print(f"확률 공간에서 곱 : {np.prod(probs):.3e}   ← underflow")
-print(f"로그 공간에서 합 : {np.sum(np.log(probs)):.3f}")
-print()
-print()
 # 매우 작은 확률들의 합 — naive 하게 exp 하면 전부 0 이 된다
 log_p_tiny = np.array([-1200.0, -1201.0, -1199.5])
+```
+
+로그 공간에서 합 : `{python} f'{np.sum(np.log(probs)):.3f}'`
+
+```{python}
+#| label: log-space-2
+#| code-fold: false
+
 with np.errstate(under="ignore"):
     naive = np.log(np.sum(np.exp(log_p_tiny)))
-print(f"아주 작은 로그확률 {log_p_tiny.tolist()} 의 logsumexp:")
+```
+
+아주 작은 로그확률 `{python} f'{log_p_tiny.tolist()}'` 의 logsumexp:
+
+```{python}
+#| label: log-space-3
+#| code-fold: false
+
 print(f"  naive log(sum(exp))  : {naive}   ← exp 가 전부 0 → log(0)")
 print(f"  logsumexp            : {logsumexp(log_p_tiny):.6f}   ← 정상")
 ```
@@ -610,10 +643,10 @@ sq = (A ** 2).sum(1)
 D2 = sq[:, None] + sq[None, :] - 2 * (A @ A.T)
 print(f"전개식으로 계산한 결과: {D2.shape} = "
       f"{D2.nbytes/1024**3:.3f} GB   ← {mid_gb/(D2.nbytes/1024**3):.0f}배 절약")
-print()
-print("이것이 FlashAttention 과 같은 발상이다 —")
-print("중간 결과를 만들지 않도록 계산 순서를 바꾼다.")
 ```
+
+이것이 FlashAttention 과 같은 발상이다 —
+중간 결과를 만들지 않도록 계산 순서를 바꾼다.
 
 ---
 
@@ -640,9 +673,9 @@ for name, N, D in [("GPT-3", 175e9, 300e9), ("LLaMA-2 7B", 7e9, 2e12),
     c = transformer_flops(N, D)
     days = c / A100_FLOPS / 86400
     print(f"{name:<18} {N/1e9:>7.0f}B {D/1e12:>6.1f}T {c:>13.2e} {days:>10,.0f}")
-print()
-print("(GPU 1장 기준. 실제로는 수천 장을 병렬로 쓴다 — 11.2 분산 학습)")
 ```
+
+(GPU 1장 기준. 실제로는 수천 장을 병렬로 쓴다 — 11.2 분산 학습)
 
 ::: {.key-concept}
 **6ND가 어디서 나오는가**
@@ -674,16 +707,16 @@ import numpy as np
 a, b, c = np.float32(1e8), np.float32(-1e8), np.float32(1.0)
 print(f"(a + b) + c = {(a + b) + c}")
 print(f"a + (b + c) = {a + (b + c)}   ← 다르다")
-print()
-print("→ GPU 에서 덧셈 순서는 스레드 스케줄링에 따라 달라진다.")
-print("  그래서 같은 시드로도 결과가 미세하게 다를 수 있다.")
-print()
 
 # 시드 관리
 rng1 = np.random.default_rng(42)
 rng2 = np.random.default_rng(42)
-print(f"같은 시드, 독립 생성기: {np.allclose(rng1.normal(size=5), rng2.normal(size=5))}")
 ```
+
+→ GPU 에서 덧셈 순서는 스레드 스케줄링에 따라 달라진다.  
+그래서 같은 시드로도 결과가 미세하게 다를 수 있다.
+
+같은 시드, 독립 생성기: `{python} f'{np.allclose(rng1.normal(size=5), rng2.normal(size=5))}'`
 
 | 무작위성의 출처 | 고정 방법 |
 |-----------------|-----------|
@@ -736,13 +769,13 @@ for g in grads:
     flag = "  ← 직접 저장은 소실" if direct == 0 and restored != 0 else ""
     print(f"{g:>16.1e} {float(direct):>13.2e} {float(in_fp16):>16.2e} "
           f"{float(restored):>15.2e}{flag}")
-print()
-print("핵심: 되돌리는 나눗셈을 fp32 에서 해야 한다.")
-print("      fp16 안에서 나누면 다시 underflow 해 아무 이득이 없다.")
-print()
-print("bf16 은 범위가 fp32 와 같아 loss scaling 이 필요 없다 —")
-print("이것이 최근 학습이 bf16 으로 수렴한 이유다.")
 ```
+
+핵심: 되돌리는 나눗셈을 fp32 에서 해야 한다.  
+fp16 안에서 나누면 다시 underflow 해 아무 이득이 없다.
+
+bf16 은 범위가 fp32 와 같아 loss scaling 이 필요 없다 —
+이것이 최근 학습이 bf16 으로 수렴한 이유다.
 
 ---
 
@@ -1016,9 +1049,10 @@ a = np.full(10_000_000, 0.1, dtype=np.float32)
 print(f"순차 합산 (cumsum)   {float(np.cumsum(a)[-1]):>16,.4f}")
 print(f"pairwise (np.sum)    {float(np.sum(a)):>16,.4f}")
 print(f"float64 누적         {float(np.sum(a, dtype=np.float64)):>16,.4f}")
-print(f"0.1 의 float32 표현  {float(np.float32(0.1)):.10f}")
-print(f"50만 근처 float32 간격 = {float(np.spacing(np.float32(5e5)))}")
 ```
+
+0.1 의 float32 표현 `{python} f'{float(np.float32(0.1)):.10f}'`
+50만 근처 float32 간격 = `{python} f'{float(np.spacing(np.float32(500000.0)))}'`
 :::
 
 ### C2. 학습 비용 어림하기
@@ -1049,7 +1083,13 @@ N, D = 7e9, 2e12
 train = 6 * N * D
 eff = 1024 * 312e12 * 0.4
 infer = 2 * N * 1000
-print(f"학습 FLOPs        {train:.2e}")
+```
+
+학습 FLOPs `{python} f'{train:.2e}'`
+
+```{python}
+#| label: ex-flops-2
+
 print(f"GPU 1,024장       {train / eff / 86400:.1f}일")
 print(f"GPU 1장           {train / (312e12 * 0.4) / 86400 / 365:.1f}년")
 print(f"추론 1,000 토큰   {infer:.2e} FLOPs  (학습의 1/{train / infer:,.0f})")
