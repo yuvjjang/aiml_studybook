@@ -615,6 +615,90 @@ fig.show()
 - augmentation을 과제에 맞추지 않는다 — [9.0](00_image_basics.qmd)에서 본 대로 augmentation은 **invariance 주입**이다
 - 좌우 반전은 classification에 좋지만 **글자 인식·좌우 구분 과제에는 해롭다**
 
+---
+
+## 실제 도구로: torchvision의 detection 연산
+
+detection 모델의 부품은 torchvision의 `ops` 에 들어 있다. 이 장의 IoU, NMS, set prediction의 Hungarian matching, focal loss를 그 함수들로 확인한다. 모델은 내려받지 않고, 상자와 점수를 직접 만든다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `torchvision` 0.29, `scipy` 1.18.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import torch
+from scipy.optimize import linear_sum_assignment
+from torchvision.ops import batched_nms, box_iou, generalized_box_iou, nms, sigmoid_focal_loss
+
+torch.manual_seed(0)
+
+# 1) IoU: 상자 두 개가 얼마나 겹치는가 (x1, y1, x2, y2)
+a = torch.tensor([[0., 0., 10., 10.]])
+for b in [[0, 0, 10, 10], [5, 0, 15, 10], [2, 2, 8, 8], [20, 20, 30, 30], [11, 0, 21, 10]]:
+    bb = torch.tensor([b], dtype=torch.float)
+    print(b, round(box_iou(a, bb).item(), 3), round(generalized_box_iou(a, bb).item(), 3))
+
+# 2) NMS: 한 객체에 대한 중복 예측을 지운다. 두 객체가 겹쳐 있으면 진짜도 지운다
+gt = torch.tensor([[0., 0., 10., 10.], [4., 0., 14., 10.]])       # 서로 많이 겹친 두 사람 (IoU 0.43)
+dets = torch.cat([gt[0] + torch.randn(5, 4) * 0.5, gt[1] + torch.randn(5, 4) * 0.5])
+scores = torch.cat([torch.rand(5) * 0.3 + 0.7, torch.rand(5) * 0.3 + 0.6])
+print(round(box_iou(gt[:1], gt[1:]).item(), 3))
+for thr in [0.3, 0.5, 0.7]:
+    keep = nms(dets, scores, thr)
+    hit = box_iou(dets[keep], gt).max(0).values > 0.5               # 정답마다 잡혔는가
+    dup = (box_iou(dets[keep], gt).argmax(1).bincount(minlength=2) - 1).clamp(min=0).sum()   # 같은 정답에 남은 여분
+    print(thr, len(keep), hit.tolist(), int(dup))
+
+# 3) class 가 다르면 서로 지우지 않게: batched_nms
+labels = torch.tensor([0] * 5 + [1] * 5)                        # 두 번째 객체는 다른 class 라고 하자
+print(len(batched_nms(dets, scores, labels, 0.3)), len(nms(dets, scores, 0.3)))
+
+# 4) Hungarian matching (DETR 의 set prediction): 예측과 정답을 일대일로 짝짓는다
+cost = -(box_iou(dets, gt) + 0.5 * scores[:, None])
+r, c = linear_sum_assignment(cost.numpy())
+print(r.tolist(), c.tolist(), [round(float(box_iou(dets[i:i + 1], gt[j:j + 1])), 2) for i, j in zip(r, c)])
+
+# 5) focal loss: 쉬운 negative 의 loss 를 줄인다
+logits = torch.tensor([-4.0, -1.0, 0.0, 2.0])                   # 배경을 배경이라고 확신하는 정도
+target = torch.zeros(4)
+ce = torch.nn.functional.binary_cross_entropy_with_logits(logits, target, reduction="none")
+fl = sigmoid_focal_loss(logits, target, alpha=0.25, gamma=2.0, reduction="none")
+print([f"{v:.1e}" for v in ce.tolist()], [f"{v:.1e}" for v in fl.tolist()], [round(v, 0) for v in (ce / fl).tolist()])
+# 쉬운 negative 1만 개와 어려운 positive 10개의 loss 합
+easy = torch.full((10000,), -4.0); hard = torch.full((10,), -0.5)
+for name, f in [("CE", lambda x, t: torch.nn.functional.binary_cross_entropy_with_logits(x, t, reduction="sum")),
+                ("focal", lambda x, t: sigmoid_focal_loss(x, t, reduction="sum"))]:
+    le, lh = f(easy, torch.zeros(10000)).item(), f(hard, torch.ones(10)).item()
+    print(name, round(le, 2), round(lh, 2), round(le / (le + lh), 3))
+
+# [0, 0, 10, 10] 1.0 1.0
+# [5, 0, 15, 10] 0.333 0.333
+# [2, 2, 8, 8] 0.36 0.36
+# [20, 20, 30, 30] 0.0 -0.778
+# [11, 0, 21, 10] 0.0 -0.048
+# 0.429
+# 0.3 1 [True, False] 0
+# 0.5 2 [True, True] 0
+# 0.7 3 [True, True] 1
+# 2 1
+# [2, 6] [0, 1] [0.89, 0.91]
+# ['1.8e-02', '3.1e-01', '6.9e-01', '2.1e+00'] ['4.4e-06', '1.7e-02', '1.3e-01', '1.2e+00'] [4122.0, 18.0, 5.0, 2.0]
+# CE 181.5 9.74 0.949
+# focal 0.04 0.94 0.045
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **IoU는 겹치지 않으면 다 0이다.** 10×10 상자를 반만 밀면 IoU 0.333, 안쪽 6×6이면 0.36이다. 1칸 떨어진 상자와 한참 떨어진 상자는 둘 다 0이다. 그래서 IoU를 loss로 쓰면 겹치지 않는 예측에는 gradient가 없다. generalized IoU(GIoU)는 거리를 반영해 −0.048과 −0.778로 구분한다.
+- **NMS threshold가 누락과 중복을 맞바꾼다 (G9.1.2, "직접 해보기" ①).** IoU 0.43으로 겹친 두 사람에 대한 예측 10개에서, threshold 0.3이면 1개만 남아 두 번째 사람을 놓친다. 0.5면 둘 다 잡고 중복이 없다. 0.7이면 3개가 남아 한 사람에 중복 예측이 하나 생긴다. 두 객체가 겹친 정도가 threshold보다 크면 NMS는 진짜 객체도 지운다.
+- **class별로 따로 NMS를 하면 서로 지우지 않는다.** 두 객체가 다른 class라면 `batched_nms` 는 둘 다 남기고(2개), class를 무시한 `nms` 는 하나만 남긴다.
+- **Hungarian matching은 일대일로 짝짓는다 (G9.1.3, "직접 해보기" ③).** IoU와 점수(가중치 0.5)로 만든 비용에서 `linear_sum_assignment` 가 예측 2번을 첫 정답에, 6번을 둘째 정답에 짝짓고 IoU는 0.89와 0.91이다. 정답 하나에 예측 하나만 짝지어지므로 NMS 없이 중복이 생기지 않는다. DETR이 학습할 때 이 짝짓기로 loss를 계산한다.
+- **focal loss는 쉬운 negative를 거의 지운다 (G9.1.4).** 배경을 배경이라고 강하게 확신한(logit −4) 예측의 loss가 cross-entropy로는 0.018, focal loss($\gamma = 2$, $\alpha = 0.25$)로는 $4.4\times10^{-6}$ 으로 4,000배 작다. 애매한(logit 0) 예측은 5배, 틀린(logit 2) 예측은 2배만 줄어든다. 쉬운 negative 1만 개와 어려운 positive 10개가 섞이면, cross-entropy에서는 loss의 95%를 쉬운 negative가 차지하고, focal loss에서는 4.5%로 줄어든다.
+
+**이 코드가 보여 주지 못하는 것.**
+모델 없이 상자를 직접 만들었다. 실제 detector(`torchvision.models.detection` 의 Faster R-CNN 등)가 이 연산들을 어떻게 엮는지, mAP를 어떻게 재는지(G9.1.1, `torchmetrics` 나 `pycocotools` 를 쓴다)는 다루지 않았다.
+segmentation 지표(G9.1.5)도 다루지 않았다.
 
 ---
 
