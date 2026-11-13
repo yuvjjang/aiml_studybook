@@ -392,13 +392,19 @@ print(f"복원 오차  |VΛV⁻¹ − A|      = "
 k = 8
 direct = np.linalg.matrix_power(A, k)
 viaeig = V @ np.diag(lam**k) @ np.linalg.inv(V)
-print(f"거듭제곱 오차 |VΛ⁸V⁻¹ − A⁸|  = {np.abs(direct - viaeig).max():.2e}")
-print()
 
 # diagonalization 이 안 되는 행렬 — eigenvalue 는 1 하나뿐인데 eigenvector 도 하나뿐이다
 D = np.array([[1.0, 1.0],
               [0.0, 1.0]])
 lam2, V2 = np.linalg.eig(D)
+```
+
+거듭제곱 오차 |VΛ⁸V⁻¹ − A⁸| = `{python} f'{np.abs(direct - viaeig).max():.2e}'`
+
+```{python}
+#| label: eigendecomposition-2
+#| code-fold: false
+
 print(f"defective 행렬 [[1,1],[0,1]] 의 eigenvalue : {lam2.real.round(4)}   ← 1 이 두 번")
 print(f"  eigenvector 행렬 V 의 rank              : {np.linalg.matrix_rank(V2)}  (2 여야 하는데)")
 print(f"  V 의 condition number                   : {np.linalg.cond(V2):.1e}  ← 역행렬이 없다")
@@ -627,10 +633,14 @@ pieces = [S[i] * np.outer(U[:, i], Vt[i]) for i in range(len(S))]
 
 for i, P in enumerate(pieces):
     print(f"조각 {i+1}:  σ{i+1} = {S[i]:.4f}\n{P.round(4)}\n")
+```
 
-print(f"두 조각의 합이 A 와 같은가: "
-      f"{np.abs(sum(pieces) - A).max():.2e}")
-print()
+두 조각의 합이 A 와 같은가: `{python} f'{np.abs(sum(pieces) - A).max():.2e}'`
+
+```{python}
+#| label: svd-pieces-2
+#| code-fold: false
+
 print(f"σ² = {(S**2).round(4)}")
 print(f"AᵀA 의 eigenvalue = {np.sort(np.linalg.eigvalsh(A.T @ A))[::-1].round(4)}   ← 같다")
 ```
@@ -659,7 +669,14 @@ import numpy as np
 D = np.array([[1.0, 1.0],
               [0.0, 1.0]])                      # diagonalization 불가였던 그 행렬
 Ud, Sd, Vdt = np.linalg.svd(D)
-print(f"defective 행렬의 singular value : {Sd.round(4)}")
+```
+
+defective 행렬의 singular value : `{python} f'{Sd.round(4)}'`
+
+```{python}
+#| label: svd-general-2
+#| code-fold: false
+
 print(f"  복원 오차       : {np.abs(Ud @ np.diag(Sd) @ Vdt - D).max():.2e}   ← 문제없이 분해된다")
 print()
 
@@ -771,8 +788,14 @@ $$\|A\|_F^2 = \sum_i \sigma_i^2, \qquad \|A - A_k\|_F^2 = \sum_{i>k}\sigma_i^2$$
 import numpy as np
 
 m, n = img.shape
-print(f"이미지 {img.shape},  rank = {np.linalg.matrix_rank(img)}")
-print()
+```
+
+이미지 `{python} f'{img.shape}'`, rank = `{python} f'{np.linalg.matrix_rank(img)}'`
+
+```{python}
+#| label: svd-energy-2
+#| code-fold: false
+
 print(f"{'k':>4} {'누적 에너지':>12} {'상대 오차':>11} {'저장 비율':>11}")
 print("-" * 42)
 for k in [1, 2, 3, 5, 8, 12, 20, 32]:
@@ -799,6 +822,8 @@ print(f"손익분기 k = {(m*n)//(m+n+1)}  — 그 위로는 원본보다 저장
 둘을 같은 것으로 읽기 쉬운데, **PCA는 각 열에서 평균을 뺀 뒤(centering) SVD를 건 것**이다.
 평균을 빼지 않으면 $\sigma_1$ 이 "데이터가 가장 많이 퍼진 방향"이 아니라 **평균 수준 그 자체**를 먼저 가져간다.
 
+σ₁ 이 차지하는 에너지 비율
+
 ```{python}
 #| label: svd-vs-pca
 #| code-fold: false
@@ -807,14 +832,18 @@ import numpy as np
 
 S_raw = S                                        # 그냥 SVD
 S_pca = np.linalg.svd(img - img.mean(0), compute_uv=False)   # 평균을 뺀 뒤 = PCA
-
-print(f"σ₁ 이 차지하는 에너지 비율")
-print(f"  평균 빼기 전 (그냥 SVD) : {S_raw[0]**2/np.sum(S_raw**2):.4f}")
-print(f"  평균 뺀 후 (PCA)        : {S_pca[0]**2/np.sum(S_pca**2):.4f}")
-print()
-print(f"평균 성분만으로 차지하는 에너지 : "
-      f"{1 - np.sum(S_pca**2)/np.sum(S_raw**2):.4f}")
 ```
+
+평균 빼기 전 (그냥 SVD) : `{python} f'{S_raw[0] ** 2 / np.sum(S_raw ** 2):.4f}'`
+
+```{python}
+#| label: svd-vs-pca-2
+#| code-fold: false
+
+print(f"  평균 뺀 후 (PCA)        : {S_pca[0]**2/np.sum(S_pca**2):.4f}")
+```
+
+평균 성분만으로 차지하는 에너지 : `{python} f'{1 - np.sum(S_pca ** 2) / np.sum(S_raw ** 2):.4f}'`
 
 첫 성분이 가진 91% 중 대부분이 **평균 밝기**다.
 [앞의 3×2 예시](#실제로-분해해-보기)에서 조각 1이 `[[2,2],[2,2],[2,2]]` 였던 것과 같은 현상이다.
@@ -967,9 +996,9 @@ tiled = np.broadcast_to(mask, (B, H, N, N)).copy()      # 명시적으로 복제
 print(f"마스크 원본  {str(mask.shape):<14} {mask.nbytes:>5}바이트")
 print(f"복제한 마스크 {str(tiled.shape):<14} {tiled.nbytes:>5}바이트"
       f"   ← {tiled.nbytes // mask.nbytes}배")
-print()
-print("broadcasting 은 이 복제를 하지 않는다 — 원본 그대로 두고 같은 곳을 다시 읽는다.")
 ```
+
+broadcasting 은 이 복제를 하지 않는다 — 원본 그대로 두고 같은 곳을 다시 읽는다.
 
 배치와 헤드가 커질수록 이 배수가 그대로 커진다.
 $B{=}32$, $H{=}32$, $N{=}2048$ 이면 마스크 하나가 4MB 인데 복제하면 4GB 다.
@@ -1037,7 +1066,14 @@ pred = np.array([1.0, 2.0, 3.0, 4.0])                  # (4,)
 target = np.array([[1.5], [2.5], [2.0], [3.0]])        # (4, 1) ← 열벡터로 들어왔다
 
 print(f"pred {pred.shape} - target {target.shape} = {(pred - target).shape}   ← (4,)가 아니다")
-print(f"MSE (의도하지 않은 4×4) : {np.mean((pred - target) ** 2):.3f}")
+```
+
+MSE (의도하지 않은 4×4) : `{python} f'{np.mean((pred - target) ** 2):.3f}'`
+
+```{python}
+#| label: broadcast-trap-2
+#| code-fold: false
+
 print(f"MSE (올바른 계산)       : {np.mean((pred - target.ravel()) ** 2):.3f}")
 ```
 
@@ -1222,7 +1258,14 @@ beta_ls = np.linalg.lstsq(X, y, rcond=None)[0]   # ② QR/SVD 로 직접
 
 print(f"κ(X)    = {np.linalg.cond(X):.3e}")
 print(f"κ(XᵀX)  = {np.linalg.cond(X.T @ X):.3e}   ← κ(X)²")
-print(f"normal equation 오차 ‖β̂ - β‖ = {np.linalg.norm(beta_ne - beta_true):.3e}")
+```
+
+normal equation 오차 ‖β̂ - β‖ = `{python} f'{np.linalg.norm(beta_ne - beta_true):.3e}'`
+
+```{python}
+#| label: normal-equations-2
+#| code-fold: false
+
 print(f"lstsq           오차 ‖β̂ - β‖ = {np.linalg.norm(beta_ls - beta_true):.3e}")
 ```
 
@@ -1652,10 +1695,10 @@ X = rng.normal(size=(300, 16))
 D1 = ((X[:, None, :] - X[None, :, :]) ** 2).sum(-1)
 sq = (X ** 2).sum(1)
 D2 = np.maximum(sq[:, None] + sq[None, :] - 2 * X @ X.T, 0)
-
-print(f"두 방법의 최대 차이 = {np.abs(D1 - D2).max():.1e}")
-print(f"방법 1 중간 배열 {X[:, None, :].shape} - {X[None, :, :].shape} → {(X[:, None, :] - X[None, :, :]).shape}")
 ```
+
+두 방법의 최대 차이 = `{python} f'{np.abs(D1 - D2).max():.1e}'`
+방법 1 중간 배열 `{python} f'{X[:, None, :].shape}'` - `{python} f'{X[None, :, :].shape}'` → `{python} f'{(X[:, None, :] - X[None, :, :]).shape}'`
 :::
 
 ## 요약
