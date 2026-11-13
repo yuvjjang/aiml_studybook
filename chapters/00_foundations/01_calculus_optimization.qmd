@@ -1262,6 +1262,80 @@ $n^2$ 개 원소를 저장하는 것도, $O(n^3)$ 역행렬을 구하는 것도 
 
 ---
 
+## 실제 도구로: autograd의 Hessian과 `scipy.optimize`
+
+이 장의 gradient, Hessian, learning rate 상한, chain rule을 PyTorch의 자동 미분으로 확인하고, gradient descent를 SciPy의 최적화 함수와 비교한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `numpy` 2.5, `scipy` 1.18. 모델을 내려받지 않는다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from scipy.optimize import minimize
+from torch.autograd.functional import hessian, jacobian
+
+# 1) gradient 와 Hessian 을 autograd 로: f(x, y) = x² - y² (saddle)
+f = lambda p: p[0] ** 2 - p[1] ** 2
+p0 = torch.tensor([0.0, 0.0])
+print(jacobian(f, p0).tolist(), hessian(f, p0).tolist(),
+      torch.linalg.eigvalsh(hessian(f, p0)).tolist())
+
+# 2) learning rate 상한 2/L: f(x) = ½ xᵀ A x, A 의 최대 eigenvalue L = 10
+A = torch.diag(torch.tensor([1.0, 10.0]))
+for lr in [0.05, 0.19, 0.21]:
+    x = torch.tensor([1.0, 1.0], requires_grad=True)
+    opt = torch.optim.SGD([x], lr=lr)
+    for _ in range(100):
+        opt.zero_grad(); (0.5 * x @ A @ x).backward(); opt.step()
+    print(lr, f"{x.norm().item():.1e}")
+
+# 3) Rosenbrock: gradient descent 와 scipy 의 2차 방법 (BFGS, Newton-CG) 반복 수
+rosen = lambda v: (1 - v[0]) ** 2 + 100 * (v[1] - v[0] ** 2) ** 2
+def grad(v):
+    t = torch.tensor(v, requires_grad=True); rosen(t).backward(); return t.grad.numpy()
+def hess(v):
+    return hessian(rosen, torch.tensor(v)).numpy()
+x0 = np.array([-1.2, 1.0])
+for method, kw in [("BFGS", dict(jac=grad)), ("Newton-CG", dict(jac=grad, hess=hess)), ("Nelder-Mead", {})]:
+    r = minimize(lambda v: float(rosen(torch.tensor(v))), x0, method=method, **kw)
+    print(method, r.nit, np.round(r.x, 4).tolist(), r.nfev)
+x = torch.tensor(x0, requires_grad=True); opt = torch.optim.SGD([x], lr=1e-3); n = 0
+while rosen(x).item() > 1e-6 and n < 200000:
+    opt.zero_grad(); rosen(x).backward(); opt.step(); n += 1
+print("GD", n, np.round(x.detach().numpy(), 4).tolist())
+
+# 4) chain rule: 합성 함수의 Jacobian = Jacobian 의 곱
+g = lambda u: torch.stack([u[0] * u[1], torch.sin(u[0])])
+h = lambda w: torch.stack([w[0] + w[1] ** 2, torch.exp(w[0])])
+u = torch.tensor([0.5, -1.0])
+J_comp = jacobian(lambda u: h(g(u)), u)
+print(f"{(J_comp - jacobian(h, g(u)) @ jacobian(g, u)).abs().max().item():.1e}")
+
+# [0.0, 0.0] [[2.0, 0.0], [0.0, -2.0]] [-2.0, 2.0]
+# 0.05 5.9e-03
+# 0.19 2.7e-05
+# 0.21 1.4e+04
+# BFGS 32 [1.0, 1.0] 39
+# Newton-CG 83 [1.0, 1.0] 105
+# Nelder-Mead 85 [1.0, 1.0] 159
+# GD 15068 [0.999, 0.998]
+# 0.0e+00
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **saddle point는 Hessian의 고유값으로 가린다 (G0.1.3).** $f = x^2 - y^2$ 의 원점에서 gradient가 0이고, `hessian` 이 $\operatorname{diag}(2, -2)$ 를 준다. 고유값의 부호가 섞여 있으면 saddle이다. gradient만 보면 최솟값과 구별되지 않는다.
+- **learning rate 상한은 $2/L$ 이다 ("learning rate 상한은 계산할 수 있다").** 가장 큰 고유값이 $L = 10$ 인 이차함수에서, lr 0.05와 0.19는 100 step 뒤 0으로 수렴하고(0.0059, $2.7\times10^{-5}$), 0.21은 $1.4\times10^4$ 으로 발산한다. 경계가 정확히 $2/L = 0.2$ 다.
+- **2차 정보를 쓰면 반복이 훨씬 적다 ("Hessian과 2차 근사").** 휘어진 골짜기 모양의 Rosenbrock 함수에서 최솟값 (1, 1)까지, SciPy의 BFGS는 32번, Newton-CG는 83번, gradient를 안 쓰는 Nelder-Mead는 85번 반복한다. 고정 learning rate($10^{-3}$)의 gradient descent는 15,068번 걸리고도 (0.999, 0.998)에서 멈춘다. 골짜기를 따라 내려가는 방향의 gradient가 아주 작기 때문이다.
+- **chain rule은 Jacobian의 곱이다 ("chain rule").** 합성 함수 $h(g(u))$ 의 Jacobian을 autograd로 바로 구한 것과, 두 Jacobian을 곱한 것의 차이가 정확히 0이다. backpropagation이 이 곱을 출력 쪽부터 벡터와 곱해 가는 것이다([3.1](../03_deep_learning/01_backpropagation.qmd)).
+
+**이 코드가 보여 주지 못하는 것.**
+2차원 함수다. 신경망은 parameter가 수백만 개라 Hessian(parameter² 크기)을 만들 수 없고, 그래서 Adam 같은 1차 방법을 쓴다. BFGS가 빠른 것은 저차원에서의 이야기다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
