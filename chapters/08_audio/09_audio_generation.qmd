@@ -682,6 +682,78 @@ codec token은 음향을 통째로 담으므로, 재현되는 것이
 - **artist 동의를 전제로 한 목소리 licensing** — 새로 생긴 시장
 - 7.15의 결론이 여기서도 같다 — **탐지가 아니라 구조가 막는다**
 
+---
+
+## 실제 도구로: MusicGen으로 CFG의 세기를 바꿔 본다
+
+이 장 G8.9.3에서 token n-gram 모델로는 "CFG를 키우면 조건 충실도는 오르고 다양성은 준다"는 trade-off가 재현되지 않았다. 텍스트로 음악을 만드는 공개 모델 MusicGen으로 다시 본다. 같은 텍스트, 같은 seed 4개로 guidance 세기 $w$ 만 바꿔 3초씩 생성한다. seed 사이에 소리가 얼마나 다른지(다양성)와, 매 step 분포가 얼마나 뾰족한지(본문의 진단 ②)를 잰다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `librosa` 1.0
+- 모델은 `facebook/musicgen-small`(5억 8,700만 parameter, 약 2.3 GB)이다. 텍스트 encoder(T5), 오디오 token을 만드는 decoder(4억 2,000만), 32 kHz EnCodec으로 이뤄진다.
+- 생성 설정은 모델의 기본값(top-k 250 sampling)을 그대로 썼다. $w = 1$ 이면 guidance를 하지 않는다. 3초 하나를 만드는 데 이 CPU에서 16~21초 걸렸다.
+- config의 `pad_token_id`, `bos_token_id` 가 vocabulary 밖이라는 경고가 나온다. MusicGen이 원래 그 값을 특별 token으로 쓰기 때문이고 결과에는 영향이 없다. 아래 출력에서는 뺐다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import time
+import librosa
+import numpy as np
+import torch
+from transformers import AutoProcessor, MusicgenForConditionalGeneration
+
+proc = AutoProcessor.from_pretrained("facebook/musicgen-small")
+model = MusicgenForConditionalGeneration.from_pretrained("facebook/musicgen-small").eval()
+cfg = model.config
+K, FPS, SR = cfg.decoder.num_codebooks, cfg.audio_encoder.frame_rate, cfg.audio_encoder.sampling_rate
+print(sum(p.numel() for p in model.parameters()), sum(p.numel() for p in model.decoder.parameters()), K, FPS, SR)
+
+# 1) token 수 (G8.9.1): codebook 4 개 × 초당 50 frame
+for sec in [10, 30, 180]:
+    print(sec, FPS * sec, K * FPS * sec)
+
+# 2) CFG 의 세기 w 를 바꿔 가며 3 초씩 생성 (G8.9.3). 생성 설정의 기본값(top-k 250 sampling)을 그대로 쓴다
+inp = proc(text=["upbeat jazz with saxophone and drums"], return_tensors="pt")
+logmel = lambda y: librosa.power_to_db(librosa.feature.melspectrogram(y=y, sr=SR, n_mels=64))
+for w in [1.0, 3.0, 8.0]:
+    outs = []
+    for seed in range(4):
+        torch.manual_seed(seed)
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            o = model.generate(**inp, do_sample=True, guidance_scale=w, max_new_tokens=150,
+                               output_scores=True, return_dict_in_generate=True)
+        dt = time.perf_counter() - t0
+        p = torch.softmax(torch.stack(o.scores)[:, 0].float(), -1)          # 첫 codebook 의 step 별 분포 (CFG 적용 뒤)
+        ent = float(-(p * torch.log(p.clamp_min(1e-12))).sum(-1).mean())
+        outs.append((o.sequences[0, 0].numpy(), ent, dt))
+    n = min(len(x[0]) for x in outs)
+    M = [logmel(x[0][:n]) for x in outs]
+    div = np.mean([np.abs(M[i] - M[j]).mean() for i in range(4) for j in range(i + 1, 4)])   # seed 쌍 6 개의 소리 차이 (dB)
+    print(w, round(np.mean([x[1] for x in outs]), 2), round(float(np.std([x[1] for x in outs])), 2),
+          round(float(div), 2), round(n / SR, 2), round(np.mean([x[2] for x in outs]), 1))
+
+# 586884674 419584000 4 50 32000
+# 10 500 2000
+# 30 1500 6000
+# 180 9000 36000
+# 1.0 2.28 0.39 14.76 2.94 16.3
+# 3.0 2.82 0.14 11.8 2.94 20.9
+# 8.0 2.58 0.13 8.8 2.94 20.9
+```
+
+1)의 줄은 (초, frame 수, token 수)다. 2)의 줄은 ($w$, 첫 codebook 분포의 평균 entropy(nat), seed 사이 entropy의 표준편차, seed 쌍 사이 log-mel 차이(dB), 생성 길이(초), 생성에 걸린 초)다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **token 수 (G8.9.1).** MusicGen은 초당 50 frame × codebook 4개 = 200 token이다. 30초가 6,000, 3분 노래가 36,000 token이다. 본문 표(codebook 8개 × 75 frame 가정)보다는 적지만 텍스트의 초당 3~5 token과 비교하면 여전히 수십 배다. MusicGen은 4개 codebook을 delay pattern으로 펼쳐 한 step에 4 token을 낸다.
+- **다양성은 교과서대로 줄었다 (G8.9.3).** seed 사이 소리 차이가 $w = 1$ 에서 14.8 dB, $w = 3$ 에서 11.8, $w = 8$ 에서 8.8 dB로 꾸준히 줄었다. guidance를 세게 걸수록 seed가 달라도 비슷한 소리가 나온다. 본문 장난감 실험에서 보이지 않던 "다양성 감소" 쪽이 실제 모델에서는 보인다.
+- **그런데 step마다의 분포는 뾰족해지지 않았다.** 첫 codebook 분포의 entropy가 $w = 1$ 에서 2.28, $w = 3$ 에서 2.82, $w = 8$ 에서 2.58이다. guidance를 건 쪽이 오히려 높다. 본문 진단 ②가 가정한 "guidance가 분포를 뾰족하게 만든다"가 이 측정에서는 나오지 않았다. $w = 1$ 의 entropy는 seed마다 흔들림이 크다(표준편차 0.39). 이 차이가 실제인지, 왜 이렇게 되는지는 이 실험으로 가를 수 없다. 다양성은 줄었는데 매 step의 entropy는 줄지 않았으니, guidance가 바꾸는 것은 분포의 폭보다는 어느 token 쪽으로 가는가일 수 있다. 확인하지 않은 추측이다.
+- **조건 충실도는 재지 않았다.** 생성된 소리가 "saxophone과 drums가 있는 jazz"에 얼마나 맞는지는 텍스트-오디오 유사도 모델(CLAP 등)이 있어야 잴 수 있다. trade-off의 다른 한쪽은 이 실험에서 비어 있다.
+
+**이 코드가 보여 주지 못하는 것.**
+텍스트 하나, seed 4개, 3초다. 본문 G8.9.2의 long-term 구조(마디, 후렴 반복)는 3초로는 볼 수 없다. 30초 이상 만들려면 이 CPU에서 몇 분씩 걸린다. 소리가 "좋은 음악"인지는 사람이 들어야 알고, FAD(G8.9.4) 같은 분포 지표는 많은 표본과 참조 음악이 필요해 재지 않았다.
 
 ---
 
