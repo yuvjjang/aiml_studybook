@@ -528,9 +528,10 @@ vjp = W1.T @ v2
 
 print(f"J 모양            {J.shape}   ← 실체화한 행렬")
 print(f"Jᵀv               {np.round(jt_v, 6)}")
-print(f"VJP (행렬 없음)    {np.round(vjp, 6)}")
-print(f"최대 오차          {np.abs(jt_v - vjp).max():.2e}")
 ```
+
+VJP (행렬 없음) `{python} f'{np.round(vjp, 6)}'`
+최대 오차 `{python} f'{np.abs(jt_v - vjp).max():.2e}'`
 
 두 번째 방식은 $(m,n)$ 행렬을 만들지 않고도 같은 답을 얻는다.
 활성화 층에서 대각 Jacobian이 `(1 - a**2) * v1` 이라는 원소별 곱 한 줄로 끝나는 것도 확인된다.
@@ -614,7 +615,15 @@ H = np.array([[1.0, 0.0],
 
 w, V = np.linalg.eigh(H)
 print(f"eigenvalue        {w}          ← 각 축의 곡률")
-print(f"eigenvector(열)\n{V}")
+```
+
+eigenvector(열)  
+`{python} f'{V}'`
+
+```{python}
+#| label: hessian-canyon-2
+#| code-fold: false
+
 print(f"condition number κ      {w.max() / w.min():.1f}")
 print(f"learning rate 상한   η < 2/λmax = {2 / w.max():.3f}")
 
