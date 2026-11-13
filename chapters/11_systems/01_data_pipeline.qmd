@@ -720,6 +720,120 @@ print("**batch vs streaming**")
 
 ---
 
+## 실제 도구로: PyTorch `DataLoader` 와 Parquet
+
+이 장의 시뮬레이션을 실제 도구로 다시 한다. `DataLoader` 의 worker 수에 따른 시간, streaming shuffle buffer의 크기, CSV와 Parquet의 크기와 읽기 속도다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `pandas` 3.1, `pyarrow` 26 (Parquet을 읽고 쓰는 데 필요하다). Windows 11에서 돌렸다.
+- 표본 하나를 준비하는 데 10 ms가 걸리는 가짜 데이터를 쓴다(`time.sleep`). worker 실험이 1분쯤 걸린다.
+- 시간은 실행마다 조금씩 다르다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import io
+import time
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader, Dataset, IterableDataset
+
+
+class SlowDataset(Dataset):
+    """표본 하나를 준비하는 데 10 ms 가 걸리는 데이터 (디스크 읽기·decode 를 흉내 낸다)."""
+    def __len__(self):
+        return 1024
+    def __getitem__(self, i):
+        time.sleep(0.01)
+        return torch.full((8,), float(i))
+
+
+def timed(loader, compute=0.0):
+    t0 = time.perf_counter()
+    for xb in loader:
+        time.sleep(compute)                                      # 모델이 batch 하나를 계산하는 시간
+    return round(time.perf_counter() - t0, 2)
+
+
+if __name__ == "__main__":                                       # Windows 에서 worker process 를 쓰려면 꼭 필요하다
+    # 1) worker 수: batch 32 개 표본 × 10 ms = loading 0.32 초, 계산 0.1 초. batch 32 개(한 epoch)
+    #    worker process 를 띄우는 데 드는 시간을 따로 보려고, 같은 loader 로 두 epoch 를 돈다
+    for w in [0, 1, 2, 4, 8]:
+        loader = DataLoader(SlowDataset(), batch_size=32, num_workers=w, persistent_workers=w > 0)
+        print(w, timed(loader, compute=0.1), timed(loader, compute=0.1))
+
+    # 2) shuffle: 정렬된 데이터에서 streaming buffer 가 작으면
+    labels = np.repeat(np.arange(10), 1000)                      # class 별로 정렬되어 저장된 10,000 개
+    class Stream(IterableDataset):
+        def __init__(self, buf):
+            self.buf = buf
+        def __iter__(self):
+            rng = np.random.default_rng(0); pool = []
+            for y in labels:
+                pool.append(y)
+                if len(pool) >= self.buf:
+                    yield pool.pop(int(rng.integers(len(pool))))
+            rng.shuffle(pool); yield from pool
+    for buf in [10, 100, 1000, 10000]:
+        batches = [b.numpy() for b in DataLoader(Stream(buf), batch_size=64)]
+        n_cls = np.mean([len(np.unique(b)) for b in batches[:100]])
+        print(buf, round(float(n_cls), 2))
+    full = [b.numpy() for b in DataLoader(torch.tensor(labels), batch_size=64, shuffle=True, generator=torch.Generator().manual_seed(0))]
+    print(round(float(np.mean([len(np.unique(b)) for b in full[:100]])), 2))
+
+    # 3) 저장 형식: 같은 표를 CSV 와 Parquet 으로 (크기, 한 열만 읽는 시간)
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({f"f{i}": rng.normal(size=200_000) for i in range(20)})
+    df["label"] = rng.integers(0, 10, len(df))
+    csv, pq = io.BytesIO(), io.BytesIO()
+    df.to_csv(csv, index=False); df.to_parquet(pq)
+    def read_col(fmt):
+        b = csv if fmt == "csv" else pq
+        b.seek(0); t0 = time.perf_counter()
+        x = pd.read_csv(b, usecols=["label"]) if fmt == "csv" else pd.read_parquet(b, columns=["label"])
+        return round(time.perf_counter() - t0, 3), len(x)
+    read_col("parquet")                                          # 첫 호출은 library 를 불러오는 시간이 섞이므로 한 번 버린다
+    print(len(csv.getvalue()) // 2**20, len(pq.getvalue()) // 2**20, read_col("csv"), read_col("parquet"))
+    def read_all(fmt):
+        b = csv if fmt == "csv" else pq
+        b.seek(0); t0 = time.perf_counter()
+        pd.read_csv(b) if fmt == "csv" else pd.read_parquet(b)
+        return round(time.perf_counter() - t0, 3)
+    print(read_all("csv"), read_all("parquet"))
+    pq.seek(0); back = pd.read_parquet(pq)
+    csv.seek(0); back_csv = pd.read_csv(csv)
+    print(back.equals(df), float((back_csv.f0 - df.f0).abs().max()), back_csv.dtypes.iloc[-1], back.dtypes.iloc[-1])
+
+# 0 13.9 13.91
+# 1 13.7 10.81
+# 2 8.55 5.55
+# 4 7.99 3.57
+# 8 9.54 3.56
+# 10 1.06
+# 100 1.45
+# 1000 4.1
+# 10000 9.95
+# 10.0
+# 75 35 (0.101, 200000) (0.004, 200000)
+# 0.384 0.034
+# True 0.0 int64 int64
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **worker 수가 처리 시간을 정한다 (G11.1.1).** batch 하나를 준비하는 데 0.32초(32 × 10 ms), 계산하는 데 0.1초다. worker 없이(0) 한 epoch(32 batch)에 13.9초로, 준비와 계산이 번갈아 일어난다($32 \times 0.42 = 13.4$). 두 번째 epoch 기준으로 worker 1개면 10.8초(준비가 병목, $32 \times 0.32$), 2개면 5.6초, 4개면 3.6초다. 4개부터는 계산 시간($32 \times 0.1 = 3.2$)에 붙어 더 줄지 않는다. 본문의 utilization $\min(1, wc/l)$ 에서 $c/l = 0.1/0.32$ 이므로 $w \ge 4$ 에서 1이 된다.
+- **Windows에서는 worker를 띄우는 비용이 크다.** 첫 epoch은 worker 2, 4, 8개에서 8.6, 8.0, 9.5초로 두 번째 epoch보다 3~6초 길다. worker process를 새로 띄우며 torch를 다시 불러오는 시간이다. `persistent_workers=True` 를 주면 epoch마다 다시 띄우지 않는다. worker를 쓰는 코드는 `if __name__ == "__main__":` 안에 있어야 한다. Windows는 process를 fork하지 않고 새로 띄우기 때문이다.
+- **정렬된 데이터는 작은 buffer로 못 섞는다 (G11.1.2, "직접 해보기" ①).** class별로 1,000개씩 정렬된 10,000개를 buffer를 두고 streaming으로 섞으면, batch(64개) 하나에 들어 있는 class 수가 buffer 10에서 1.06, 100에서 1.45, 1,000에서 4.1, 10,000에서 9.95다. 전체를 섞으면 10.0이다. buffer가 class 하나의 크기(1,000)보다 작으면 batch가 거의 한 class로 채워진다. 데이터 크기의 1%인 buffer로는 이 정렬을 깨지 못했다.
+- **Parquet은 작고, 필요한 열만 읽는다 (G11.1.3, "직접 해보기" ②).** 수치 열 20개와 label 하나, 20만 행의 표가 CSV로 75 MB, Parquet으로 35 MB다. label 열 하나만 읽는 데 CSV는 0.101초, Parquet은 0.004초다. CSV는 원하는 열만 쓰더라도 파일 전체를 훑어야 하고, Parquet은 열별로 저장되어 그 열만 읽는다. 전체를 읽어도 0.384초와 0.034초다.
+- **CSV는 타입을 저장하지 않는다.** 이 예에서는 두 형식 모두 값과 타입이 그대로 돌아왔다(float 오차 0.0, label은 `int64`). 그러나 CSV에서는 읽을 때마다 타입을 다시 추측하므로, 결측이 섞인 정수 열은 float가 되고 날짜는 문자열이 된다. Parquet은 schema를 파일에 함께 저장한다.
+
+**이 코드가 보여 주지 못하는 것.**
+`time.sleep` 으로 만든 가짜 loading이다. 실제 loading은 CPU를 쓰고(decode, augmentation) 디스크 I/O와 경쟁하므로, worker를 늘린 효과가 이렇게 깔끔하게 나뉘지 않는다. GPU도 없다.
+본문의 validation gate와 training/serving skew(G11.1.4, G11.1.5)는 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
