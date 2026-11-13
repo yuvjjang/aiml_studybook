@@ -154,9 +154,14 @@ for b in BINS:
     verd = ("bimodal을 놓침" if p < 2 else
             "정확" if p == 2 else "잡음 봉우리")
     print(f"{b:>8} {hists[b][2]:>9.3f} {p:>14}  {verd}")
+```
 
-print()
-print("자동 규칙들이 고르는 값:")
+자동 규칙들이 고르는 값:
+
+```{python}
+#| label: histogram-bins-numbers-2
+#| code-fold: false
+
 for name in ["sturges", "fd", "scott", "doane", "auto"]:
     c, e = np.histogram(mix, bins=name)
     print(f"  {name:<10} {len(c):>4}개  폭 {e[1]-e[0]:.3f}  봉우리 {count_peaks(c)}")
@@ -224,6 +229,8 @@ fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 fig.show()
 ```
 
+ECDF 로 바로 읽을 수 있는 것들
+
 ```{python}
 #| label: ecdf-numbers
 #| code-fold: false
@@ -231,14 +238,13 @@ fig.show()
 import numpy as np
 from scipy import stats
 
-print("ECDF 로 바로 읽을 수 있는 것들")
 for q in [5, 25, 50, 75, 95]:
     print(f"  {q:>2}분위수: {np.percentile(mix, q):>7.3f}")
-print()
 ks = stats.kstest(mix, stats.norm(loc=mix.mean(), scale=mix.std()).cdf)
-print(f"같은 평균·분산 정규분포와의 KS 검정")
-print(f"  통계량 D = {ks.statistic:.4f}, p = {ks.pvalue:.3e}")
 ```
+
+같은 평균·분산 정규분포와의 KS 검정
+통계량 D = `{python} f'{ks.statistic:.4f}'`, p = `{python} f'{ks.pvalue:.3e}'`
 
 KS(Kolmogorov–Smirnov) 검정의 통계량 $D$ 는 두 ECDF의 **최대 세로 간격**이다 — 위 그림에서 눈으로도 보인다.
 $p$ 가 `{python} f"{ks.pvalue:.0e}"` 이므로 정규가 아니라고 강하게 기각된다.
@@ -611,8 +617,14 @@ for nm, flag in METHODS.items():
     hit = int((flag & truth).sum())
     print(f"{nm:<20} {int(flag.sum()):>8} {hit:>12} "
           f"{int((flag & ~truth).sum()):>7} {hit/4:>9.0%}")
-print()
-print("주입한 4개 점을 각 지표로 보면:")
+```
+
+주입한 4개 점을 각 지표로 보면:
+
+```{python}
+#| label: outlier-numbers-2
+#| code-fold: false
+
 print(f"{'좌표':<16} {'|z| 최대':>10} {'IQR 플래그':>11} {'Mahalanobis':>13}  {'성격'}")
 print("-" * 70)
 for i in range(NO, len(P)):
@@ -722,7 +734,14 @@ for sigma in [1.0, 3.0, 7.5]:
 x = rng.normal(0, 2.0, 1000)
 x[:20] = 500.0                                   # 2% 만 오염
 sd_c, mad_c = float(x.std(ddof=1)), float(c * np.median(np.abs(x - np.median(x))))
-print(f"\n참 σ = 2.0 인데 2%(20개)가 500 으로 오염된 경우")
+```
+
+참 σ = 2.0 인데 2%(20개)가 500 으로 오염된 경우
+
+```{python}
+#| label: mad-scale-2
+#| code-fold: false
+
 print(f"  표본표준편차      {sd_c:>8.2f}   ← {sd_c/2:.0f}배 틀림")
 print(f"  1.4826·MAD        {mad_c:>8.2f}   ← 거의 정확")
 ```
@@ -789,14 +808,14 @@ fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 fig.show()
 ```
 
+참 평균 소득: `{python} f'{true_mean:,.0f}'`
+
 ```{python}
 #| label: missingness-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"참 평균 소득: {true_mean:,.0f}")
-print()
 print(f"{'메커니즘':<24} {'결측률':>8} {'complete-case':>13} {'bias':>9} "
       f"{'regression imp.':>16} {'bias':>9}")
 print("-" * 78)
