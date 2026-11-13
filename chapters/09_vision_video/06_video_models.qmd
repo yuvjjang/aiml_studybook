@@ -588,6 +588,90 @@ fig
 - tube masking의 효과가 50%에서 나타나지 않은 것은 이 clip의 특성 때문일 수 있다. VideoMAE가 높은 비율을 쓰는 이유를 여기서 확인했다고 말할 수는 없고, 모순되지 않는 결과를 얻었을 뿐이다.
 :::
 
+---
+
+## 실제 도구로: VideoMAE에게 두 가지 방식으로 가린 clip을 복원시킨다
+
+이 장 G9.6.4의 질문을 실제 사전학습 모델에 던진다. 같은 비율을 가리되 tube masking(공간 칸을 모든 시각에서 가림)과 시각마다 따로 가리는 방식 중 어느 쪽이 복원하기 어려운가. 시간 지름길이 있다면 따로 가린 쪽이 쉬워야 한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.22, `scikit-image` 0.26
+- 모델은 `MCG-NJU/videomae-base`(9,400만 parameter, 약 380 MB)다. Kinetics-400으로 사전학습만 한 판이라 복원용 decoder가 붙어 있다.
+- 시험 clip은 실제 사진(`scikit-image` 의 우주비행사) 위를 카메라가 가로로 훑는 16 frame이다. frame당 이동량을 0(정지), 4, 16 pixel로 바꿨다. 진짜 동영상이 아니라 카메라 이동만 있는 clip이다.
+- 출력의 loss는 가린 칸의 복원 오차(patch마다 정규화한 pixel의 MSE)이고, 가리기 seed 5개의 평균이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+import torch
+from skimage import data
+from transformers import VideoMAEForPreTraining, VideoMAEImageProcessor
+
+MID = "MCG-NJU/videomae-base"                                    # Kinetics-400 으로 사전학습만 한 판 (decoder 포함)
+proc = VideoMAEImageProcessor.from_pretrained(MID)
+model = VideoMAEForPreTraining.from_pretrained(MID).eval()
+cfg = model.config
+T, P, TUB = cfg.num_frames, cfg.patch_size, cfg.tubelet_size
+nt, ns = T // TUB, (cfg.image_size // P) ** 2                    # 시간 칸 수 × 공간 칸 수 = token 수
+print(sum(p.numel() for p in model.parameters()), T, TUB, P, nt, ns, nt * ns)
+
+# 실제 사진 위를 카메라가 가로로 훑는 16 frame clip (frame 당 이동량을 바꿔 가며)
+photo = data.astronaut()                                          # 512×512
+def clip(step):
+    return [photo[100:324, x:x + 224] for x in range(0, step * T, step)]
+
+def loss(frames, mask):
+    pv = proc(frames, return_tensors="pt").pixel_values
+    with torch.no_grad():
+        return float(model(pv, bool_masked_pos=mask).loss)
+
+def tube(ratio, rng):                                            # 공간 칸을 골라 모든 시간 칸에서 가린다
+    m = np.zeros((nt, ns), bool); m[:, rng.choice(ns, int(ratio * ns), replace=False)] = True
+    return torch.from_numpy(m.reshape(1, -1))
+def per_frame(ratio, rng):                                       # 시간 칸마다 따로 같은 비율을 가린다
+    m = np.zeros((nt, ns), bool)
+    for t in range(nt): m[t, rng.choice(ns, int(ratio * ns), replace=False)] = True
+    return torch.from_numpy(m.reshape(1, -1))
+
+# 1) 같은 비율이면 tube 가 더 어려운가: 가린 칸의 복원 loss (seed 5 개 평균)
+for step in [0, 4, 16]:                                          # frame 당 0 (정지), 4, 16 pixel 이동
+    f = clip(step) if step else [photo[100:324, 0:224]] * T
+    for ratio in [0.75, 0.9]:
+        lt = np.mean([loss(f, tube(ratio, np.random.default_rng(s))) for s in range(5)])
+        lp = np.mean([loss(f, per_frame(ratio, np.random.default_rng(s))) for s in range(5)])
+        print(step, ratio, round(lt, 3), round(lp, 3))
+
+# 2) 가린 칸 하나가 이웃 시각에서 '같은 자리'를 볼 수 있는 비율 (per-frame masking 의 지름길)
+rng = np.random.default_rng(0)
+m = per_frame(0.9, rng).numpy().reshape(nt, ns)
+visible_same = np.mean([(~m[[t2 for t2 in range(nt) if t2 != t], j]).any() for t in range(nt) for j in range(ns) if m[t, j]])
+print(round(float(visible_same), 3))
+
+# 94210944 16 2 16 8 196 1568
+# 0 0.75 0.61 0.39
+# 0 0.9 0.816 0.542
+# 4 0.75 0.349 0.342
+# 4 0.9 0.546 0.498
+# 16 0.75 0.259 0.276
+# 16 0.9 0.353 0.412
+# 0.545
+```
+
+1)의 줄은 (frame당 이동 pixel, 가린 비율, tube masking의 loss, 시각마다 따로 가렸을 때의 loss)다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **token 수 (G9.6.1).** 16 frame을 2 frame씩 묶고(tubelet) 16×16 patch로 자르면 시간 칸 8개 × 공간 칸 196개 = 1,568 token이다. 이미지 한 장(196 token)의 8배이고, 모든 token끼리 보는 attention이면 비용은 64배다.
+- **정지 화면에서는 시간 지름길이 크다 (G9.6.4).** 90%를 가렸을 때 tube masking의 loss는 0.816, 따로 가리면 0.542다. 따로 가리면 가린 칸의 55%가 다른 시각의 같은 자리에서 보인다(2)의 마지막 줄). 그 칸을 베끼면 되니 쉬워진다. 75%에서도 0.61 대 0.39다. 본문의 장난감 실험에서는 차이가 90%에서야 나타났는데, 실제 모델과 실제 사진에서는 75%에서도 분명하다.
+- **움직임이 커지면 지름길이 사라지고, 결국 뒤집힌다.** frame당 4 pixel이면 차이가 작아지고(90%에서 0.546 대 0.498), 16 pixel이면 오히려 tube 쪽 loss가 낮다(0.353 대 0.412). 카메라가 빨리 움직이면 "다른 시각의 같은 자리"에 다른 내용이 있어서 베낄 것이 없다. [9.5](05_video_representation.qmd)의 "redundancy는 video의 성질이 아니라 이동량의 함수"가 masking에서도 그대로다. 따로 가렸을 때 loss가 더 높은 이유는 확인하지 않았다.
+- **줄 사이의 loss 크기는 비교하지 않는다.** 이동량에 따라 사진의 다른 부분이 들어가고, 완전히 정지한 clip은 Kinetics 학습 데이터에서 보기 드문 입력이다. 비교는 같은 줄 안에서만 한다.
+
+**이 코드가 보여 주지 못하는 것.**
+카메라 이동만 있는 clip 하나다. 물체가 따로 움직이는 진짜 동영상에서는 지름길의 크기가 장면마다 다르다. 복원 loss가 낮은 것과 좋은 표현을 배우는 것은 다른 문제다. 어떤 masking으로 사전학습해야 downstream 정확도가 높은지는 학습을 해야 알 수 있어 다루지 않았다. single-frame baseline(G9.6.5)도 Kinetics 분류 모델과 실제 동영상이 있어야 잴 수 있어 다루지 않았다.
+
+---
+
 ::: {.callout-tip}
 ## 직접 해보기
 
