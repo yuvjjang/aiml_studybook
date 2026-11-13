@@ -132,7 +132,7 @@ kernel은 `ai-ml-study` 를 고른다.
 
 이 책의 본문 코드는 PyTorch를 쓰지 않는다. 빌드할 때마다 같은 그림이 나오도록 의존성을 NumPy·SciPy·Plotly로 제한했기 때문이다.
 대신 장 끝의 **실제 도구로** 절이, 그 장에서 NumPy로 만든 것을 PyTorch·Hugging Face·scikit-learn으로는 어떻게 쓰는지 보여 준다.
-지금 그 절이 있는 장은 101개다.
+지금 그 절이 있는 장은 114개다.
 
 - **Part 0 수학 기초**
     - [0.0 선형대수](chapters/00_foundations/00_linear_algebra.qmd) — torch.linalg
@@ -182,6 +182,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [4.3 LSTM과 GRU](chapters/04_architectures/03_lstm_gru.qmd) — torch.nn.LSTM
     - [4.4 seq2seq와 attention의 탄생](chapters/04_architectures/04_seq2seq_attention.qmd) — 번역 모델의 cross-attention
     - [4.5 embedding](chapters/04_architectures/05_embeddings.qmd) — nn.Embedding 과 학습된 GPT-2·BERT의 표현
+    - [4.6 GNN](chapters/04_architectures/06_gnn.qmd) — PyTorch Geometric으로 Cora에서 깊이를 바꾼다
 - **Part 5 Transformer**
     - [5.0 attention mechanism](chapters/05_transformer/00_attention_mechanism.qmd) — BERT의 attention을 꺼내 본다
     - [5.1 self-attention과 masking](chapters/05_transformer/01_self_attention.qmd) — nn.MultiheadAttention 의 mask
@@ -191,6 +192,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [5.5 encoder-decoder와 세 가지 계열](chapters/05_transformer/05_encoder_decoder.qmd) — T5로 encoder-decoder를 들여다본다
     - [5.6 GPT를 처음부터 만들기](chapters/05_transformer/06_build_gpt.qmd) — PyTorch로 옮기면
     - [5.7 efficient attention과 긴 문맥](chapters/05_transformer/07_efficient_attention.qmd) — scaled_dot_product_attention
+    - [5.8 Mixture of Experts(MoE)](chapters/05_transformer/08_mixture_of_experts.qmd) — Switch Transformer의 router를 들여다본다
     - [5.9 scaling law](chapters/05_transformer/09_scaling_laws.qmd) — GPT-2 세 크기의 loss로 지수를 잰다
     - [5.10 Transformer의 대안](chapters/05_transformer/10_alternatives_ssm.qmd) — Mamba-130m과 GPT-2를 나란히 놓는다
 - **Part 6 생성 모델**
@@ -200,6 +202,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [6.3 GAN](chapters/06_generative/03_gan.qmd) — PyTorch로 GAN을 학습시킨다
     - [6.4 normalizing flow](chapters/06_generative/04_normalizing_flows.qmd) — torch.distributions 의 transform
     - [6.5 diffusion model](chapters/06_generative/05_diffusion.qmd) — diffusers의 scheduler
+    - [6.7 latent diffusion과 텍스트-이미지](chapters/06_generative/07_latent_diffusion.qmd) — Stable Diffusion의 autoencoder로 48배 압축을 직접 해 본다
 - **Part 7 언어**
     - [7.0 텍스트를 다루기](chapters/07_language/00_text_representation.qmd) — scikit-learn의 CountVectorizer 와 TfidfVectorizer
     - [7.1 tokenization](chapters/07_language/01_tokenization.qmd) — 공개된 tokenizer 두 개
@@ -208,11 +211,13 @@ kernel은 `ai-ml-study` 를 고른다.
     - [7.4 pretraining paradigm](chapters/07_language/04_pretraining_paradigms.qmd) — BERT와 GPT-2를 나란히 놓는다
     - [7.5 pretraining 데이터](chapters/07_language/05_pretraining_data.qmd) — datasketch로 near-duplicate를 찾는다
     - [7.6 fine-tuning과 PEFT](chapters/07_language/06_finetuning_peft.qmd) — PyTorch와 PEFT
+    - [7.7 instruction tuning과 alignment](chapters/07_language/07_alignment.qmd) — 같은 모델의 base 판과 instruct 판을 나란히 놓는다
     - [7.8 prompting과 in-context learning](chapters/07_language/08_prompting_icl.qmd) — GPT-2에 few-shot prompt를 준다
     - [7.9 decoding 전략](chapters/07_language/09_decoding.qmd) — generate 의 인자들
     - [7.10 RAG](chapters/07_language/10_rag.qmd) — BM25, 문장 embedding, RRF
     - [7.13 LLM 평가](chapters/07_language/13_evaluation.qmd) — statsmodels로 평가 결과를 검정한다
     - [7.14 inference 최적화](chapters/07_language/14_inference_optimization.qmd) — GPT-2로 KV cache와 quantization을 잰다
+    - [7.15 안전성과 신뢰](chapters/07_language/15_safety.qmd) — GPT-2에서 암기와 "모르는 것"을 본다
 - **Part 8 음성**
     - [8.0 소리와 디지털 신호](chapters/08_audio/00_sound_and_sampling.qmd) — soundfile과 SciPy로 sampling과 quantization을 확인한다
     - [8.1 Fourier 변환과 spectrogram](chapters/08_audio/01_fourier_stft.qmd) — torch.stft 와 scipy.signal
@@ -221,13 +226,20 @@ kernel은 `ai-ml-study` 를 고른다.
     - [8.4 CTC와 RNN-T](chapters/08_audio/04_ctc_rnnt.qmd) — nn.CTCLoss 와 wav2vec2의 CTC 출력
     - [8.5 음성 self-supervised learning](chapters/08_audio/05_ssl_speech.qmd) — wav2vec2의 사전학습 과제를 직접 돌린다
     - [8.6 현대 음성 인식](chapters/08_audio/06_asr_modern.qmd) — Whisper로 받아쓰기
+    - [8.7 음성 합성(TTS)](chapters/08_audio/07_tts.qmd) — VITS 모델로 같은 문장을 여러 번 읽힌다
+    - [8.8 vocoder와 neural audio codec](chapters/08_audio/08_vocoders_codecs.qmd) — EnCodec으로 음성을 token으로 바꾼다
+    - [8.9 오디오·음악 생성](chapters/08_audio/09_audio_generation.qmd) — MusicGen으로 CFG의 세기를 바꿔 본다
+    - [8.10 그 밖의 오디오 과제](chapters/08_audio/10_audio_tasks.qmd) — 학습한 화자 embedding으로 실제 녹음의 EER을 잰다
 - **Part 9 비전·비디오**
     - [9.0 이미지의 표현과 처리](chapters/09_vision_video/00_image_basics.qmd) — Pillow와 SciPy의 이미지 함수
     - [9.1 vision 과제와 CNN 응용](chapters/09_vision_video/01_vision_tasks.qmd) — torchvision의 detection 연산
     - [9.2 Vision Transformer](chapters/09_vision_video/02_vit.qmd) — 공개된 ViT로 확인하기
     - [9.3 vision self-supervised learning](chapters/09_vision_video/03_ssl_vision.qmd) — DINOv2와 MAE를 불러 써 본다
     - [9.4 CLIP과 multimodal 표현](chapters/09_vision_video/04_clip_multimodal.qmd) — 공개된 CLIP으로 확인하기
+    - [9.5 video의 표현](chapters/09_vision_video/05_video_representation.qmd) — 고전 optical flow와 RAFT를 같은 시험에 넣는다
+    - [9.6 video 이해 모델](chapters/09_vision_video/06_video_models.qmd) — VideoMAE에게 두 가지 방식으로 가린 clip을 복원시킨다
     - [9.7 tracking과 시간적 연관](chapters/09_vision_video/07_tracking.qmd) — filterpy의 Kalman filter와 SciPy의 Hungarian
+    - [9.9 vision-language model](chapters/09_vision_video/09_vlm.qmd) — 작은 VLM에게 정답을 아는 장면을 묻는다
 - **Part 10 강화학습**
     - [10.0 Markov decision process](chapters/10_rl/00_mdp.qmd) — Gymnasium 환경의 MDP
     - [10.1 dynamic programming](chapters/10_rl/01_dynamic_programming.qmd) — Gymnasium FrozenLake의 모델로 DP를 푼다
@@ -248,6 +260,8 @@ kernel은 `ai-ml-study` 를 고른다.
     - [12.2 uncertainty와 calibration](chapters/12_trust/02_uncertainty.qmd) — PyTorch로 학습한 분류기를 보정한다
     - [12.3 robustness와 distribution shift](chapters/12_trust/03_robustness.qmd) — PyTorch로 공격을 만든다
     - [12.4 fairness와 privacy](chapters/12_trust/04_fairness_privacy.qmd) — scikit-learn 분류기의 fairness와 privacy를 잰다
+- **부록**
+    - [A.2 math cheat sheet](chapters/13_appendix/02_math_cheatsheet.qmd) — 계산기를 실제 모델 구조와 대조한다
 
 이 코드는 책의 가상환경과 **별도의 환경**에서 돌린다.
 
@@ -256,7 +270,7 @@ python -m venv venv-torch
 venv-torch/bin/pip install torch transformers peft          # Windows: venv-torch\Scripts\pip
 ```
 
-장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. Part 1의 절들은 `pandas` 와 `statsmodels` 를, 강화학습 장들은 `gymnasium` 을, 음성 장들은 `librosa`·`soundfile` 을, 9.0은 `pillow` 를, 4.1·9.1은 `torchvision` 을, 1.2는 `matplotlib` 을, 11.1은 `pyarrow` 를, 8.3은 `hmmlearn` 을, 7.5는 `datasketch` 를, 9.7은 `filterpy` 를, 6.5는 `diffusers` 를, 11.5는 `onnx`·`onnxruntime`·`onnxscript` 를, 11.6은 `river` 를 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)는 `sentencepiece` 가 필요하다.
+장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. Part 1의 절들은 `pandas` 와 `statsmodels` 를, 강화학습 장들은 `gymnasium` 을, 음성 장들은 `librosa`·`soundfile` 을, 9.0은 `pillow` 를, 4.1·9.1은 `torchvision` 을, 1.2는 `matplotlib` 을, 11.1은 `pyarrow` 를, 8.3은 `hmmlearn` 을, 7.5는 `datasketch` 를, 9.7은 `filterpy` 를, 6.5는 `diffusers` 를, 11.5는 `onnx`·`onnxruntime`·`onnxscript` 를, 11.6은 `river` 를 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)·[5.8](chapters/05_transformer/08_mixture_of_experts.qmd)은 `sentencepiece`, [4.6](chapters/04_architectures/06_gnn.qmd)은 `torch_geometric`, 6.7·9.5·9.6은 `scikit-image`(시험 이미지)를, 6.7은 `diffusers` 도 쓴다. 8.10은 Mini LibriSpeech(openslr.org/31)를 따로 내려받는다.
 GPU가 있으면 [pytorch.org](https://pytorch.org/get-started/locally/) 의 안내대로 자기 CUDA 버전에 맞는 `torch` 를 설치한다.
 
 **이 절의 코드를 읽을 때 알아 둘 것**
