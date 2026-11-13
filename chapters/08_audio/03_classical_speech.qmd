@@ -891,6 +891,81 @@ subword 출력(8.4)이 이 제약을 없앤다.
 - **HMM의 conditional independence 가정** — 그래서 delta feature도 필요 없어졌다 (8.2)
 - 남는 것은 alignment를 **marginalization(주변화 — 가능한 모든 alignment의 확률을 전부 더해 버리는 것)**하는 아이디어 하나다 (8.4)
 
+---
+
+## 실제 도구로: hmmlearn의 Gaussian HMM
+
+고전 음성 인식의 HMM을 `hmmlearn` 으로 다룬다. phoneme 하나를 흉내 낸 left-to-right state 3개짜리 HMM에서 sequence를 뽑고, Viterbi로 state를 복원하고, label 없이 Baum–Welch로 parameter를 다시 찾는다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `hmmlearn` 0.3, `numpy` 2.5 (`pip install hmmlearn`). PyTorch는 쓰지 않는다.
+- 음성이 아니라 2차원 Gaussian 관측을 쓴다. 실제로는 이 자리에 MFCC([8.2](02_mel_mfcc.qmd))가 들어간다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np
+from hmmlearn import hmm
+
+rng = np.random.default_rng(0)
+
+# 참 모델: left-to-right state 3개 (phoneme 하나의 시작·가운데·끝), 각 state 는 2차원 Gaussian 을 낸다
+true = hmm.GaussianHMM(n_components=3, covariance_type="diag", init_params="", params="")
+true.startprob_ = np.array([1.0, 0.0, 0.0])
+true.transmat_ = np.array([[0.8, 0.2, 0.0], [0.0, 0.8, 0.2], [0.0, 0.0, 1.0]])
+true.means_ = np.array([[0.0, 0.0], [3.0, 1.0], [0.0, 3.0]])
+true.covars_ = np.full((3, 2), 0.5)
+seqs, states = [], []
+for k in range(100):
+    X, Z = true.sample(25, random_state=k)
+    seqs.append(X); states.append(Z)
+X_all, lengths = np.concatenate(seqs), [len(s) for s in seqs]
+
+# 1) Viterbi: 참 모델로 state 열을 복원한다 (forced alignment)
+logp, path = true.decode(seqs[0], algorithm="viterbi")
+print(path.tolist()); print(states[0].tolist()); print(round(float(np.mean(path == states[0])), 3), round(logp, 2))
+
+# 2) Baum–Welch (EM): label 없이 parameter 를 학습한다
+m = hmm.GaussianHMM(n_components=3, covariance_type="diag", n_iter=100, random_state=0, init_params="mc", params="stmc")
+m.startprob_ = np.array([1.0, 0.0, 0.0])
+m.transmat_ = np.array([[0.5, 0.5, 0.0], [0.0, 0.5, 0.5], [0.0, 0.0, 1.0]])   # left-to-right 구조만 준다 (0 은 0 으로 남는다)
+m.fit(X_all, lengths)
+print(np.round(m.means_, 2).tolist(), np.round(m.transmat_, 2).tolist(), m.monitor_.converged, len(m.monitor_.history))
+acc = np.mean([np.mean(m.predict(s) == z) for s, z in zip(seqs, states)])
+print(round(float(acc), 3), round(m.score(X_all, lengths), 1), round(true.score(X_all, lengths), 1))
+
+# 3) 구조를 주지 않으면 (아무 전이나 허용, 무작위 시작)
+free = hmm.GaussianHMM(n_components=3, covariance_type="diag", n_iter=100, random_state=1).fit(X_all, lengths)
+print(np.round(free.transmat_, 2).tolist(), round(free.score(X_all, lengths), 1))
+
+# 4) 단어 인식처럼: 두 '단어' 모델 중 likelihood 가 큰 쪽을 고른다
+other = hmm.GaussianHMM(n_components=3, covariance_type="diag", init_params="", params="")
+other.startprob_, other.transmat_ = true.startprob_, true.transmat_
+other.means_ = np.array([[0.0, 3.0], [3.0, 1.0], [0.0, 0.0]])  # 같은 소리를 반대 순서로 내는 단어
+other.covars_ = np.full((3, 2), 0.5)
+right = sum(true.score(s) > other.score(s) for s in seqs)
+print(right, len(seqs))
+
+# [0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+# [0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+# 1.0 -56.06
+# [[-0.06, -0.04], [2.98, 0.97], [0.01, 2.97]] [[0.82, 0.18, 0.0], [0.0, 0.8, 0.2], [0.0, 0.0, 1.0]] True 7
+# 0.999 -5937.9 -5946.0
+# [[1.0, 0.0, 0.0], [0.2, 0.8, 0.0], [0.0, 0.18, 0.82]] -5937.9
+# 100 100
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **Viterbi가 state 열을 복원한다 (G8.3.1, "직접 해보기" ①).** 참 모델로 decoding하면 25 frame의 state 열(0이 5 frame, 1이 2 frame, 나머지 2)을 정확히 맞힌다. forced alignment가 하는 일이 이것이다.
+- **label 없이 parameter를 찾는다 (G8.3.1의 embedded re-estimation).** 시작 확률과 left-to-right 구조(0인 전이)만 주고 Baum–Welch(EM)를 돌리면 7번 반복에 수렴한다. 평균은 (−0.06, −0.04), (2.98, 0.97), (0.01, 2.97)로 참값 (0,0), (3,1), (0,3)과 거의 같고, 전이 확률도 0.82/0.18, 0.8/0.2로 참값(0.8/0.2)에 가깝다. 학습한 모델의 state 예측은 99.9% 맞는다. EM에서 0으로 둔 전이는 끝까지 0으로 남는다. 구조를 주는 방법이 이것이다.
+- **학습한 모델의 likelihood가 참 모델보다 조금 높다.** −5,937.9 대 −5,946.0이다. 같은 데이터에 맞춘 parameter라 참값보다 이 데이터를 조금 더 잘 설명한다. overfitting의 작은 형태다.
+- **구조를 주지 않아도 이 데이터에서는 찾았다.** 아무 전이나 허용하고 무작위로 시작해도 같은 likelihood(−5,937.9)에 도달했다. 전이 행렬을 보면 state 번호만 뒤바뀐 채(2→1→0) 같은 left-to-right 구조다. HMM의 state 번호는 의미가 없고, 학습할 때마다 바뀔 수 있다.
+- **단어 인식은 likelihood 비교다 (G8.3.4).** 같은 세 소리를 반대 순서로 내는 "다른 단어" 모델과 비교하면, 100개 sequence 모두에서 참 모델의 likelihood가 높다. 고전 인식기는 단어(또는 phoneme 열)마다 HMM을 이어 붙이고 이 비교를 language model과 함께 한다.
+
+**이 코드가 보여 주지 못하는 것.**
+관측이 잘 분리된 2차원 Gaussian이라 쉽다. 실제 음성의 MFCC는 39차원이고, state마다 Gaussian mixture를 쓰고, 화자와 잡음에 따라 크게 겹친다. 전체 인식기는 `hmmlearn` 으로 만들지 않고 Kaldi 같은 전용 도구를 썼다.
+triphone과 state tying(G8.3.5), language model 가중치("직접 해보기" ③)는 다루지 않았다.
 
 ---
 
