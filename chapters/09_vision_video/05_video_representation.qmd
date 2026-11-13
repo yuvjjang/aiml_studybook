@@ -482,6 +482,96 @@ fig
 **Something-Something이 특별한 이유**: label이 '무언가를 왼쪽으로 밀기'처럼 **물체가 아니라 동작**으로 되어 있다.
 frame 하나로는 절대 풀 수 없게 설계한 것이다 — G9.5.2의 오른쪽 막대만 남긴 dataset인 셈이다.
 
+---
+
+## 실제 도구로: 고전 optical flow와 RAFT를 같은 시험에 넣는다
+
+이 장 G9.5.3에서 직접 구현한 Lucas–Kanade의 두 약점, 곧 큰 변위와 brightness constancy 위반을 실제 도구로 다시 잰다. 고전 방법은 `scikit-image` 의 iterative Lucas–Kanade(`optical_flow_ilk`)와 TV-L1을, 신경망 방법은 `torchvision` 의 RAFT(small)를 쓴다. 실제 사진을 정해진 양만큼 옮겨 두 번째 frame을 만들었으므로 정답 flow를 정확히 안다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `torchvision` 0.29, `scikit-image` 0.26
+- RAFT-small의 사전학습 weight(약 4 MB)는 처음 실행할 때 내려받는다. 합성 데이터(FlyingChairs, FlyingThings)로 학습한 것이다.
+- 시험 이미지는 `scikit-image` 에 들어 있는 우주비행사 사진의 256×256 부분이다. `np.roll` 로 옮기면 가장자리가 반대편으로 감기므로, 오차는 가장자리 40 pixel을 뺀 안쪽에서 잰다.
+- 두 고전 방법 모두 `scikit-image` 안에서 coarse-to-fine pyramid와 warping을 이미 쓴다. 본문 ③의 해법이 들어 있는 판이다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import time
+import numpy as np
+import torch
+from skimage import data
+from skimage.color import rgb2gray
+from skimage.registration import optical_flow_ilk, optical_flow_tvl1
+from torchvision.models.optical_flow import Raft_Small_Weights, raft_small
+
+img = data.astronaut()[96:352, 128:384]                          # 256×256 RGB (RAFT 는 8 의 배수 크기를 받는다)
+model = raft_small(weights=Raft_Small_Weights.DEFAULT).eval()
+print(sum(p.numel() for p in model.parameters()))
+
+def shift(a, dy, dx): return np.roll(a, (dy, dx), axis=(0, 1))   # 정답 flow 가 어디서나 (dx, dy) 인 두 번째 frame
+M = 40                                                           # 가장자리(roll 로 감긴 부분)는 빼고 잰다
+
+def raft(a, b):
+    t = lambda x: torch.from_numpy(x).permute(2, 0, 1)[None].float() / 127.5 - 1
+    with torch.no_grad():
+        f = model(t(a), t(b))[-1][0].numpy()                     # 반복 갱신의 마지막 결과, (2, H, W) = (u, v)
+    return f[0], f[1]
+
+def epe(u, v, dx, dy):                                           # end-point error: 화살표 끝점의 평균 거리 (pixel)
+    return round(float(np.sqrt((u - dx) ** 2 + (v - dy) ** 2)[M:-M, M:-M].mean()), 2)
+
+# 1) 변위 크기별 오차: 고전 방법(창 안에서 least squares, pyramid 있는 TV-L1) 대 RAFT
+g = rgb2gray(img)
+for d in [1, 4, 8, 16, 24]:
+    dx, dy = d, d // 2
+    b = shift(img, dy, dx); gb = rgb2gray(b)
+    v_ilk, u_ilk = optical_flow_ilk(g, gb, radius=4)              # scikit-image 는 (v, u) 순서로 돌려준다
+    v_tv, u_tv = optical_flow_tvl1(g, gb)
+    u_r, v_r = raft(img, b)
+    print(d, epe(u_ilk, v_ilk, dx, dy), epe(u_tv, v_tv, dx, dy), epe(u_r, v_r, dx, dy))
+
+# 2) brightness constancy 를 깨면: 두 번째 frame 만 1.3배 밝게 (조명 변화)
+dx, dy = 4, 2
+b = (shift(img, dy, dx).astype(np.float32) * 1.3).clip(0, 255).astype(np.uint8); gb = rgb2gray(b)
+v_ilk, u_ilk = optical_flow_ilk(g, gb, radius=4); v_tv, u_tv = optical_flow_tvl1(g, gb); u_r, v_r = raft(img, b)
+print("밝기 1.3배", epe(u_ilk, v_ilk, dx, dy), epe(u_tv, v_tv, dx, dy), epe(u_r, v_r, dx, dy))
+
+# 3) 움직임이 없는데 밝기만 바뀌면: 정답은 flow 0
+b = (img.astype(np.float32) * 1.3).clip(0, 255).astype(np.uint8); gb = rgb2gray(b)
+v_ilk, u_ilk = optical_flow_ilk(g, gb, radius=4); v_tv, u_tv = optical_flow_tvl1(g, gb); u_r, v_r = raft(img, b)
+print("정지 + 밝기 1.3배", epe(u_ilk, v_ilk, 0, 0), epe(u_tv, v_tv, 0, 0), epe(u_r, v_r, 0, 0))
+
+# 4) 시간: 256×256 한 쌍
+for name, f in [("ilk", lambda: optical_flow_ilk(g, rgb2gray(shift(img, 2, 4)), radius=4)),
+                ("tvl1", lambda: optical_flow_tvl1(g, rgb2gray(shift(img, 2, 4)))),
+                ("raft", lambda: raft(img, shift(img, 2, 4)))]:
+    t0 = time.perf_counter(); f(); print(name, round(time.perf_counter() - t0, 2))
+
+# 990162
+# 1 0.01 0.01 0.08
+# 4 0.02 0.01 0.11
+# 8 0.15 0.01 0.12
+# 16 0.91 0.01 0.04
+# 24 12.46 1.74 0.08
+# 밝기 1.3배 16.5 3.64 0.12
+# 정지 + 밝기 1.3배 16.0 3.02 0.08
+# ilk 0.75
+# tvl1 1.24
+# raft 0.82
+```
+
+1)~3)의 줄은 (변위 또는 조건, iterative Lucas–Kanade, TV-L1, RAFT의 end-point error(pixel))다. 1)에서 변위 $d$ 는 가로 $d$, 세로 $d/2$ pixel이다. 4)는 256×256 한 쌍에 걸린 초다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **작은 변위에서는 고전 방법이 더 정확하다.** 1~4 pixel에서 두 고전 방법의 오차는 0.01~0.02 pixel이고 RAFT는 0.08~0.11이다. 이 시험은 사진 전체를 한 덩어리로 옮긴, brightness constancy가 정확히 성립하는 경우다. 고전 방법의 가정이 그대로 맞는 경우라 고전 방법이 유리하다.
+- **변위가 커지면 창 안의 least squares가 먼저 무너진다 (G9.5.3 ②).** iterative Lucas–Kanade(창 9×9)는 8 pixel에서 0.15, 16 pixel에서 0.91, 24 pixel에서 12.5로 무너진다. pyramid가 있는데도 그렇다. 화면 전체를 함께 매끄럽게 맞추는 TV-L1은 16 pixel까지 0.01이고 24 pixel에서 1.74다. RAFT는 24 pixel에서도 0.08이다. 모든 위치 쌍의 닮은 정도(correlation volume)를 보고 반복해서 고치는 구조라 변위 크기에 거의 영향을 받지 않는다. 24 pixel에서 Lucas–Kanade가 왜 이렇게까지 무너지는지는 따로 확인하지 않았다.
+- **밝기가 바뀌면 고전 방법이 가짜 움직임을 본다 (brightness constancy).** 두 번째 frame만 1.3배 밝게 하면, 4 pixel 움직임에서 오차가 Lucas–Kanade 16.5, TV-L1 3.64로 뛴다. 움직임이 전혀 없는데 밝기만 바뀐 경우에도 16.0, 3.02 pixel의 flow를 만들어 낸다. $I_x u + I_y v + I_t = 0$ 에서 밝기 변화 $I_t$ 를 움직임으로 설명하려 하기 때문이다. RAFT는 두 경우 모두 0.08~0.12로 영향을 거의 받지 않는다. 본문 표의 "frame difference: 조명 변화에 취약"이 optical flow에도 그대로 있고, 학습한 feature가 이것을 상당 부분 넘는다.
+- **시간은 이 크기에서 비슷하다.** 256×256 한 쌍에 셋 다 1초 안팎이었다. 영상 전체의 모든 frame 쌍에 flow를 구하면 이것이 frame 수만큼 곱해진다. 본문의 "optical flow 추출 비용이 컸다"가 이것이다.
+
+**이 코드가 보여 주지 못하는 것.**
+화면 전체가 같은 양만큼 움직이는 가장 단순한 경우다. 실제 영상에는 물체마다 다른 움직임, 가려짐(occlusion), 움직임 경계가 있고, 거기서 세 방법의 차이는 이 표와 다르다. 이 경우를 재려면 정답 flow가 있는 benchmark(Sintel, KITTI 등)를 써야 한다. aperture problem(G9.5.3 ①)도 따로 재지 않았다.
 
 ---
 
