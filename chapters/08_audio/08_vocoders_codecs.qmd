@@ -361,15 +361,8 @@ quiet = lev[:n] < np.percentile(env, 20)
 하위 1% 구간의 SNR은 `{python} f'{np.percentile(sl, 1):.1f}'` dB → `{python} f'{np.percentile(sm, 1):.1f}'` dB — **`{python} f'{np.percentile(sm, 1) - np.percentile(sl, 1):.0f}'` dB 개선**이다.
 
 조용한 구간(하위 20%, `{python} f'{int(quiet.sum())}'`개)만 보면
-
-```{python}
-#| label: mulaw-3
-#| code-fold: false
-
-print(f"  선형   {sl[:n][quiet].mean():>6.1f} dB")
-print(f"  µ-law {sm[:n][quiet].mean():>6.1f} dB  "
-      f"(**{sm[:n][quiet].mean()-sl[:n][quiet].mean():+.1f} dB**)")
-```
+선형 `{python} f'{sl[:n][quiet].mean():.1f}'` dB, µ-law `{python} f'{sm[:n][quiet].mean():.1f}'` dB
+(**`{python} f'{sm[:n][quiet].mean() - sl[:n][quiet].mean():+.1f}'` dB**)다.
 
 **이것이 companding의 정체다 — 평균 SNR을 팔아 SNR의 균일함을 산다.**
 
@@ -398,7 +391,7 @@ print("-" * 66)
 for a, b, c in [
     ("WaveNet (sample 단위)", SR, "16,000 — 병렬화 불가"),
     ("WaveRNN (sample 단위)", SR, "구조를 줄여 step을 싸게"),
-    ("**HiFi-GAN (병렬)**", 1, "**한 번의 forward pass**"),
+    ("HiFi-GAN (병렬)", 1, "한 번의 forward pass"),
     ("DiffWave (diffusion 50 step)", 50, "전체를 50번 훑는다"),
     ("Griffin-Lim (150회)", 150, "8.7에서 잰 것"),
 ]:
@@ -722,12 +715,7 @@ for nm, fps, ns, k in [("여기 ② (hop 128, 6단계)", SR/HOP, 6, K),
 - **delay pattern**: 단계마다 한 step씩 밀어 넣는다 (MusicGen)
 - **계층**: 1단계만 autoregressive로, 나머지는 조건부로 (VALL-E)
 
-```{python}
-#| label: tokens-2
-#| code-fold: false
-
-print("**semantic token vs acoustic token**")
-```
+**semantic token vs acoustic token**
 
 | 구분 | 무엇에서 | 담는 것 |
 |---|---|---|
@@ -795,6 +783,17 @@ neural codec: SNR로 보면 고전 codec이 낫다
 **셋 다 SNR이 지각과 다른 것을 재기 때문이다.**
 [7.13](../07_language/13_evaluation.qmd)의 결론이 오디오에서도 같다 —
 **최적화하는 지표와 원하는 것이 다르면 지표가 이긴다.**
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **RVQ 비교의 두 SNR은 서로 다른 공간에서 쟀다.** ①은 waveform의 SNR이고, ②는 표준화한 log-mel의 SNR이다. log-mel에는 위상이 없어서 그 자체로는 소리가 되지 않고, 다시 소리로 바꾸려면 vocoder가 따로 있어야 한다. 그래서 "4.0 kbps에서 18.16 dB"를 그 bitrate로 얻는 음질로 읽으면 안 된다. 이 비교가 보여 주는 것은 "위상을 버린 표현이 RVQ로 덮기 훨씬 쉽다"까지다.
+- **encoder를 학습하지 않았다.** 두 경우 모두 고정된 변환(DCT, log-mel) 위에 k-means codebook을 얹었을 뿐이다. "그래서 neural codec은 encoder를 먼저 학습한다"는 이 비교에서 끌어낸 해석이고, 학습한 encoder와 그렇지 않은 encoder를 비교한 것은 아니다.
+- **신경망 vocoder는 MSE regression 하나만 학습했다.** WaveNet, HiFi-GAN, flow, diffusion vocoder는 학습하지 않았다. "discriminator가 평균 출력을 잡아낸다"는 설명이다. dilated convolution의 receptive field와 autoregressive의 step 수는 계산한 값이다.
+- **음성이 합성이다.** 무작위 phoneme 14개를 이은 합성 발화로 학습 40개, test 10개다. µ-law의 구간별 SNR처럼 신호 처리로 잰 숫자도 이 신호의 값이다.
+:::
 
 ---
 
