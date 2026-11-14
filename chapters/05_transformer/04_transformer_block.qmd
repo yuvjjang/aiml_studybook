@@ -432,9 +432,9 @@ print(f"d_model = {d}")
 print(f"  ReLU FFN (4d)          : {relu_ffn/1e6:8.1f}M")
 print(f"  SwiGLU (4d, 보정 없음)  : {swiglu_naive/1e6:8.1f}M  ← 1.5배로 불공정")
 print(f"  SwiGLU (8/3 d)         : {swiglu_fixed/1e6:8.1f}M  ← parameter 맞춤")
-print()
-print(f"LLaMA-2 7B 실제 값: d=4096, FFN hidden=11008 ≈ {11008/4096:.2f}d")
 ```
+
+LLaMA-2 7B 실제 값: d=4096, FFN hidden=11008 ≈ `{python} f'{11008 / 4096:.2f}'`d
 
 ---
 
