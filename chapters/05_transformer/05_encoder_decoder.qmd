@@ -167,8 +167,14 @@ encoder-only의 학습(MLM — 아래 설명)은 token의 15%만 가리고 맞�
 #| code-fold: false
 
 T = 512
+```
 
-print(f"sequence 길이 T = {T}\n")
+sequence 길이 T = `{python} f'{T}'`
+
+```{python}
+#| label: mask-counting-2
+#| code-fold: false
+
 print(f"{'':<26}{'볼 수 있는 쌍':>16}{'예측 과제 수':>14}")
 print(f"{'양방향 (encoder-only)':<26}{T*T:>16,}{int(0.15*T):>14,}")
 print(f"{'causal (decoder-only)':<26}{T*(T+1)//2:>16,}{T:>14,}")
