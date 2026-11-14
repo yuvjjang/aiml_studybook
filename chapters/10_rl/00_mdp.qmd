@@ -289,7 +289,7 @@ for a in range(gw.nA):
                        for t in nz)
     vals = " + ".join(f"{gw.P[s,a,t]*V[t]:.3f}" for t in nz)
     print(f"  {rl.ARROWS[a]}  R={gw.R[s,a]:+.3f}, γ[{terms}]")
-    print(f"       = {gw.R[s,a]:+.3f} + {gamma}×({vals}) = **{Q[s,a]:+.4f}**")
+    print(f"       = {gw.R[s,a]:+.3f} + {gamma}×({vals}) = {Q[s,a]:+.4f}")
 ```
 
 max_a Q = `{python} f'{Q[s].max():+.4f}'`, V(s) = `{python} f'{V[s]:+.4f}'` — 일치: `{python} f'{np.isclose(Q[s].max(), V[s])}'`
