@@ -126,10 +126,9 @@ for name, scale in [("He  (2/n_in)", np.sqrt(2.0 / n_in)),
         W = rng.normal(0, scale, (n_in, n_in))
         h = np.maximum(0, h @ W)
     print(f"{name:<22}{h.std():>22.3e}{h.std()/s0:>14.2e}")
-
-print(f"\n이론 예측: 계수를 1 로 쓰면 층마다 1/√2 배 → 2^(-{depth}/2) "
-      f"= {2.0**(-depth/2):.2e}")
 ```
+
+이론 예측: 계수를 1 로 쓰면 층마다 1/√2 배 → 2\^(-`{python} f'{depth}'`/2) = `{python} f'{2.0 ** (-depth / 2):.2e}'`
 
 second moment의 비율은 0.5로 정확히 절반이고, 계수를 빼먹은 Xavier는 30층 뒤 신호가
 이론 예측과 같은 자릿수($10^{-5}$)로 사라진다.
@@ -151,12 +150,20 @@ second moment의 비율은 0.5로 정확히 절반이고, 계수를 빼먹은 Xa
 import numpy as np
 
 n_in = 512
-print(f"n_in = {n_in} 일 때 실제 값:")
+```
+
+n_in = `{python} f'{n_in}'` 일 때 실제 값:
+
+```{python}
+#| label: init-formulas-2
+#| code-fold: false
+
 print(f"  LeCun  σ = {np.sqrt(1/n_in):.5f}")
 print(f"  Xavier σ = {np.sqrt(2/(n_in+n_in)):.5f}   (n_out = n_in 가정)")
 print(f"  He     σ = {np.sqrt(2/n_in):.5f}")
-print(f"  GPT 관례 σ = 0.02  → He 대비 {0.02/np.sqrt(2/n_in):.2f}배")
 ```
+
+GPT 관례 σ = 0.02 → He 대비 `{python} f'{0.02 / np.sqrt(2 / n_in):.2f}'`배
 
 $n_{\text{in}} = n_{\text{out}}$ 이면 Xavier와 LeCun은 같은 값이 된다 — 아래 실험에서
 두 곡선이 겹치는 이유다.
@@ -412,31 +419,36 @@ fig.update_layout(legend=dict(x=0.02, y=0.4, font=dict(size=10)))
 fig.show()
 ```
 
+gradient 비 (입력층 ‖g‖ / 출력층 ‖g‖) — 1 에 가까울수록 좋다
+
 ```{python}
 #| label: residual-numbers
 #| code-fold: false
 
 import numpy as np
 
-print("gradient 비 (입력층 ‖g‖ / 출력층 ‖g‖) — 1 에 가까울수록 좋다")
 print(f"{'설정':<26} " + " ".join(f"{d:>10}" for d in depths))
 print("-" * 92)
 for name, dat in runs.items():
     print(f"{name:<26} " + " ".join(f"{d[0]:>10.2e}" for d in dat))
-print()
-print("출력 activation의 표준편차")
+```
+
+출력 activation의 표준편차
+
+```{python}
+#| label: residual-numbers-2
+#| code-fold: false
+
 print(f"{'설정':<26} " + " ".join(f"{d:>10}" for d in depths))
 print("-" * 92)
 for name, dat in runs.items():
     print(f"{name:<26} " + " ".join(f"{d[1]:>10.2e}" for d in dat))
-print()
 
 sig_plain = runs["sigmoid + Xavier, residual 없음"][-1][0]
 sig_res   = runs["sigmoid + Xavier, residual 1/√L"][-1][0]
 he_plain  = runs["ReLU + He, residual 없음"][-1][0]
 he_res1   = runs["ReLU + He, residual α=1"][-1][0]
 he_resL   = runs["ReLU + He, residual 1/√L"][-1][0]
-
 ```
 
 읽어야 할 것이 셋이다.
@@ -577,7 +589,14 @@ import numpy as np
 
 d_model, n_layer = 768, 12
 he = np.sqrt(2/d_model)
-print(f"d_model={d_model}, L={n_layer} 일 때")
+```
+
+d_model=`{python} f'{d_model}'`, L=`{python} f'{n_layer}'` 일 때
+
+```{python}
+#| label: llm-init-practice-2
+#| code-fold: false
+
 print(f"  He 표준편차          : {he:.5f}")
 print(f"  GPT 관례 0.02        : {0.02:.5f}  (He 의 {0.02/he:.2f}배)")
 print(f"  output projection 0.02/√(2L) : {0.02/np.sqrt(2*n_layer):.5f}  "
