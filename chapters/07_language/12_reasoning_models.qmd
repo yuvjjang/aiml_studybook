@@ -580,6 +580,136 @@ fig.show()
 - 사고 길이가 늘면 latency·비용이 함께 는다 — 점수만 보면 안 된다
 - 정답 추출 방식(마지막 숫자? box 안?)이 점수를 몇 %p씩 바꾼다
 
+---
+
+## 실제 도구로: 작은 모델에 수학 문제를 여러 번 풀게 한다
+
+본문의 문제 집합은 정답 확률 $p$ 와 오답 분포를 직접 정해 둔 합성이었다. 여기서는 실제 모델이 실제 문제를 풀게 해서 그 두 가지를 잰다. 모델은 `Qwen2.5-0.5B-Instruct`(parameter 5억 개)이고, 문제는 초등 수학 서술형 문제 모음 GSM8K의 test 앞 30개다. 정답은 숫자 하나라서 문자열 비교로 채점할 수 있다. 본문의 "완벽한 verifier"가 있는 경우다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.23, `datasets` 5.2. 모델과 데이터는 Hugging Face Hub에서 처음 실행할 때 내려받는다(모델 약 1 GB).
+- 문제마다 세 가지를 했다. 풀이 없이 답만 내게 하기(greedy), 풀이를 쓰고 답을 내게 하기(greedy), 풀이를 쓰고 답을 내게 하는 것을 temperature 0.7로 8번 sample하기. 풀이는 384 token에서 자른다.
+- 답은 `\boxed{}` 안의 값, 없으면 마지막 숫자를 읽는다. CPU에서 약 70분 걸렸다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import collections, re, sys, time
+import numpy as np, torch
+from datasets import load_dataset
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+MID = "Qwen/Qwen2.5-0.5B-Instruct"
+NPROB = int(sys.argv[1]) if len(sys.argv) > 1 else 30
+N = 8
+CAP = 384
+tok = AutoTokenizer.from_pretrained(MID); tok.padding_side = "left"
+model = AutoModelForCausalLM.from_pretrained(MID, dtype=torch.float32).eval()
+ds = load_dataset("openai/gsm8k", "main", split="test").select(range(NPROB))
+
+
+def gold_of(s):
+    return s.split("####")[-1].strip().replace(",", "")
+
+
+def pred_of(text):
+    m = re.findall(r"\\boxed\{([^}]*)\}", text) or re.findall(r"-?\d[\d,]*\.?\d*", text)
+    if not m:
+        return None
+    v = m[-1].replace(",", "").replace("$", "").strip().rstrip(".")
+    try:
+        f = float(v); return str(int(f)) if f == int(f) else str(f)
+    except ValueError:
+        return v
+
+
+def prompt(q, cot):
+    msg = q + ("\nThink step by step, then put the final number in \\boxed{}." if cot
+               else "\nGive only the final number in \\boxed{}, with no explanation.")
+    return tok.apply_chat_template([{"role": "user", "content": msg}], tokenize=False, add_generation_prompt=True)
+
+
+@torch.no_grad()
+def gen(q, n, cot, sample):
+    enc = tok([prompt(q, cot)] * n, return_tensors="pt", padding=True)
+    torch.manual_seed(0)
+    out = model.generate(**enc, max_new_tokens=CAP if cot else 20, do_sample=sample,
+                         temperature=0.7 if sample else None, top_p=None, top_k=None)
+    new = out[:, enc["input_ids"].shape[1]:]
+    texts = tok.batch_decode(new, skip_special_tokens=True)
+    lens = (new != tok.pad_token_id).sum(1).tolist()
+    return [pred_of(t) for t in texts], lens
+
+
+t0 = time.time()
+rows = []
+for ex in ds:
+    g = gold_of(ex["answer"])
+    p_direct, _ = gen(ex["question"], 1, False, False)
+    p_greedy, l_greedy = gen(ex["question"], 1, True, False)
+    preds, lens = gen(ex["question"], N, True, True)
+    rows.append((g, p_direct[0], p_greedy[0], l_greedy[0], preds, lens))
+print(f"문제 {NPROB}개, 문제당 sample {N}개 (temperature 0.7), {time.time() - t0:.0f}초")
+
+acc = lambda xs: float(np.mean(xs))
+print("1) 생각할 자리를 주는가")
+print(f"   답만 (greedy)            {acc([r[1] == r[0] for r in rows]):.3f}")
+print(f"   풀이 후 답 (greedy)      {acc([r[2] == r[0] for r in rows]):.3f}   평균 {np.mean([r[3] for r in rows]):.0f} token")
+print("2) sample 수 n 에 따른 정확도 (앞에서부터 n개)")
+print("   n   pass@n  다수결")
+for n in [1, 2, 4, 8]:
+    pas = acc([r[0] in r[4][:n] for r in rows])
+    maj = acc([collections.Counter([p for p in r[4][:n] if p is not None]).most_common(1)[0][0] == r[0]
+               if any(p is not None for p in r[4][:n]) else False for r in rows])
+    print(f"   {n:2d}  {pas:.3f}   {maj:.3f}")
+ps = np.array([np.mean([p == r[0] for p in r[4]]) for r in rows])
+print("3) 문제별 정답 비율 p (8개 중)")
+print(f"   p=0: {int((ps == 0).sum())}개   0<p<0.25: {int(((ps > 0) & (ps < 0.25)).sum())}개   "
+      f"0.25<=p<0.5: {int(((ps >= 0.25) & (ps < 0.5)).sum())}개   p>=0.5: {int((ps >= 0.5).sum())}개")
+hard = [r for r, p in zip(rows, ps) if 0 < p < 0.5]
+mh = acc([collections.Counter([p for p in r[4] if p is not None]).most_common(1)[0][0] == r[0] for r in hard])
+print(f"   0<p<0.5 인 {len(hard)}문제에서 pass@8 1.000, 다수결@8 {mh:.3f}")
+shares = []
+for r in rows:
+    wrong = [p for p in r[4] if p != r[0]]
+    if len(wrong) >= 4:
+        shares.append(collections.Counter(wrong).most_common(1)[0][1] / len(wrong))
+print(f"4) 오답이 4개 이상인 {len(shares)}문제: 가장 흔한 오답이 오답 중 차지하는 비율 평균 {np.mean(shares):.2f}")
+lc = [l for r in rows for p, l in zip(r[4], r[5]) if p == r[0]]
+lw = [l for r in rows for p, l in zip(r[4], r[5]) if p != r[0]]
+print(f"5) 풀이 길이: 정답 sample 평균 {np.mean(lc):.0f} token, 오답 sample 평균 {np.mean(lw):.0f} token"
+      f"  ({CAP} token 상한에 닿은 sample {np.mean([l >= CAP for r in rows for l in r[5]]):.1%})")
+
+# 문제 30개, 문제당 sample 8개 (temperature 0.7), 4178초
+# 1) 생각할 자리를 주는가
+#    답만 (greedy)            0.000
+#    풀이 후 답 (greedy)      0.300   평균 307 token
+# 2) sample 수 n 에 따른 정확도 (앞에서부터 n개)
+#    n   pass@n  다수결
+#     1  0.300   0.300
+#     2  0.467   0.300
+#     4  0.533   0.333
+#     8  0.600   0.400
+# 3) 문제별 정답 비율 p (8개 중)
+#    p=0: 12개   0<p<0.25: 2개   0.25<=p<0.5: 9개   p>=0.5: 7개
+#    0<p<0.5 인 11문제에서 pass@8 1.000, 다수결@8 0.455
+# 4) 오답이 4개 이상인 25문제: 가장 흔한 오답이 오답 중 차지하는 비율 평균 0.32
+# 5) 풀이 길이: 정답 sample 평균 274 token, 오답 sample 평균 320 token  (384 token 상한에 닿은 sample 24.2%)
+```
+
+2)의 pass@n 은 앞에서부터 $n$개 sample 중 하나라도 정답인 비율이고, 다수결은 같은 $n$개에서 가장 많이 나온 답이 정답인 비율이다(동률이면 먼저 나온 답).
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **생각할 자리를 주면 정확도가 0에서 0.30이 된다.** 답만 내게 하면 30문제를 하나도 못 맞히고, 풀이를 쓰게 하면 greedy로 9문제를 맞힌다. 같은 모델, 같은 가중치다. prompt의 마지막 한 줄("답만 내라" → "단계별로 생각한 뒤 답을 내라")과 생성 길이 상한만 바꿨다. 이 장 첫머리의 "inference compute"가 실제로 정확도를 바꾼다는 가장 단순한 증거다.
+- **pass@n 은 오르고 다수결은 덜 오른다 (G7.12.1).** $n$ 을 1에서 8로 늘리면 pass@n 은 0.30 → 0.60, 다수결은 0.30 → 0.40이다. 본문의 합성 실험과 같은 모양이다. 채점할 수 있으면(정답과 비교) sample을 늘린 이득을 거의 다 가져가고, 채점할 수 없어 다수결에 기대면 일부만 가져간다.
+- **다수결이 놓치는 곳은 정답이 소수인 문제다.** 8개 중 정답이 1~3개인 11문제는 정의상 pass@8 이 모두 성공이지만, 다수결은 0.455(5문제)만 맞힌다. 본문의 "다수결은 모델이 정답 쪽으로 기울어 있을 때만 작동한다"를 문제 단위로 본 것이다.
+- **8번 다 틀린 문제가 30개 중 12개다.** 이 12문제는 $n = 8$ 에서 어떤 선택 방법으로도 못 맞힌다. 본문의 $p = 0$ 문제와 같은 역할이다. 다만 8번은 적어서, sample을 더 늘리면 일부는 풀릴 수 있다. 여기서는 확인하지 않았다.
+- **오답은 어느 정도 한곳에 모인다.** 오답이 4개 이상인 문제에서 가장 흔한 오답이 오답의 평균 32%를 차지했다. 본문의 합성 분포에서 가장 매력적인 오답의 몫(35%)과 비슷하다. 다만 문제마다 오답이 4~8개뿐이어서 거친 숫자다. 오답이 모두 달라도 이 값은 1/(오답 수), 곧 12.5~25%가 나온다.
+- **틀린 풀이가 더 길다 (G7.12.3).** 정답 sample은 평균 274 token, 오답 sample은 320 token이다. 본문의 "비용의 대부분은 못 푸는 문제가 쓴다"와 같은 방향이다. 단, sample의 24%가 384 token 상한에서 잘렸고, 잘린 풀이에서는 마지막 숫자를 답으로 읽으므로 중간 계산 값이 답으로 잡힌다. 길어서 틀린 것과 잘려서 틀린 것이 섞여 있다.
+
+**이 코드가 보여 주지 못하는 것.**
+문제 30개, 작은 모델 하나, seed 하나다. sample 수가 8까지라 본문처럼 $n$ 을 수천까지 늘렸을 때의 곡선은 보지 못한다. reward model로 고르는 best-of-n은 하지 않았다(채점할 reward model이 없다). 이 모델을 RLVR로 더 학습시키는 것(G7.12.4)도 하지 않았다. 학습 쪽은 [10.5](../10_rl/05_rl_for_llm.qmd)의 "실제 도구로" 절에서 한 걸음만 본다.
 
 ---
 
