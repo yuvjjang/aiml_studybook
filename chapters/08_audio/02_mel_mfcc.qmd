@@ -331,22 +331,22 @@ bad = [p for p in PITCH if abs(p[2] - p[0]) > 5]
 
 ```{python}
 #| label: cepstrum-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
+# 결과에 따라 문단이 달라진다 — 마크다운으로 그대로 출력한다
 if bad:
     b = bad[0]
-    print(f"**그런데 F0={b[0]}에서 {b[2]:.0f} Hz로 틀렸다 — "
-          f"정확히 절반이다.**")
-    print("  2주기짜리 봉우리가 더 강해서 그것을 집었다. **octave error**(옥타브 오류)라고 부른다.")
-    print("  cepstrum pitch 추정의 대표적인 실패 양식이고, 실무에서는")
-    print("  연속성 제약(이전 frame과 가깝게)이나 autocorrelation과의 결합으로 막는다.")
+    print(f"**그런데 F0={b[0]}에서 {b[2]:.0f} Hz로 틀렸다 — 정확히 절반이다.** "
+          "2주기짜리 봉우리가 더 강해서 그것을 집었다. **octave error**(옥타브 오류)라고 부른다. "
+          "cepstrum pitch 추정의 대표적인 실패 양식이고, 실무에서는 "
+          "연속성 제약(이전 frame과 가깝게)이나 autocorrelation과의 결합으로 막는다.")
 else:
-    print()
-    print("**이 설정에서는 octave error(옥타브 오류)가 나오지 않았다.**")
-    print("  다만 cepstrum pitch 추정의 대표적 실패 양식이므로 적어 둔다 —")
-    print("  2주기짜리 봉우리가 더 강하면 F0의 **절반**을 답으로 내놓는다.")
-    print("  여기서 안 나온 이유는 합성 신호라 harmonic이 완벽하기 때문이다.")
-    print("  실제 음성에서는 흔하고, 연속성 제약이나 autocorrelation과의 결합으로 막는다.")
+    print("**이 설정에서는 octave error(옥타브 오류)가 나오지 않았다.** "
+          "다만 cepstrum pitch 추정의 대표적 실패 양식이므로 적어 둔다 — "
+          "2주기짜리 봉우리가 더 강하면 F0의 **절반**을 답으로 내놓는다. "
+          "여기서 안 나온 것은 합성 신호라 harmonic 구조가 깨끗해서일 수 있다. "
+          "실제 음성에서는 흔하고, 연속성 제약이나 autocorrelation과의 결합으로 막는다.")
 ```
 
 낮은 quefrency만 남기면 **envelope**, 즉 성도 filter가 나온다.
