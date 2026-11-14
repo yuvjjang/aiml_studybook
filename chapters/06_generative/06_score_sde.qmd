@@ -310,11 +310,11 @@ for xc in [-5.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 4.0, 5.0]:
     if abs(sx_t) < 1.0:                      # density의 꼭대기 — 부호가 의미 없다
         same = "(score≈0)"
     else:
-        same = "일치" if np.sign(sx_m) == np.sign(sx_t) else "**반대**"
+        same = "일치" if np.sign(sx_m) == np.sign(sx_t) else "반대"
     lp = float(true_lp2(P, AB_LOW).mean())
     FLIP.append((xc, sx_t, sx_m, same, lp))
     print(f"{xc:>8.1f} {lp:>14.1f} {sx_t:>16.2f} {sx_m:>18.2f} {same:>8}")
-bad = [f for f in FLIP if f[3] == "**반대**"]
+bad = [f for f in FLIP if f[3] == "반대"]
 bad_txt = ", ".join(f"{f[0]:.0f}" for f in bad)
 lp_bad_max = max(f[4] for f in bad)
 x0_row = [f for f in FLIP if f[0] == 0.0][0]
@@ -615,6 +615,138 @@ EDM(Karras et al. 2022)이 정리한 실전 결론:
 마지막 항목이 흥미롭다 — **결정론과 확률성의 절충점이 최적**이라는 것이다.
 순수 ODE도, 순수 SDE도 아니다.
 
+---
+
+## 실제 도구로: 학습된 DDPM으로 inversion과 sampler를 잰다
+
+본문의 G6.6.3과 sampler 계보는 2차원 toy 데이터와 정확한 score로 만든 결과였다. 여기서는 CIFAR-10(32×32 컬러 이미지)으로 학습해 공개된 DDPM checkpoint `google/ddpm-cifar10-32` 를 `diffusers` 로 불러 같은 두 가지를 잰다. 실제 이미지로 inversion 왕복을 하고, 같은 noise에서 출발한 sampler들을 비교한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `diffusers` 0.43, `datasets` 5.2. checkpoint(약 140 MB)와 CIFAR-10 test set은 처음 실행할 때 내려받는다. CPU에서 한 시간 이상 걸린다.
+- **scheduler 설정 하나를 바꿨다.** 이 checkpoint의 scheduler 설정 파일에는 `clip_sample=True` 가 들어 있다. 매 step에서 예측한 깨끗한 이미지 $\hat x_0$ 를 $[-1, 1]$ 로 잘라 내는 옵션이다. 그대로 두면 아래 4)처럼 DDIM이 step을 늘려도 수렴하지 않아서, 2)와 3)은 `clip_sample=False` 로 쟀다. 본문의 ODE에는 이런 자르기가 없다.
+- PSNR은 $[-1, 1]$ 범위 이미지에서 $10\log_{10}(2^2/\text{MSE})$ 다. 클수록 원본에 가깝다. 흔히 30 dB를 넘으면 차이가 작다고 본다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np, torch
+from datasets import load_dataset
+from diffusers import UNet2DModel, DDPMScheduler, DDIMScheduler, DDIMInverseScheduler, DPMSolverMultistepScheduler
+
+torch.manual_seed(0)
+repo = "google/ddpm-cifar10-32"
+unet = UNet2DModel.from_pretrained(repo).eval()
+ab = DDPMScheduler.from_pretrained(repo).alphas_cumprod
+print("1) 모델과 schedule")
+print("   parameter", sum(p.numel() for p in unet.parameters()), " T", len(ab),
+      " sqrt(abar_T)", f"{ab[-1].sqrt():.4f}", " 증폭 1/sqrt(abar_T)", f"{1/ab[-1].sqrt():.0f}")
+print("   이 checkpoint 의 scheduler 설정 clip_sample =", DDIMScheduler.from_pretrained(repo).config.clip_sample)
+NC = dict(clip_sample=False)   # 아래 2), 3) 은 매 step 의 x0 예측을 [-1, 1] 로 자르지 않는다
+
+# CIFAR-10 test 이미지 16장 → [-1, 1]
+ds = load_dataset("uoft-cs/cifar10", split="test[:16]")
+x0 = torch.stack([torch.tensor(np.array(im), dtype=torch.float32).permute(2, 0, 1) / 127.5 - 1 for im in ds["img"]])
+
+
+@torch.no_grad()
+def run(s, x, steps):
+    s.set_timesteps(steps)
+    for t in s.timesteps:
+        x = s.step(unet(x, t).sample, t, x).prev_sample
+    return x
+
+
+@torch.no_grad()
+def invert_then_sample(x, steps, t_frac):
+    """x0 → (DDIM inversion) → x_t → (DDIM) → x0'. t_frac 은 T 의 몇 할까지 올라가는가."""
+    inv = DDIMInverseScheduler.from_pretrained(repo, **NC)
+    fwd = DDIMScheduler.from_pretrained(repo, **NC)
+    inv.set_timesteps(steps); fwd.set_timesteps(steps)
+    keep = int(round(steps * t_frac))
+    up = inv.timesteps[:keep]
+    down = fwd.timesteps[steps - keep:]
+    z = x
+    for t in up:
+        z = inv.step(unet(z, t).sample, t, z).prev_sample
+    y = z
+    for t in down:
+        y = fwd.step(unet(y, t).sample, t, y).prev_sample
+    return z, y, int(up[-1])
+
+
+def psnr(a, b):
+    return float(10 * torch.log10(4 / ((a - b) ** 2).mean()))
+
+
+rms = lambda a, b: float(((a - b) ** 2).mean().sqrt())
+
+print("2) DDIM inversion 왕복 (step 50, CIFAR-10 test 16장)")
+for frac in [0.3, 0.5, 0.7, 0.9, 1.0]:
+    z, y, tmax = invert_then_sample(x0, 50, frac)
+    print(f"   t_max {tmax:4d}  sqrt(abar) {ab[tmax].sqrt():.4f}  왕복 PSNR {psnr(y, x0):5.1f} dB"
+          f"  x_t 의 std {z.std():.2f}")
+print("   끝까지 올라갈 때 step 수만 바꾼다")
+for steps in [20, 100, 250]:
+    z, y, tmax = invert_then_sample(x0, steps, 1.0)
+    print(f"   step {steps:4d}  t_max {tmax:4d}  왕복 PSNR {psnr(y, x0):5.1f} dB")
+
+print("3) 같은 noise 에서 출발한 sampler 비교 (8장, 기준 = DDIM 1000 step)")
+xT = torch.randn(8, 3, 32, 32, generator=torch.Generator().manual_seed(1))
+ref = run(DDIMScheduler.from_pretrained(repo, **NC), xT.clone(), 1000)
+for n in [10, 20, 50, 100]:
+    print(f"   {'DDIM':12s} {n:4d} step  기준과의 RMS 차이 {rms(run(DDIMScheduler.from_pretrained(repo, **NC), xT.clone(), n), ref):.4f}")
+for n in [10, 20]:
+    print(f"   {'DPM-Solver++':12s} {n:4d} step  기준과의 RMS 차이 {rms(run(DPMSolverMultistepScheduler.from_pretrained(repo), xT.clone(), n), ref):.4f}")
+torch.manual_seed(2)
+out = run(DDPMScheduler.from_pretrained(repo, **NC), xT.clone(), 1000)
+print(f"   {'DDPM':12s} 1000 step  기준과의 RMS 차이 {rms(out, ref):.4f}  (확률적)")
+print(f"   참고: 서로 다른 noise 로 만든 두 이미지의 RMS 차이 {rms(ref, ref.roll(1, 0)):.4f}")
+
+print("4) checkpoint 기본값 clip_sample=True 로 같은 비교 (기준도 clip 한 DDIM 1000 step)")
+ref_c = run(DDIMScheduler.from_pretrained(repo), xT.clone(), 1000)
+for n in [10, 50]:
+    print(f"   {'DDIM':12s} {n:4d} step  기준과의 RMS 차이 {rms(run(DDIMScheduler.from_pretrained(repo), xT.clone(), n), ref_c):.4f}")
+
+# C:\Users\yuvjj\AppData\Local\Temp\tvx\Lib\site-packages\huggingface_hub\utils\_validators.py:205: UserWarning: The `local_dir_use_symlinks` argument is deprecated and ignored in `hf_hub_download`. Downloading to a local directory does not use symlinks anymore.
+# 1) 모델과 schedule
+#    parameter 35746307  T 1000  sqrt(abar_T) 0.0064  증폭 1/sqrt(abar_T) 157
+#    이 checkpoint 의 scheduler 설정 clip_sample = True
+# 2) DDIM inversion 왕복 (step 50, CIFAR-10 test 16장)
+#    t_max  280  sqrt(abar) 0.6659  왕복 PSNR  37.8 dB  x_t 의 std 0.55
+#    t_max  480  sqrt(abar) 0.3080  왕복 PSNR  35.8 dB  x_t 의 std 0.60
+#    t_max  680  sqrt(abar) 0.0953  왕복 PSNR  34.5 dB  x_t 의 std 0.62
+#    t_max  880  sqrt(abar) 0.0197  왕복 PSNR  31.5 dB  x_t 의 std 0.65
+#    t_max  980  sqrt(abar) 0.0077  왕복 PSNR  28.5 dB  x_t 의 std 0.66
+#    끝까지 올라갈 때 step 수만 바꾼다
+#    step   20  t_max  950  왕복 PSNR  23.2 dB
+#    step  100  t_max  990  왕복 PSNR  31.0 dB
+#    step  250  t_max  996  왕복 PSNR  32.8 dB
+# 3) 같은 noise 에서 출발한 sampler 비교 (8장, 기준 = DDIM 1000 step)
+#    DDIM           10 step  기준과의 RMS 차이 0.1192
+#    DDIM           20 step  기준과의 RMS 차이 0.0666
+#    DDIM           50 step  기준과의 RMS 차이 0.0297
+#    DDIM          100 step  기준과의 RMS 차이 0.0154
+#    DPM-Solver++   10 step  기준과의 RMS 차이 0.0544
+#    DPM-Solver++   20 step  기준과의 RMS 차이 0.0286
+#    DDPM         1000 step  기준과의 RMS 차이 0.6911  (확률적)
+#    참고: 서로 다른 noise 로 만든 두 이미지의 RMS 차이 0.6405
+# 4) checkpoint 기본값 clip_sample=True 로 같은 비교 (기준도 clip 한 DDIM 1000 step)
+#    DDIM           10 step  기준과의 RMS 차이 0.3349
+#    DDIM           50 step  기준과의 RMS 차이 0.3382
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **끝까지 올라갈수록 왕복이 나빠진다. 다만 본문 같은 절벽은 아니다 (G6.6.3).** 50 step으로 inversion한 왕복 PSNR은 $t_{\max}$ 280에서 37.8 dB, 680에서 34.5 dB, 880에서 31.5 dB, 980에서 28.5 dB다. $\sqrt{\bar\alpha}$ 가 0.1 아래로 떨어지는 구간에서 오차가 빨리 커진다는 방향은 본문과 같지만, 본문처럼 마지막 한 칸에서 수십 배 뛰지는 않는다. 본문의 표는 정확한 score를 쓴 toy였고, 여기는 학습된 신경망이다.
+- **step 수가 왕복 오차를 크게 좌우한다.** 끝까지 올라가는 inversion을 20 step으로 하면 23.2 dB, 100 step 31.0 dB, 250 step 32.8 dB다. inversion은 "$x_t$ 에서 잰 noise 예측을 $x_{t+1}$ 에서도 쓴다"는 근사로 한 칸씩 올라가므로, 칸이 넓을수록 오차가 크다. 본문의 "정확 inversion solver" 항목이 이 근사를 반복 계산으로 없애는 방법이다.
+- **inversion으로 찾은 $x_T$ 는 표준 Gaussian과 다르다.** 끝까지 올라간 $x_t$ 의 표준편차가 0.66이다. 생성할 때 뽑는 noise는 1이다. 왕복은 되지만, 이 latent를 편집하면 모델이 sampling에서 본 적 없는 영역의 입력을 다루게 된다.
+- **DDIM은 step을 두 배로 늘리면 오차가 대략 반이 된다 (sampler 계보 표).** 1000 step DDIM을 기준으로 10, 20, 50, 100 step의 RMS 차이가 0.119, 0.067, 0.030, 0.015다. step 크기에 비례해 오차가 주는 1차 방법의 모습이고, 표의 "probability flow ODE 1차 discretization"과 맞다.
+- **DPM-Solver++는 같은 step에서 더 정확하다.** 10 step이 0.054로 DDIM 20 step(0.067)보다 낫고, 20 step이 0.029로 DDIM 50 step(0.030)과 같다. 표의 "10~25 step"이 이것이다.
+- **확률적 sampler는 같은 noise에서 출발해도 다른 그림이 된다.** DDPM 1000 step의 결과는 기준과 RMS 0.69 떨어져 있다. 서로 다른 noise로 만든 두 그림 사이의 거리(0.64)와 비슷하다. 시작 noise가 같아도 매 step 새로 넣는 noise 때문에 사실상 다른 표본이다. 결정론적 sampler만 invertible하다는 본문의 구분이 이것이다.
+- **library의 기본 설정이 결론을 바꾼다.** 4)에서 `clip_sample=True` 그대로 재면 DDIM 10 step과 50 step이 모두 0.33으로, step을 늘려도 1000 step 결과에 가까워지지 않는다. 자르기가 ODE에 없는 비선형 연산을 매 step 넣기 때문으로 보인다(그 이상은 확인하지 않았다). checkpoint의 scheduler 설정을 열어 보지 않고 sampler를 비교하면, "DDIM은 step을 늘려도 소용없다"는 틀린 결론을 낼 수 있다.
+
+**이 코드가 보여 주지 못하는 것.**
+이미지는 16장(inversion)과 8장(sampler)이다. 비교는 1000 step DDIM과의 거리이지 이미지 품질(FID 등)이 아니다. 확률적 sampler의 자기 교정, CFG를 켠 inversion, 본문 G6.6.2의 likelihood 계산은 실제 모델로 재지 않았다.
 
 ---
 
