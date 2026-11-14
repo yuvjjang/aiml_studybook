@@ -186,12 +186,17 @@ p = nn.softmax(logits)
 manual = p.copy(); manual[np.arange(5), y_idx] -= 1.0; manual /= 5
 
 print(f"손실 {L:.6f}   (균등 예측이면 log 4 = {np.log(4):.6f})")
-print(f"gradient가 (p − onehot)/n 과 일치: "
-      f"최대 차이 {np.abs(g - manual).max():.2e}")
-print()
 # 수치 검증
 eps = 1e-6
 num = np.zeros_like(logits)
+```
+
+gradient가 (p − onehot)/n 과 일치: 최대 차이 `{python} f'{np.abs(g - manual).max():.2e}'`
+
+```{python}
+#| label: ce-gradient-check-2
+#| code-fold: false
+
 for i in range(5):
     for j in range(4):
         old = logits[i, j]
@@ -199,8 +204,9 @@ for i in range(5):
         logits[i, j] = old - eps; lm, _ = nn.softmax_ce_loss(logits, y_idx)
         logits[i, j] = old
         num[i, j] = (lp - lm) / (2*eps)
-print(f"수치 미분과의 최대 차이: {np.abs(g - num).max():.2e}")
 ```
+
+수치 미분과의 최대 차이: `{python} f'{np.abs(g - num).max():.2e}'`
 
 ---
 
@@ -251,14 +257,14 @@ fig.update_layout(legend=dict(x=0.55, y=0.98, font=dict(size=10)))
 fig.show()
 ```
 
+샘플 난이도에 따른 loss 기여도 (전체 합 대비 비율)
+
 ```{python}
 #| label: focal-effect
 #| code-fold: false
 
 import numpy as np
 
-print("샘플 난이도에 따른 loss 기여도 (전체 합 대비 비율)")
-print()
 # 쉬운 샘플 많고 어려운 샘플 적은 전형적 불균형 상황
 p_easy = np.full(950, 0.95)      # 이미 잘 맞히는 샘플
 p_hard = np.full(50, 0.15)       # 계속 틀리는 샘플
@@ -675,17 +681,24 @@ viz.fig_defaults(fig, height=400, title="label 잡음에 대한 loss별 robustne
 fig.show()
 ```
 
+깨끗한 test set 정확도
+
 ```{python}
 #| label: robust-loss-numbers
 #| code-fold: false
 
-print("깨끗한 test set 정확도")
 print(f"{'loss':<18} " + " ".join(f"{r:>7.0%}" for r in noise_rates))
 print("-" * 62)
 for label, pairs in results.items():
     print(f"{label:<18} " + " ".join(f"{t:>7.3f}" for t, _ in pairs))
-print()
-print("train set 정확도 (뒤집힌 label 기준) — 잡음을 얼마나 외웠는가")
+```
+
+train set 정확도 (뒤집힌 label 기준) — 잡음을 얼마나 외웠는가
+
+```{python}
+#| label: robust-loss-numbers-2
+#| code-fold: false
+
 print(f"{'loss':<18} " + " ".join(f"{r:>7.0%}" for r in noise_rates))
 print("-" * 62)
 for label, pairs in results.items():
