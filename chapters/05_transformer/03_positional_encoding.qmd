@@ -620,8 +620,9 @@ def shift(k):
 
 R = shift(k)
 errs = [np.abs(pe(p + k) - np.einsum("iab,ib->ia", R, pe(p))).max() for p in [0, 3, 50, 999, 12345]]
-print(f"k={k} 칸 이동을 p 와 무관한 회전으로 쓸 때 최대 오차: {max(errs):.1e}")
 ```
+
+k=`{python} f'{k}'` 칸 이동을 p 와 무관한 회전으로 쓸 때 최대 오차: `{python} f'{max(errs):.1e}'`
 :::
 
 ## 요약
