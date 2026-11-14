@@ -95,11 +95,19 @@ out, scores, topk, load = moe_layer(X, W_router, experts, k=K)
 
 dense_params = d * d_ff * 2
 moe_params = N_EXP * dense_params
-print(f"expert {N_EXP}개 중 top-{K} 선택")
+```
+
+expert `{python} f'{N_EXP}'`개 중 top-`{python} f'{K}'` 선택
+
+```{python}
+#| label: moe-forward-2
+#| code-fold: false
+
 print(f"  총 FFN parameter   {moe_params:,}   ({N_EXP}배)")
 print(f"  token당 사용 parameter {K * dense_params:,}   ({K}배)")
-print(f"  → parameter는 {N_EXP}배, 연산은 {K}배만 늘었다")
 ```
+
+→ parameter는 `{python} f'{N_EXP}'`배, 연산은 `{python} f'{K}'`배만 늘었다
 
 ---
 
