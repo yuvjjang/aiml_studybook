@@ -16,7 +16,7 @@ normalization은 부가 기능이 아니라 **구조의 일부**다.
 normalization은 **지형 자체를 바꾸는** 방법이다.
 
 이 장에서 normalization은 "평균을 빼고 표준편차로 나눈다"는 뜻이고,
-[2.2](../02_classical_ml/02_regularization.qmd)와 [3.6](06_regularization_dl.qmd)의 regularization(overfitting을 막는 장치)과는 다른 것이다.
+[2.3](../02_classical_ml/03_regularization.qmd)와 [3.6](06_regularization_dl.qmd)의 regularization(overfitting을 막는 장치)과는 다른 것이다.
 한국어로는 둘 다 '정규화'로 번역되어 혼동하기 쉽다.
 
 ---
