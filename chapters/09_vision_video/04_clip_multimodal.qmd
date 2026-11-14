@@ -189,14 +189,8 @@ lo, hi = BR[0], BR[-1]
 
 **두 능력이 완전히 다르게 반응한다.**
 
-```{python}
-#| label: batch-2
-#| code-fold: false
-
-print(f"  retrieval: {lo[1]:.4f} → {hi[1]:.4f}  (폭 {hi[1]-lo[1]:.4f})")
-print(f"  zero-shot: {lo[2]:.4f} → {hi[2]:.4f}  (폭 {hi[2]-lo[2]:.4f}) "
-      f"— **{(hi[2]-lo[2])/max(hi[1]-lo[1],1e-9):.0f}배 민감**")
-```
+- retrieval: `{python} f'{lo[1]:.4f}'` → `{python} f'{hi[1]:.4f}'` (폭 `{python} f'{hi[1] - lo[1]:.4f}'`)
+- zero-shot: `{python} f'{lo[2]:.4f}'` → `{python} f'{hi[2]:.4f}'` (폭 `{python} f'{hi[2] - lo[2]:.4f}'`) — **`{python} f'{(hi[2] - lo[2]) / max(hi[1] - lo[1], 1e-9):.0f}'`배 민감**
 
 **왜 zero-shot만 이렇게 민감한가.**
 
@@ -634,6 +628,17 @@ print(f"  batch 256 : {SL[-1][2]-SL[-1][1]:+.4f}")
 - 저작권·동의 문제가 아직 정리되지 않았다
 - LAION 같은 공개 dataset은 그 문제를 **투명하게** 만들었지만 없애지는 못했다
 
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **이미지와 텍스트가 아니라 합성 벡터 쌍이다.** 개념 8종과 style 6차원을 무작위 linear 사상으로 48차원("이미지")과 40차원("텍스트")에 옮기고 잡음을 더했다. 실제 이미지와 문장은 개념 수가 수만 개이고 구조가 이렇게 깔끔하게 나뉘지 않는다. encoder도 hidden layer가 하나인 MLP다.
+- **batch와 τ의 비대칭은 이 데이터의 구조에서 나왔다.** "retrieval은 style만, zero-shot은 개념 구조를 쓴다"고 데이터를 그렇게 만들었다. CLIP 규모(batch 32,768)에서 batch 크기의 효과가 이 비율로 나타나는지는 이 실험이 말하지 않는다.
+- **prompt template은 텍스트 벡터에 더한 무작위 offset이다.** "문장 하나 바꿔 0.901~0.960"은 offset 6개를 바꾼 결과다. 아래 "실제 도구로" 절에서 공개 CLIP으로 확인하려 했지만, 쓴 이미지가 너무 쉬워 template 사이 차이가 드러나지 않았다.
+- **modality gap의 결론은 이 encoder에서 나왔다.** "초기화에서 이미 갈라져 있고, 차원이 높으면 학습해도 닫히지 않는다"는 hidden layer 하나짜리 encoder와 24~128차원 embedding에서 잰 것이다. 실제 CLIP에서도 gap이 보고되지만, 원인이 같은지는 여기서 확인하지 않았다.
+:::
 
 ---
 
