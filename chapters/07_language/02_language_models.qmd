@@ -164,7 +164,7 @@ for n in [1, 2, 3, 4, 5, 6]:
     htr, _ = ce_mle(TRAIN, TBL[n], n)
     hte, z = ce_mle(TEST, TBL[n], n)
     MLE_ROWS.append((n, htr, hte, z))
-    tag = f"{2**hte:.2f}" if z == 0 else "**∞**"
+    tag = f"{2**hte:.2f}" if z == 0 else "∞"
     print(f"{n:>3} {htr:>10.4f} {hte:>11.4f} {z:>12.2%} {tag:>16}")
 print("-" * 58)
 print(f"{'참값':>3} {'':>10} {H_TRUE:>11.4f} {0:>12.2%} {2**H_TRUE:>16.2f}")
