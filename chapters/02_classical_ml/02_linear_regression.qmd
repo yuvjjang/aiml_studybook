@@ -201,17 +201,24 @@ fig.update_layout(margin=dict(l=0, r=0, t=60, b=0))
 fig.show()
 ```
 
+residual 과 X의 각 열의 내적 (0이어야 함):
+
 ```{python}
 #| label: orthogonality-check
 #| code-fold: false
 
 import numpy as np
 
-print(f"residual 과 X의 각 열의 내적 (0이어야 함):")
 print(f"  Xᵀr = {np.round(X.T @ r, 12)}")
-print()
 H = X @ np.linalg.inv(X.T @ X) @ X.T
-print(f"projection matrix 의 성질:")
+```
+
+projection matrix 의 성질:
+
+```{python}
+#| label: orthogonality-check-2
+#| code-fold: false
+
 print(f"  H² = H (idempotent) : {np.allclose(H @ H, H)}")
 print(f"  Hᵀ = H (대칭)     : {np.allclose(H.T, H)}")
 print(f"  trace(H) = 특성 수 : {np.trace(H):.6f}  (= {X.shape[1]})")
@@ -399,6 +406,8 @@ $\beta_j$ 의 해석은 **"다른 변수를 고정한 채 $x_j$ 를 1 늘리면 
 2. **계수는 인과가 아니다.** 통제하지 않은 confounder가 있으면 bias가 생긴다
    ([1.6 causal inference](../01_data_science/06_causal_inference.qmd)).
 
+x 의 참 효과: 1.000
+
 ```{python}
 #| label: coef-interpretation
 #| code-fold: false
@@ -417,7 +426,6 @@ def ols(X, y):
     return np.linalg.solve(X.T @ X, X.T @ y)
 
 b_simple, b_multi = float(ols(x, y)[1]), float(ols(np.c_[x, z], y)[1])
-print(f"x 의 참 효과: 1.000")
 print(f"  단순회귀 (z 무시)     : {b_simple:.3f}   ← bias")
 print(f"  다중회귀 (z 통제)     : {b_multi:.3f}   ← 참값 회복")
 ```
@@ -1068,8 +1076,13 @@ for i in range(n):                                      # 정말로 n 번 다시
     b = np.linalg.lstsq(X[keep], y[keep], rcond=None)[0]
     refit.append(y[i] - X[i] @ b)
 refit = np.array(refit)
+```
 
-print(f"공식과 재적합의 최대 차이  {np.abs(shortcut - refit).max():.1e}")
+공식과 재적합의 최대 차이 `{python} f'{np.abs(shortcut - refit).max():.1e}'`
+
+```{python}
+#| label: ex-loocv-2
+
 print(f"leverage 합 = {h.sum():.3f}   (파라미터 수 2)")
 print(f"훈련 MSE {np.mean(r**2):.3f}   LOOCV MSE {np.mean(refit**2):.3f}")
 ```
