@@ -183,10 +183,16 @@ def react(start, path, p, g, mode="random", typecheck=False, retry=0,
 g = np.random.default_rng(3)
 start, path, gold = make_task(4, g)
 print("과제: " + " → ".join(path))
-print(f"시작 {start}, 정답 {gold}")
-print()
 # 선택 실수가 0번인 trajectory와 딱 1번인 trajectory를 찾아 나란히 놓는다
 found = {}
+```
+
+시작 `{python} f'{start}'`, 정답 `{python} f'{gold}'`
+
+```{python}
+#| label: react-2
+#| code-fold: false
+
 for seed in range(300):
     ans, c, er, log, bad = react(start, path, 0.85,
                                  np.random.default_rng(seed), trace=True)
