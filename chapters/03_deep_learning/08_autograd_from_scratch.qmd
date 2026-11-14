@@ -305,8 +305,14 @@ cv = av*bv + av
 th = np.tanh(bv)
 da = 2*cv*th*(bv+1)
 db = 2*cv*th*av + cv**2*(1 - th**2)
+```
 
-print(f"graph node 수: {len(order)}")
+graph node 수: `{python} f'{len(order)}'`
+
+```{python}
+#| label: verify-scalar-2
+#| code-fold: false
+
 print(f"d = {float(d.data):.6f}   (손계산 {cv**2*th:.6f})")
 print()
 print(f"∂d/∂a : autograd {float(a.grad):.6f}   손계산 {da:.6f}   "
@@ -537,10 +543,11 @@ nodes = chain.backward()
 mem = sum(v.data.nbytes + v.grad.nbytes for v in nodes)
 big_nodes = sum(1 for v in nodes if v.data.size > 1)
 mem_ratio = mem / chain.data.nbytes
-print(f"graph node {len(nodes)}개 (그중 {big_nodes}개가 256×256 배열)")
-print(f"보관 중인 메모리: {mem/1e6:.1f} MB (값 + gradient)")
-print(f"최종 결과만 필요하다면 {chain.data.nbytes/1e6:.2f} MB")
 ```
+
+graph node `{python} f'{len(nodes)}'`개 (그중 `{python} f'{big_nodes}'`개가 256×256 배열)  
+보관 중인 메모리: `{python} f'{mem / 1000000.0:.1f}'` MB (값 + gradient)  
+최종 결과만 필요하다면 `{python} f'{chain.data.nbytes / 1000000.0:.2f}'` MB
 
 `{python} f"{mem_ratio:.0f}"`배 차이다. inference에는 이 중간값이 전혀 필요 없으므로 `no_grad()`
 (또는 `inference_mode()`)가 필수다. 나머지 `1.0` 상수 node 20개는 scalar라 메모리에는
@@ -646,8 +653,14 @@ for p in ps:
 L_auto = softmax_ce_tensor(forward(ps, xb), np.eye(2)[yb])
 L_auto.backward()
 L_ref, g_ref = ref.loss_and_grads(xb, yb, loss="softmax_ce")
+```
 
-print("자작 autograd vs src/nn.py 의 손으로 짠 backpropagation")
+자작 autograd vs src/nn.py 의 손으로 짠 backpropagation
+
+```{python}
+#| label: train-autograd-numbers-2
+#| code-fold: false
+
 print(f"  loss      : {float(L_auto.data):.8f} vs {L_ref:.8f}")
 for name, mine, theirs in [("W0", ps[0].grad, g_ref["W0"]), ("b0", ps[1].grad, g_ref["b0"]),
                            ("W1", ps[2].grad, g_ref["W1"]), ("b1", ps[3].grad, g_ref["b1"])]:
