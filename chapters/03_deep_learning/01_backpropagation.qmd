@@ -615,7 +615,7 @@ residual이 없으면 40층 뒤 gradient가 $0.6^{40}$ 근처로 사라지지만
 
 residual connection은 gradient가 '지나가는 길'을 항상 열어둔다.
 ResNet(2015) 이전에 깊은 망이 학습되지 않았던 이유이자, 해결책이다.
-[Part 5의 transformer](../05_transformer/00_attention.qmd)도 모든 층이 이 배선을 쓴다.
+[Part 5의 transformer](../05_transformer/00_attention_mechanism.qmd)도 모든 층이 이 배선을 쓴다.
 
 ---
 
