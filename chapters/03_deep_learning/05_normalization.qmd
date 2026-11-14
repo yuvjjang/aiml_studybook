@@ -347,17 +347,22 @@ print(f"{'batch B':>7} {'std(μ̂)':>10} {'BatchNorm 정확도':>18} {'LayerNorm
 print("-" * 58)
 for B, s_, a, l in zip(batch_sizes, stat_std, acc_bn, acc_ln):
     print(f"{B:>7} {s_:>10.4f} {a:>18.3f} {l:>18.3f}")
-print()
 slope = float(np.polyfit(np.log(batch_sizes), np.log(stat_std), 1)[0])
-print(f"통계 잡음 지수: {slope:.3f} (이론 −0.5)")
-print()
 small = [i for i, B in enumerate(batch_sizes) if B <= 8]
-print(f"작은 batch(B≤8) 평균 정확도 — BatchNorm {np.mean([acc_bn[i] for i in small]):.3f}, "
-      f"LayerNorm {np.mean([acc_ln[i] for i in small]):.3f}")
-big = [i for i, B in enumerate(batch_sizes) if B >= 64]
-print(f"큰 batch(B≥64) 평균 정확도 — BatchNorm {np.mean([acc_bn[i] for i in big]):.3f}, "
-      f"LayerNorm {np.mean([acc_ln[i] for i in big]):.3f}")
 ```
+
+통계 잡음 지수: `{python} f'{slope:.3f}'` (이론 −0.5)
+
+작은 batch(B≤8) 평균 정확도 — BatchNorm `{python} f'{np.mean([acc_bn[i] for i in small]):.3f}'`, LayerNorm `{python} f'{np.mean([acc_ln[i] for i in small]):.3f}'`
+
+```{python}
+#| label: bn-batch-numbers-2
+#| code-fold: false
+
+big = [i for i, B in enumerate(batch_sizes) if B >= 64]
+```
+
+큰 batch(B≥64) 평균 정확도 — BatchNorm `{python} f'{np.mean([acc_bn[i] for i in big]):.3f}'`, LayerNorm `{python} f'{np.mean([acc_ln[i] for i in big]):.3f}'`
 
 ::: {.callout-warning}
 **BatchNorm이 못 하는 것들**
@@ -527,13 +532,14 @@ fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=11)))
 fig.show()
 ```
 
+① residual stream의 scale
+
 ```{python}
 #| label: pre-post-numbers
 #| code-fold: false
 
 import numpy as np
 
-print("① residual stream의 scale")
 print(f"{'깊이':>6} {'pre-LN 최종 std':>17} {'/√깊이':>9} {'post-LN 최종 std':>18}")
 print("-" * 56)
 for dep in depths:
@@ -541,8 +547,14 @@ for dep in depths:
     sq = data[("post", dep)][0][-1]
     print(f"{dep:>6} {sp:>17.3f} {sp/np.sqrt(dep):>9.3f} {sq:>18.3f}")
 std_pre_64 = float(data[("pre", 64)][0][-1])
-print()
-print("② 층별 gradient norm — 입력층 / 출력층 비")
+```
+
+② 층별 gradient norm — 입력층 / 출력층 비
+
+```{python}
+#| label: pre-post-numbers-2
+#| code-fold: false
+
 print(f"{'깊이':>6} {'pre-LN':>10} {'post-LN':>10}")
 print("-" * 30)
 for dep in depths:
@@ -1034,8 +1046,9 @@ for _ in range(200):
     W = W - 0.5 * grad(W)
     norms.append(np.linalg.norm(W))
 print(f"‖W‖: 0 step {norms[0]:.2f} → 50 step {norms[50]:.2f} → 200 step {norms[-1]:.2f}")
-print(f"한 번이라도 줄었는가: {np.any(np.diff(norms) < -1e-9)}")
 ```
+
+한 번이라도 줄었는가: `{python} f'{np.any(np.diff(norms) < -1e-09)}'`
 :::
 
 ### C2. batch 2의 BatchNorm은 정보를 지운다
