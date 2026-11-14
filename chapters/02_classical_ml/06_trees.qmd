@@ -208,8 +208,14 @@ splits = {
     "분할 ①  (300,100) | (100,300)": ((300, 100), (100, 300)),
     "분할 ②  (200,400) | (200,  0)": ((200, 400), (200, 0)),
 }
+```
 
-print(f"부모: A {parent[0]}, B {parent[1]}\n")
+부모: A `{python} f'{parent[0]}'`, B `{python} f'{parent[1]}'`
+
+```{python}
+#| label: impurity-comparison-2
+#| code-fold: false
+
 print(f"{'':<32}{'misclass. gain':>14}{'Gini gain':>12}{'entropy gain':>15}")
 for name, (L, R) in splits.items():
     print(f"{name:<32}{gain(parent, L, R, misclass):>14.4f}"
