@@ -673,12 +673,7 @@ big = [x for x in DRIFTC if x[0] == 1.0][0]
 
 ## 나머지 배관
 
-```{python}
-#| label: misc
-#| code-fold: false
-
-print("**batch vs streaming**")
-```
+**batch vs streaming**
 
 |  | batch (Lambda의 batch 층) | streaming (속도 층) |
 |---|---|---|
@@ -717,6 +712,17 @@ print("**batch vs streaming**")
 | 오염된 원본이 어디까지 퍼졌나 | 전수 조사 | 영향받은 산출물 목록 |
 | 이 모델을 재학습하려면 | 기억에 의존 | 정확한 입력 snapshot |
 | 삭제 요청이 왔다 | **대응 불가** | 포함된 dataset·모델 식별 |
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **worker와 GPU는 simulation이다.** G11.1.1은 load와 compute에 걸리는 시간을 정해 두고 사건을 시간 순으로 흉내 냈다. 실제 DataLoader에서는 process 시작 비용, memory 복사, disk cache가 끼어든다. 실제 `DataLoader` 의 측정은 아래 "실제 도구로" 절에 있다.
+- **"현실 데이터"도 합성이다.** 정규분포 값을 소수 첫째 자리에서 반올림하고, 4개 열에 같은 정수 값을 반복해 넣었다. 실제 데이터처럼 값의 종류가 적고 반복이 많게 만든 것이다. "75% 절감"은 이 데이터의 값이고, 압축률은 본문에 적은 대로 데이터의 성질이 정한다.
+- **속도는 이 책을 빌드한 컴퓨터에서 잰 시간이다.** "CSV decoding이 100배 이상 느리다", "columnar 1열 읽기가 4.4배 빠르다"는 빌드할 때마다 조금씩 달라지고, CPU와 library 버전에 따라 배율이 바뀐다.
+- **validation gate의 recall은 우리가 넣은 오류에 대한 값이다.** 결측 2%, 범위 초과 1%, 중복 3%, drift 5%를 넣고 몇 %를 잡는지 쟀다. 실제 데이터의 오류는 종류와 비율이 다르다.
+:::
 
 ---
 
