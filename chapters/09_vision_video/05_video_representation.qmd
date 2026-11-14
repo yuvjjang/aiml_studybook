@@ -395,10 +395,11 @@ cross = next((f for f in FLOW if f[3] < f[2]), None)
 
 ```{python}
 #| label: flow-3
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if cross:
-    print(f"  변위 {cross[0]}px부터 거친 층({cross[3]:.3f})이 "
+    print(f"변위 {cross[0]}px부터 거친 층({cross[3]:.3f})이 "
           f"원본 층({cross[2]:.3f})을 앞선다.")
 ```
 
@@ -481,6 +482,17 @@ fig
 
 **Something-Something이 특별한 이유**: label이 '무언가를 왼쪽으로 밀기'처럼 **물체가 아니라 동작**으로 되어 있다.
 frame 하나로는 절대 풀 수 없게 설계한 것이다 — G9.5.2의 오른쪽 막대만 남긴 dataset인 셈이다.
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **clip이 32×32 합성 영상이다.** 모양 2종 중 하나가 네 방향 중 하나로 등속 이동하고, 배경 무늬는 멈춰 있다. 카메라 움직임, 가림, 여러 물체, 장면 전환이 없다. "redundancy는 이동량의 함수"라는 결론은 일반적이지만, cosine 0.984 같은 값은 이 clip의 값이다.
+- **frame sampling의 모델은 pixel 위 linear probe다.** frame을 8×8로 줄이고 이어 붙여 logistic regression을 학습했다(학습 clip 400개). "32 frame을 주면 static 과제가 0.987에서 0.917로 나빠진다"를 본문은 입력 차원이 32배로 늘어 이 작은 학습 set에서 overfitting한 것으로 설명한다. frame을 pooling하는 실제 video 모델에서도 그런지는 이 실험이 보여 주지 않는다. "2장이면 대부분 얻는다"도 등속 직선 운동이라 그렇다.
+- **optical flow는 Lucas-Kanade 방식을 직접 구현해 잰 것이다.** aperture problem, Taylor 1차 근사의 한계, pyramid의 역전은 방법의 성질이라 일반적이다. 학습 기반 flow(RAFT)와의 비교는 아래 "실제 도구로" 절에 있다.
+- **"dataset bias" 줄은 문헌의 보고다.** Kinetics와 Something-Something의 차이는 이 장에서 잰 것이 아니다.
+:::
 
 ---
 
