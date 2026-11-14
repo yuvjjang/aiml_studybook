@@ -5,7 +5,7 @@ jupyter: ai-ml-study
 ---
 
 **regularization**(정규화 — 모델이 훈련 데이터를 통째로 외우지 못하게 제약을 거는 모든 기법)은
-[2.2](../02_classical_ml/02_regularization.qmd)에서 봤다. 이 장은 딥러닝에서 실제로 쓰는 도구들을 다룬다.
+[2.3](../02_classical_ml/03_regularization.qmd)에서 봤다. 이 장은 딥러닝에서 실제로 쓰는 도구들을 다룬다.
 ([3.5](05_normalization.qmd)의 normalization과 한국어 번역이 같아 헷갈리기 쉽지만 다른 것이다.)
 
 [2.1](../02_classical_ml/01_bias_variance.qmd)에서 배운 bias-variance 이야기대로라면,
