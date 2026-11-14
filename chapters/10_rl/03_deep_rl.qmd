@@ -622,6 +622,17 @@ TD3의 '두 critic 중 최솟값'이 G10.3.1과 같은 처방이다 —
 
 ---
 
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **본문 실험에는 신경망이 없다.** maximization bias는 잡음 섞인 추정값과 작은 MDP로, replay는 상태 35개에 feature 9개인 linear 근사로, target network는 Baird의 반례(linear feature)로 쟀다. 장치 하나하나가 무엇을 고치는지 떼어 보기 위해서다. 신경망 Q-function을 쓰는 DQN은 아래 "실제 도구로" 절의 CartPole(입력은 이미지가 아니라 상태 4개)에서만 학습했다.
+- **"target network는 발산을 막고 replay는 못 막는다"는 Baird 반례에서의 결론이다.** 이 반례는 off-policy, bootstrap, linear 근사가 겹쳐 발산하도록 만든 예다. Atari 규모에서 두 장치가 각각 얼마씩 기여하는지는 이 실험으로 알 수 없다. 요약표에 적은 대로, replay의 이득은 이 작은 문제에서 뚜렷하지 않았다.
+- **Dueling은 식별 문제를 식으로 보였다.** 평균을 빼는 방식과 최댓값을 빼는 방식을 학습해 비교하지는 않았다.
+- **"나머지 확장들"과 Rainbow 표는 문헌의 정리다.**
+:::
+
+---
+
 ## 실제 도구로: CartPole에서 DQN을 학습시킨다
 
 Gymnasium의 CartPole에서 DQN을 PyTorch로 학습시킨다. experience replay, ε-greedy, target network를 갖춘 기본 DQN과, target network를 뺀 것, Double DQN을 seed 둘씩 비교한다.
