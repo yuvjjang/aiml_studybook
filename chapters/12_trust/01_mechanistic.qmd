@@ -339,8 +339,8 @@ for l, c in [(0, CC["c1"]), (1, CC["c2"])]:
         ind = float(A[:, rows, rows-HALF+1].mean())
         first = float(A[:, rows, 0].mean())
         DIAG[(l, h)] = (self_, prev, ind, first)
-        lab = ("**induction pattern**" if ind > 0.4 else
-               "**previous-token pattern**" if prev > 0.4 else "분산됨")
+        lab = ("induction pattern" if ind > 0.4 else
+               "previous-token pattern" if prev > 0.4 else "분산됨")
         print(f"L{l}H{h:<5} {self_:>9.4f} {prev:>10.4f} {ind:>14.4f} "
               f"{first:>8.4f} {1-self_-prev-ind-first:>9.4f}   {lab}")
 ```
@@ -413,8 +413,8 @@ for kill, nm in [({(0, 0)}, "L0H0"), ({(0, 1)}, "L0H1"), ({(1, 0)}, "L1H0"),
                  ({(1, 0), (1, 1)}, "2층 전체")]:
     a = float((run(P, ti, kill)[0].argmax(-1) == tt)[:, REP].mean())
     pat = (f"{DIAG[list(kill)[0]][2]:.3f}" if len(kill) == 1 else "—")
-    verdict = ("**필수**" if BASE-a > 0.5 else
-               "기여함" if BASE-a > 0.05 else "**무관**")
+    verdict = ("필수" if BASE-a > 0.5 else
+               "기여함" if BASE-a > 0.05 else "무관")
     ABL.append((nm, a, BASE-a))
     print(f"{nm:<12} {pat:>10} {a:>9.4f} {BASE-a:>9.4f}   {verdict}")
 h10 = [x for x in ABL if x[0] == "L1H0"][0]
@@ -683,7 +683,7 @@ for S in [1.0, 0.3, 0.1, 0.03, 0.01]:
     G = Wn@Wn.T; np.fill_diagonal(G, 0)
     intf = float(np.abs(G[np.ix_(live, live)]).mean())
     SUP.append((1-S, rep, intf, float(nrm.max())))
-    verdict = "**superposition**" if rep > MD else "직교 (superposition 없음)"
+    verdict = "superposition" if rep > MD else "직교 (superposition 없음)"
     print(f"{1-S:>8.2f} {rep:>12} {intf:>11.4f} {nrm.max():>11.4f}   {verdict}")
 d0, d9 = SUP[0], SUP[-1]
 ```
@@ -820,8 +820,8 @@ for lam in [0.0, 0.03, 0.1, 0.3, 0.8]:
     alive = (A > 1e-6).mean(0) > 1e-3
     align = float(C.max(1)[alive].mean()) if alive.any() else 0.0
     SAE.append((lam, l0, r2, recov, align))
-    verdict = ("**sparsity 없음**" if lam == 0 else
-               "**균형점**" if recov == int(LIVE.sum()) and r2 > 0.95 else
+    verdict = ("sparsity 없음" if lam == 0 else
+               "균형점" if recov == int(LIVE.sum()) and r2 > 0.95 else
                "reconstruction collapse" if r2 < 0.9 else "")
     print(f"{lam:>6.2f} {l0:>12.2f} {r2:>11.4f} "
           f"{recov:>7}/{int(LIVE.sum()):<4} {align:>10.4f}   {verdict}")
@@ -839,11 +839,11 @@ best = [s for s in SAE if s[3] == int(LIVE.sum()) and s[2] > 0.95]
 
 ```{python}
 #| label: sae-3
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if best:
     bb = best[0]
-    print()
     print(f"**λ={bb[0]:.2f}에서 {bb[3]}개 전부를 되찾는다** — "
           f"평균 활성 {bb[1]:.2f}개, reconstruction R² {bb[2]:.4f}, 정렬 {bb[4]:.4f}.")
 ```
@@ -919,6 +919,16 @@ fig
 - **steering(조종)이 따라온다** — feature 방향을 찾으면 잔차에 더하거나 빼서 행동을 바꿀 수 있다
 - 그것이 alignment·안전 연구가 이 분야에 거는 기대다 — 속임수나 위험한 의도에 해당하는 방향을 찾아 감시하거나 끄는 것
 - **다만 아직 연구 단계다.** 이 장의 결과를 70B 모델에 그대로 옮길 수 없다
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **모델이 2층짜리 작은 Transformer이고 과제가 하나다.** 무작위 token열에서 induction만 학습시켰다. 그래서 circuit이 head 두 개로 깔끔하게 드러났다. 실제 LLM에서는 같은 일을 여러 head가 나눠 하고, 한 head가 여러 일을 겸해서 이렇게 깨끗하게 갈리지 않는다. 아래 "실제 도구로" 절에서 GPT-2로 같은 절차를 밟아 보았다.
+- **phase transition은 seed 하나의 학습 곡선이다.** "200 step 0.23 → 300 step 0.72"가 언제 일어나는지는 learning rate와 초기값에 따라 움직인다. 급격한 전환이 있다는 것은 원 연구에서도 보고된 현상이다.
+- **superposition과 SAE는 정답 feature를 알고 만든 장난감이다.** 5차원에 feature 20개를 넣었고, SAE가 "16개 중 몇 개를 복원했나"를 셀 수 있었던 것도 정답을 알기 때문이다. 본문 마지막 절의 말대로, 실제 LLM에는 이 채점표가 없다.
+:::
 
 ---
 
