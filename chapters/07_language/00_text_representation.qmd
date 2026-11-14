@@ -386,12 +386,12 @@ for i in range(len(CORPUS)):
 print()
 for i, d in enumerate(CORPUS):
     print(f"  {i}: {d}")
-print()
 TH = 0.7
 pairs = [(i, j) for i in range(len(CORPUS)) for j in range(i+1, len(CORPUS))
          if M[i, j] >= TH]
-print(f"threshold {TH} 이상인 쌍: {pairs}")
 ```
+
+threshold `{python} f'{TH}'` 이상인 쌍: `{python} f'{pairs}'`
 
 MinHash signature `{python} f"{K}"`차원으로 추정한 유사도 행렬이다.
 문서 0과 2는 공백·마침표만 다른데 유사도 `{python} f"{M[0, 2]:.2f}"` — near-duplicate로 잡힌다.
@@ -495,8 +495,14 @@ for a, b in PAIRS:
     print(f"{a:<10} {b:<10} {d:>9} {1 - d/max(len(a), len(b)):>14.3f}")
 a_, b_ = "한글", ud.normalize("NFD", "한글")
 D_HAN = int(edit_table(a_, b_)[-1, -1])
-print()
-print("'kitten' → 'sitting' 의 최소 편집 경로:")
+```
+
+'kitten' → 'sitting' 의 최소 편집 경로:
+
+```{python}
+#| label: edit-distance-2
+#| code-fold: false
+
 for op, x, y in backtrace(edit_table("kitten", "sitting"), "kitten", "sitting"):
     mark = "" if op == "유지" else "   ←"
     print(f"    {op}  {x or '∅':>2} → {y or '∅':>2}{mark}")
@@ -647,8 +653,14 @@ for V in [1000, 5000, 10000, 30000, 50000]:
     cov = float(cnt[order[:V]].sum()/cnt.sum())
     ZP.append((V, cov, oov))
     print(f"{V:>12,} {cov:>19.2%} {oov:>16.2%}")
-print()
-print("Heaps 법칙 — corpus를 키우면 vocabulary도 계속 자란다")
+```
+
+Heaps 법칙 — corpus를 키우면 vocabulary도 계속 자란다
+
+```{python}
+#| label: zipf-2
+#| code-fold: false
+
 print(f"{'token 수':>12} {'고유 type 수':>14} {'type/token':>11}")
 print("-" * 40)
 HP = []
