@@ -57,10 +57,17 @@ rng = np.random.default_rng(0)
 X = rng.normal(size=(n, d))
 Wq, Wk, Wv, Wo = [rng.normal(size=(d, d)) * 0.3 for _ in range(4)]
 
-print(f"입력 X                     {X.shape}")
 Q = X @ Wq
-print(f"XWq (한 번에 projection)    {Q.shape}")
 Q_split = Q.reshape(n, h, d_k)
+```
+
+입력 X `{python} f'{X.shape}'`
+XWq (한 번에 projection) `{python} f'{Q.shape}'`
+
+```{python}
+#| label: mha-shapes-2
+#| code-fold: false
+
 print(f"reshape (n, h, d_k)        {Q_split.shape}")
 Q_heads = Q_split.transpose(1, 0, 2)
 print(f"transpose (h, n, d_k)      {Q_heads.shape}   ← head가 앞으로")
@@ -69,11 +76,17 @@ print()
 out, attn = attention.multi_head_attention(X, Wq, Wk, Wv, Wo, n_heads=h)
 print(f"head별 attention attn       {attn.shape}   ← (h, n, n)")
 print(f"concat 후 W_O 통과 → 출력    {out.shape}   ← 입력과 같은 shape")
-print()
 
 n_params_single = 4 * d * d
 n_params_multi = 4 * d * d
-print(f"단일 head parameter 수: {n_params_single}")
+```
+
+단일 head parameter 수: `{python} f'{n_params_single}'`
+
+```{python}
+#| label: mha-shapes-3
+#| code-fold: false
+
 print(f"{h}개 head parameter 수:  {n_params_multi}   ← 동일")
 ```
 
@@ -630,7 +643,13 @@ for i in range(h):
 
 out_concat = np.concatenate(heads, axis=1) @ Wo
 parts = [heads[i] @ Wo[i * dh:(i + 1) * dh] for i in range(h)]
-print(f"concat·W_O 와 Σ head_i W_O^(i) 의 차이 {np.abs(out_concat - sum(parts)).max():.1e}")
+```
+
+concat·W_O 와 Σ head_i W_O\^(i) 의 차이 `{python} f'{np.abs(out_concat - sum(parts)).max():.1e}'`
+
+```{python}
+#| label: ex-mha-blocks-2
+
 print(f"head 별 몫의 rank {[np.linalg.matrix_rank(p) for p in parts]}   전체 출력 rank {np.linalg.matrix_rank(out_concat)}")
 ```
 :::
