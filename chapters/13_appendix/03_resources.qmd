@@ -79,7 +79,7 @@ NAME = {p[0]: p[1] for p in PARTS}
 SIZE = {p[0]: p[3] for p in PARTS}
 for g, ps in ROUTES.items():
     ch = sum(SIZE[p] for p in ps)
-    print(f"**{g}**")
+    print(f"[{g}]")
     print(f"    {' → '.join(f'{p}. {NAME[p]}' for p in ps)}")
     print(f"    {len(ps)}개 Part, {ch}개 장 "
           f"(전체 {sum(SIZE.values())}장의 {ch/sum(SIZE.values()):.0%})")
@@ -250,13 +250,13 @@ fig
 PROJ = [
     ("입문", "backpropagation을 numpy로 직접", "3.8", "autograd의 실체가 보인다"),
     ("입문", "MNIST를 MLP·CNN으로", "4.0", "학습 loop 전체를 손에 익힌다"),
-    ("입문", "고전 ML로 표 데이터 대회", "2.x", "**전처리가 8할**임을 배운다"),
+    ("입문", "고전 ML로 표 데이터 대회", "2.x", "전처리가 8할임을 배운다"),
     ("중급", "GPT를 바닥부터 (nanoGPT급)", "5.6", "tokenizer부터 sampling까지"),
-    ("중급", "diffusion model로 작은 이미지 생성", "6.4", "schedule·sampler의 감각"),
-    ("중급", "RAG pipeline 구축", "7.7", "검색 품질이 전부임을 배운다"),
+    ("중급", "diffusion model로 작은 이미지 생성", "6.5", "schedule·sampler의 감각"),
+    ("중급", "RAG pipeline 구축", "7.10", "검색 품질이 전부임을 배운다"),
     ("중급", "PPO로 CartPole·LunarLander", "10.4", "RL의 불안정성을 체험"),
     ("중급", "ASR fine-tuning (Whisper)", "8.6", "데이터 전처리가 대부분"),
-    ("고급", "LoRA fine-tuning + 평가 설계", "7.6", "**평가가 학습보다 어렵다**"),
+    ("고급", "LoRA fine-tuning + 평가 설계", "7.6", "평가가 학습보다 어렵다"),
     ("고급", "inference 서버 구축 후 부하 시험", "11.5", "tail latency의 실체"),
     ("고급", "quantization·pruning 후 품질 측정", "11.4", "trade-off를 직접 재 본다"),
     ("고급", "작은 모델의 circuit 찾기", "12.1", "patching·ablation을 손으로"),
