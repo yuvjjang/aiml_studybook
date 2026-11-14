@@ -334,9 +334,15 @@ txt_tok = rng.normal(size=(n_txt, d))
 Wq, Wk, Wv = [rng.normal(0, 0.2, (d, d)) for _ in range(3)]
 out, attn = scaled_dot_product_attention(img_tok @ Wq, txt_tok @ Wk,
                                          txt_tok @ Wv)
+```
 
-print(f"Q (이미지 latent)  {img_tok.shape}")
-print(f"K, V (텍스트)      {txt_tok.shape}")
+Q (이미지 latent) `{python} f'{img_tok.shape}'`
+K, V (텍스트) `{python} f'{txt_tok.shape}'`
+
+```{python}
+#| label: cross-attn-2
+#| code-fold: false
+
 print(f"출력               {out.shape}   ← 이미지 token 수가 그대로 유지된다")
 print(f"attention weight   {attn.shape}   ← 각 이미지 위치가 어느 단어를 보는가")
 print()
