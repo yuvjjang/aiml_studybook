@@ -568,6 +568,17 @@ fig
 
 ---
 
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **두 집단을 우리가 만들었다.** B는 표본이 적고, base rate가 높고(0.55 대 0.30), feature 측정이 더 부정확하도록 설정했다. 실제 집단 사이의 차이는 이보다 복잡하고, 무엇이 차이를 만드는지 모르는 경우가 많다. 그래서 "원인은 측정 품질 차이"라고 말할 수 있었던 것은 이 실험에서만 가능한 일이다.
+- **"정확도 비용 1.7%"는 이 설정의 값이다.** 공정성 제약의 비용은 base rate 차이와 집단 사이 정보량 차이에 따라 크게 달라진다. 통념보다 작다는 것을 일반화하면 안 된다.
+- **membership inference는 단순한 공격 하나로 쟀다.** 공격 AUC 0.753은 이 공격의 값이고, 더 강한 공격(shadow model 등)이면 더 높을 수 있다. 반대 방향, 곧 AUC가 낮으면 안전하다는 결론은 낼 수 없다.
+- **DP-SGD의 불균등 영향은 재현되지 않았다.** 본문에 적은 대로 선형 모델이라 그럴 수 있고, 문헌의 결과는 overparameterized network에서 나왔다.
+:::
+
+---
+
 ## 실제 도구로: scikit-learn 분류기의 fairness와 privacy를 잰다
 
 이 장의 지표들을 실제 분류기의 출력에서 직접 계산한다. 두 집단에서 **같은 규칙**으로 데이터를 만들되 양성 비율(base rate)만 다르게 하고, 하나의 모델을 학습시킨 뒤 집단별 지표를 비교한다. 이어서 membership inference와 differential privacy의 Laplace mechanism을 본다.
@@ -765,6 +776,6 @@ Part 12는 그 다음이다 — **잰 것이 내가 믿는 것인지 확인해�
 
 ---
 
-**다음**: [13.0 paper map](../13_appendix/00_paper_map.qmd) — Part 13 부록
+**다음**: [A.0 paper map](../13_appendix/00_paper_map.qmd) — 부록
 
 **이전**: [12.3 robustness와 distribution shift](03_robustness.qmd)
