@@ -52,6 +52,8 @@ kernel 크기와 channel 수만으로 정해진다. MLP는 pixel 수(변의 길�
 parameter 수만 문제가 아니다. 더 근본적인 문제가 있다.
 같은 이미지를 5 pixel 옆으로 옮기면 MLP와 CNN이 각각 무엇을 보는지 확인한다.
 
+원본과 5pixel 이동본:
+
 ```{python}
 #| label: mlp-translation
 #| code-fold: false
@@ -71,10 +73,7 @@ cos = float(v1 @ v2 / (np.linalg.norm(v1)*np.linalg.norm(v2)))
 c1, c2 = v1 - v1.mean(), v2 - v2.mean()
 corr = float(c1 @ c2 / (np.linalg.norm(c1)*np.linalg.norm(c2)))
 changed = float(np.mean(np.abs(img-shifted) > 0.01))
-print(f"원본과 5pixel 이동본:")
 print(f"  cosine similarity      {cos:.4f}")
-print(f"  평균 제거 후 상관계수   {corr:.4f}")
-print(f"  값이 바뀐 pixel 비율     {changed:.1%}")
 
 # CNN 은 어떤가 — 같은 kernel로 두 이미지를 필터링해 본다
 k = imaging.KERNELS["소벨 x"]
@@ -82,8 +81,11 @@ f1, f2 = imaging.convolve2d(img, k), imaging.convolve2d(shifted, k)
 # feature map도 정확히 같은 만큼 이동해 있는가?
 f1_rolled = np.roll(f1, 5, axis=1)
 inner = float(np.abs(f1_rolled[:, 8:-8] - f2[:, 8:-8]).max())      # 경계 제외
-print(f"CNN: conv(shift(x)) 와 shift(conv(x)) 의 최대 차이 (경계 제외): {inner:.2e}")
 ```
+
+평균 제거 후 상관계수 `{python} f'{corr:.4f}'`
+값이 바뀐 pixel 비율 `{python} f'{changed:.1%}'`
+CNN: conv(shift(x)) 와 shift(conv(x)) 의 최대 차이 (경계 제외): `{python} f'{inner:.2e}'`
 
 cosine similarity가 `{python} f"{cos:.2f}"` 로 높아 보이는 것은 밝기 기준선이 공유되기 때문이고,
 평균을 제거한 상관계수 `{python} f"{corr:.2f}"` 가 실제 패턴의 유사도다.
@@ -125,6 +127,8 @@ $f$ 는 입력 이미지, $k$ 는 kernel, $[i,j]$ 는 출력 위치다. kernel�
 **cross-correlation**(상호상관)을 쓰면서 "convolution"이라 부른다.
 kernel을 학습으로 얻으므로 뒤집힘이 parameter에 흡수되기 때문이다 — 뒤집힌 도장을 배우면 그만이다.
 
+비대칭 kernel:
+
 ```{python}
 #| label: conv-vs-corr
 #| code-fold: false
@@ -139,13 +143,24 @@ k = np.arange(9).reshape(3, 3).astype(float)     # 비대칭 kernel
 corr = imaging.convolve2d(img, k, pad="constant")
 true_conv = imaging.convolve2d(img, k[::-1, ::-1], pad="constant")
 
-print("비대칭 kernel:")
 print(k.astype(int))
-print()
-print("delta 입력에 대한 cross-correlation 결과 (중심 3×3):")
+```
+
+delta 입력에 대한 cross-correlation 결과 (중심 3×3):
+
+```{python}
+#| label: conv-vs-corr-2
+#| code-fold: false
+
 print(corr[2:5, 2:5].astype(int))
-print()
-print("진짜 convolution 결과 (중심 3×3):")
+```
+
+진짜 convolution 결과 (중심 3×3):
+
+```{python}
+#| label: conv-vs-corr-3
+#| code-fold: false
+
 print(true_conv[2:5, 2:5].astype(int))
 ```
 
@@ -224,6 +239,8 @@ viz.fig_defaults(fig, height=380,
 fig.show()
 ```
 
+출력 (0,0) 이 계산되는 방식:
+
 ```{python}
 #| label: conv-sliding-numbers
 #| code-fold: false
@@ -232,7 +249,6 @@ import numpy as np
 
 i, j = 0, 0
 patch = inp[i:i+K, j:j+K]
-print(f"출력 (0,0) 이 계산되는 방식:")
 print(f"  입력 patch           kernel")
 for r in range(K):
     print(f"  {patch[r].astype(int)}      {kern[r].astype(int)}")
@@ -498,7 +514,14 @@ receptive field가 물체보다 작으면 모델은 물체 전체를 한 번에 
 C = 64
 one_5 = 5*5*C*C
 two_3 = 2 * (3*3*C*C)
-print(f"channel {C}→{C} 기준")
+```
+
+channel `{python} f'{C}'`→`{python} f'{C}'` 기준
+
+```{python}
+#| label: vgg-trick-2
+#| code-fold: false
+
 print(f"  5×5 한 층    : {one_5:,} parameter")
 print(f"  3×3 두 층    : {two_3:,} parameter  ({two_3/one_5:.0%})")
 print(f"  7×7 한 층    : {7*7*C*C:,}")
@@ -553,8 +576,9 @@ print(f"  bottleneck: {1*1*C*BOTTLE + 3*3*BOTTLE*BOTTLE + 1*1*BOTTLE*C:>10,}"
 dw = flops(H, 3, C, 1) + flops(H, 1, C, C)   # channel별 3×3 + 1×1 pointwise
 print(f"depthwise separable convolution (MobileNet)")
 print(f"  depthwise 3×3 + pointwise 1×1     : {dw/1e9:>7.2f} GFLOPs ({dw/plain:.1%})")
-print(f"  이론 감소율 = 1/C_out + 1/K² = 1/{C} + 1/9 = {1/C + 1/9:.4f}")
 ```
+
+이론 감소율 = 1/C_out + 1/K² = 1/`{python} f'{C}'` + 1/9 = `{python} f'{1 / C + 1 / 9:.4f}'`
 
 ResNet-50 이상이 전부 이 bottleneck block을 쓴다 — 비싼 3×3을 좁은 channel에서만 하면 연산과 parameter가
 `{python} f"{bottleneck/plain:.0%}"` 로 준다. depthwise separable convolution은 실측 비율이 이론값
