@@ -49,6 +49,8 @@ $$V(D^*, G) = 2\,D_{JS}(p_{\text{data}} \,\|\, p_g) - 2\log 2$$
 
 **즉 GAN은 Jensen–Shannon divergence(JS — 두 분포와 그 평균 사이의 KL을 대칭으로 합친 거리, [0.4](../00_foundations/04_information_theory.qmd))를 최소화한다.** $p_g = p_{\text{data}}$ 에서 $-2\log2$ 가 최소다.
 
+p = N(0,1), q = N(간격, 1)
+
 ```{python}
 #| label: optimal-d
 #| code-fold: false
@@ -64,7 +66,6 @@ def gauss(x, m, s):
     return np.exp(-(x-m)**2/(2*s*s))/np.sqrt(2*np.pi*s*s)
 
 
-print("p = N(0,1),  q = N(간격, 1)")
 print(f"{'분포 간격':>10} {'V(D*,G)':>12} {'2·JS − 2log2':>15} {'차이':>11} "
      f"{'JS':>10}")
 print("-" * 62)
@@ -373,9 +374,6 @@ X_REAL = sample_real(3000, 1)
 ZD, BATCH = 8, 256
 
 cov, ent, near = mode_stats(sample_real(1500, 77), CEN)
-print(f"실제 데이터 기준선: cover {cov}/8, 균형도 {ent:.2f}, mode 근처 {near:.1%}")
-print()
-print("Net의 weight·입력 gradient finite difference 검사")
 r0 = np.random.default_rng(0)
 net = Net([3, 8, 8, 1], seed=1)
 Xg = r0.normal(size=(5, 3))
@@ -390,6 +388,16 @@ def L():
 
 e = 1e-6
 wmax = 0.0
+```
+
+실제 데이터 기준선: cover `{python} f'{cov}'`/8, 균형도 `{python} f'{ent:.2f}'`, mode 근처 `{python} f'{near:.1%}'`
+
+Net의 weight·입력 gradient finite difference 검사
+
+```{python}
+#| label: gan-setup-2
+#| code-fold: false
+
 for kk in net.p:
     f = net.p[kk].ravel()
     for i in range(min(3, f.size)):
@@ -402,7 +410,14 @@ for i in range(5):
         o = Xg[i, j]; Xg[i, j] = o + e; a = L(); Xg[i, j] = o - e; b = L()
         Xg[i, j] = o
         imax = max(imax, abs((a-b)/(2*e) - dX[i, j])/(abs(dX[i, j]) + 1e-9))
-print(f"  weight gradient 상대오차 {wmax:.2e}")
+```
+
+weight gradient 상대오차 `{python} f'{wmax:.2e}'`
+
+```{python}
+#| label: gan-setup-3
+#| code-fold: false
+
 print(f"  입력   gradient 상대오차 {imax:.2e}")
 ```
 
@@ -463,6 +478,8 @@ for nm, _ in CONFIGS:
 print(f"{'실제 데이터':<22} {'':>6} {cov:>4}/8 {ent:>9.2f} {near:>10.1%}")
 ```
 
+통제 실험: discriminator 5 step 고정, Lipschitz 제약만 변경
+
 ```{python}
 #| label: gan-analysis
 #| code-fold: false
@@ -472,7 +489,6 @@ import numpy as np
 h_mm = RUNS["saturating loss"][2]
 h5 = RUNS["D 5 step"][2]
 h1 = RUNS["표준 GAN (non-sat.)"][2]
-print("통제 실험: discriminator 5 step 고정, Lipschitz 제약만 변경")
 print(f"{'설정':<22} {'Lipschitz 제약':>12} {'균형도':>9} {'mode 근처':>10} {'D Lipschitz':>11}")
 print("-" * 68)
 LIP = {}
