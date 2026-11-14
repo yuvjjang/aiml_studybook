@@ -154,8 +154,15 @@ def build_input(x, T, pos_enc):
 
 rng0 = np.random.default_rng(0)
 x0, p0, y0 = make_batch(6, rng0)
-print(f"batch 하나의 예 (길이 6, vocabulary {K})")
-print(f"  입력 symbol (샘플 0): {x0[0].argmax(1).tolist()}")
+```
+
+batch 하나의 예 (길이 6, vocabulary `{python} f'{K}'`)  
+입력 symbol (샘플 0): `{python} f'{x0[0].argmax(1).tolist()}'`
+
+```{python}
+#| label: recall-setup-2
+#| code-fold: false
+
 print(f"  query 위치 p       : {int(p0[0])}")
 print(f"  정답               : {int(y0[0])}")
 print(f"  확인               : {x0[0].argmax(1)[p0[0]]}")
@@ -450,7 +457,14 @@ alignment의 선명도가 다르다 — entropy `{python} f"{ents['attention']:.
 #| code-fold: false
 
 d = 512
-print(f"d={d} 일 때 encoder 상태 저장 비용 (fp32)")
+```
+
+d=`{python} f'{d}'` 일 때 encoder 상태 저장 비용 (fp32)
+
+```{python}
+#| label: complexity-shift-2
+#| code-fold: false
+
 print(f"{'길이 T':>8} {'context vector':>14} {'전체 상태':>14} {'배수':>8}")
 print("-" * 48)
 for T in [10, 50, 100, 500]:
