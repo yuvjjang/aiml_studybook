@@ -300,10 +300,18 @@ fig.show()
 #| code-fold: false
 
 latent_dim, T_diff = 64*64*4, 1000
-print(f"512×512 이미지의 latent 64×64×4 = {latent_dim:,}차원")
-print(f"  AR 순차 호출        : {latent_dim:,} 번")
-print(f"  diffusion {T_diff} step : {T_diff:,} 번  (AR의 1/{latent_dim/T_diff:.0f})")
 ```
+
+512×512 이미지의 latent 64×64×4 = `{python} f'{latent_dim:,}'`차원
+
+```{python}
+#| label: trilemma-numbers-2
+#| code-fold: false
+
+print(f"  AR 순차 호출        : {latent_dim:,} 번")
+```
+
+diffusion `{python} f'{T_diff}'` step : `{python} f'{T_diff:,}'` 번 (AR의 1/`{python} f'{latent_dim / T_diff:.0f}'`)
 
 sampling 비용이 실제로 뜻하는 것이 이것이다. latent space 차원 하나하나를 순서대로 뽑는 AR보다
 1,000 step짜리 diffusion이 `{python} f"{latent_dim/T_diff:.0f}"`배 적게 신경망을 부른다 — diffusion이
@@ -407,8 +415,14 @@ names = list(MODELS)
 n_noise, n_collapse = names[4], names[2]
 q_gap = abs(SCORES[n_collapse][2] - SCORES[names[0]][2])
 fid_ratio = SCORES[n_collapse][1] / SCORES[n_noise][1]
-print()
-print("FID가 보는 두 moment(평균·공분산)")
+```
+
+FID가 보는 두 moment(평균·공분산)
+
+```{python}
+#| label: evaluation-numbers-2
+#| code-fold: false
+
 print(f"{'분포':<26} {'평균':>18} {'trace(공분산)':>14}")
 print("-" * 58)
 mom = {}
