@@ -507,8 +507,14 @@ import numpy as np
 
 rng = np.random.default_rng(0)
 n, reps = 60, 200
+```
 
-print(f"n = {n} 고정, p 를 바꿔가며 (무작위 설계, 잡음 있는 타깃)\n")
+n = `{python} f'{n}'` 고정, p 를 바꿔가며 (무작위 설계, 잡음 있는 타깃)
+
+```{python}
+#| label: interpolation-peak-2
+#| code-fold: false
+
 print(f"{'p':>6}{'p/n':>7}{'σ_min(X)':>12}{'κ(X)':>14}{'‖β̂‖':>12}")
 for p in [10, 30, 50, 58, 60, 62, 70, 120, 400]:
     smin, kappa, nrm = [], [], []
