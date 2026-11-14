@@ -120,13 +120,14 @@ fig.update_layout(legend=dict(x=0.01, y=0.28, font=dict(size=10)))
 fig.show()
 ```
 
+① cell 종류별 (T=`{python} f'{T_G}'`)
+
 ```{python}
 #| label: gradient-flow-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"① cell 종류별 (T={T_G})")
 print(f"{'cell':<16} {'입력쪽 ‖g‖':>13} {'출력쪽 ‖g‖':>13} {'비':>12} {'시점당 배율':>12}")
 print("-" * 72)
 for lbl, v in flows.items():
@@ -136,9 +137,14 @@ for lbl, v in flows.items():
 r_rnn = flows["vanilla RNN"][0]/flows["vanilla RNN"][-1]
 r_lstm = flows["LSTM (b_f=1)"][0]/flows["LSTM (b_f=1)"][-1]
 lstm_gain = float(r_lstm/r_rnn)
+```
 
-print()
-print(f"② forget gate bias별")
+② forget gate bias별
+
+```{python}
+#| label: gradient-flow-numbers-2
+#| code-fold: false
+
 print(f"{'b_f':>6} {'평균 f':>10} {'f^60 (이론 감쇠)':>18} {'실측 gradient 비':>20}")
 print("-" * 60)
 for fb in fbs:
@@ -266,8 +272,14 @@ print("-" * 58)
 for d in DISTS:
     print(f"{d:>6} " + " ".join(
         f"{best[(k, d)]:>10.4f} {verdict(best[(k, d)]):>5}" for k in CELL_LBL))
-print()
-print("선택된 learning rate")
+```
+
+선택된 learning rate
+
+```{python}
+#| label: cell-comparison-numbers-2
+#| code-fold: false
+
 print(f"{'거리':>6} " + " ".join(f"{CELL_LBL[k]:>12}" for k in CELL_LBL))
 print("-" * 46)
 for d in DISTS:
@@ -509,8 +521,14 @@ prod_avg = float(np.prod(f_mat.mean(0)[1:]))
 # unit별로 따로 곱해 본다 — 평균의 곱과 곱의 분포는 다르다
 per_unit = np.prod(f_mat[:, 1:], axis=1)
 order = np.argsort(-per_unit)
-print(f"unit별 ∏f (hidden {H_H}개): 최대 {per_unit.max():.4f}, 중앙값 {np.median(per_unit):.4f}, "
-      f"최소 {per_unit.min():.2e}")
+```
+
+unit별 ∏f (hidden `{python} f'{H_H}'`개): 최대 `{python} f'{per_unit.max():.4f}'`, 중앙값 `{python} f'{np.median(per_unit):.4f}'`, 최소 `{python} f'{per_unit.min():.2e}'`
+
+```{python}
+#| label: gate-numbers-2
+#| code-fold: false
+
 print(f"  상위 5개: " + ", ".join(f"{per_unit[i]:.3f}" for i in order[:5]))
 print(f"  하위 5개: " + ", ".join(f"{per_unit[i]:.1e}" for i in order[-5:]))
 spread = float(per_unit.max()/per_unit.min())
@@ -548,7 +566,14 @@ unit별로 따로 곱해 보면 답이 나온다. unit 간 편차가 `{python} f
 import numpy as np
 
 D_ADAM = 39
-print(f"거리 {D_ADAM}, Adam η=0.01, 1000 step — seed별 최종 loss")
+```
+
+거리 `{python} f'{D_ADAM}'`, Adam η=0.01, 1000 step — seed별 최종 loss
+
+```{python}
+#| label: adam-check-2
+#| code-fold: false
+
 print(f"{'cell':<14} {'seed 0':>10} {'seed 1':>10} {'seed 2':>10} {'평균':>10}")
 print("-" * 58)
 adam_res = {}
