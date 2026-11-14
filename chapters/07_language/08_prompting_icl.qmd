@@ -385,6 +385,8 @@ fig.show()
 prompt로 "JSON으로만 답하라"고 해도 어길 때가 있다.
 **decoding 단계에서 막으면** 확률이 아니라 **보장**이 된다 — **constrained decoding**(제약 디코딩)이다.
 
+목표 문법: {"a": <숫자>}
+
 ```{python}
 #| label: constrained
 #| code-fold: false
@@ -451,8 +453,6 @@ def valid(s):
     return bool(re.fullmatch(r'\{"a": [012]+\}', s))
 
 
-print('목표 문법:  {"a": <숫자>}')
-print()
 OK = {}
 for tag, con in [("제약 없음", False), ("문법 constrained decoding", True)]:
     outs = [generate(con, i) for i in range(200)]
