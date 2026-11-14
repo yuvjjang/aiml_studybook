@@ -297,12 +297,7 @@ p9 = [p for p in PRUNE if p[0] == 0.9][0]
 - **재학습 없이도 절반은 그냥 지울 수 있다** — 신경망이 over-parameterized(필요보다 parameter가 많은 상태)라는 증거
 - 그 위로는 급격히 무너진다 — **collapse 지점**이 있다
 
-```{python}
-#| label: prune-2
-#| code-fold: false
-
-print("**structured vs unstructured**")
-```
+**structured vs unstructured**
 
 | 방식 | 지우는 단위 | 실제 속도 향상 |
 |---|---|---|
@@ -390,12 +385,13 @@ d5 = [l for l in LOT if l[0] == 0.5][0]
 
 ```{python}
 #| label: lottery-3
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if d5[1] > BASE:
     print(f"**덤으로: 50% pruning이 dense 모델보다 낫다** "
-          f"({d5[1]:.4f} vs {BASE:.4f}).")
-    print("  이 규모에서는 pruning이 **regularization으로도 작동**한다.")
+          f"({d5[1]:.4f} vs {BASE:.4f}). "
+          "이 규모에서는 pruning이 **regularization으로도 작동**한다.")
 ```
 
 ```{python}
@@ -660,6 +656,17 @@ quantization한 뒤 pruning하면 quantization 눈금이 다시 어긋난다.
 
 QAT는 quantization을 학습에 넣는다 — forward는 quantization하고 backward는 **straight-through estimator(STE, 직통 추정기)**로 통과시킨다.  
 반올림은 미분이 0이라 그냥 흘려보내는 것이다. 이론적으로는 편법인데 잘 된다.
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **모델이 hidden 64×64인 MLP이고 데이터가 합성이다.** "8bit는 사실상 공짜", "50%는 재학습 없이도 버틴다" 같은 결론은 이 작은 모델에서 나왔다. LLM에서는 activation의 outlier가 훨씬 크고 층이 깊어 오차가 쌓이므로, 같은 bit 수에서 손실이 더 클 수 있다. 실제 LLM의 quantization 손실은 이 실험으로 알 수 없다.
+- **lottery ticket은 조건부로 재현됐다.** 50~90% sparsity에서는 원래 초기값이 앞섰지만 95%에서 뒤집혔다. 원 논문도 큰 network에서는 rewinding 같은 수정이 필요했다고 보고했다. 이 결과를 다른 크기와 데이터로 일반화하면 안 된다.
+- **"unstructured pruning은 속도가 그대로"는 dense 행렬 곱 기준이다.** sparse 연산을 지원하는 kernel과 hardware에서는 일부 빨라질 수 있다. 이 장에서는 그런 kernel을 시험하지 않았다.
+- **"조합의 손실이 덜 더해진다"와 순서의 권장은 이 모델 하나의 결과다.**
+:::
 
 ---
 
