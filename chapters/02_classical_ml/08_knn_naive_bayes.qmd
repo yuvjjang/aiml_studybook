@@ -205,8 +205,15 @@ import numpy as np
 rng = np.random.default_rng(0)
 n = 2000
 
-print(f"[0,1]^d 에 {n}개 점, 질의점 하나까지의 거리\n")
 cv_by = {}
+```
+
+[0,1]\^d 에 `{python} f'{n}'`개 점, 질의점 하나까지의 거리
+
+```{python}
+#| label: distance-concentration-2
+#| code-fold: false
+
 print(f"{'d':>6}{'최소 거리':>11}{'최대 거리':>11}{'상대 차이':>11}{'CV':>11}")
 for d in [1, 2, 5, 20, 100, 1000]:
     X = rng.random((n, d))
