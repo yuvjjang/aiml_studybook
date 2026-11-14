@@ -100,8 +100,9 @@ for n in [10, 50, 200, 1000, 10000]:
     incl = np.mean([len(np.unique(r)) / n for r in idx])
     theory = 1 - (1 - 1/n) ** n
     print(f"{n:>8}{theory:>14.4f}{incl:>14.4f}{1-incl:>12.4f}")
-print(f"\n극한값 1 - 1/e = {1 - np.exp(-1):.4f}")
 ```
+
+극한값 1 - 1/e = `{python} f'{1 - np.exp(-1):.4f}'`
 
 $n=50$ 만 되어도 극한값에 거의 붙는다.
 
@@ -210,10 +211,10 @@ for nm, m in [("단일 트리 (완전 성장)", single), ("bagging 60개", bag),
     te_acc[nm] = float((m.predict(X[te])==y[te]).mean())
     print(f"{nm:<26} {(m.predict(X[tr])==y[tr]).mean():>8.3f} "
           f"{te_acc[nm]:>8.3f}")
-print()
 oob_acc = float(bag.oob_score(X[tr], y[tr]))
-print(f"bagging OOB 추정 정확도: {oob_acc:.3f}")
 ```
+
+bagging OOB 추정 정확도: `{python} f'{oob_acc:.3f}'`
 
 OOB 추정(`{python} f"{oob_acc:.3f}"`)이 별도 검증셋 없이도 시험 정확도(`{python} f"{te_acc['bagging 60개']:.3f}"`)에 가까운 값을 준다.
 그리고 특성이 둘뿐인 이 데이터에서는 `max_features=1` 인 random forest가
