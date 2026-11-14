@@ -489,6 +489,8 @@ viz.fig_defaults(fig, height=440, title="Gaussian mixture model (EM)")
 fig.show()
 ```
 
+covariance이 다른 타원형 cluster 2개에서:
+
 ```{python}
 #| label: gmm-vs-kmeans
 #| code-fold: false
@@ -496,13 +498,13 @@ fig.show()
 import sys; sys.path.append("../..")
 from src import clustering as cl
 
-print(f"covariance이 다른 타원형 cluster 2개에서:")
 print(f"  k-means ARI : {cl.adjusted_rand_index(yg, lab_k):.3f}")
 print(f"  GMM     ARI : {cl.adjusted_rand_index(yg, lab_g):.3f}")
 print()
 print(f"log-likelihood: {ll[0]:.1f} → {ll[-1]:.1f}  (EM 은 증가만 함을 보장)")
-print(f"혼합 비율 π: {pig.round(3)}")
 ```
+
+혼합 비율 π: `{python} f'{pig.round(3)}'`
 
 ::: {.key-concept}
 **k-means는 GMM의 특수한 경우다.**
