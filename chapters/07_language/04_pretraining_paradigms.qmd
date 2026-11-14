@@ -204,38 +204,49 @@ bidirectional 모델은 $x_{t+1}$ 을 이미 안다고 가정하고 학습되었
 TOKENS = ["오늘", "서울", "의", "날씨", "는", "매우", "맑고", "따뜻하다"]
 
 print("원본:  " + " ".join(TOKENS))
-print()
+```
 
-print("① CLM (GPT) — next-token prediction, 입력을 망가뜨리지 않는다")
+① CLM (GPT) — next-token prediction, 입력을 망가뜨리지 않는다
+
+```{python}
+#| label: objectives-2
+#| code-fold: false
+
 for t in [3, 5]:
     print(f"   입력 {' '.join(TOKENS[:t]):<28} → 정답 '{TOKENS[t]}'")
-print(f"   길이 {len(TOKENS)}인 sequence에서 학습 신호 {len(TOKENS)-1}개 "
-      f"(모든 위치)")
-print()
 
-print("② MLM (BERT) — 15%를 [MASK]로 바꾸고 그것만 맞힌다")
 masked = TOKENS.copy()
 masked[3] = "[MASK]"
-print(f"   입력 {' '.join(masked)}")
-print(f"   정답 위치 3 = '{TOKENS[3]}'")
-print(f"   학습 신호 1개 (15% × 8 ≈ 1)")
-print()
 
-print("③ span corruption (T5) — 연속 구간을 하나의 sentinel token으로")
-print(f"   입력  오늘 서울 의 <X> 는 <Y> 따뜻하다")
-print(f"   정답  <X> 날씨 <Y> 매우 맑고 <Z>")
-print("   가려진 구간을 **순서대로 생성**한다 — encoder-decoder 구조가 필요하다")
-print()
-
-print("④ RTD (ELECTRA) — 작은 generator가 바꿔치기하고, discriminator가 찾아낸다")
 corrupted = TOKENS.copy()
 corrupted[1] = "부산"
 corrupted[5] = "조금"
-print(f"   손상 {' '.join(corrupted)}")
+```
+
+길이 `{python} f'{len(TOKENS)}'`인 sequence에서 학습 신호 `{python} f'{len(TOKENS) - 1}'`개 (모든 위치)
+
+② MLM (BERT) — 15%를 [MASK]로 바꾸고 그것만 맞힌다
+입력 `{python} f'{' '.join(masked)}'`
+정답 위치 3 = '`{python} f'{TOKENS[3]}'`'
+학습 신호 1개 (15% × 8 ≈ 1)
+
+③ span corruption (T5) — 연속 구간을 하나의 sentinel token으로
+입력 오늘 서울 의 \<X> 는 \<Y> 따뜻하다
+정답 \<X> 날씨 \<Y> 매우 맑고 \<Z>
+가려진 구간을 **순서대로 생성**한다 — encoder-decoder 구조가 필요하다
+
+④ RTD (ELECTRA) — 작은 generator가 바꿔치기하고, discriminator가 찾아낸다
+손상 `{python} f'{' '.join(corrupted)}'`
+
+```{python}
+#| label: objectives-3
+#| code-fold: false
+
 print(f"   정답 " + " ".join("가짜" if TOKENS[i] != corrupted[i] else "진짜"
                             for i in range(len(TOKENS))))
-print(f"   학습 신호 {len(TOKENS)}개 — **모든 위치**에서 이진 분류")
 ```
+
+학습 신호 `{python} f'{len(TOKENS)}'`개 — **모든 위치**에서 이진 분류
 
 BERT의 masking은 사실 세 갈래다 — 가릴 15% 중 80%는 `[MASK]`로 교체, 10%는 무작위 token으로 교체,
 10%는 **그대로 둔다**. fine-tuning 때는 `[MASK]`가 없으므로 그 불일치를 줄이려는 장치다.
