@@ -317,9 +317,9 @@ _, dout = nn.mse_loss(out, y)
 
 g_ours = backward_core(m, cache, dout)
 g_lib = m.backward(cache, dout)
-print("위 구현과 src/nn.py 의 최대 차이:",
-      f"{max(np.abs(g_ours[k] - g_lib[k]).max() for k in g_ours):.2e}")
 ```
+
+위 구현과 src/nn.py 의 최대 차이: `{python} f'{max((np.abs(g_ours[k] - g_lib[k]).max() for k in g_ours)):.2e}'`
 
 ---
 
@@ -689,6 +689,9 @@ $\sqrt{L}$ 개 간격으로 저장점을 두면 저장 개수도 $\sqrt{L}$, 재
 층마다 "gradient 크기 ÷ weight 크기"를 재면, 그 층이 한 step에 자기 크기의 몇 %나 움직이는지 알 수 있다.
 건강검진에서 각 장기의 수치를 따로 보는 것과 같다 — 전체 손실 하나만 보면 어느 층이 문제인지 알 수 없다.
 
+건강한 망 vs 병든 망의 층별 gradient/weight 비율
+(이 비율이 1e-3 \~ 1e-2 이면 건강, 1e-6 이하면 그 층은 거의 안 움직인다)
+
 ```{python}
 #| label: gradient-diagnostics
 #| code-fold: false
@@ -699,9 +702,6 @@ from src import nn, datasets
 
 X, y = datasets.two_moons(n=300, noise=0.2, seed=0)
 
-print("건강한 망 vs 병든 망의 층별 gradient/weight 비율")
-print("(이 비율이 1e-3 ~ 1e-2 이면 건강, 1e-6 이하면 그 층은 거의 안 움직인다)")
-print()
 for name, kw in [("relu + he (건강)",      dict(activation="relu", init="he")),
                  ("sigmoid + small (병듦)", dict(activation="sigmoid", init="small"))]:
     m = nn.MLP([2] + [32]*8 + [2], seed=0, **kw)
