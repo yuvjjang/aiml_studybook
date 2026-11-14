@@ -126,7 +126,14 @@ z = 1.0 + 1.0*eps
 a, b = (2*z).mean(1), ((z**2)*(z-1.0)/1.0).mean(1)
 print()
 print(f"n=64 mini-batch (σ=1, μ=1):")
-print(f"  reparameterization: 평균 {a.mean():.4f} (참값 2.0), 표준오차 {a.std():.4f}")
+```
+
+reparameterization: 평균 `{python} f'{a.mean():.4f}'` (참값 2.0), 표준오차 `{python} f'{a.std():.4f}'`
+
+```{python}
+#| label: reparam-variance-2
+#| code-fold: false
+
 print(f"  score function    : 평균 {b.mean():.4f} (참값 2.0), 표준오차 {b.std():.4f}")
 se_ratio = float(b.std()/a.std())
 var_lo, var_hi = min(t[4] for t in VAR_TABLE), max(t[4] for t in VAR_TABLE)
@@ -222,10 +229,16 @@ X = X_raw - MU
 X_te = blobs64(400, seed=99)[0] - MU
 K = 8
 REAL_SHARP = sharpness(X_raw)
+```
 
-print(f"데이터 {X.shape} — 실제 자유도 {Z_true.shape[1]}개, latent 차원 k={K}")
-print()
-print("finite difference gradient 검사 (ε 고정)")
+데이터 `{python} f'{X.shape}'` — 실제 자유도 `{python} f'{Z_true.shape[1]}'`개, latent 차원 k=`{python} f'{K}'`
+
+finite difference gradient 검사 (ε 고정)
+
+```{python}
+#| label: vae-impl-2
+#| code-fold: false
+
 print(f"{'latent k':>8} {'β':>6} {'상대오차':>12}")
 print("-" * 28)
 gc_worst = 0.0
@@ -600,10 +613,14 @@ nn.train(net, c_in[:, None], x_out[:, None], loss="mse",
          opt=nn.Optimizer("adam", lr=0.01), steps=3000, seed=0)
 grid = np.linspace(-1, 1, 9)
 pred = net.forward(grid[:, None], training=False)[0].ravel()
+```
 
-print(f"실제 x 의 분포: 평균 {x_out.mean():.3f}, "
-      f"봉우리 {np.percentile(x_out, 25):.2f} 와 {np.percentile(x_out, 75):.2f}")
-print()
+실제 x 의 분포: 평균 `{python} f'{x_out.mean():.3f}'`, 봉우리 `{python} f'{np.percentile(x_out, 25):.2f}'` 와 `{python} f'{np.percentile(x_out, 75):.2f}'`
+
+```{python}
+#| label: blurry-2
+#| code-fold: false
+
 print(f"{'c':>7} {'MSE 학습 예측':>14} {'가장 가까운 봉우리까지':>22}")
 print("-" * 46)
 for c_, p_ in zip(grid, pred):
@@ -694,8 +711,14 @@ def ae_dec(Z):
 vae = BETA_MODELS[1.0]
 Z_ae = ae_enc(X)
 _, Z_vae, _ = vae.encode(X)
+```
 
-print("encoder가 실제로 쓰는 latent 영역 (차원별 평균)")
+encoder가 실제로 쓰는 latent 영역 (차원별 평균)
+
+```{python}
+#| label: vae-vs-ae-2
+#| code-fold: false
+
 print(f"{'모델':<8} {'평균 |μ|':>10} {'평균 sd':>10} {'prior N(0,1)과의 거리'}")
 print("-" * 58)
 LAT_SD = {}
@@ -704,7 +727,6 @@ for nm, Z in [("AE", Z_ae), ("VAE", Z_vae)]:
     LAT_SD[nm] = float(Z.std(0).mean())
     print(f"{nm:<8} {np.abs(Z.mean(0)).mean():>10.4f} {Z.std(0).mean():>10.4f} "
           f"{gap:>18.4f}")
-print()
 
 
 def nearest_dist(S, ref):
@@ -714,7 +736,14 @@ def nearest_dist(S, ref):
 
 
 zp = np.random.default_rng(5).normal(size=(400, K))
-print("z ~ N(0, I)에서 400개를 뽑아 decoding")
+```
+
+z \~ N(0, I)에서 400개를 뽑아 decoding
+
+```{python}
+#| label: vae-vs-ae-3
+#| code-fold: false
+
 print(f"{'출처':<22} {'가장 가까운 실데이터까지 거리':>26} {'sharpness':>10}")
 print("-" * 62)
 rows = [("실제 데이터 (held-out)", X_te[:400]),
