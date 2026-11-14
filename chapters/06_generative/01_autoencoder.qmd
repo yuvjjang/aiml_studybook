@@ -66,15 +66,19 @@ X_te = make_blobs64(400, seed=99)[0] - MU
 
 U_, S_, Vt_ = np.linalg.svd(X, full_matrices=False)
 ev = S_**2
+```
 
-print(f"데이터 {X.shape} — 64차원 관측, 실제 자유도 {Z_true.shape[1]}개")
-print()
+데이터 `{python} f'{X.shape}'` — 64차원 관측, 실제 자유도 `{python} f'{Z_true.shape[1]}'`개
+
+```{python}
+#| label: setup-2
+#| code-fold: false
+
 print(f"{'PC':>6} {'설명 분산 비율':>13} {'누적':>9}")
 print("-" * 32)
 cum = np.cumsum(ev)/ev.sum()
 for i in range(8):
     print(f"{i+1:>6} {ev[i]/ev.sum():>13.4f} {cum[i]:>9.4f}")
-print()
 ```
 
 데이터는 8×8 = 64차원 이미지지만, 실제로는 중심·폭·밝기 다섯 숫자로 전부 만들어진다.
@@ -227,8 +231,14 @@ print(f"{'||W_e W_d − P||_F':<34} {np.linalg.norm(W0 @ W1 - P):.4f}")
 print(f"{'||P||_F':<34} {np.linalg.norm(P):.4f}")
 data_gap = float(np.linalg.norm(X @ (W0@W1 - P))/np.linalg.norm(X))
 print(f"{'데이터 위에서의 차이 ||X(W_eW_d − P)||/||X||':<34} {data_gap:.6f}")
-print()
-print("decoder 각 행과 PC1~3의 |cosine|:")
+```
+
+decoder 각 행과 PC1\~3의 |cosine|:
+
+```{python}
+#| label: subspace-detail-2
+#| code-fold: false
+
 for i in range(k):
     d = W1[i]/np.linalg.norm(W1[i])
     print(f"    decoder 행 {i}: {np.round(np.abs(Vk @ d), 3)}")
@@ -1154,7 +1164,13 @@ x_noisy = x + sigma * rng.normal(size=n)
 
 A = np.column_stack([x_noisy, np.ones(n)])
 slope, intercept = np.linalg.lstsq(A, x, rcond=None)[0]
-print(f"학습된 denoiser: x̂ = {slope:.3f}·x̃ + {intercept:.3f}")
+```
+
+학습된 denoiser: x̂ = `{python} f'{slope:.3f}'`·x̃ + `{python} f'{intercept:.3f}'`
+
+```{python}
+#| label: ex-dae-linear-2
+
 print(f"이론:            x̂ = {s**2 / (s**2 + sigma**2):.3f}·x̃ + {sigma**2 * mu / (s**2 + sigma**2):.3f}")
 ```
 :::
