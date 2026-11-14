@@ -276,18 +276,27 @@ rng_d = np.random.default_rng(0)
 V_d = 50
 sharp_d = np.sort(rng_d.normal(0, 3, V_d))[::-1]      # 확신하는 분포
 flat_d = np.sort(rng_d.normal(0, 0.5, V_d))[::-1]     # 헤매는 분포
+```
 
-print(f"① temperature는 entropy를 조절한다 (후보는 그대로 {V_d}개)")
-print()
+① temperature는 entropy를 조절한다 (후보는 그대로 `{python} f'{V_d}'`개)
+
+```{python}
+#| label: decoding-knobs-2
+#| code-fold: false
+
 print(f"{'T':>7}{'뾰족한 분포 H':>16}{'평평한 분포 H':>16}")
 for T in [0.2, 0.5, 1.0, 2.0, 5.0]:
     print(f"{T:>7.1f}{_entropy(_softmax_T(sharp_d,T)):>16.3f}"
           f"{_entropy(_softmax_T(flat_d,T)):>16.3f}")
 print(f"{'균등':>7}{np.log2(V_d):>16.3f}{np.log2(V_d):>16.3f}   ← T→∞ 극한")
+```
 
-print()
-print("② top-k는 고정, top-p는 adaptive")
-print()
+② top-k는 고정, top-p는 adaptive
+
+```{python}
+#| label: decoding-knobs-3
+#| code-fold: false
+
 print(f"{'':<12}{'뾰족한 분포':>14}{'평평한 분포':>14}")
 for k in [5, 20]:
     print(f"{f'top-k={k}':<12}{k:>14}{k:>14}")
@@ -297,7 +306,6 @@ for pp in [0.9, 0.95]:
         p = np.sort(_softmax_T(z, 1.0))[::-1]
         sizes.append(int(np.searchsorted(np.cumsum(p), pp) + 1))
     print(f"{f'top-p={pp}':<12}{sizes[0]:>14}{sizes[1]:>14}")
-
 ```
 
 top-p는 같은 설정에서 확신할 때 후보를 좁히고 헤맬 때 넓힌다.
@@ -1039,8 +1047,13 @@ n = 200_000
 x = rng.choice(5, n, p=q)
 accept = rng.random(n) < np.minimum(1, p[x] / q[x])
 x[~accept] = rng.choice(5, (~accept).sum(), p=residual)
+```
 
-print(f"빈도  {np.bincount(x, minlength=5) / n}")
+빈도 `{python} f'{np.bincount(x, minlength=5) / n}'`
+
+```{python}
+#| label: ex-speculative-2
+
 print(f"p     {p}")
 print(f"받아들임 비율 {accept.mean():.4f}   1 − TV = {1 - 0.5 * np.abs(p - q).sum():.4f}")
 ```
