@@ -73,16 +73,17 @@ Ahat = norm_adj(A)
 print(f"graph: node {n}, edge {int(A.sum()//2)}, community {C_COM}")
 print(f"평균 degree {A.sum(1).mean():.1f}  (최소 {int(A.sum(1).min())}, "
       f"최대 {int(A.sum(1).max())})")
-print(f"node 특성 {d_feat}차원 — community 중심 + 잡음")
-print()
 
 # permutation equivariance 확인
 pi = np.random.default_rng(1).permutation(n)
 H_orig = Ahat @ X
 H_perm = norm_adj(A[np.ix_(pi, pi)]) @ X[pi]
 perm_err = float(np.abs(H_perm - H_orig[pi]).max())
-print(f"permutation equivariance 확인: ‖Â(πAπᵀ)·πX − π(ÂX)‖_max = {perm_err:.2e}")
 ```
+
+node 특성 `{python} f'{d_feat}'`차원 — community 중심 + 잡음
+
+permutation equivariance 확인: ‖Â(πAπᵀ)·πX − π(ÂX)‖_max = `{python} f'{perm_err:.2e}'`
 
 node 번호를 뒤섞어도 결과가 부동소수점 오차(`{python} f"{perm_err:.0e}"`) 안에서 정확히 따라 움직인다 —
 **adjacency matrix를 통한 aggregation은 구조적으로 permutation equivariant다.**
@@ -467,13 +468,14 @@ viz.fig_defaults(fig, height=390,
 fig.show()
 ```
 
+node 0 (왼쪽 clique) 이 각 node에 미치는 영향력 (Âᵏ 의 원소)
+
 ```{python}
 #| label: oversquashing-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"node 0 (왼쪽 clique) 이 각 node에 미치는 영향력 (Âᵏ 의 원소)")
 print(f"{'층 k':>6} {'같은 clique':>14} {'다리 건너편':>14} {'비율':>12}")
 print("-" * 50)
 for k, a, b in zip(KS, same_side, other_side):
@@ -662,19 +664,26 @@ fig.update_layout(legend=dict(x=0.02, y=0.3, font=dict(size=11)))
 fig.show()
 ```
 
+test 정확도
+
 ```{python}
 #| label: gat-numbers
 #| code-fold: false
 
 import numpy as np
 
-print("test 정확도")
 print(f"{'잡음 비율':>10} " + " ".join(f"{KLBL[k]:>10}" for k in KINDS))
 print("-" * 44)
 for f in FRACS:
     print(f"{f:>10.2f} " + " ".join(f"{res_g[(k, f)]:>10.3f}" for k in KINDS))
-print()
-print("attention이 같은 community 이웃을 더 보는가 (1 이면 전혀 구분 못 함)")
+```
+
+attention이 같은 community 이웃을 더 보는가 (1 이면 전혀 구분 못 함)
+
+```{python}
+#| label: gat-numbers-2
+#| code-fold: false
+
 print(f"{'잡음 비율':>10} {'GAT':>10} {'GATv2':>10}")
 print("-" * 34)
 for f in FRACS:
@@ -737,10 +746,11 @@ for i in range(n_tok):
     out_mp[i] = sum(alpha[k]*(Xs[j] @ Wv) for k, j in enumerate(nbrs))
 
 attn_diff = float(np.abs(out_attn - out_mp).max())
-print(f"self-attention 출력과 complete graph message passing 출력")
-print(f"  최대 차이 : {attn_diff:.2e}")
-print(f"  동일한가  : {np.allclose(out_attn, out_mp)}")
 ```
+
+self-attention 출력과 complete graph message passing 출력
+최대 차이 : `{python} f'{attn_diff:.2e}'`
+동일한가 : `{python} f'{np.allclose(out_attn, out_mp)}'`
 
 **같은 연산이다.** self-attention은 graph가 complete graph(모든 token이 모든 token의 이웃)이고,
 AGGREGATE가 attention 가중합이며, message가 $W_v h_j$, 가중치가 $\text{softmax}(q_i \cdot k_j/\sqrt d)$ 인 GNN이다.
@@ -1022,8 +1032,13 @@ A_hat = At / np.sqrt(np.outer(d, d))
 
 X = rng.normal(size=(n, 16)) + 1.0
 X[:, 0] += np.where(c == 0, 0.5, -0.5)                  # community 신호는 첫 특성에만
+```
 
-print(f"Â 의 큰 eigenvalue 3개: {np.sort(np.linalg.eigvalsh(A_hat))[-3:].round(3)}")
+Â 의 큰 eigenvalue 3개: `{python} f'{np.sort(np.linalg.eigvalsh(A_hat))[-3:].round(3)}'`
+
+```{python}
+#| label: ex-oversmoothing-2
+
 for k in [0, 1, 2, 4, 8, 16, 32, 64]:
     H = np.linalg.matrix_power(A_hat, k) @ X / np.sqrt(d)[:, None]
     common = np.linalg.norm(H.mean(0))
