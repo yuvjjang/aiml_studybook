@@ -167,10 +167,10 @@ for lo in range(0, n, 128):                # block 크기 128
     ell = a * ell + b * ell_b
     O = O / ell
     m = m_new
-
-print(f"표준 계산과의 최대 오차: {np.abs(O - ref).max():.3e}")
-print(f"block 하나가 들고 있는 점수 개수: 128  (전체 {n} 개가 아니다)")
 ```
+
+표준 계산과의 최대 오차: `{python} f'{np.abs(O - ref).max():.3e}'`
+block 하나가 들고 있는 점수 개수: 128 (전체 `{python} f'{n}'` 개가 아니다)
 
 근사가 아니라 부동소수점 오차 수준에서 같다. softmax의 분모를 '나중에 보정'할 수 있다는 것이
 tiling의 열쇠다.
@@ -700,10 +700,11 @@ for blk in np.split(np.arange(n), cuts):                     # 무작위 크기 
 
 with np.errstate(over="ignore", invalid="ignore"):
     naive = np.exp(s) @ v / np.exp(s).sum()
-print(f"block 크기 {np.diff(np.r_[0, cuts, n]).tolist()}")
-print(f"online 합치기 vs 한 번에: 최대 차이 {np.abs(o - ref).max():.1e}")
-print(f"최댓값을 빼지 않은 계산: {naive[:3]}")
 ```
+
+block 크기 `{python} f'{np.diff(np.r_[0, cuts, n]).tolist()}'`
+online 합치기 vs 한 번에: 최대 차이 `{python} f'{np.abs(o - ref).max():.1e}'`
+최댓값을 빼지 않은 계산: `{python} f'{naive[:3]}'`
 :::
 
 ## 요약
