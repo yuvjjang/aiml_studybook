@@ -87,14 +87,15 @@ ref = [r for r in ROWS if r[0] == 224 and r[1] == 16][0]
 
 ```{python}
 #| label: patch-arith-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 for a, b, lbl in [((224, 32), (224, 16), "patch를 32→16으로 (같은 해상도)"),
                   ((224, 16), (224, 8), "patch를 16→8로"),
                   ((224, 16), (512, 16), "해상도를 224→512로 (같은 patch)")]:
     x = [r for r in ROWS if (r[0], r[1]) == a][0]
     y = [r for r in ROWS if (r[0], r[1]) == b][0]
-    print(f"  · {lbl}: token {x[2]}→{y[2]} ({y[2]/x[2]:.0f}배), "
+    print(f"- {lbl}: token {x[2]}→{y[2]} ({y[2]/x[2]:.0f}배), "
           f"attention 행렬 {y[3]/x[3]:.0f}배, **전체 연산 {y[4]/x[4]:.1f}배**")
 a = [r for r in ROWS if (r[0], r[1]) == (224, 32)][0]
 bb = [r for r in ROWS if (r[0], r[1]) == (224, 16)][0]
@@ -556,14 +557,15 @@ for i in range(len(NS)):
 
 ```{python}
 #| label: crossover-read-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if cross:
     j = NS.index(cross)
-    print(f"  표본 {cross}개: 공유 {CURVE[True][j]:.3f} vs "
+    print(f"표본 {cross}개: 공유 {CURVE[True][j]:.3f} vs "
           f"위치별 {CURVE[False][j]:.3f} — **역전**")
 else:
-    print("  이 범위 안에서는 역전이 일어나지 않았다.")
+    print("이 범위 안에서는 역전이 일어나지 않았다.")
 ```
 
 **mechanism이 점선에 다 보인다.**
@@ -772,6 +774,17 @@ ViT 이후의 흐름은 대체로 **뺐던 bias를 조금씩 되가져오는** �
 - supervised ViT의 attention은 훨씬 덜 깔끔하다
 - attention rollout 등 보정 기법 없이 한 층의 map만 보면 오해하기 쉽다
 - 즉 'attention이 물체를 찾는다'는 **학습 방식의 산물**이지 구조의 산물이 아니다
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **데이터 효율 교차는 ViT와 CNN을 비교한 것이 아니다.** "patch마다 같은 weight + 평균 pooling"인 1층 모델과 "patch마다 다른 weight"인 1층 모델을 비교했다. 과제도 좌상단 patch 하나에서 규칙이 뒤집히게 설계해서, 위치를 아는 모델이 결국 이기도록 만들었다. 본문에 적은 대로 ImageNet과 JFT-300M의 결과를 재현한 것이 아니라 "가정이 틀린 만큼이 상한이 된다"는 mechanism을 보인 것이다. 교차가 표본 몇 개에서 일어나는지는 이 과제의 설계에 달려 있다.
+- **비용은 연산 수를 센 것이다.** "attention 16배, 전체 4.1배", "224/P16에서 attention 4%", "Swin 16배 절감"은 공식으로 센 값이고, 실제 GPU에서의 시간은 memory 접근과 kernel 구현에 따라 다르다([11.3](../11_systems/03_hardware.qmd)).
+- **해상도를 바꿀 때의 cosine 0.41은 sinusoidal encoding을 14×14로 접어 잰 값이다.** ViT가 학습한 positional embedding은 다른 모양일 수 있다. 아래 "실제 도구로" 절에서 공개된 ViT의 것을 따로 확인했다.
+- **격자 equivariance(8px 이동에 오차 0.91)는 무작위 weight의 patch embedding에서 쟀다.** "patch 크기의 배수에서만 오차가 0"이라는 성질은 구조에서 나오므로 학습 여부와 관계없지만, 0.91이라는 크기는 weight에 따라 달라진다.
+:::
 
 ---
 
