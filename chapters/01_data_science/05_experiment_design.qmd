@@ -102,9 +102,14 @@ y_self = 0.8*u + TRUE_EFFECT*t_self + rng.normal(0, 1, N)
 # (b) randomization: 동전 던지기
 t_rand = rng.random(N) < 0.5
 y_rand = 0.8*u + TRUE_EFFECT*t_rand + rng.normal(0, 1, N)
+```
 
-print(f"진짜 treatment 효과: {TRUE_EFFECT:+.3f}")
-print()
+진짜 treatment 효과: `{python} f'{TRUE_EFFECT:+.3f}'`
+
+```{python}
+#| label: randomization-why-2
+#| code-fold: false
+
 print(f"{'배정 방식':<16} {'추정 효과':>11} {'bias':>10} "
       f"{'treatment군 u 평균':>16} {'control군 u 평균':>14}")
 print("-" * 72)
@@ -188,14 +193,14 @@ viz.fig_defaults(fig, height=420,
 fig.show()
 ```
 
+명목 significance level `{python} f'{ALPHA:.0%}'`, 진짜 효과 0, 시뮬레이션 `{python} f'{N_SIM:,}'`회
+
 ```{python}
 #| label: peeking-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"명목 significance level {ALPHA:.0%}, 진짜 효과 0, 시뮬레이션 {N_SIM:,}회")
-print()
 print(f"{'확인 횟수':>10} {'false positive':>14} {'명목 대비':>11}")
 print("-" * 38)
 for k, f in zip(LOOKS, fprs):
@@ -307,15 +312,22 @@ for m in [0.5, 0.2, 0.1, 0.05, 0.02, 0.01]:
 **MDE를 절반으로 줄이면 표본이 4배 필요하다** (제곱 반비례).
 이것을 전환율 지표로 환산해 본다. 이진 지표의 표준편차는 $\sqrt{p(1-p)}$ 다.
 
+전환율 지표에서의 예 (기준 전환율 5%)
+
 ```{python}
 #| label: sample-size-conversion
 #| code-fold: false
 
-print("전환율 지표에서의 예 (기준 전환율 5%)")
 p0 = 0.05
 sd0 = np.sqrt(p0*(1-p0))
-print(f"  기준 전환율 {p0:.1%}, 표준편차 σ = √(p(1−p)) = {sd0:.4f}")
-print()
+```
+
+기준 전환율 `{python} f'{p0:.1%}'`, 표준편차 σ = √(p(1−p)) = `{python} f'{sd0:.4f}'`
+
+```{python}
+#| label: sample-size-conversion-2
+#| code-fold: false
+
 print(f"{'상대 개선':>10} {'절대 차이':>11} {'σ 단위 MDE':>13} {'그룹당 표본':>14} "
       f"{'일 트래픽 10만 기준':>18}")
 print("-" * 72)
@@ -409,7 +421,14 @@ theta = np.cov(Y, X)[0, 1] / np.var(X, ddof=1)
 Yc = Y - theta * (X - X.mean())
 
 rho = np.corrcoef(Y, X)[0, 1]
-print(f"\n시뮬레이션:  ρ = {rho:.4f}")
+```
+
+시뮬레이션: ρ = `{python} f'{rho:.4f}'`
+
+```{python}
+#| label: cuped-sim-2
+#| code-fold: false
+
 print(f"  Var(Y)        = {Y.var(ddof=1):.4f}")
 print(f"  Var(Y_CUPED)  = {Yc.var(ddof=1):.4f}")
 print(f"  실제 비율      = {Yc.var(ddof=1)/Y.var(ddof=1):.4f}")
@@ -566,13 +585,14 @@ viz.fig_defaults(fig, height=400,
 fig.show()
 ```
 
+설계는 50:50 인데 실제 배정률이 미세하게 다를 때
+
 ```{python}
 #| label: srm-numbers
 #| code-fold: false
 
 import numpy as np
 
-print("설계는 50:50 인데 실제 배정률이 미세하게 다를 때")
 print(f"{'실제 배정률':>12} " + " ".join(f"{f'n={n:,}':>14}" for n in
                                     [10000, 100000, 1000000]))
 print("-" * 62)
@@ -582,10 +602,16 @@ for p_ in RATIOS:
         pv = np.median([srm_p(p_, n, seed=s) for s in range(9)])
         row.append(f"{pv:.2e}" + ("*" if pv < 0.001 else " "))
     print(f"{p_:>12.3f} " + " ".join(f"{v:>14}" for v in row))
-print("  (* = SRM 경보)")
-print()
-# 각 배정률이 처음 탐지되는 표본 크기를 직접 찾는다
-print("각 불균형이 처음 탐지되는 표본 크기")
+```
+
+(\* = SRM 경보)
+
+각 불균형이 처음 탐지되는 표본 크기
+
+```{python}
+#| label: srm-numbers-2
+#| code-fold: false
+
 print(f"{'실제 배정률':>12} {'설계와의 차이':>13} {'최소 탐지 표본':>16}")
 print("-" * 46)
 grid = [10**k for k in range(3, 8)]
