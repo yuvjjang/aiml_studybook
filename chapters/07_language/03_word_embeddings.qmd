@@ -78,8 +78,15 @@ d2 = PMI_T[W2I["의사_여"]] - PMI_T[W2I["의사_남"]]
 
 DIFF_SD, DIFF_MEAN = float(np.std(d1-d2)), float(np.mean(d1-d2))
 DIFF_THEORY = float((LOGZ[4, 1]-LOGZ[4, 0])-(LOGZ[0, 1]-LOGZ[0, 0]))
-print("(왕_여 − 왕_남)  vs  (의사_여 − 의사_남)")
-print(f"  두 차이 벡터의 차의 표준편차: {DIFF_SD:.3e}")
+```
+
+(왕_여 − 왕_남) vs (의사_여 − 의사_남)  
+두 차이 벡터의 차의 표준편차: `{python} f'{DIFF_SD:.3e}'`
+
+```{python}
+#| label: design-2
+#| code-fold: false
+
 print(f"  두 차이 벡터의 차의 평균    : {DIFF_MEAN:.6f}")
 print(f"  이론상 상수항 (logZ 차이)   : {DIFF_THEORY:.6f}")
 ```
@@ -150,6 +157,8 @@ $$\text{PMI}(w, c) = \log\frac{p(w, c)}{p(w)\,p(c)} = \log\frac{p(c \mid w)}{p(c
 대가는 이 행렬의 `{python} f"{ZERO_SHARE:.0%}"`가 0이 된다는 것 — **정보를 버린다.**
 뒤에서 이 clipping이 얼마나 손해인지 측정한다.
 
+최근접 이웃 (PMI + SVD)
+
 ```{python}
 #| label: svd
 #| code-fold: false
@@ -174,7 +183,6 @@ def nearest(E, w, k=3):
 
 
 EXPL_PMI, EXPL_PPMI = S_M[:D].sum()/S_M.sum(), S_P[:D].sum()/S_P.sum()
-print("최근접 이웃 (PMI + SVD)")
 for w in ["왕_남", "왕_여", "의사_남"]:
     print(f"  {w:<8} → " +
           ", ".join(f"{n} ({s:.3f})" for s, n in nearest(E_PMI, w)))
@@ -206,6 +214,8 @@ $$\mathcal{L} = -\log\sigma(v_w \cdot u_c)
 진짜 친구는 끌어당기고, 무작위로 데려온 낯선 사람은 밀어내는 것이다.
 negative 분포는 unigram 빈도의 $0.75$ 제곱을 쓴다 — 흔한 단어를 덜 뽑기 위한 경험적 선택이다.
 :::
+
+최근접 이웃 (SGNS)
 
 ```{python}
 #| label: sgns
@@ -252,7 +262,6 @@ def train_sgns(wi, ci, d=16, k=5, steps=12000, lr=0.5, batch=4096, seed=0):
 K_NEG = 5
 W_SG, C_SG = train_sgns(WI, CI, d=D, k=K_NEG, seed=0)
 
-print("최근접 이웃 (SGNS)")
 for w in ["왕_남", "왕_여", "의사_남"]:
     print(f"  {w:<8} → " +
           ", ".join(f"{n} ({s:.3f})" for s, n in nearest(W_SG, w)))
@@ -390,8 +399,14 @@ for nm, E in [("PMI + SVD", E_PMI), ("PPMI + SVD", E_PPMI), ("SGNS", W_SG)]:
     ok, tot = analogy_acc(E)
     ACC[nm] = ok/tot
     print(f"{nm:<26} {ok:>6}/{tot} = {ok/tot:>5.1%}")
-print()
-print("예시: 왕_남 → 왕_여 :: 의사_남 → ?")
+```
+
+예시: 왕_남 → 왕_여 :: 의사_남 → ?
+
+```{python}
+#| label: analogy-2
+#| code-fold: false
+
 for nm, E in [("PMI + SVD", E_PMI), ("PPMI + SVD", E_PPMI), ("SGNS", W_SG)]:
     print(f"  {nm:<14} " +
           ", ".join(f"{n} ({s:.3f})" for s, n in
@@ -475,6 +490,8 @@ $$J = \sum_{w,c} f\big(X_{wc}\big)\Big(v_w \cdot u_c + b_w + \tilde b_c - \log X
 - bias $b_w, \tilde b_c$ 가 단어·문맥의 전체 빈도를 흡수한다 → 남는 것이 PMI 비슷한 양
 - $f(x) = \min\big((x/x_{\max})^{0.75}, 1\big)$ 로 **드문 조합의 영향을 줄인다**
 
+최근접 이웃 (GloVe)
+
 ```{python}
 #| label: glove
 #| code-fold: false
@@ -506,7 +523,6 @@ W_GV, C_GV, GV_LOSS = train_glove(CO)
 ok_gv, tot_gv = analogy_acc(W_GV)
 
 ACC["GloVe"] = ok_gv/tot_gv
-print("최근접 이웃 (GloVe)")
 for w in ["왕_남", "의사_남"]:
     print(f"  {w:<8} → " +
           ", ".join(f"{n} ({s:.3f})" for s, n in nearest(W_GV, w)))
@@ -547,7 +563,6 @@ $$v(\text{where}) = v(\text{<wh}) + v(\text{whe}) + v(\text{her}) + v(\text{ere}
 #| label: fasttext
 #| code-fold: false
 
-
 def char_ngrams(w, lo=3, hi=5):
     s = f"<{w}>"
     out = []
@@ -559,12 +574,11 @@ def char_ngrams(w, lo=3, hi=5):
 for w in ["토크나이저", "토크나이징", "tokenizer"]:
     g = char_ngrams(w)
     print(f"  {w:<12} n-gram {len(g):>2}개: {g[:6]} ...")
-print()
 a, b = set(char_ngrams("토크나이저")), set(char_ngrams("토크나이징"))
-print(f"'토크나이저' 와 '토크나이징' 의 n-gram 겹침: "
-      f"{len(a & b)}/{len(a | b)} = {len(a & b)/len(a | b):.1%}")
 OVERLAP = len(a & b)/len(a | b)
 ```
+
+'토크나이저' 와 '토크나이징' 의 n-gram 겹침: `{python} f'{len(a & b)}'`/`{python} f'{len(a | b)}'` = `{python} f'{len(a & b) / len(a | b):.1%}'`
 
 '토크나이저'와 '토크나이징'은 n-gram의 `{python} f"{OVERLAP:.0%}"`를 공유한다.
 **학습에 '토크나이징'이 없어도 조각으로 벡터를 조립할 수 있다.** 처음 보는 단어도 부품(어근·접사)을 알면 뜻을 짐작하는 것과 같다.
@@ -586,6 +600,8 @@ token 자체를 조각으로 나누면 embedding 층에서 따로 처리할 필�
 
 ## G7.3.6 — bias는 어디에 있는가
 
+성별 축에 투영한 값
+
 ```{python}
 #| label: bias
 #| code-fold: false
@@ -602,7 +618,6 @@ PC1_SHARE = float(s_b[0]**2/(s_b**2).sum())
 sims = [cos(DIFFS[i], DIFFS[j]) for i in range(len(ROLES))
         for j in range(i+1, len(ROLES))]
 SIM_MEAN, SIM_MIN = float(np.mean(sims)), float(min(sims))
-print("성별 축에 투영한 값")
 print(f"  {'단어':<10} {'투영':>10}")
 print("  " + "-"*24)
 for w in ["왕_남", "왕_여", "의사_남", "의사_여", "군인_남", "군인_여"]:
