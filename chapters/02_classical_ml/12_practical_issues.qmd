@@ -108,9 +108,14 @@ fig.show()
 #| code-fold: false
 
 import numpy as np
+```
 
-print(f"  전체 데이터로 feature selection (leakage): {np.mean(leak_aucs):.3f} "
-      f"± {np.std(leak_aucs):.3f}")
+전체 데이터로 feature selection (leakage): `{python} f'{np.mean(leak_aucs):.3f}'` ± `{python} f'{np.std(leak_aucs):.3f}'`
+
+```{python}
+#| label: leak-numbers-2
+#| code-fold: false
+
 print(f"  훈련 데이터로만 feature selection        : {np.mean(clean_aucs):.3f} "
       f"± {np.std(clean_aucs):.3f}")
 ```
@@ -253,9 +258,9 @@ print(f"{'방법':<22} {'ROC-AUC':>10} {'PR-AUC':>10} {'평균 예측확률':>14
 print("-" * 60)
 for nm, a, pr, mp in rows_out:
     print(f"{nm:<22} {a:>10.4f} {pr:>10.4f} {mp:>14.4f}")
-print()
-print(f"실제 양성 비율: {yi.mean():.4f}")
 ```
+
+실제 양성 비율: `{python} f'{yi.mean():.4f}'`
 
 순위 지표(AUC)는 네 방법이 거의 차이가 없다. 바뀌는 것은 **확률의 눈금**이다.
 resampling·class weight는 사실상 'threshold를 옮긴 것'과 비슷한 효과를 내고,
@@ -327,8 +332,14 @@ def shift(p, pi_tr, pi_te):
     return odds / (1 + odds)
 
 pi_tr, pi_te = 0.50, 0.01          # 1:1 로 균형 맞춰 학습, 실제는 1%
+```
 
-print(f"학습 시 양성 비율 {pi_tr:.0%} → 실제 환경 {pi_te:.0%}\n")
+학습 시 양성 비율 `{python} f'{pi_tr:.0%}'` → 실제 환경 `{python} f'{pi_te:.0%}'`
+
+```{python}
+#| label: prior-shift-2
+#| code-fold: false
+
 print(f"{'모델 출력 확률':>14}{'보정 후':>12}{'배율':>9}")
 for p in [0.9, 0.7, 0.5, 0.3, 0.1]:
     q = shift(p, pi_tr, pi_te)
@@ -430,10 +441,10 @@ print(f"{'기간':>5} {'고정 모델':>11} {'재학습':>10} {'입력 PSI':>11}
 print("-" * 42)
 for t in [0, 3, 6, 9, 11]:
     print(f"{t:>5} {acc_fixed[t]:>11.3f} {acc_retrain[t]:>10.3f} {psi_vals[t]:>11.4f}")
-print()
-print(f"고정 모델: {acc_fixed[0]:.3f} → {acc_fixed[-1]:.3f}")
-print(f"입력 PSI 최대값: {max(psi_vals):.4f}")
 ```
+
+고정 모델: `{python} f'{acc_fixed[0]:.3f}'` → `{python} f'{acc_fixed[-1]:.3f}'`
+입력 PSI 최대값: `{python} f'{max(psi_vals):.4f}'`
 
 고정 모델의 정확도가 `{python} f"{acc_fixed[0]:.2f}"` 에서 `{python} f"{acc_fixed[-1]:.2f}"` 로 무너졌는데,
 입력 PSI는 최대 `{python} f"{max(psi_vals):.3f}"` 로 경보 기준 0.1을 한 번도 넘지 않는다.
@@ -570,19 +581,25 @@ base_scores = 0.860 + rng.normal(0, 0.012, 10)
 new_scores  = 0.868 + rng.normal(0, 0.012, 10)
 
 print(f"기존 모델: {base_scores.mean():.4f} ± {base_scores.std(ddof=1):.4f}  (시드 10개)")
-print(f"새 모델  : {new_scores.mean():.4f} ± {new_scores.std(ddof=1):.4f}")
-print()
 d = new_scores.mean() - base_scores.mean()
 pooled = np.sqrt((base_scores.var(ddof=1) + new_scores.var(ddof=1))/2)
+```
+
+새 모델 : `{python} f'{new_scores.mean():.4f}'` ± `{python} f'{new_scores.std(ddof=1):.4f}'`
+
+```{python}
+#| label: baseline-check-2
+#| code-fold: false
+
 print(f"차이 {d:+.4f}  ·  시드 간 표준편차 {pooled:.4f}  ·  effect size {d/pooled:.2f}")
-print()
 # bootstrap confidence interval
 diffs = [rng.choice(new_scores, 10).mean() - rng.choice(base_scores, 10).mean()
          for _ in range(5000)]
 lo, hi = np.percentile(diffs, [2.5, 97.5])
-print(f"차이의 95% bootstrap confidence interval: [{lo:+.4f}, {hi:+.4f}]")
-print(f"0 을 포함{'한다' if lo < 0 < hi else '하지 않는다'}")
 ```
+
+차이의 95% bootstrap confidence interval: [`{python} f'{lo:+.4f}'`, `{python} f'{hi:+.4f}'`]
+0 을 포함`{python} f'{('한다' if lo < 0 < hi else '하지 않는다')}'`
 
 confidence interval이 0을 `{python} "포함하므로 유의하다고 말할 수 없다" if lo < 0 < hi else "포함하지 않으므로 개선이라 볼 수 있다"`.
 만약 시드 하나씩만 비교했다면 "0.8%p 개선"이라고 보고했을 것이다.
