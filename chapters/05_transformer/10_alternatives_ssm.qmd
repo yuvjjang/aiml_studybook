@@ -86,7 +86,14 @@ y_rec = ssm_recurrent(u, A, B, C, D)
 y_conv = ssm_convolutional(u, A, B, C, D)
 
 print(f"순환 view        출력 앞 3개: {np.round(y_rec[:3], 6)}")
-print(f"convolution view 출력 앞 3개: {np.round(y_conv[:3], 6)}")
+```
+
+convolution view 출력 앞 3개: `{python} f'{np.round(y_conv[:3], 6)}'`
+
+```{python}
+#| label: ssm-duality-2
+#| code-fold: false
+
 print(f"최대 차이: {np.abs(y_rec - y_conv).max():.2e}   ← 같은 모델이다")
 ```
 
