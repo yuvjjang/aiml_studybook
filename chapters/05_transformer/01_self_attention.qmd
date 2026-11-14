@@ -114,14 +114,9 @@ viz.fig_defaults(fig, height=330,
 fig.show()
 ```
 
-```{python}
-#| label: perm-numbers
-#| code-fold: false
-
-print(f"원래 순서 : {tokens}")
-print(f"섞은 순서 : {[tokens[i] for i in perm]}")
-print(f"되돌린 출력과 원본의 최대 차이: {max_diff:.3e}")
-```
+원래 순서 : `{python} f'{tokens}'`
+섞은 순서 : `{python} f'{[tokens[i] for i in perm]}'`
+되돌린 출력과 원본의 최대 차이: `{python} f'{max_diff:.3e}'`
 
 순서 정보가 계산에 전혀 반영되지 않는다. positional encoding 없이는 어순이 다른 문장을 구별할 수 없다.
 
@@ -300,7 +295,14 @@ fig.show()
 import numpy as np
 
 upper = attn_causal[np.triu_indices(n, k=1)]
-print(f"미래 위치 가중치 최댓값 : {upper.max():.2e}")
+```
+
+미래 위치 가중치 최댓값 : `{python} f'{upper.max():.2e}'`
+
+```{python}
+#| label: causal-check-2
+#| code-fold: false
+
 print(f"각 행의 합               : {np.round(attn_causal.sum(axis=1), 6)}")
 print(f"첫 행                    : {np.round(attn_causal[0], 3)}")
 ```
