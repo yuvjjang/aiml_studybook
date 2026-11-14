@@ -318,15 +318,16 @@ value iteration(`{python} f'{vi_backups:,}'`)의 `{python} f'{best[2] / vi_backu
 
 ```{python}
 #| label: gpi-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if bad:
-    print("**그런데 작은 k에서는 policy가 최적이 아닌 채로 멈췄다.**")
+    print("**그런데 작은 k에서는 policy가 최적이 아닌 채로 멈췄다.**\n")
     for k, it, tot, opt, err in bad:
-        print(f"  k={k}: policy가 안 바뀌어 멈췄지만 V 오차가 {err:.2e} 남았다")
-    print("  'policy가 안 바뀜'을 멈춤 조건으로 쓴 결과다 —")
-    print("  **가치가 부정확하면 그 조건이 일찍 발동할 수 있다.**")
-    print("  G10.1.2에서 예고한 함정이 여기서 실제로 나타났다.")
+        print(f"- k={k}: policy가 안 바뀌어 멈췄지만 V 오차가 {err:.2e} 남았다")
+    print("\n'policy가 안 바뀜'을 멈춤 조건으로 쓴 결과다 — "
+          "**가치가 부정확하면 그 조건이 일찍 발동할 수 있다.** "
+          "G10.1.2에서 예고한 함정이 여기서 실제로 나타났다.")
 ```
 
 ```{python}
