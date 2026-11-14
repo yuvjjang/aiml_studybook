@@ -33,7 +33,7 @@ import numpy as np
 PAPERS = [
     # ── 기초 ──
     (1986, "기초", "Backpropagation", "backpropagation으로 다층 신경망을 학습", "3.8"),
-    (1997, "기초", "LSTM", "gate로 long-range dependency를 살린다", "4.2"),
+    (1997, "기초", "LSTM", "gate로 long-range dependency를 살린다", "4.3"),
     (1998, "기초", "LeNet", "convolution으로 이미지를 읽는다", "4.0"),
     (2012, "기초", "AlexNet", "GPU + ReLU + dropout으로 판을 뒤집다", "4.0"),
     (2014, "기초", "Adam", "adaptive learning rate의 사실상 표준", "3.4"),
@@ -41,33 +41,33 @@ PAPERS = [
     (2015, "기초", "ResNet", "residual connection으로 깊이의 한계를 뚫다", "4.1"),
     (2016, "기초", "LayerNorm", "batch에 의존하지 않는 normalization", "3.5"),
     # ── sequence·Transformer ──
-    (2014, "sequence", "seq2seq", "encoder-decoder로 가변 길이를 잇다", "4.3"),
+    (2014, "sequence", "seq2seq", "encoder-decoder로 가변 길이를 잇다", "4.4"),
     (2014, "sequence", "Bahdanau Attention", "alignment를 학습하는 attention", "5.0"),
     (2017, "sequence", "Transformer", "recurrence를 버리고 attention만 남기다", "5.1"),
-    (2021, "sequence", "RoPE", "회전 position embedding", "5.2"),
+    (2021, "sequence", "RoPE", "회전 position embedding", "5.3"),
     (2022, "sequence", "FlashAttention", "IO를 줄여 attention을 빠르게", "11.3"),
     # ── 언어 ──
-    (2013, "언어", "Word2Vec", "distributional hypothesis를 벡터로", "7.0"),
-    (2018, "언어", "ELMo", "context에 따라 달라지는 표현", "7.1"),
-    (2018, "언어", "BERT", "양방향 masked pretraining", "7.2"),
-    (2018, "언어", "GPT-1", "생성형 pretraining + fine-tuning", "7.2"),
-    (2019, "언어", "GPT-2", "규모가 곧 능력이라는 첫 신호", "7.3"),
-    (2019, "언어", "T5", "모든 과제를 text-to-text로", "7.2"),
-    (2020, "언어", "GPT-3", "in-context learning의 발견", "7.3"),
-    (2020, "언어", "Scaling Laws", "loss가 power law를 따른다", "7.4"),
-    (2022, "언어", "Chinchilla", "데이터가 모자랐다 — 최적 배분 재정의", "7.4"),
+    (2013, "언어", "Word2Vec", "distributional hypothesis를 벡터로", "7.3"),
+    (2018, "언어", "ELMo", "context에 따라 달라지는 표현", "7.4"),
+    (2018, "언어", "BERT", "양방향 masked pretraining", "7.4"),
+    (2018, "언어", "GPT-1", "생성형 pretraining + fine-tuning", "7.4"),
+    (2019, "언어", "GPT-2", "규모가 곧 능력이라는 첫 신호", "7.4"),
+    (2019, "언어", "T5", "모든 과제를 text-to-text로", "7.4"),
+    (2020, "언어", "GPT-3", "in-context learning의 발견", "7.8"),
+    (2020, "언어", "Scaling Laws", "loss가 power law를 따른다", "5.9"),
+    (2022, "언어", "Chinchilla", "데이터가 모자랐다 — 최적 배분 재정의", "5.9"),
     (2023, "언어", "LLaMA", "공개 weight가 판을 다시 열다", "7.5"),
     # ── alignment ──
     (2022, "alignment", "InstructGPT", "RLHF로 지시를 따르게", "10.5"),
     (2022, "alignment", "Constitutional AI", "원칙으로 스스로를 교정", "10.5"),
     (2023, "alignment", "DPO", "reward model 없이 preference를 직접 최적화", "10.5"),
     # ── 생성 ──
-    (2013, "생성", "VAE", "variational inference로 latent space를 배운다", "6.1"),
-    (2014, "생성", "GAN", "두 신경망의 경쟁으로 생성", "6.2"),
-    (2020, "생성", "DDPM", "denoising을 반복해 생성", "6.4"),
-    (2020, "생성", "Score SDE", "diffusion을 미분방정식으로 통일", "6.5"),
-    (2021, "생성", "Latent Diffusion", "latent space에서 diffusion해 비용을 줄이다", "6.6"),
-    (2022, "생성", "Flow Matching", "probability path를 직접 regression", "6.7"),
+    (2013, "생성", "VAE", "variational inference로 latent space를 배운다", "6.2"),
+    (2014, "생성", "GAN", "두 신경망의 경쟁으로 생성", "6.3"),
+    (2020, "생성", "DDPM", "denoising을 반복해 생성", "6.5"),
+    (2020, "생성", "Score SDE", "diffusion을 미분방정식으로 통일", "6.6"),
+    (2021, "생성", "Latent Diffusion", "latent space에서 diffusion해 비용을 줄이다", "6.7"),
+    (2022, "생성", "Flow Matching", "probability path를 직접 regression", "6.8"),
     # ── 비전 ──
     (2020, "비전", "ViT", "이미지를 patch sequence로", "9.2"),
     (2021, "비전", "CLIP", "이미지-텍스트 contrastive learning", "9.4"),
@@ -75,12 +75,12 @@ PAPERS = [
     (2021, "비전", "MAE", "masked 복원 pretraining", "9.3"),
     (2023, "비전", "SAM", "prompt로 무엇이든 segmentation", "9.1"),
     # ── 오디오 ──
-    (2016, "오디오", "WaveNet", "원파형을 autoregressive로 생성", "8.9"),
+    (2016, "오디오", "WaveNet", "원파형을 autoregressive로 생성", "8.8"),
     (2020, "오디오", "wav2vec 2.0", "음성 self-supervised learning", "8.5"),
     (2021, "오디오", "HuBERT", "cluster label로 self-supervised", "8.5"),
     (2021, "오디오", "VITS", "end-to-end 음성 합성", "8.7"),
     (2022, "오디오", "Whisper", "weakly supervised 대규모 다국어 ASR", "8.6"),
-    (2022, "오디오", "EnCodec", "신경망 오디오 codec", "8.9"),
+    (2022, "오디오", "EnCodec", "신경망 오디오 codec", "8.8"),
     # ── 효율·시스템 ──
     (2019, "효율", "ZeRO", "optimizer state를 쪼개 메모리를 줄인다", "11.2"),
     (2021, "효율", "LoRA", "low-rank adapter로 fine-tuning", "7.6"),
@@ -252,7 +252,7 @@ INFO = {p[2]: p for p in PAPERS}
 for goal, names in PATHS.items():
     ns = sorted(names, key=lambda n: INFO[n][0])
     yrs = [INFO[n][0] for n in ns]
-    print(f"**{goal}** — {len(ns)}편, {min(yrs)}–{max(yrs)}")
+    print(f"[{goal}] — {len(ns)}편, {min(yrs)}–{max(yrs)}")
     for n in ns:
         y, f, nm, d, ch = INFO[n]
         print(f"    {y}  {nm:<28} {d:<34} → {ch}")
@@ -334,7 +334,7 @@ fig
 | overfitting 영역인가 아닌가 | [12.3] 여기서 trade-off의 방향이 뒤집혔다 |
 | 집단·부분집합별로도 성립하나 | [12.4] 평균은 subgroup을 감춘다 |
 | 코드와 weight가 공개됐나 | 재현의 최소 조건 |
-| compute budget(계산 예산)이 명시됐나 | [7.4] 예산이 다르면 비교가 무의미 |
+| compute budget(계산 예산)이 명시됐나 | [5.9] 예산이 다르면 비교가 무의미 |
 
 **이 목록은 논문을 깎아내리려는 게 아니다.**
 어떤 조건에서 성립하는 결과인지 알아야 내 상황에 옮길 수 있다.
