@@ -102,6 +102,8 @@ control군(control군) 항도 대칭이다.
 아래 G1.6.2가 정확히 이 붕괴를 보여준다.
 :::
 
+potential outcomes 표 (실제로는 회색 칸을 볼 수 없다)
+
 ```{python}
 #| label: potential-outcomes
 #| code-fold: false
@@ -116,7 +118,6 @@ ite = np.round(rng.normal(0.5, 1.0, n_demo), 2)     # 개별 효과 (사람마�
 y1 = np.round(y0 + ite, 2)
 t = rng.random(n_demo) < 0.5
 
-print("potential outcomes 표 (실제로는 회색 칸을 볼 수 없다)")
 print(f"{'i':>3} {'T':>3} {'Y(0)':>8} {'Y(1)':>8} {'개별효과':>10} {'관측되는 것':>12}")
 print("-" * 50)
 for i in range(n_demo):
@@ -209,14 +210,14 @@ viz.fig_defaults(fig, height=430,
 fig.show()
 ```
 
+진짜 인과효과 = `{python} f'{TRUE}'`
+
 ```{python}
 #| label: what-to-control-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"진짜 인과효과 = {TRUE}")
-print()
 print(f"{'변수 유형':<24} {'구조':<18} {'통제 안 함':>12} {'통제함':>10}  {'규칙'}")
 print("-" * 90)
 for name, struct, un, ct, rule in CASES:
@@ -474,14 +475,14 @@ fig.update_layout(legend=dict(x=0.55, y=0.3, font=dict(size=10)))
 fig.show()
 ```
 
+진짜 효과 = `{python} f'{TRUE}'`, 미관측 confounder U 가 T 와 Y 를 모두 밀어 올린다
+
 ```{python}
 #| label: iv-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"진짜 효과 = {TRUE}, 미관측 confounder U 가 T 와 Y 를 모두 밀어 올린다")
-print()
 print(f"{'γ':>7} {'1단계 F':>10} {'OLS':>10} {'IV 평균':>11} {'IV 중앙값':>11} "
       f"{'IV 표준편차':>13}  {'판정'}")
 print("-" * 76)
@@ -490,7 +491,6 @@ for g in GAMMAS:
     verdict = "weak" if d["F"] < 10 else "쓸 만함"
     print(f"{g:>7.3f} {d['F']:>10.1f} {d['ols']:>+10.4f} {d['iv']:>+11.4f} "
           f"{d['iv_med']:>+11.4f} {d['iv_sd']:>13.4f}  {verdict}")
-print()
 
 weak = [g for g in GAMMAS if IV_RES[g]["F"] < 10]
 strong = [g for g in GAMMAS if IV_RES[g]["F"] >= 10]
@@ -648,14 +648,14 @@ fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 fig.show()
 ```
 
+진짜 효과 = `{python} f'{TRUE}'`
+
 ```{python}
 #| label: did-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"진짜 효과 = {TRUE}")
-print()
 print(f"{'위반 강도':>10} {'DiD 추정':>11} {'bias':>10} {'상대 오차':>11}")
 print("-" * 46)
 for v, d in zip(VIOLS, did_vals):
@@ -1029,8 +1029,13 @@ naive = Y[T].mean() - Y[~T].mean()
 adjust = sum((X == x).mean() * (Y[T & (X == x)].mean() - Y[~T & (X == x)].mean())
              for x in [False, True])
 ipw = np.mean(T * Y / e - (~T) * Y / (1 - e))
+```
 
-print(f"단순 비교            {naive:+.3f}")
+단순 비교 `{python} f'{naive:+.3f}'`
+
+```{python}
+#| label: ex-simpson-ipw-2
+
 print(f"adjustment formula   {adjust:+.3f}")
 print(f"IPW                  {ipw:+.3f}")
 print("참 ATE               +0.100")
