@@ -490,11 +490,12 @@ a, b = DIAG[0], DIAG[1]
 
 ```{python}
 #| label: single-frame-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if a[4] > 1:
-    print(f"    1을 넘는다 — 1 frame({a[2]:.4f})이 8 frame({a[3]:.4f})보다 높다.")
-    print("    frame을 더 주면 차원만 늘어 overfitting한다 "
+    print(f"1을 넘는다 — 1 frame({a[2]:.4f})이 8 frame({a[3]:.4f})보다 높다. "
+          "frame을 더 주면 차원만 늘어 overfitting한다 "
           "([9.5](05_video_representation.qmd)에서 본 그대로).")
 ```
 
