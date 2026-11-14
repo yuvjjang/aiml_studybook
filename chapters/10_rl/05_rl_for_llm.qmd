@@ -532,6 +532,17 @@ a, b_, c = RLVR
 
 ---
 
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **언어모델이 열거 가능한 장난감이다.** vocabulary 6개, 길이 4라 문장이 1,296개뿐이다. 그래서 기댓값과 KL을 근사 없이 계산할 수 있었지만, 실제 언어모델의 출력 공간은 이것과 비교할 수 없이 크고 표본으로만 다룰 수 있다.
+- **RLHF는 학습하지 않고 최적해를 식으로 놓았다.** $\pi^* \propto \pi_{\text{ref}}\exp(\hat r/\beta)$ 를 직접 계산했다. reward hacking의 곡선은 "최적화가 끝까지 갔을 때 어디에 도달하는가"이고, PPO로 학습할 때 생기는 문제(불안정, 표본 잡음, reward model과 policy가 함께 움직이는 것)는 들어 있지 않다.
+- **reward model의 결함을 우리가 정해 넣었다.** 잡음은 Gaussian이고, spurious feature는 참 품질과 정확히 직교하도록 만들었다. 실제 reward model의 오차가 어떤 모양인지는 알 수 없고, 그 모양에 따라 hacking의 정도가 달라진다.
+- **GRPO는 gradient 추정의 variance만 쟀다.** group 평균 baseline이 variance를 얼마나 줄이는지는 정확히 재지만, 그것으로 학습한 결과는 비교하지 않았다. 아래 "실제 도구로" 절도 실제 모델에서 group advantage가 언제 0이 되는지까지만 보고, 끝까지 학습하지는 않는다.
+:::
+
+---
+
 ## 실무 지형
 
 **alignment algorithm의 지형**
@@ -564,6 +575,117 @@ a, b_, c = RLVR
 | verifier 과제만 좋아진다 | RLVR 편중 — 일반 능력 regression 확인 |
 | KL이 갑자기 튄다 | rollout batch가 작거나 오래됐다 |
 
+---
+
+## 실제 도구로: TRL의 GRPO에 verifier 두 개를 걸어 본다
+
+G10.5.3의 advantage 식 $\hat{A}_i = (r_i - \text{mean})/\text{std}$ 에는 숨은 조건이 있다. group 안의 보상이 **전부 같으면** 분자가 0이라 advantage가 0이고, 그 group에서는 아무것도 배우지 않는다. G10.5.4의 verifier는 0 아니면 1을 주므로, 모델이 아직 한 번도 통과하지 못하는 verifier라면 모든 group이 이 경우다. 실제 모델과 Hugging Face의 RL library `trl` 로 이것을 확인한다.
+
+과제는 두 자리 수 덧셈이다("What is 52 + 16? Answer with just the number."). 모델은 `SmolLM2-135M-Instruct`(parameter 1억 3,500만 개)다. verifier를 둘 만든다.
+
+- **엄격한 verifier**: 응답의 **첫 번째** 숫자가 정답이어야 1이다. "숫자만 답하라"는 지시를 지켰는지까지 본다.
+- **허술한 verifier**: 정답이 응답 **어딘가에** 나오기만 하면 1이다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `transformers` 5.23, `trl` 1.18, `datasets` 5.2. 모델은 처음 실행할 때 내려받는다(약 270 MB).
+- 3)의 GRPO step은 prompt 2개에 응답을 8개씩 생성하고 한 번 갱신한다. 이 CPU에서는 step 하나에 12~14분이 걸려서(다른 계산과 함께 돌았다) **1 step만 돌렸다.** 학습이 끝까지 가면 무엇이 되는지는 이 절에 없다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import re
+import numpy as np, torch
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from trl import GRPOConfig, GRPOTrainer
+
+MID = "HuggingFaceTB/SmolLM2-135M-Instruct"
+tok = AutoTokenizer.from_pretrained(MID); tok.padding_side = "left"
+K = 8                                          # group 크기: prompt 하나에 응답 8개
+
+
+def make(n, seed):
+    g = np.random.default_rng(seed)
+    a, b = g.integers(10, 100, n), g.integers(10, 100, n)
+    return Dataset.from_dict({
+        "prompt": [[{"role": "user", "content": f"What is {x} + {y}? Answer with just the number."}] for x, y in zip(a, b)],
+        "answer": [str(x + y) for x, y in zip(a, b)]})
+
+
+TRAIN, TEST = make(2000, 0), make(100, 1)
+NUM = re.compile(r"-?\d+")
+
+
+def strict(completions, answer, **kw):       # 첫 번째 숫자가 정답이어야 한다
+    return [1.0 if (m := NUM.findall(c[0]["content"])) and m[0] == a else 0.0 for c, a in zip(completions, answer)]
+
+
+def loose(completions, answer, **kw):        # 정답이 어딘가에 나오기만 하면 된다
+    return [1.0 if a in NUM.findall(c[0]["content"]) else 0.0 for c, a in zip(completions, answer)]
+
+
+@torch.no_grad()
+def generate(model, prompts, n, sample):
+    texts = [tok.apply_chat_template(p, tokenize=False, add_generation_prompt=True) for p in prompts for _ in range(n)]
+    enc = tok(texts, return_tensors="pt", padding=True)
+    out = model.generate(**enc, max_new_tokens=32, do_sample=sample, temperature=1.0 if sample else None,
+                         top_p=None, top_k=None)
+    return [[{"content": d}] for d in tok.batch_decode(out[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)]
+
+
+base = AutoModelForCausalLM.from_pretrained(MID).eval()
+P, A = TEST["prompt"], TEST["answer"]
+comp = generate(base, P, 1, False)
+print(f"1) 학습 전, test 100문제 greedy:  엄격 채점 {np.mean(strict(comp, A)):.2f}   허술 채점 {np.mean(loose(comp, A)):.2f}")
+for i in range(3):
+    print(f"   예: {comp[i][0]['content']!r}  (정답 {A[i]})")
+
+torch.manual_seed(0)
+comp = generate(base, P, K, True)
+AK = [a for a in A for _ in range(K)]
+print(f"2) 같은 100문제에 temperature 1.0으로 {K}개씩 sample → group 100개")
+for name, fn in [("엄격", strict), ("허술", loose)]:
+    r = np.array(fn(comp, AK)).reshape(-1, K)
+    sd = r.std(1)
+    adv = (r - r.mean(1, keepdims=True)) / (sd[:, None] + 1e-4)
+    print(f"   {name} verifier: 보상 평균 {r.mean():.3f}   보상이 group 안에서 전부 같은 group {np.mean(sd == 0):.0%}"
+          f"   advantage가 0이 아닌 응답 {np.mean(np.abs(adv) > 0):.0%}")
+
+print("3) TRL GRPOTrainer 로 1 step (prompt 2개 × 응답 8개) — TRL 이 기록한 값")
+for name, fn in [("엄격", strict), ("허술", loose)]:
+    torch.manual_seed(0)
+    model = AutoModelForCausalLM.from_pretrained(MID)
+    cfg = GRPOConfig(output_dir="grpo_tmp", max_steps=1, per_device_train_batch_size=16, num_generations=K,
+                     max_completion_length=32, learning_rate=5e-6, beta=0.04, temperature=1.0,
+                     logging_steps=1, save_strategy="no", report_to=[], seed=0, use_cpu=True, disable_tqdm=True)
+    tr = GRPOTrainer(model=model, reward_funcs=fn, args=cfg, train_dataset=TRAIN, processing_class=tok)
+    tr.train()
+    h = [h for h in tr.state.log_history if "reward" in h][0]
+    print(f"   {name} verifier: reward {float(h['reward']):.3f}  frac_reward_zero_std {float(h['frac_reward_zero_std']):.2f}"
+          f"  loss {float(h['loss']):.4f}  grad_norm {float(h['grad_norm']):.3f}  step 시간 {float(h['step_time']):.0f}초")
+
+# 1) 학습 전, test 100문제 greedy:  엄격 채점 0.00   허술 채점 0.54
+#    예: '52 + 16 = 78'  (정답 68)
+#    예: 'To add 56 and 71, we need to follow the order of operations, which is:\n\nFirst, we add the numbers: '  (정답 127)
+#    예: '77 + 78 = 155'  (정답 155)
+# 2) 같은 100문제에 temperature 1.0으로 8개씩 sample → group 100개
+#    엄격 verifier: 보상 평균 0.003   보상이 group 안에서 전부 같은 group 98%   advantage가 0이 아닌 응답 2%
+#    허술 verifier: 보상 평균 0.177   보상이 group 안에서 전부 같은 group 32%   advantage가 0이 아닌 응답 68%
+# 3) TRL GRPOTrainer 로 1 step (prompt 2개 × 응답 8개) — TRL 이 기록한 값
+#    엄격 verifier: reward 0.000  frac_reward_zero_std 1.00  loss 0.0000  grad_norm 0.000  step 시간 866초
+#    허술 verifier: reward 0.312  frac_reward_zero_std 0.50  loss -0.0139  grad_norm 2.344  step 시간 732초
+```
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **모델은 덧셈을 반쯤 하지만, 지시한 형식은 지키지 않는다.** greedy로 100문제 중 54문제에서 정답이 응답에 나온다. 그런데 "숫자만 답하라"고 했는데도 `52 + 16 = 78` 처럼 식을 다시 쓰므로, 첫 숫자는 늘 문제의 숫자다. 엄격한 verifier로는 0점이다.
+- **엄격한 verifier로는 group의 98%가 신호를 내지 않는다.** 문제마다 8개를 sample하면 엄격한 verifier에서 보상이 group 안에서 전부 같은(대부분 전부 0인) group이 98%다. 이 group들의 advantage는 0이다. 허술한 verifier는 32%만 그렇다.
+- **TRL도 똑같이 기록한다.** 엄격한 verifier의 1 step은 `frac_reward_zero_std` 1.00(두 group 모두 보상이 전부 같음), loss 0, grad_norm 0이다. 계산은 다 했는데 parameter가 조금도 움직이지 않는다. 허술한 verifier는 group 하나에서 보상이 갈려 grad_norm 2.344가 나왔다.
+- **G10.5.4 끝의 "pretraining된 policy가 이미 좋은 출발점이라서"가 이것이다.** outcome reward만 쓰는 RL은 policy가 **가끔은** 통과해야 시작된다. 그래서 실무에서는 먼저 SFT로 답의 형식을 가르치거나, 형식에 부분 점수를 주는 보상을 따로 둔다(G10.5.4 표의 "형식 보상을 따로 주는 이유"). 반대로 허술한 verifier는 처음부터 신호가 있지만, "정답이 어딘가에 있기만 하면 된다"는 규칙은 숫자를 여러 개 늘어놓는 응답에도 1을 준다. 학습이 그 틈을 파고드는지는 1 step으로는 알 수 없고, 여기서는 확인하지 못했다.
+- **sample하면 greedy보다 못하다.** 허술한 verifier의 보상 평균이 greedy 0.54에서 temperature 1.0 sample 0.177로 떨어진다. GRPO는 sample로 group을 만들므로 학습이 보는 정확도는 greedy 평가의 정확도와 다르다.
+
+**이 코드가 보여 주지 못하는 것.**
+학습을 1 step만 했다. 엄격한 verifier에서 대부분의 group이 신호를 내지 않는다는 것은 2)의 98%로 보이지만, 나머지 2%의 group만으로 느리게라도 배우기 시작하는지, 허술한 verifier로 끝까지 학습했을 때 정확도가 오르는지, 그 verifier의 틈을 hacking하는지는 보지 못했다. GPU가 있으면 3)의 `max_steps` 를 수백으로 올려 확인할 수 있다. 덧셈은 아주 쉬운 과제이고 모델도 작다.
 
 ---
 
