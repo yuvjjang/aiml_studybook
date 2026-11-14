@@ -495,8 +495,14 @@ import numpy as np
 
 rng = np.random.default_rng(0)
 n, n_test = 40, 5000
+```
 
-print(f"순수 잡음 데이터, n={n}")
+순수 잡음 데이터, n=`{python} f'{n}'`
+
+```{python}
+#| label: optimism-demo-2
+#| code-fold: false
+
 print(f"{'특성 수':>8} {'훈련 R²':>10} {'시험 R²':>10}   해석")
 print("-" * 56)
 for p in [1, 5, 10, 20, 35, 39]:
