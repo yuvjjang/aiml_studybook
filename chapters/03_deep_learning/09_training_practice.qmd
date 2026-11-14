@@ -64,18 +64,25 @@ target을 표준화(평균 0, 분산 1로)했다면 $L_0 \approx 1$ 이어야 �
 
 **binary classification(BCE).** positive 비율이 $\pi$ 면 $L_0 = H(\pi) = -\pi\log\pi-(1-\pi)\log(1-\pi)$ 다.
 
+분류 — 균등 예측일 때의 cross-entropy
+
 ```{python}
 #| label: expected-initial-loss
 #| code-fold: false
 
 import numpy as np
 
-print("분류 — 균등 예측일 때의 cross-entropy\n")
 print(f"{'class 수 K':>12}{'log K (nat)':>14}{'log₂K (bit)':>14}")
 for K in [2, 10, 100, 1000, 50_000]:
     print(f"{K:>12,}{np.log(K):>14.4f}{np.log2(K):>14.4f}")
+```
 
-print("\n불균형이면 기준선이 내려간다 (label 분포의 entropy)\n")
+불균형이면 기준선이 내려간다 (label 분포의 entropy)
+
+```{python}
+#| label: expected-initial-loss-2
+#| code-fold: false
+
 print(f"{'positive 비율 π':>12}{'H(π)':>10}{'log 2 대비':>12}")
 for pi in [0.5, 0.1, 0.01, 0.001]:
     H = -(pi*np.log(pi) + (1-pi)*np.log(1-pi))
@@ -181,8 +188,14 @@ fig.show()
 import numpy as np
 
 n_par = nn.MLP([2, 64, 64, 2], activation="relu", seed=0).n_params()
-print(f"모델 parameter {n_par:,}개")
-print()
+```
+
+모델 parameter `{python} f'{n_par:,}'`개
+
+```{python}
+#| label: overfit-tiny-numbers-2
+#| code-fold: false
+
 print(f"{'샘플 수':>8} {'parameter/샘플':>14} {'최종 loss':>12} {'train 정확도':>12} {'판정'}")
 print("-" * 64)
 for n_ in sizes:
@@ -611,10 +624,10 @@ def train_once(model_seed, data_seed):
 a1, a2 = train_once(0, 0), train_once(0, 0)
 print(f"같은 seed 2회: {a1:.10f} vs {a2:.10f}  차이 {abs(a1-a2):.1e}")
 vals = [train_once(s, s) for s in range(8)]
-print(f"8개 seed: 평균 {np.mean(vals):.4f}, 표준편차 {np.std(vals):.4f}, "
-      f"범위 {min(vals):.4f}~{max(vals):.4f}")
 spread = float(max(vals) - min(vals))
 ```
+
+8개 seed: 평균 `{python} f'{np.mean(vals):.4f}'`, 표준편차 `{python} f'{np.std(vals):.4f}'`, 범위 `{python} f'{min(vals):.4f}'`\~`{python} f'{max(vals):.4f}'`
 
 seed를 고정하면 완전히 같은 결과가 나오고, seed를 바꾸면 최종 loss가
 `{python} f"{spread:.4f}"` 만큼 벌어진다 — 이것이 '실험 잡음'의 크기다.
@@ -651,15 +664,21 @@ print(f"{'float16':<16} {f16.max:>14.4g} {f16.tiny:>14.4g} {10:>10} {5:>10}")
 print(f"{'bfloat16':<16} {3.39e38:>14.4g} {bf16_min_normal:>14.4g} {7:>10} {8:>10}")
 print(f"{'float32':<16} {np.finfo(np.float32).max:>14.4g} "
       f"{np.finfo(np.float32).tiny:>14.4g} {23:>10} {8:>10}")
-print()
 
 # 실제 gradient 크기 분포에서 fp16 underflow가 얼마나 나는가
 rng = np.random.default_rng(0)
 grads = np.abs(rng.lognormal(np.log(1e-4), 2.5, 200000))
 under = float((grads < f16.tiny).mean())
 over = float((grads > f16.max).mean())
-print(f"전형적인 gradient 분포 (중앙값 {np.median(grads):.2e}) 에서")
-print(f"  fp16 underflow(0 이 됨) 비율 : {under:.2%}")
+```
+
+전형적인 gradient 분포 (중앙값 `{python} f'{np.median(grads):.2e}'`) 에서
+fp16 underflow(0 이 됨) 비율 : `{python} f'{under:.2%}'`
+
+```{python}
+#| label: mixed-precision-2
+#| code-fold: false
+
 print(f"  fp16 overflow(inf) 비율     : {over:.2%}")
 print()
 for scale in [1, 2**8, 2**12, 2**16, 2**20]:
@@ -807,12 +826,13 @@ weight만 저장하면 게임의 위치만 저장하고 인벤토리와 진행 �
 | EMA weight | 쓴다면 필수 | 별도 사본이 사라진다 |
 | 설정 snapshot | 권장 | 무엇으로 만든 checkpoint인지 모른다 |
 
+7B 모델 AdamW checkpoint 크기 (fp32 상태 기준)
+
 ```{python}
 #| label: checkpointing
 #| code-fold: false
 
 N = 7e9
-print(f"7B 모델 AdamW checkpoint 크기 (fp32 상태 기준)")
 print(f"  weight       : {N*4/1e9:>6.1f} GB")
 print(f"  Adam m, v    : {N*8/1e9:>6.1f} GB")
 print(f"  합계         : {N*12/1e9:>6.1f} GB")
