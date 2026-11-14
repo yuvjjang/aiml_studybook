@@ -125,8 +125,14 @@ for i, (wa, wb) in enumerate(zip(W0, FULL.W)):
     SPEC.append((i, Dm.shape, min(Dm.shape), eff, e))
     print(f"W{i:<5} {str(Dm.shape):<14} {min(Dm.shape):>9} {eff:>10.2f} "
           f"{e[:4].sum():>7.1%} {e[:8].sum():>7.1%} {e[:16].sum():>7.1%}")
-print()
-print("비교: 같은 크기의 **무작위** 행렬")
+```
+
+비교: 같은 크기의 **무작위** 행렬
+
+```{python}
+#| label: rank-check-2
+#| code-fold: false
+
 print(f"{'모양':<14} {'유효 rank':>10} {'최대 대비':>10}")
 print("-" * 38)
 rr = np.random.default_rng(0)
@@ -305,13 +311,14 @@ parameter가 왜 이렇게 줄어드는지 세어 본 표다. **$d \times d$ 행
 $d = 128$, $r = 4$ 면 `{python} f"{HID*HID:,}"` → `{python} f"{2*HID*4:,}"` (`{python} f"{HID//8}"`배).
 실제 LLM은 $d = 4096$ 이라 `{python} f"{4096*4096:,}"` → `{python} f"{2*4096*4:,}"` (`{python} f"{4096//8}"`배)다.
 
+LoRA rank를 바꿔가며 — learning rate는 5e-3로 통일
+
 ```{python}
 #| label: rank-sweep
 #| code-fold: false
 
 import numpy as np
 
-print("LoRA rank를 바꿔가며 — learning rate는 5e-3로 통일")
 print(f"{'방법':<16} {'학습 parameter':>14} {'비율':>8} {'B PPL':>9} "
       f"{'A PPL':>9} {'A 망각':>9}")
 print("-" * 70)
@@ -332,9 +339,14 @@ for r in [1, 2, 4, 8, 16, 32]:
     LORA_ROWS.append((r, m.n_params(), lb, la, la/A0))
     print(f"{'LoRA r='+str(r):<16} {m.n_params():>14,} "
           f"{m.n_params()/N_W:>7.1%} {lb:>9.3f} {la:>9.3f} {la/A0:>8.2f}x")
+```
 
-print()
-print("full fine-tuning — learning rate를 바꿔가며 (공정 비교를 위해)")
+full fine-tuning — learning rate를 바꿔가며 (공정 비교를 위해)
+
+```{python}
+#| label: rank-sweep-2
+#| code-fold: false
+
 print(f"{'lr':<16} {'학습 parameter':>14} {'비율':>8} {'B PPL':>9} "
       f"{'A PPL':>9} {'A 망각':>9}")
 print("-" * 70)
