@@ -37,7 +37,14 @@ weight $W_{hh}$ 는 **모든 시점에서 공유된다** — 매일 같은 요�
 
 D, T, HID = 128, 50, 256
 mlp_p, rnn_p = D*T*HID, (D+HID)*HID
-print(f"입력 차원 {D}, 길이 {T}, hidden {HID} 일 때 첫 층 parameter")
+```
+
+입력 차원 `{python} f'{D}'`, 길이 `{python} f'{T}'`, hidden `{python} f'{HID}'` 일 때 첫 층 parameter
+
+```{python}
+#| label: why-not-mlp-2
+#| code-fold: false
+
 print(f"  MLP (flatten): {mlp_p:>10,}   ← 길이 T 에 비례")
 print(f"  RNN          : {rnn_p:>10,}   ← 길이와 무관")
 ```
@@ -332,9 +339,9 @@ def train_rnn(T, signal_pos=0, clip=1.0, sigma=1.0, lr=0.05,
     return np.array(losses), np.array(gnorms)
 
 L, _ = train_rnn(T=5, signal_pos=0)
-print(f"동작 확인 — 거리 4 에서 최종 loss {np.nanmean(L[-50:]):.4f} "
-      f"(무작위 수준 {np.log(2):.4f})")
 ```
+
+동작 확인 — 거리 4 에서 최종 loss `{python} f'{np.nanmean(L[-50:]):.4f}'` (무작위 수준 `{python} f'{np.log(2):.4f}'`)
 
 optimizer는 SGD를 쓴다. [3.9](../03_deep_learning/09_training_practice.qmd)에서 확인했듯
 Adam은 step 크기를 맞춰 gradient 병리를 덮어버리기 때문이다.
@@ -394,6 +401,8 @@ viz.fig_defaults(fig, height=400,
 fig.show()
 ```
 
+① 길이 T=`{python} f'{T_FIX}'` 고정, 신호 위치만 이동
+
 ```{python}
 #| label: dependency-numbers
 #| code-fold: false
@@ -404,24 +413,26 @@ CH = np.log(2)
 def verdict(L):
     return "학습됨" if L < CH*0.5 else ("부분적" if L < CH*0.95 else "실패 (무작위)")
 
-print(f"① 길이 T={T_FIX} 고정, 신호 위치만 이동")
 print(f"{'신호 위치':>10} {'거리':>6} {'최종 loss':>12}  {'판정'}")
 print("-" * 46)
 for pos in positions:
     d = T_FIX-1-pos
     print(f"{pos:>10} {d:>6} {by_dist[d]:>12.4f}  {verdict(by_dist[d])}")
-print()
 ok_d = sorted(d for d in by_dist if by_dist[d] < CH*0.5)
 bad_d = sorted(d for d in by_dist if by_dist[d] >= CH*0.95)
+```
 
-print()
-print(f"② 신호는 항상 맨 앞, 길이만 변화")
+② 신호는 항상 맨 앞, 길이만 변화
+
+```{python}
+#| label: dependency-numbers-2
+#| code-fold: false
+
 print(f"{'길이 T':>8} {'거리':>6} {'최종 loss':>12}  {'판정'}")
 print("-" * 44)
 for T in lengths_v:
     d = T-1
     print(f"{T:>8} {d:>6} {by_len[d]:>12.4f}  {verdict(by_len[d])}")
-print()
 ok_l = sorted(d for d in by_len if by_len[d] < CH*0.5)
 bad_l = sorted(d for d in by_len if by_len[d] >= CH*0.95)
 per1 = per_step[1.0]
@@ -587,7 +598,14 @@ $h_t$ 를 계산하려면 $h_{t-1}$ 이 있어야 한다. **순서대로만** �
 #| code-fold: false
 
 d = 512
-print(f"d={d} 일 때 총 연산량 비교")
+```
+
+d=`{python} f'{d}'` 일 때 총 연산량 비교
+
+```{python}
+#| label: parallelism-2
+#| code-fold: false
+
 print(f"{'T':>7} {'RNN':>14} {'self-attention':>16} {'attention/RNN':>12}")
 print("-" * 54)
 for T in [32, 128, 512, 2048, 8192]:
