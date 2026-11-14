@@ -577,9 +577,9 @@ print(f"d_model = {d}")
 print(f"  ReLU FFN, hidden 4d    : {2*d*(4*d)/1e6:>7.1f}M  (W₁, W₂)")
 print(f"  SwiGLU, hidden 4d      : {3*d*(4*d)/1e6:>7.1f}M  (W₁, W₂, W₃) ← 1.5배")
 print(f"  SwiGLU, hidden 8d/3    : {3*d*int(8/3*d)/1e6:>7.1f}M  ← parameter 일치")
-print()
-print(f"LLaMA-2 7B 실제: d=4096, FFN hidden=11008 = {11008/4096:.2f}d ≈ 8/3")
 ```
+
+LLaMA-2 7B 실제: d=4096, FFN hidden=11008 = `{python} f'{11008 / 4096:.2f}'`d ≈ 8/3
 
 ---
 
