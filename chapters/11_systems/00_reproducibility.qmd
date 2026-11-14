@@ -104,12 +104,12 @@ ACC = np.array([train_once(s, s, s) for s in range(40)])
 최소 `{python} f'{ACC.min():.4f}'`
 최대 `{python} f'{ACC.max():.4f}'`
 
+**폭 `{python} f'{ACC.max() - ACC.min():.4f}'`** (`{python} f'{(ACC.max() - ACC.min()) * 100:.1f}'`%p)
+
 ```{python}
 #| label: seed-spread-2
 #| code-fold: false
 
-print(f"  **폭     {ACC.max()-ACC.min():.4f}** "
-      f"({(ACC.max()-ACC.min())*100:.1f}%p)")
 lo, hi = ACC.min(), ACC.max()
 ```
 
