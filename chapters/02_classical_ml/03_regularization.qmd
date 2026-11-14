@@ -102,7 +102,13 @@ beta = beta / np.linalg.norm(beta) * 3.0          # ‖β‖ = 3 으로 고정
 
 lam_star = sigma**2 * p / np.linalg.norm(beta)**2
 print(f"‖β‖ = {np.linalg.norm(beta):.1f},  σ² = {sigma**2}, p = {p}")
-print(f"이론 최적 λ* = σ²p/‖β‖² = {lam_star:.4f}\n")
+```
+
+이론 최적 λ\* = σ²p/‖β‖² = `{python} f'{lam_star:.4f}'`
+
+```{python}
+#| label: ridge-beats-ols-2
+#| code-fold: false
 
 print(f"{'λ':>8}{'bias²':>10}{'variance':>10}{'MSE 실측':>11}{'MSE 이론':>11}")
 for lam in [0.0, 0.5, lam_star, 4.0, 20.0]:
@@ -392,9 +398,9 @@ for i in [0, 12, 20, 26, 32, 38]:
     nz_l = int((np.abs(lasso_path[i]) < 1e-8).sum())
     picked = [f"β{j+1}" for j in range(p) if abs(lasso_path[i, j]) > 1e-8]
     print(f"{l:>10.4f} {nz_r:>13} {nz_l:>13}   {','.join(picked) if picked else '(없음)'}")
-print()
-print(f"참값이 0이 아닌 특성: β1, β2, β3, β8")
 ```
+
+참값이 0이 아닌 특성: β1, β2, β3, β8
 
 ::: {.interaction-hint}
 왼쪽 Ridge는 계수들이 **0에 점근**할 뿐 도달하지 않습니다. 오른쪽 Lasso는 하나씩 **정확히 0에 닿아** 그대로 붙어 있습니다. 중간 λ에서 Lasso가 고른 특성이 참값이 0이 아닌 것들과 대체로 일치합니다.
