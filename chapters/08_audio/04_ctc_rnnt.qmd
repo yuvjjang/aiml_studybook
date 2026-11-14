@@ -563,7 +563,7 @@ fin = CURVE[-1]
 
 print(f"{'':<4}{'항목':<24} {'HMM-GMM (8.3)':<22} {'CTC (여기)'}")
 print("-" * 76)
-for a, b, c in [("학습에 필요한 label", "frame별 state", "**phoneme열만**"),
+for a, b, c in [("학습에 필요한 label", "frame별 state", "phoneme열만"),
                 ("alignment 방법", "flat start + 재추정", "모든 alignment를 marginalization"),
                 ("pronunciation lexicon", "필요", "필요 없음"),
                 ("깨끗한 조건 오류율", "PER 0.0033 (Viterbi)", f"PER {fin[3]:.4f}"),
@@ -714,12 +714,7 @@ beam search의 진짜 값어치는 경로 합산이 아니라 **LM을 끼워 넣
 
 이 결합 방식을 **shallow fusion**이라 부른다.
 
-```{python}
-#| label: decode-2
-#| code-fold: false
-
-print(f"  $\\log P = \\log P_{{CTC}} + \\alpha \\log P_{{LM}} + \\beta |y|$")
-```
+$$\log P = \log P_{CTC} + \alpha \log P_{LM} + \beta |y|$$
 
 CTC 점수에 LM 점수를 **decoding 시점에** 더한다. 학습은 따로다.
 
@@ -757,22 +752,14 @@ conditional independence가 무엇을 못 하게 하는가
 
 방금 쓴 글자를 다시 읽어 보며 다음 글자를 정하는 속기사다.
 
-```{python}
-#| label: rnnt
-#| code-fold: false
-
-print(f"{'':<4}{'구성':<22} {'CTC':<26} {'RNN-T'}")
-print("-" * 78)
-for a, b, c in [
-    ("encoder", "frame → 표현", "같다"),
-    ("prediction network", "**없다**", "**이전 출력 → 표현**"),
-    ("joint network", "없다 (선형 출력)", "encoder+prediction을 합쳐 분포"),
-    ("출력 의존성", "없다 (conditional independence)", "**있다** — 내부 LM 역할"),
-    ("lattice", "T x S (1차원 진행)", "**T x U (2차원)**"),
-    ("한 frame에", "label 하나 또는 blank", "**label 여러 개 가능**"),
-]:
-    print(f"{'':<4}{a:<22} {b:<26} {c}")
-```
+| 구성 | CTC | RNN-T |
+|---|---|---|
+| encoder | frame → 표현 | 같다 |
+| prediction network | **없다** | **이전 출력 → 표현** |
+| joint network | 없다 (선형 출력) | encoder+prediction을 합쳐 분포 |
+| 출력 의존성 | 없다 (conditional independence) | **있다** — 내부 LM 역할 |
+| lattice | T x S (1차원 진행) | **T x U (2차원)** |
+| 한 frame에 | label 하나 또는 blank | **label 여러 개 가능** |
 
 lattice의 차이가 핵심이다.  
 CTC lattice는 시간축을 따라 **한 방향**으로만 간다.  
@@ -803,6 +790,17 @@ RNN-T lattice는 (시간, 출력 위치) 평면에서 오른쪽·위로 간다 �
 - **streaming**: RNN-T, 또는 chunk 단위 causal attention
 - **출력 단위**: 문자보다 **subword**(7.1) — sequence가 짧아져 유리
 - 그리고 subword는 OOV 문제를 없앤다 (8.3의 pronunciation lexicon과 대조)
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **음성이 합성이고 과제가 쉽다.** 모음 5개는 formant filter로, 마찰음 3개는 대역 noise로 만든 phoneme 8종이고, 단어도 정해진 목록에서 뽑았다. 학습 50발화, test 25발화다. 실제 음성에 있는 coarticulation(앞뒤 소리가 서로 번지는 현상), 화자와 녹음 환경의 차이, 영어 기준 40개 안팎의 phoneme이 없다. test PER 0은 이 과제에서 나온 값이다.
+- **spike의 폭과 위치는 이 작은 encoder에서 잰 값이다.** 문맥이 ±4 frame뿐인 encoder에서 blank 64%, 출력 위치 0.67이 나왔다. "출력 대부분이 blank이고 글자는 짧게 선다"는 성질은 아래 "실제 도구로" 절의 wav2vec2에서도 보였다(blank 56%). 출력이 phoneme 구간의 뒤쪽에 몰린다는 것은 실제 모델에서 확인하지 않았다.
+- **LM의 이득은 유리한 조건에서 잰 것이다.** phoneme bigram을 학습 발화에서 셌고, test 발화도 같은 단어 목록으로 만들었다. LM이 test 문장의 phoneme 순서를 이미 아는 셈이다. PER이 0.182에서 0.152로 준 폭을 실제 ASR에서 LM이 주는 이득으로 옮기면 안 된다.
+- **RNN-T는 구현하지 않았다.** 비교표에 적은 RNN-T의 성질(출력 의존성, streaming)은 설명이고, 이 장에서 잰 것이 아니다.
+:::
 
 ---
 
