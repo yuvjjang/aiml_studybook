@@ -538,6 +538,17 @@ single-frame baseline의 VLM 판이다.
 
 ---
 
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **vision encoder와 LLM이 없다.** 장면은 6×6 격자에 물체 prototype 벡터를 놓은 것이고, "encoder 출력"은 셀마다 물체 유형과의 내적을 계산한 흉내다. 질문에 답하는 쪽도 언어 모델이 아니라 그 위에서 학습한 linear classifier다. "압축에 강한 질문과 죽는 질문"은 mechanism을 보인 것이고, 0.760, 0.509 같은 값은 이 설정의 값이다.
+- **Q-Former는 query attention 한 층을 흉내 낸 것이다.** "위치가 없으면 query를 늘려도 좌우를 못 맞힌다"는 attention이 permutation equivariant라는 성질에서 나오므로 일반적이다. 실제 Q-Former는 위치 정보가 들어간 encoder 출력을 받는다.
+- **hallucination은 co-occurrence bias 하나만 만들었다.** 학습 데이터에서 0번 물체의 90%를 1번과 함께 두었다. 실제 VLM의 hallucination에는 언어 모델의 prior, 낮은 해상도, instruction data의 편향 같은 다른 원인도 있다. 아래 "실제 도구로" 절의 SmolVLM은 없는 물체를 물었을 때 17%를 있다고 답했지만, 그 원인이 co-occurrence인지는 가르지 않았다.
+- **token 예산은 계산이다.** 336px = 576 token 같은 값은 patch 크기에서 센 것이다.
+:::
+
+---
+
 ## 실제 도구로: 작은 VLM에게 정답을 아는 장면을 묻는다
 
 공개된 작은 vision-language model인 SmolVLM-256M으로 이 장의 질문을 실제로 던진다. 이미지 한 장이 visual token 몇 개가 되는가, 그리고 이 장 "준비"와 같은 성격의 격자 장면에서 존재, 없는 물체, 개수, 좌우 관계를 얼마나 맞히는가.
