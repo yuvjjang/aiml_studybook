@@ -219,8 +219,9 @@ output  = weights @ V                 # (n, d)  — value들의 가중 평균
 
 print(f"점수    {scores.shape}   범위 [{scores.min():.2f}, {scores.max():.2f}]")
 print(f"가중치  {weights.shape}   행 합 = {weights.sum(axis=1).round(6)}")
-print(f"출력    {output.shape}")
 ```
+
+출력 `{python} f'{output.shape}'`
 
 ---
 
@@ -818,13 +819,14 @@ def attn(X):
     return (P / P.sum(1, keepdims=True)) @ (X @ Wv)
 
 perm = rng.permutation(n)
-print(f"위치 정보 없음:  max|Attn(PX) − P·Attn(X)| = {np.abs(attn(X[perm]) - attn(X)[perm]).max():.1e}")
 
 pos = rng.normal(size=(n, d))                         # 자리마다 고정된 위치 벡터
 moved_with_pos = attn(X[perm] + pos)                  # 섞인 뒤 새 자리의 위치를 받음
 original = attn(X + pos)[perm]                        # 원래 자리의 위치를 들고 섞임
-print(f"위치 정보 있음:  max|차이| = {np.abs(moved_with_pos - original).max():.2f}")
 ```
+
+위치 정보 없음: max|Attn(PX) − P·Attn(X)| = `{python} f'{np.abs(attn(X[perm]) - attn(X)[perm]).max():.1e}'`
+위치 정보 있음: max|차이| = `{python} f'{np.abs(moved_with_pos - original).max():.2f}'`
 :::
 
 ### C2. attention으로 kernel regression 하기
