@@ -441,7 +441,7 @@ for kind, nm in [("sarsa", "SARSA"), ("qlearn", "Q-learning")]:
         Qs.append(Q); rs.append(ret)
     rs = np.array(rs)
     CLIFFRES[nm] = (Qs[0], rs)
-    print(f"**{nm}** — 학습 중 episode 보상 (마지막 100개 평균) "
+    print(f"{nm} — 학습 중 episode 보상 (마지막 100개 평균) "
           f"{rs[:, -100:].mean():.2f}")
     show(Qs[0], f"학습된 greedy 경로")
     print()
