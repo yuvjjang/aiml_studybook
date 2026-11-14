@@ -170,12 +170,11 @@ for t in [0.5, 0.6, 0.7, 0.75, 0.8, 0.9]:
     print(f"{t:>13.2f} {m:>10.4f}  {note}")
 coco = float(np.mean([eval_set(SCENES, 0.5, t)[0]
                       for t in np.arange(0.5, 1.0, 0.05)]))
-print()
 m50 = [v for t, v in IOUS if t == 0.5][0]
 m75 = [v for t, v in IOUS if t == 0.75][0]
-print(f"**mAP@0.5 = {m50:.3f}, mAP@0.75 = {m75:.3f}, "
-      f"COCO mAP@[.5:.95] = {coco:.3f}**")
 ```
+
+**mAP\@0.5 = `{python} f'{m50:.3f}'`, mAP\@0.75 = `{python} f'{m75:.3f}'`, COCO mAP\@[.5:.95] = `{python} f'{coco:.3f}'`**
 
 같은 detector다. 숫자만 `{python} f'{m50 / max(m75, 1e-09):.1f}'`배 차이 난다.
 
@@ -246,16 +245,10 @@ none = NMS[-1]
 
 **NMS의 변형들**
 
-```{python}
-#| label: nms-2
-#| code-fold: false
-
-for a, b in [("Soft-NMS", "지우는 대신 **점수를 깎는다** — 혼잡 장면에서 낫다"),
-             ("class별 NMS", "다른 class끼리는 억제하지 않는다"),
-             ("IoU 예측 head", "점수 대신 **위치 품질**로 정렬한다"),
-             ("set prediction (DETR)", "**NMS 자체를 없앤다** — 다음 절")]:
-    print(f"  · **{a}** — {b}")
-```
+- **Soft-NMS** — 지우는 대신 **점수를 깎는다** — 혼잡 장면에서 낫다
+- **class별 NMS** — 다른 class끼리는 억제하지 않는다
+- **IoU 예측 head** — 점수 대신 **위치 품질**로 정렬한다
+- **set prediction (DETR)** — **NMS 자체를 없앤다** — 다음 절
 
 ---
 
@@ -331,18 +324,12 @@ DETR은 같은 효과를 학습으로 얻는다 — query가 서로 다른 것�
 
 **DETR이 실제로 한 것과, 그 대가**
 
-```{python}
-#| label: hungarian-2
-#| code-fold: false
-
-print(f"{'':<4}{'얻은 것':<30} {'대가'}")
-print("-" * 70)
-for a, b in [("NMS 제거 — 후처리가 사라진다", "학습이 느리다 (초기 DETR 500 epoch)"),
-             ("anchor 설계가 사라진다", "작은 객체에 약하다"),
-             ("end-to-end 미분 가능", "**matching이 학습 초기에 불안정**하다"),
-             ("set prediction이라 순서 무관", "query 수가 상한을 만든다")]:
-    print(f"{'':<4}{a:<30} {b}")
-```
+| 얻은 것 | 대가 |
+|---|---|
+| NMS 제거 — 후처리가 사라진다 | 학습이 느리다 (초기 DETR 500 epoch) |
+| anchor 설계가 사라진다 | 작은 객체에 약하다 |
+| end-to-end 미분 가능 | **matching이 학습 초기에 불안정**하다 |
+| set prediction이라 순서 무관 | query 수가 상한을 만든다 |
 
 **학습 초기 불안정이 핵심 문제였다.**
 
@@ -507,17 +494,11 @@ small, big = SEG[0], SEG[-1]
 
 **구조: U-Net과 dilated convolution은 같은 문제를 다르게 푼다**
 
-```{python}
-#| label: segmentation-2
-#| code-fold: false
-
-print(f"{'':<4}{'접근':<28} {'해상도를 어떻게 되찾나'}")
-print("-" * 68)
-for a, b in [("U-Net", "downsample 후 upsample + **skip connection**으로 세부 복원"),
-             ("dilated convolution (DeepLab)", "downsample 없이 **receptive field만 키운다**"),
-             ("FPN", "여러 해상도의 feature를 함께 쓴다 (detection과 공유)")]:
-    print(f"{'':<4}{a:<28} {b}")
-```
+| 접근 | 해상도를 어떻게 되찾나 |
+|---|---|
+| U-Net | downsample 후 upsample + **skip connection**으로 세부 복원 |
+| dilated convolution (DeepLab) | downsample 없이 **receptive field만 키운다** |
+| FPN | 여러 해상도의 feature를 함께 쓴다 (detection과 공유) |
 
 [9.0](00_image_basics.qmd)에서 잰 receptive field 식이 여기서 설계 도구가 된다 —
 segmentation은 **넓은 문맥과 정밀한 경계를 동시에** 요구하기 때문이다.
@@ -614,6 +595,17 @@ fig.show()
 - backbone을 freeze했는데 **BN 통계는 갱신**되게 둔다 (eval mode로 두어야 한다)
 - augmentation을 과제에 맞추지 않는다 — [9.0](00_image_basics.qmd)에서 본 대로 augmentation은 **invariance 주입**이다
 - 좌우 반전은 classification에 좋지만 **글자 인식·좌우 구분 과제에는 해롭다**
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **detector를 흉내 냈다.** 정답 box마다 Gaussian으로 흔든 box 2개를 내고 장면마다 false positive 3개를 더했다. 실제 detector의 오류, 곧 작은 객체를 놓치거나 class를 혼동하거나 가려진 객체에서 흔들리는 것은 없다. "IoU threshold에 따라 mAP가 0.82도 0.12도 된다"는 구조는 일반적이지만, 두 숫자는 흔드는 폭(jitter)을 어떻게 정했는지에 달려 있다.
+- **Hungarian 결과는 정답 box를 써서 고른 것이다.** 본문에 적은 대로 inference 때 쓸 수 없는 진단이다. 요약표의 "중복 0.086 → 0.030, mAP 0.72 → 0.80"은 DETR의 성능이 아니라 일대일 배정이 사는 것의 크기다. DETR은 학습하지 않았다.
+- **focal loss는 확률 분포를 가정하고 계산했다.** 배경과 객체의 '객체일 확률'을 Beta 분포에서 뽑아, 학습이 어느 정도 된 detector를 흉내 냈다. "negative 비중 0.993 → 0.415"는 이 가정의 값이고, focal loss로 학습했을 때 성능이 오르는지는 재지 않았다.
+- **segmentation 지표는 원 모양 mask로 계산했다.** 같은 1 pixel 오차가 크기에 따라 IoU를 다르게 깎는다는 것은 기하의 성질이라 일반적이다.
+:::
 
 ---
 
