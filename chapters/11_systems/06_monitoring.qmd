@@ -321,18 +321,24 @@ for thr in [0.05, 0.08, 0.10, 0.15, 0.20, 0.30]:
     fp = float((psi_null > thr).mean())
     tp = float((psi_drift > thr).mean())
     ALERT.append((thr, fp, tp))
-    verdict = ("**alert fatigue**" if fp*365 > 20 else
+    verdict = ("alert fatigue" if fp*365 > 20 else
                "쓸 만하다" if tp > 0.9 else
-               "**놓친다**")
+               "놓친다")
     print(f"{thr:>9.2f} {fp:>12.1%} {tp:>9.1%} {fp*365:>14.0f}회 {verdict}")
-print()
 best = [a for a in ALERT if a[1]*365 <= 20 and a[2] > 0.9]
+f_lo = [a for a in ALERT if a[0] == 0.05][0]
+f_hi = [a for a in ALERT if a[0] == 0.10][0]
+```
+
+```{python}
+#| label: alerts-4
+#| echo: false
+#| output: asis
+
 if best:
     b = best[0]
     print(f"**이 설정에서 쓸 만한 구간은 threshold {b[0]:.2f} 근처다** — "
           f"연 {b[1]*365:.0f}회 false alarm에 탐지율 {b[2]:.1%}.")
-f_lo = [a for a in ALERT if a[0] == 0.05][0]
-f_hi = [a for a in ALERT if a[0] == 0.10][0]
 ```
 
 - threshold를 0.10에서 0.05로 낮추면 false alarm이 `{python} f'{f_hi[1]:.1%}'` → `{python} f'{f_lo[1]:.1%}'`로 **`{python} f'{f_lo[1] / f_hi[1]:.0f}'`배** 된다 — 정상 분포의 꼬리에 걸리기 때문
@@ -521,6 +527,17 @@ label이 필요 없고, 즉시 관측되며, 모델 품질과 상관이 높다.
 - **audit log(감사 로그)** — 누가 언제 어떤 모델을 배포했고 무엇을 승인했는가
 - 규제 대응 — 설명 요구([12.0](../12_trust/00_interpretability.qmd)), 삭제 요구, 자동 결정에 대한 이의 제기
 - 이 문서들은 사고가 난 뒤에 만들 수 없다 — **배포 pipeline의 일부**여야 한다
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **drift를 우리가 정한 모양으로 넣었다.** concept drift는 결정 경계를 180일에 걸쳐 0.8 radian 회전시킨 것이고, covariate shift는 입력 분포를 옮긴 것이다. 실제 drift는 갑자기 오기도 하고, 둘이 섞이기도 하고, 계절처럼 되돌아오기도 한다.
+- **"concept drift는 입력 지표로 원리적으로 못 잡는다"는 정의에서 나오는 결론이라 일반적이다.** 반면 "covariate shift에서 정확도가 올랐다"는 본문에 적은 대로 입력이 옮겨 간 쪽이 이 데이터에서 우연히 더 쉬운 영역이었기 때문이다. PSI 경보가 성능 저하가 아닐 수 있다는 것까지가 일반적인 교훈이다.
+- **재학습 주기의 결론은 drift가 일정한 속도로 일어난다고 둔 결과다.** "60일 2번이면 매번의 98.7%"는 이 속도에서의 값이고, drift가 빠르거나 갑자기 오면 필요한 주기가 달라진다.
+- **alert fatigue의 숫자는 하루 300건, feature 12개의 가정에서 계산했다.** 실제 횟수는 traffic과 feature 수에 따라 달라진다.
+:::
 
 ---
 
