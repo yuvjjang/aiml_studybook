@@ -142,7 +142,7 @@ PHI, BASE, FULL = shapley_exact(xq)
 print(f"{'feature':>7} {'값':>9} {'attribution φ':>13} {'진짜 함수에서의 역할'}")
 print("-" * 62)
 ROLE = ["main effect (계수 +2.0)", "main effect (계수 −1.5)", "x3과 interaction",
-        "x2와 interaction", "비선형 tanh", "**x0의 상관 proxy (함수에 없음)**",
+        "x2와 interaction", "비선형 tanh", "x0의 상관 proxy (함수에 없음)",
         "무관", "무관"]
 for j in range(D):
     print(f"{'x'+str(j):>7} {xq[j]:>+9.3f} {PHI[j]:>+13.4f} {ROLE[j]}")
@@ -604,7 +604,7 @@ for name, local in [("fully connected 1층 (일반 MLP)", False),
     SAL[name] = (accv(m), rows, base_sal)
 
 for name, (a0, rows, _) in SAL.items():
-    print(f"**{name}** — 학습 후 정확도 {a0:.4f}")
+    print(f"{name} — 학습 후 정확도 {a0:.4f}")
     print(f"  {'무작위화 범위':<14} {'정확도':>9} {'saliency 순위상관':>18}")
     print("  " + "-"*44)
     for lbl, a, sp in rows:
@@ -817,6 +817,17 @@ c_large = np.array([lime_coefs(mi, xl, 1.0, 1000, s, 3)[0] for s in range(5)])
 4. PDP는 **항상 ICE와 함께** 본다
 5. 설명의 hyperparameter(background 분포, σ, baseline)를 **함께 보고한다**
 6. 그리고 **'그러므로 이걸 바꾸면 결과가 달라진다'는 말을 하지 않는다** — 그건 인과의 영역이다
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **설명할 모델과 데이터를 우리가 만들었다.** 상관 feature, Rashomon, PDP 실험은 정답 함수를 아는 합성 regression 데이터다. 그래서 설명이 맞는지 채점할 수 있었다. 실제 데이터에는 이런 정답이 없어서, 같은 실패가 일어나도 알아차리기 어렵다.
+- **saliency sanity check는 12×12 이미지의 작은 모델에서 했다.** 과제는 밝은 사각형과 어두운 사각형을 가르는 것이다. "구조가 지도를 그린다"는 결론은 local 연결을 고정한 이 모델에서 보인 것이다. 본문에 적은 대로 실제 CNN의 saliency에도 같은 의심을 둘 근거가 되지만, 실제 CNN에서 그 비율이 얼마인지는 이 실험이 말하지 않는다.
+- **faithfulness와 LIME의 숫자는 이 모델의 값이다.** deletion test는 상위 feature를 지웠을 때 이 모델의 예측이 얼마나 흔들리는지를 쟀다. LIME의 "σ=1.0이면 참값의 45%"는 이 함수의 곡률에서 나온 값이라, 다른 모델에서는 neighborhood 크기의 영향이 다르다. "σ 선택이 seed보다 지배적이다"는 방향은 일반적이다.
+- **Shapley value는 feature 8개라 정확히 계산했다.** 실제 SHAP library는 feature가 많아 근사(KernelSHAP, TreeSHAP)를 쓰고, 그 근사 오차는 여기 들어 있지 않다.
+:::
 
 ---
 
