@@ -97,8 +97,9 @@ k = 3
 Q, _ = np.linalg.qr(rng.normal(size=(d, k)))
 err_pca = float(((X - X @ Vt[:k].T @ Vt[:k]) ** 2).sum())
 err_rand = float(((X - X @ Q @ Q.T) ** 2).sum())
-print(f"\nk={k} reconstruction error — PCA {err_pca:.1f} vs 무작위 subspace {err_rand:.1f}")
 ```
+
+k=`{python} f'{k}'` reconstruction error — PCA `{python} f'{err_pca:.1f}'` vs 무작위 subspace `{python} f'{err_rand:.1f}'`
 
 보존 + 오차 = 전체가 어떤 $k$ 에서도 정확히 성립한다.
 전체가 상수이므로 하나를 최대화하는 것은 다른 하나를 최소화하는 것이고,
@@ -266,14 +267,14 @@ fig.update_layout(legend=dict(x=0.72, y=0.98))
 fig.show()
 ```
 
+원 차원 `{python} f'{size * size}'` · 표본 `{python} f'{n_img}'`개
+
 ```{python}
 #| label: pca-compression
 #| code-fold: false
 
 import numpy as np
 
-print(f"원 차원 {size*size} · 표본 {n_img}개")
-print()
 print(f"{'k':>5} {'누적 expl.var':>14} {'recon. MSE':>13} {'저장 비율':>11}")
 print("-" * 48)
 for k in [1, 2, 3, 5, 8, 15, 30, 60]:
@@ -281,10 +282,10 @@ for k in [1, 2, 3, 5, 8, 15, 30, 60]:
     mse = float(np.mean((R - Dc)**2))
     ratio = k*(n_img + size*size) / (n_img * size*size)
     print(f"{k:>5} {cum[k-1]:>14.4f} {mse:>13.5f} {ratio:>10.1%}")
-print()
 k95 = int(np.searchsorted(cum, 0.95) + 1)
-print(f"→ explained variance 95% 에 필요한 성분: {k95}개 (원 차원의 {k95/(size*size):.0%})")
 ```
+
+→ explained variance 95% 에 필요한 성분: `{python} f'{k95}'`개 (원 차원의 `{python} f'{k95 / (size * size):.0%}'`)
 
 ::: {.interaction-hint}
 $k=1$ 은 평균 얼룩만, $k=5$ 면 대략의 모양이 나오고, $k=30$ 이면 원본과 거의 구별되지 않습니다. 누적 곡선이 빠르게 1에 접근하는 것이 **압축이 가능한 이유**입니다.
@@ -379,7 +380,14 @@ def separability(proj, lab):
     return abs(a.mean() - b.mean()) / np.sqrt(0.5*(a.var() + b.var()))
 
 sep_raw, sep_std = separability(p_raw, lab), separability(p_std, lab)
-print(f"  standardization 없이 PC1 projection → 분리도 {sep_raw:.3f}")
+```
+
+standardization 없이 PC1 projection → 분리도 `{python} f'{sep_raw:.3f}'`
+
+```{python}
+#| label: pca-scale-numbers-2
+#| code-fold: false
+
 print(f"  standardization 후   PC1 projection → 분리도 {sep_std:.3f}")
 ```
 
