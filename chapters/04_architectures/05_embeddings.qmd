@@ -373,7 +373,7 @@ $d=2$ 의 `{python} f"{gap2:.3f}"` 와 $d=32$ 의 `{python} f"{gap32:.3f}"` 가 
 
 embedding을 2차원으로 줄여 보는 것은 흔한 진단이다.
 **그런데 방법에 따라 그림이 달라진다.** 지구본을 평면 지도로 펼치는 방법이 여럿이고 저마다 다른 곳을 왜곡하는 것과 같다.
-[1.5의 PCA](../01_data/05_dimensionality_reduction.qmd)와 t-SNE(가까운 점은 가깝게 유지하는 데 집중하는 비선형 방법)를 비교한다.
+[2.10의 PCA](../02_classical_ml/10_dimensionality_reduction.qmd)와 t-SNE(가까운 점은 가깝게 유지하는 데 집중하는 비선형 방법)를 비교한다.
 
 ```{python}
 #| label: fig-embedding-map
