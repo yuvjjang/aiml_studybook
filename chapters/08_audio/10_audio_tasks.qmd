@@ -469,13 +469,7 @@ for k, v in COL.items():
 
 **PIT**(permutation invariant training — 순열 불변 학습)가 이것을 푼다.
 
-```{python}
-#| label: pit-3
-#| code-fold: false
-
-print("$$\\mathcal{L} = \\min_{\\pi \\in \\mathcal{P}} "
-      "\\sum_i \\ell(\\hat{y}_i,\\; y_{\\pi(i)})$$")
-```
+$$\mathcal{L} = \min_{\pi \in \mathcal{P}} \sum_i \ell(\hat{y}_i,\; y_{\pi(i)})$$
 
 - 가능한 모든 짝짓기를 시도하고 **가장 낮은 loss를 택한다** — 답안지를 두 방향으로 다 채점해 보고 높은 점수를 준다
 - 출력 2개면 permutation 2가지, 3개면 6가지 — 실용적인 범위다
@@ -514,7 +508,7 @@ print("-" * 60)
 KWS = []
 for fpr in [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7]:
     per_h = fpr*FPS*3600
-    ok = "**쓸 만하다**" if per_h <= 1 else ("아슬아슬" if per_h <= 12 else "쓸 수 없다")
+    ok = "쓸 만하다" if per_h <= 1 else ("아슬아슬" if per_h <= 12 else "쓸 수 없다")
     KWS.append((fpr, per_h))
     print(f"{fpr:>22.0e} {per_h:>18.1f} {per_h*24:>16.0f}  {ok}")
 target = [k for k in KWS if k[1] <= 1][0]
@@ -591,6 +585,18 @@ data augmentation — [8.6](06_asr_modern.qmd)에서 잰 '다양성'을 값싸�
 - 평가 지표가 과제마다 완전히 다르다 — EER, SI-SDR, mAP, WER
 - **그리고 거의 전부 base rate·불균형 문제를 안고 있다**
 - 실서비스는 이들을 pipeline으로 엮는다 — 앞단 실패가 뒤로 전파된다 (7.11)
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **화자가 parameter 두 개로 만든 합성 화자다.** 화자 30명은 F0와 성도 배율로만 다르고, 발화는 사람마다 8개다. 실제 화자 사이의 음색, 말버릇, 녹음 장비 차이는 없다. EER 0.394 → 0.202 같은 값은 이 조건의 값이다. 아래 "실제 도구로" 절에서 실제 녹음 20명으로 재 보니 log-mel 평균의 EER이 17.5%로, 숫자의 크기가 상당히 달랐다.
+- **x-vector는 이 장에서 학습하지 않았다.** UBM supervector까지 직접 만들었고, "x-vector는 같은 원리를 학습으로 한다"는 설명이다. 학습된 x-vector는 "실제 도구로" 절에서 공개 모델로만 썼다.
+- **separation은 상한만 쟀다.** IRM, IBM, 정답 복소 spectrum은 모두 정답을 알고 만든 mask다. 분리 모델(Conv-TasNet 등)을 학습해 그 상한에 얼마나 다가가는지는 재지 않았다.
+- **permutation 문제도 학습으로 보인 것이 아니다.** "고정 순서 loss의 최적 출력은 두 정답의 평균"이라는 계산을 하고, 그 출력의 점수를 쟀다. 실제로 모델을 고정 순서 loss로 학습한 결과는 아니다.
+- **detection의 1e-6은 계산이다.** "시간당 false alarm 1회"를 frame 수로 나눈 값이고, detector를 만들어 잰 것이 아니다.
+:::
 
 ---
 
