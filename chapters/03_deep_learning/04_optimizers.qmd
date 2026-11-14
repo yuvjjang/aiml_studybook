@@ -431,7 +431,7 @@ RAdam 논문이 이 분산을 정량화했고, 실무의 답은 그냥 warmup이
 ## AdamW: weight decay를 분리하는 이유
 
 **weight decay**(가중치 감쇠)는 매 step마다 weight를 조금씩 0 쪽으로 줄이는 regularization이다.
-[2.2](../02_classical_ml/02_regularization.qmd)의 L2 regularization을 loss에 넣으면 gradient에 $\lambda\theta$ 가 더해지고,
+[2.3](../02_classical_ml/03_regularization.qmd)의 L2 regularization을 loss에 넣으면 gradient에 $\lambda\theta$ 가 더해지고,
 SGD에서는 이것이 곧 weight decay와 같다.
 그런데 Adam은 그 gradient를 **$\sqrt{\hat v}$ 로 나눈다.**
 
