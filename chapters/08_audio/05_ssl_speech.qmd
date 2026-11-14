@@ -431,15 +431,20 @@ print("-" * 58)
 print(f"{'1차: MFCC raw feature':<32} {p0:>14.4f} {n0:>9.4f}")
 print(f"{'2차: 학습된 표현':<32} {p1:>14.4f} {n1:>9.4f}")
 print(f"{'변화':<32} {p1-p0:>+14.4f} {n1-n0:>+9.4f}")
-print()
+```
+
+```{python}
+#| label: pretrain-2
+#| echo: false
+#| output: asis
+
 if p1 > p0:
-    print(f"**반복이 code를 개선했다** — purity {p0:.4f} → {p1:.4f}.")
-    print("  모델이 mask 구간을 맞히려면 **문맥에서 음운 정보를 뽑아야** 하고,")
-    print("  그 표현은 raw MFCC보다 phoneme에 가깝게 alignment된다.")
-    print("  이것이 HuBERT가 실제로 하는 일이고, 여기서 재현된다.")
+    print(f"**반복이 code를 개선했다** — purity {p0:.4f} → {p1:.4f}. "
+          "모델이 mask 구간을 맞히려면 **문맥에서 음운 정보를 뽑아야** 하고, "
+          "그 표현은 raw MFCC보다 phoneme에 가깝게 alignment된다. "
+          "이것이 HuBERT가 실제로 하는 일이고, 여기서 재현된다.")
 else:
-    print(f"**이 설정에서는 반복이 code를 개선하지 못했다** "
-          f"({p0:.4f} → {p1:.4f}).")
+    print(f"**이 설정에서는 반복이 code를 개선하지 못했다** ({p0:.4f} → {p1:.4f}).")
 ```
 
 실제 HuBERT는 이 반복을 2\~3회 돌리고, 회차마다 code 수를 늘린다.  
@@ -594,28 +599,20 @@ big = [e for e in EFF if e[1] - e[4] > 0.1]
 
 ```{python}
 #| label: label-efficiency-3
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if big:
-    print("  transcription이 적을수록 격차가 크다:")
+    print("transcription이 적을수록 격차가 크다:\n")
     for e in big:
-        print(f"    {e[0]:>2}발화: {e[1]:.3f} → {e[4]:.3f} "
-              f"({(e[1]-e[4])/e[1]:.0%} 감소)")
-te10 = [e for e in EFF if e[0] == 10]
+        print(f"- {e[0]}발화: {e[1]:.3f} → {e[4]:.3f} ({(e[1]-e[4])/e[1]:.0%} 감소)")
+te10 = [e for e in EFF if e[0] == 10][0]
 ```
 
 **label efficiency 주장이 이 작은 규모에서도 재현된다.**
 
 **다만 seed 간 범위를 보라.** 예를 들어 10발화의 pretraining 구간이
-
-```{python}
-#| label: label-efficiency-4
-#| code-fold: false
-
-if te10:
-    e = te10[0]
-    print(f"  [{e[5]:.3f}~{e[6]:.3f}]이다 — 폭이 평균 차이만큼 넓다.")
-```
+[`{python} f'{te10[5]:.3f}'`\~`{python} f'{te10[6]:.3f}'`]이다 — 폭이 평균 차이만큼 넓다.
 
 실제로 이 실험을 처음 seed 하나로 돌렸을 때는 **반대 결론**이 나왔다.  
 [7.13](../07_language/13_evaluation.qmd)에서 잰 그대로다 —
@@ -717,11 +714,11 @@ pretraining이 '정보'로 기여할 여지가 처음부터 거의 없었다.
 
 ```{python}
 #| label: probe-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if p1 > p0:
-    print(f"  · 학습된 표현으로 다시 clustering하면 {p0:.4f} → {p1:.4f} "
-          f"(HuBERT iterative refinement)")
+    print(f"- 학습된 표현으로 다시 clustering하면 {p0:.4f} → {p1:.4f} (HuBERT iterative refinement)")
 ```
 
 - transcription이 적을 때 pretraining이 실제로 크게 돕는다
@@ -777,6 +774,17 @@ SUPERB benchmark는 이 가중치를 과제마다 학습하게 한다.
 - 언어 간 공유되는 것은 음운 자체가 아니라 **음성 신호의 구조**다
 - 그래서 계통이 먼 언어 사이에도 전이가 일어난다
 - 이것이 self-supervised learning이 음성에서 가장 크게 기여한 지점이다
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **음성이 8.4와 같은 합성 phoneme 8종이다.** 사전학습에 쓴 발화가 250개이고 encoder는 2층이다. 실제 모델은 수만 시간의 음성과 Transformer 24층으로 학습한다. purity 0.775 → 0.873은 화자 차이와 coarticulation이 없는 데이터에서 나온 값이다.
+- **세 가지 설계 중 학습해 본 것은 HuBERT 방식뿐이다.** contrastive와 online quantization은 수식과 표로만 설명했다. 그래서 어느 설계가 나은지는 이 장에서 답하지 않는다. wav2vec2의 contrastive 과제는 아래 "실제 도구로" 절에서 이미 학습된 모델로 돌려 보기만 했다.
+- **label efficiency의 이득은 seed 3개로 쟀다.** 본문에 적은 대로 seed 간 범위가 평균 차이만큼 넓고, seed 하나로는 반대 결론이 나왔었다. "5개 설정 중 4개에서 이긴다"도 그 범위 안에서 읽어야 한다.
+- **연속 regression의 '평균 collapse'는 이 규모에서 재현되지 않았다** (예측 분산이 정답의 0.76배). 큰 모델에서 collapse가 일어나는지 아닌지는 이 실험으로 판단할 수 없다.
+:::
 
 ---
 
