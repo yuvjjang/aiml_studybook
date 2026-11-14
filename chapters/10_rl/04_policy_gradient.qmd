@@ -281,12 +281,13 @@ for c in [1.0, 0.6, 0.0]:
 
 ```{python}
 #| label: gae-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 for c in [1.0, 0.6, 0.0]:
     r = GAE[c]
     best = min(r, key=lambda x: x[3])
-    print(f"  c={c}: bias {r[0][1]:.4f}→{r[-1][1]:.4f}, "
+    print(f"- c={c}: bias {r[0][1]:.4f}→{r[-1][1]:.4f}, "
           f"variance {r[0][2]:.5f}→{r[-1][2]:.5f}, **최적 λ = {best[0]}**")
 ```
 
@@ -687,6 +688,17 @@ entropy는 `{python} f'{ENT[0][2]:.3f}'` → `{python} f'{ENT[-1][2]:.3f}'`로 �
 - 그러면 critic 없이도 advantage를 만들 수 있다 — G10.4.1에서 본 **상수 baseline이 거의 다 얻는다**는 결과가 근거다
 - 이것이 GRPO(group relative policy optimization)이고, LLM처럼 한 상태(prompt)에서 여러 trajectory를 값싸게 뽑을 수 있을 때 특히 유리하다
 - [10.5](05_rl_for_llm.qmd)에서 다룬다
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **환경이 5×7 GridWorld이고 policy가 표 형태 softmax다.** 정확한 gradient를 DP로 구해 놓고 표본 추정과 비교하려고 그렇게 했다. 신경망 policy와 연속 상태는 없다. 아래 "실제 도구로" 절의 CartPole이 신경망 policy를 쓴 유일한 실험이다.
+- **critic은 학습한 것이 아니라 만든 것이다.** GAE 실험의 critic은 참 가치 $V^\pi$ 에 배율 $c$ 를 곱해 만들었다. 실제 critic의 오차는 상태마다 방향과 크기가 다르므로, "c=1이면 최적 λ가 0, c가 작으면 0.99"는 오차의 모양을 단순하게 가정한 결과다. λ가 bias와 variance를 바꾸는 방향은 일반적이다.
+- **PPO의 결론은 이 작은 환경 하나에서 나왔다.** "clipping이 없으면 반복 중 붕괴한다", "entropy bonus가 이 문제에서는 도움이 안 됐다"는 탐색이 어렵지 않은 GridWorld의 결과다. 본문에 적은 대로 entropy bonus의 이득은 재현되지 않았고, 이것이 다른 환경에서도 그렇다는 뜻은 아니다.
+- **"PPO가 이긴 이유는 구현 난이도"는 해석이다.** TRPO를 구현해 비교하지 않았다.
+:::
 
 ---
 
