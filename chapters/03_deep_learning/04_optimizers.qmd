@@ -301,10 +301,10 @@ for mu, f_ in zip(mus, finals):
     t = trajs[mu]
     flips = int(np.sum(np.diff(np.sign(np.diff(t[:, 1]))) != 0))
     print(f"{mu:>6.2f} {1/(1-mu):>13.1f} {f_:>13.3e} {flips:>19}")
-print()
 best_mu = mus[int(np.argmin(finals))]
-print(f"이 설정에서 최적 μ = {best_mu}")
 ```
+
+이 설정에서 최적 μ = `{python} f'{best_mu}'`
 
 "y축 부호 변화 횟수"는 협곡의 폭 방향으로 몇 번 좌우로 튕겼는가다.
 $\mu$ 가 커질수록 effective learning rate가 커져 빠르지만, 임계를 넘으면 공이 너무 무거워져 진동이 다시 커진다 —
@@ -611,12 +611,12 @@ print("-" * 46)
 for t in [1, 2, 3, 5, 10, 30, 100, 200]:
     med, p99 = q[0, t-1], q[2, t-1]
     print(f"{t:>6} {med:>10.3f} {p99:>10.3f} {p99/med:>15.2f}")
-print()
 steady = float(np.median(q[0, 100:]))
 warm_ratio = float(q[0, 0] / steady)
 spread_late = float(q[2, -1] / q[0, -1])
-print(f"t=1 의 step 크기 {q[0,0]:.3f} vs 정상 구간 {steady:.3f} → {warm_ratio:.1f}배")
 ```
+
+t=1 의 step 크기 `{python} f'{q[0, 0]:.3f}'` vs 정상 구간 `{python} f'{steady:.3f}'` → `{python} f'{warm_ratio:.1f}'`배
 
 $t=1$ 에서는 $\hat m = g$, $\hat v = g^2$ 이므로 $|\hat m/\sqrt{\hat v}| = 1$ — step이 정확히 $\eta$ 다.
 $t$ 가 커지면 $\hat m$ 은 최근 10개 남짓 gradient의 평균이라 잡음이 상쇄되어 작아지는데
@@ -663,22 +663,26 @@ from src import nn
 rng = np.random.default_rng(0)
 # 대부분 정상이고 가끔 폭발하는 gradient norm 분포 (실제 학습에서 흔한 모양)
 norms = np.abs(rng.normal(0, 1, 5000)) * np.where(rng.random(5000) < 0.01, 40, 1)
+```
 
-print(f"gradient norm — 중앙값 {np.median(norms):.3f}, "
-      f"99분위 {np.percentile(norms, 99):.2f}, 최댓값 {norms.max():.2f}")
-print()
+gradient norm — 중앙값 `{python} f'{np.median(norms):.3f}'`, 99분위 `{python} f'{np.percentile(norms, 99):.2f}'`, 최댓값 `{python} f'{norms.max():.2f}'`
+
+```{python}
+#| label: clipping-demo-2
+#| code-fold: false
+
 print(f"{'clip 임계값':>11} {'clip되는 비율':>15} {'적용 후 최대 norm':>18}")
 print("-" * 48)
 for c in [0.5, 1.0, 2.0, 5.0, 10.0]:
     hit = float((norms > c).mean())
     print(f"{c:>11.1f} {hit:>15.2%} {min(norms.max(), c):>18.2f}")
-print()
 # 실제 gradient dict 에 적용
 g = {"W": rng.normal(0, 3, (8, 8)), "b": rng.normal(0, 3, 8)}
 before, scale = nn.clip_grads(g, 1.0)
 after = np.sqrt(sum(float((v**2).sum()) for v in g.values()))
-print(f"clip_grads: norm {before:.3f} → {after:.3f} (배율 {scale:.4f})")
 ```
+
+clip_grads: norm `{python} f'{before:.3f}'` → `{python} f'{after:.3f}'` (배율 `{python} f'{scale:.4f}'`)
 
 clipping은 방향은 그대로 두고 크기만 줄인다(모든 원소에 같은 배율을 곱하므로). 위 분포처럼 1%의 step만 폭발하는 상황에서
 그 step들만 잘라내는 것이 목적이고, 임계값 1.0이 transformer 학습의 관례다.
@@ -834,12 +838,12 @@ print(f"{'설정':<24} {'최종 loss':>11} {'최저 loss':>11} {'test 정확도'
 print("-" * 62)
 for label, (loss, acc) in hists.items():
     print(f"{label:<24} {loss[-50:].mean():>11.4f} {loss.min():>11.4f} {acc:>12.3f}")
-print()
 best_loss = min(hists, key=lambda k: hists[k][0][-50:].mean())
 best_acc = max(hists, key=lambda k: hists[k][1])
-print(f"최저 train loss: {best_loss}")
-print(f"최고 test 정확도: {best_acc}")
 ```
+
+최저 train loss: `{python} f'{best_loss}'`
+최고 test 정확도: `{python} f'{best_acc}'`
 
 train loss를 가장 잘 낮춘 설정과 가장 잘 generalization한 설정이 같을 이유는 없다.
 learning rate를 각자 조금씩만 조정해도 순위가 바뀐다 — 그래서 optimizer 비교는
@@ -851,6 +855,8 @@ learning rate를 각자 조금씩만 조정해도 순위가 바뀐다 — 그래
 
 optimizer state는 parameter마다 따로 붙는 장부다. Adam은 parameter 하나당 $m$ 과 $v$ 두 개를 fp32(4 byte)로 들고 있으므로
 parameter당 8 byte가 추가된다. 7B(70억 개) 모델이면 이것만 56 GB다.
+
+7B parameter 모델 학습 시 메모리 (activation·framework overhead 제외)
 
 ```{python}
 #| label: memory-cost
@@ -865,8 +871,6 @@ def bytes_per_param(kind, mixed_precision=True):
              "adafactor": 0.1, "8bit-adam": 2}[kind]
     return p_master + p_half + grad + state
 
-print("7B parameter 모델 학습 시 메모리 (activation·framework overhead 제외)")
-print()
 print(f"{'optimizer':<14} {'parameter당 B':>12} {'7B 모델':>12} {'A100 80GB 몇 장':>17}")
 print("-" * 60)
 N = 7e9
