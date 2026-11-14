@@ -278,7 +278,7 @@ for f0 in [300, 1500, 3000, 3900, 5000, 7000, 9000]:
     y = audio.resample_naive(x, SR, SR_LOW)
     pk, pred = peak_freq(y, SR_LOW), fold(f0, SR_LOW)
     ALIAS.append((f0, pred, pk))
-    st = "정상" if f0 < SR_LOW/2 else "**aliasing**"
+    st = "정상" if f0 < SR_LOW/2 else "aliasing"
     print(f"{f0:>10} {pred:>10.1f} {pk:>10.1f} "
           f"{('예' if abs(pk-pred) < 3 else '아니오'):>8} {st}")
 ```
