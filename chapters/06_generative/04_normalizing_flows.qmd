@@ -107,9 +107,10 @@ for k in Pc:
 
 zc, _, _ = fchk.forward(Xc)
 inv_err = float(np.abs(fchk.inverse(zc) - Xc).max())
-print(f"  gradient 상대오차   {worst:.2e}")
-print(f"  역변환 오차 max|f⁻¹(f(x)) − x|   {inv_err:.2e}")
 ```
+
+gradient 상대오차 `{python} f'{worst:.2e}'`
+역변환 오차 max|f⁻¹(f(x)) − x| `{python} f'{inv_err:.2e}'`
 
 `src/generative.py` 의 RealNVP를 검증한 것이다. **역변환 오차 `{python} f"{inv_err:.0e}"`는 기계 정density다.**
 근사가 아니라 정확한 역함수다. VAE의 encoder-decoder는 이런 보장이 없다 — reconstruction 오차가 항상 남는다.
@@ -194,9 +195,10 @@ gg = np.linspace(-8, 8, 500)
 GX, GY = np.meshgrid(gg, gg)
 lp_grid = FLOWS[8].log_prob(np.stack([GX.ravel(), GY.ravel()], 1))
 Z_int = float(np.exp(lp_grid).sum()*(gg[1]-gg[0])**2)
-print(f"8층 모델 density의 격자 적분 ∫p(x)dx = {Z_int:.6f}")
 gen_gap = DEP[-1][3] - DEP[-1][2]
 ```
+
+8층 모델 density의 격자 적분 ∫p(x)dx = `{python} f'{Z_int:.6f}'`
 
 **깊이를 늘릴수록 test NLL이 단조 감소한다** (`{python} f"{DEP[0][3]:.3f}"` → `{python} f"{DEP[-1][3]:.3f}"`).
 기준선인 표준정규는 `{python} f"{gauss_nll:.3f}"`이니, 1층만으로도 이미 데이터를 배운다. 훈련·test
@@ -295,8 +297,14 @@ for nm, v in [("log N(z; 0, I)  (prior)", lp_z),
               ("log p(x)        (합계)", lp_z + ld_all)]:
     print(f"{nm:<28} {v.mean():>10.4f} {v.std():>10.4f} {v.min():>10.4f} "
           f"{v.max():>10.4f}")
-print()
-print("z가 표준정규가 되었는가")
+```
+
+z가 표준정규가 되었는가
+
+```{python}
+#| label: jacobian-2
+#| code-fold: false
+
 print(f"  z의 평균     {np.round(z_all.mean(0), 4)}   (목표 [0, 0])")
 print(f"  z의 표준편차 {np.round(z_all.std(0), 4)}   (목표 [1, 1])")
 print(f"  z의 상관계수 {np.corrcoef(z_all.T)[0, 1]:>7.4f}   (목표 0)")
@@ -413,12 +421,18 @@ print(f"{'실제 데이터':>6} {'':>10} {'':>9} {near_real.mean():>10.1%} "
 lo, hi = min(t[4] for t in TOPO), max(t[4] for t in TOPO)
 bridge_txt = " → ".join(f"{t[4]:.1%}" for t in TOPO)
 par_ratio = TOPO[-1][1] / TOPO[0][1]
-print()
-print("ring 위·ring 안쪽 네 지점의 모델 density vs 참 density")
 probe_pts = np.stack([CEN[0], (CEN[0] + CEN[1])/2,
                       1.5*CEN[0]/np.linalg.norm(CEN[0]),
                       np.array([0.0, 0.0])])
 labels = ["mode 0 중심", "인접 mode 중점", "반지름 1.5 지점", "원점 (ring의 구멍)"]
+```
+
+ring 위·ring 안쪽 네 지점의 모델 density vs 참 density
+
+```{python}
+#| label: topology-2
+#| code-fold: false
+
 print()
 print(f"  {'위치':<20} {'모델 log p':>13} {'참 log p':>12} "
       f"{'모델 / 참':>14}")
@@ -833,12 +847,18 @@ z = rng.normal(size=200_000)
 x = z.copy()
 for _ in range(50):                                   # Newton 으로 f(x) = z 풀기
     x -= (f(x) - z) / df(x)
-print(f"역변환 오차 max|f(x) − z| = {np.abs(f(x) - z).max():.1e}")
 
 edges = np.linspace(-3, 3, 31)
 hist, _ = np.histogram(x, edges, density=True)
 c = (edges[:-1] + edges[1:]) / 2
 formula = stats.norm.pdf(f(c)) * df(c)
+```
+
+역변환 오차 max|f(x) − z| = `{python} f'{np.abs(f(x) - z).max():.1e}'`
+
+```{python}
+#| label: ex-cov-1d-2
+
 print(f"histogram vs 공식 최대 차이 {np.abs(hist - formula).max():.4f}   (density 최댓값 {formula.max():.3f})")
 for xi in [0.0, 1.0, 2.5]:
     print(f"  x={xi}:  p_z(f(x))·f'(x) = {stats.norm.pdf(f(xi)) * df(xi):.4f}   (표준정규라면 {stats.norm.pdf(xi):.4f})")
@@ -876,8 +896,13 @@ Z = (X - mu) @ A.T
 log_det = np.log(abs(np.linalg.det(A)))
 nll_flow = -np.mean(stats.multivariate_normal(np.zeros(2), np.eye(2)).logpdf(Z) + log_det)
 nll_gauss = -np.mean(stats.multivariate_normal(mu, S).logpdf(X))
+```
 
-print(f"선형 flow NLL  {nll_flow:.6f}")
+선형 flow NLL `{python} f'{nll_flow:.6f}'`
+
+```{python}
+#| label: ex-linear-flow-2
+
 print(f"Gaussian NLL   {nll_gauss:.6f}")
 print(f"z 평균 {Z.mean(0).round(12)}   z covariance\n{np.cov(Z.T, bias=True).round(6)}")
 ```
