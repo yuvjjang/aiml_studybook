@@ -515,8 +515,14 @@ DMC.fit(X_R, y=Y, steps=6000, lr=2e-3, batch=256, seed=1, p_uncond=0.1)
 TARGET = 3
 tgt = np.full(2000, TARGET)
 real_var = float((CEN[TARGET] + rr.normal(0, 0.2, (2000, 2))).var(0).sum())
+```
 
-print(f"조건 = mode {TARGET}, 2000 sample")
+조건 = mode `{python} f'{TARGET}'`, 2000 sample
+
+```{python}
+#| label: cfg-2
+#| code-fold: false
+
 print(f"{'w':>6} {'목표 mode 적중':>14} {'sample 분산':>12} "
       f"{'실제 분산 대비':>15} {'목표까지 거리':>14}")
 print("-" * 66)
