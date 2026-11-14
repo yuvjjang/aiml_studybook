@@ -397,9 +397,9 @@ print("-" * 78)
 REG = []
 for nm, lo, hi, exp in [
     ("데이터 있음 · 잡음 적음", -3.0, -2.0, "둘 다 작아야"),
-    ("**데이터 구멍**", -0.8, 0.2, "epistemic이 커야"),
+    ("데이터 구멍", -0.8, 0.2, "epistemic이 커야"),
     ("데이터 있음 · 잡음 큼", 2.5, 3.5, "aleatoric이 커야"),
-    ("**extrapolation 영역**", 4.5, 5.5, "epistemic이 커야"),
+    ("extrapolation 영역", 4.5, 5.5, "epistemic이 커야"),
 ]:
     m_ = (XG[:, 0] >= lo) & (XG[:, 0] <= hi)
     a_ = float(np.sqrt(ALEA[m_].mean())); e_ = float(np.sqrt(EPIS[m_].mean()))
@@ -418,21 +418,11 @@ hole, noisy, extra = REG[1], REG[2], REG[3]
 extrapolation(외삽 — 데이터 범위 바깥) 영역(데이터 최댓값 4.0 바깥): 비율 `{python} f'{extra[3]:.2f}'`로 **epistemic이 안 커진다**.  
 epistemic σ가 구멍에서 `{python} f'{hole[2]:.3f}'`였는데 extrapolation에서는 `{python} f'{extra[2]:.3f}'`다.
 
-```{python}
-#| label: decompose-2
-#| code-fold: false
-
-for s in ["원인은 구성원들이 **같은 방향으로 extrapolation**하기 때문이다 — "
-          "구조와 loss가 같으니 데이터 밖에서도 비슷하게 행동한다. 같은 학교에서 같은 교재로 배운 전문가들은 안 배운 문제에도 비슷하게 틀린다",
-          "**deep ensemble은 interpolation(내삽) 구멍은 잡지만 extrapolation은 못 잡는다**",
-          "그리고 여기서 aleatoric σ가 {:.3f}로 크게 나온 것도 "
-          "'잡음을 안다'가 아니라 **잡음 모델이 그냥 extrapolation된 것**이다"
-          .format(extra[1]),
-          "**이것이 'ensemble을 쓰면 OOD(out-of-distribution — 학습 분포 밖)를 안다'는 통념의 한계**다 — "
-          "[12.3](03_robustness.qmd)에서 OOD 탐지를 따로 다루는 이유",
-          "분포 무관 보장이 필요하면 다음 절의 conformal로 간다"]:
-    print(f"  · {s}")
-```
+- 원인은 구성원들이 **같은 방향으로 extrapolation**하기 때문으로 보인다 — 구조와 loss가 같으니 데이터 밖에서도 비슷하게 행동한다. 같은 학교에서 같은 교재로 배운 전문가들은 안 배운 문제에도 비슷하게 틀린다
+- **이 실험의 deep ensemble은 interpolation(내삽) 구멍은 잡았지만 extrapolation은 못 잡았다**
+- 그리고 여기서 aleatoric σ가 `{python} f'{extra[1]:.3f}'`로 크게 나온 것도 '잡음을 안다'가 아니라 **잡음 모델이 그냥 extrapolation된 것**으로 읽어야 한다 — 그 영역에는 잡음을 잴 데이터가 없다
+- **이것이 'ensemble을 쓰면 OOD(out-of-distribution — 학습 분포 밖)를 안다'는 통념의 한계**다 — [12.3](03_robustness.qmd)에서 OOD 탐지를 따로 다루는 이유
+- 분포 무관 보장이 필요하면 다음 절의 conformal로 간다
 
 ```{python}
 #| label: fig-decompose
@@ -723,6 +713,18 @@ fig
 - 다만 **모델이 일관되게 틀리는 경우**를 못 잡는다. 앞 절의 ensemble 불일치와 정확히 같은 한계
 - conformal은 생성에도 적용할 수 있다 — '정답을 포함할 확률 90%'인 **후보 집합**을 내는 식으로
 - **가장 실용적인 조합**: 검증 가능한 부분은 검증하고([11.6](../11_systems/06_monitoring.qmd)), 나머지는 거부 threshold로 사람에게 넘긴다
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **데이터가 10차원 합성 4-class 과제다.** Gumbel 잡음을 섞어 Bayes 오차를 일부러 크게 만들었다. 모델은 hidden 2층 MLP다. "커질수록 ECE가 8.8배"는 이 데이터와 이 모델 크기 범위의 값이다. 큰 network가 overconfident해지는 경향은 문헌에도 보고되지만, 그 배율은 데이터와 학습 방법에 따라 다르다.
+- **temperature scaling은 같은 분포의 validation set으로 맞췄다.** 요약표의 "한계"대로 분포가 바뀌면 다시 어긋난다. 이 장에서 drift 아래의 calibration은 재지 않았다.
+- **uncertainty 분해는 일부만 재현됐다.** 데이터 구멍에서는 epistemic이 컸지만, extrapolation 영역에서는 ensemble 구성원이 같이 틀려 epistemic이 작게 나왔다. ensemble 5개, 같은 구조의 MLP라서 구성원이 비슷하게 extrapolation했을 수 있다. 구조나 데이터가 더 다양한 ensemble에서도 그런지는 확인하지 않았다.
+- **conformal의 보장 자체는 절차에서 나오므로 일반적이다.** 다만 "평균 2.28개 class", "class별 0.894~0.945"는 이 데이터의 값이다.
+- **LLM의 uncertainty 절은 문헌 정리다.**
+:::
 
 ---
 
