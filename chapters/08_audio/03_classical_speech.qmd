@@ -554,14 +554,7 @@ d0, d1, d2 = DEC
 **여기서 두 지표가 반대로 움직인다.**
 
 frame 정확도: `{python} f'{d0[1]:.4f}'` → `{python} f'{d1[1]:.4f}'` — **떨어진다**
-
-```{python}
-#| label: decode-phone-2
-#| code-fold: false
-
-print(f"  phoneme 오류율:   {d0[2]:.4f} → {d1[2]:.4f} — "
-      f"**{d0[2]/max(d1[2],1e-9):.1f}배 좋아진다**")
-```
+phoneme 오류율: `{python} f'{d0[2]:.4f}'` → `{python} f'{d1[2]:.4f}'` — **`{python} f'{d0[2]/max(d1[2], 1e-9):.1f}'`배 좋아진다**
 
 Viterbi는 개별 frame을 조금 희생하고 **경로 전체**를 맞춘다.  
 frame argmax는 짧게 깜빡이는 오류를 내는데 (한 frame만 다른 phoneme으로 튄다),
@@ -571,10 +564,11 @@ frame argmax는 짧게 깜빡이는 오류를 내는데 (한 frame만 다른 pho
 
 ```{python}
 #| label: decode-phone-3
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if d2[2] == 0:
-    print("  이 corpus에서는 완벽하다. pronunciation lexicon이 phoneme 연쇄를 강하게 제약하기 때문이다.")
+    print("이 corpus에서는 완벽하다. pronunciation lexicon이 phoneme 연쇄를 강하게 제약하기 때문이다.")
 ```
 
 **교훈: 최적화하는 지표와 보고하는 지표를 혼동하지 말 것.**
@@ -890,6 +884,17 @@ subword 출력(8.4)이 이 제약을 없앤다.
 - **문맥 의존 단위와 state tying** — encoder가 문맥을 담는다
 - **HMM의 conditional independence 가정** — 그래서 delta feature도 필요 없어졌다 (8.2)
 - 남는 것은 alignment를 **marginalization(주변화 — 가능한 모든 alignment의 확률을 전부 더해 버리는 것)**하는 아이디어 하나다 (8.4)
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **음성이 합성이고 phoneme이 8종이다.** 모음은 formant filter로, 마찰음은 대역 noise로 만들었고, 단어도 정해진 작은 목록에서 뽑았다. 요약표에 적은 대로 forced alignment가 1회 반복 뒤 거의 개선되지 않은 것도 합성 데이터라 고칠 것이 없었기 때문이다. 실제 음성에서는 반복이 더 필요하다.
+- **PER 0, WER 0은 쉬운 조건의 값이다.** 작은 lexicon과 phoneme bigram이 탐색을 강하게 좁혔다. 실제 어휘 수만 개, 문장 단위 language model에서는 이렇게 되지 않는다. 반대로 "학습 조건 밖에서 무너진다"(σ=0.10에서 WER 0.82)는 이 작은 데이터에서 더 극단적으로 나타났을 수 있다.
+- **8.2 재검증 ③은 예상과 반대로 나왔다.** diagonal covariance에서 log-mel이 MFCC보다 정확했다. 이 데이터 하나의 결과라 8.2의 일반적인 주장을 뒤집는 근거는 아니고, 이 조건에서 재현되지 않았다는 것까지다.
+- **triphone과 state tying은 세기만 했다.** "9.2%만 관측"은 이 corpus의 phoneme 9종(묵음 포함)으로 가능한 triphone 729개 중에서 센 값이고, 64,000개는 phoneme 40개를 가정해 계산한 수다. decision tree로 state를 묶어 학습하지는 않았다.
+:::
 
 ---
 
