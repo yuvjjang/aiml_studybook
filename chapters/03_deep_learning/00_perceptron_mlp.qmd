@@ -365,7 +365,14 @@ for i in range(1, len(deep.W)):
 out_flat = X @ W_eq + b_eq
 
 n_deep, n_flat = deep.n_params(), W_eq.size + b_eq.size
-print(f"5층 망 (hidden 32×3) 파라미터: {n_deep:,}개")
+```
+
+5층 망 (hidden 32×3) 파라미터: `{python} f'{n_deep:,}'`개
+
+```{python}
+#| label: linear-collapse-2
+#| code-fold: false
+
 print(f"등가 단일 선형층 파라미터   : {n_flat}개")
 print(f"두 출력의 최대 차이         : {np.abs(out_deep - out_flat).max():.3e}")
 ```
@@ -601,8 +608,14 @@ print(f"{'입력 X':<26} {str(X.shape):>16}")
 for i, (w, b) in enumerate(zip(model.W, model.b)):
     print(f"{f'  @ W{i} {w.shape} + b{i}':<26} {str(cache['z'][i].shape):>16}")
 print(f"{'출력 (logit)':<26} {str(out.shape):>16}")
-print()
-print(f"총 파라미터 {model.n_params():,}개")
+```
+
+총 파라미터 `{python} f'{model.n_params():,}'`개
+
+```{python}
+#| label: forward-shapes-2
+#| code-fold: false
+
 print(f"  = {d_in}×{h1}+{h1} + {h1}×{h2}+{h2} + {h2}×{K}+{K}")
 print(f"  = {d_in*h1+h1} + {h1*h2+h2} + {h2*K+K}")
 ```
