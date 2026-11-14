@@ -61,7 +61,7 @@ for lbl, tokens, batch in [("decode (batch 1)", 1, 1),
     I = flops/byts
     ROOF.append((lbl, tokens*batch, I))
     print(f"{lbl:<26} {flops:>14.2e} {byts:>14.2e} {I:>11.1f} "
-          f"{'연산' if I > RIDGE else '**메모리**'}")
+          f"{'연산' if I > RIDGE else '메모리'}")
 BATCH1_UTIL = 1/RIDGE
 ```
 
