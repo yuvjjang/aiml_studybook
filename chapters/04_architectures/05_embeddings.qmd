@@ -38,8 +38,14 @@ print(f"{'one-hot':<14} {V:>10,} {V*4/1024:>10.0f}KB {V*512*4/1e6:>11.1f}MB "
 print(f"{'dense embedding':<14} {d:>10,} {d*4/1024:>10.0f}KB {d*512*4/1e6:>11.1f}MB "
       f"{V*d*4/1e6:>10.1f}MB   학습으로 정해짐")
 oh = np.eye(5)
-print()
-print("one-hot 벡터들의 cosine similarity 행렬 (5개 단어):")
+```
+
+one-hot 벡터들의 cosine similarity 행렬 (5개 단어):
+
+```{python}
+#| label: onehot-problem-2
+#| code-fold: false
+
 print(oh @ oh.T)
 ```
 
@@ -80,11 +86,16 @@ a = onehot @ E
 # 방법 B: lookup (indexing)
 b = E[ids]
 
-print(f"두 결과가 같은가: {np.array_equal(a, b)}")
-print(f"최대 차이: {np.abs(a-b).max():.1e}")
-print()
-
 t0 = time.perf_counter()
+```
+
+두 결과가 같은가: `{python} f'{np.array_equal(a, b)}'`
+최대 차이: `{python} f'{np.abs(a - b).max():.1e}'`
+
+```{python}
+#| label: lookup-equals-matmul-2
+#| code-fold: false
+
 for _ in range(50):
     onehot = np.zeros((len(ids), Vv))
     onehot[np.arange(len(ids)), ids] = 1.0
@@ -146,7 +157,14 @@ rng = np.random.default_rng(0)
 
 NV = 400
 n_pairs = NV*(NV-1)//2
-print(f"무작위 단위벡터 {NV}개 ({n_pairs:,} 쌍)의 내적 분포 (완전 직교 = 0)\n")
+```
+
+무작위 단위벡터 `{python} f'{NV}'`개 (`{python} f'{n_pairs:,}'` 쌍)의 내적 분포 (완전 직교 = 0)
+
+```{python}
+#| label: near-orthogonal-2
+#| code-fold: false
+
 print(f"{'차원 d':>8}{'내적 표준편차':>14}{'1/√d':>10}{'최대 |내적|':>14}")
 max_ov = {}
 for d in [8, 64, 768, 4096]:
@@ -159,6 +177,7 @@ for d in [8, 64, 768, 4096]:
 
 # JL: 필요한 차원은 log N 에 비례 (상수 8 은 예시)
 print()
+
 print(f"{'어휘 N':>10}{'log N':>9}{'ε=0.2 일 때 필요 차원 ~8logN/ε²':>32}")
 for N in [1_000, 50_000, 1_000_000]:
     print(f"{N:>10,}{np.log(N):>9.2f}{8*np.log(N)/0.2**2:>32,.0f}")
@@ -252,11 +271,18 @@ def cos_mat(X):
 
 K_V, C_V = 60, 6
 sents, label = make_corpus(K=K_V, C=C_V)
-print(f"합성 corpus: 어휘 {K_V}, 주제 {C_V}개(주제당 {K_V//C_V}단어), "
-      f"문장 {len(sents):,}개")
-print(f"문장 예: {sents[0].tolist()}  (주제 {label[sents[0][0]]})")
-print(f"단어별 주제 label: {label[:12].tolist()} ...")
 ```
+
+합성 corpus: 어휘 `{python} f'{K_V}'`, 주제 `{python} f'{C_V}'`개(주제당 `{python} f'{K_V // C_V}'`단어), 문장 `{python} f'{len(sents):,}'`개
+
+```{python}
+#| label: sgns-setup-2
+#| code-fold: false
+
+print(f"문장 예: {sents[0].tolist()}  (주제 {label[sents[0][0]]})")
+```
+
+단어별 주제 label: `{python} f'{label[:12].tolist()}'` ...
 
 **학습은 label을 전혀 보지 않는다.** 같이 등장한다는 사실만 쓴다.
 그럼에도 주제 구조가 벡터 기하로 나타나는지가 관심사다.
@@ -716,12 +742,18 @@ for nm, Z in [("무작위 Gaussian (기준)", R16),
               ("인위적 anisotropy (대조군)", X_aniso)]:
     print(f"{nm:<26} {aniso(Z):>16.4f} {aniso(Z-Z.mean(0)):>12.4f} "
           f"{aniso(whiten(Z)):>13.4f}")
-print()
 
 cov = np.cov((X16 - X16.mean(0)).T)
 ev = np.linalg.eigvalsh(cov)[::-1]
 top_ev = float(ev[0]/ev.sum())
-print(f"학습된 embedding covariance의 eigenvalue 분포 (d=16)")
+```
+
+학습된 embedding covariance의 eigenvalue 분포 (d=16)
+
+```{python}
+#| label: anisotropy-2
+#| code-fold: false
+
 print(f"  최대 eigenvalue가 차지하는 비중 : {top_ev:.3f}  (균등하면 {1/16:.3f})")
 print(f"  상위 3개 누적               : {ev[:3].sum()/ev.sum():.3f}")
 an_learned, an_rand, an_ctrl = aniso(X16), aniso(R16), aniso(X_aniso)
