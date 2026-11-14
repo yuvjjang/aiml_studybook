@@ -180,7 +180,7 @@ print(f"{'배치 전략':<22} {'sequence 길이':>14} {'단계 간 의존':>14} 
 print("-" * 74)
 for a, n, dep, c in [
     ("flatten (평탄화)", T*S, "완전", "가장 길다. T x S"),
-    ("병렬 head", T, "**없음**", "한 step에 S개를 동시에"),
+    ("병렬 head", T, "없음", "한 step에 S개를 동시에"),
     ("delay pattern", T + S, "부분", "단계마다 한 step씩 밀어 넣는다"),
     ("계층 (coarse→fine)", f"{T} + {T*(S-1)}", "부분", "1단계만 AR, 나머지는 조건부"),
 ]:
@@ -258,8 +258,8 @@ print(f"{'lag (frame)':>12} {'실제 음악':>11} {'3-gram 생성':>13} "
       f"{'실제 음성':>11}  {'비고'}")
 print("-" * 68)
 for lag in [1, 10, 31, 62, PHRASE, 2*PHRASE]:
-    note_ = ("**phrase 주기**" if lag == PHRASE else
-             "**2주기**" if lag == 2*PHRASE else
+    note_ = ("← phrase 주기" if lag == PHRASE else
+             "← 2주기" if lag == 2*PHRASE else
              "(한 음 길이)" if lag == 31 else "")
     print(f"{lag:>12} {AC_REAL[lag-1]:>11.3f} {AC_GEN[lag-1]:>13.3f} "
           f"{AC_SPE[lag-1]:>11.3f}  {note_}")
@@ -613,7 +613,7 @@ G8.9.3의 guidance 대가가 그래서 잘 안 보인다.
 
 print(f"{'구성':<26} {'latency (ms)':>12} {'비고'}")
 print("-" * 64)
-casc = [("VAD로 발화 끝 판정", 200, "**끝났는지 기다려야 한다**"),
+casc = [("VAD로 발화 끝 판정", 200, "끝났는지 기다려야 한다"),
         ("ASR (8.6)", 150, "streaming이어도 마무리 필요"),
         ("LLM 첫 token (TTFT)", 350, "7.14의 prefill"),
         ("LLM 응답 생성", 400, "문장 하나 분량"),
@@ -629,16 +629,10 @@ print(f"{'합계 (cascade)':<26} {tot:>12}")
 
 **end-to-end 음성-음성 모델이 줄이는 것**
 
-```{python}
-#| label: duplex-2
-#| code-fold: false
-
-for a, b in [("텍스트 왕복 제거", "ASR·TTS의 latency와 오류가 사라진다"),
-             ("발화 끝을 기다리지 않음", "**barge-in(끼어들기)**이 가능해진다"),
-             ("paralinguistic(준언어) 정보 보존", "억양·웃음·망설임이 텍스트에서 지워지지 않는다"),
-             ("**full-duplex(전이중)**", "듣기와 말하기를 동시에 — 사람의 대화 구조 (무전기가 아니라 전화)")]:
-    print(f"  · **{a}** — {b}")
-```
+- **텍스트 왕복 제거** — ASR·TTS의 latency와 오류가 사라진다
+- **발화 끝을 기다리지 않음** — **barge-in(끼어들기)**이 가능해진다
+- **paralinguistic(준언어) 정보 보존** — 억양·웃음·망설임이 텍스트에서 지워지지 않는다
+- **full-duplex(전이중)** — 듣기와 말하기를 동시에 — 사람의 대화 구조 (무전기가 아니라 전화)
 
 **대신 잃는 것**
 
@@ -681,6 +675,18 @@ codec token은 음향을 통째로 담으므로, 재현되는 것이
 - 생성물 provenance 표기(C2PA 등)
 - **artist 동의를 전제로 한 목소리 licensing** — 새로 생긴 시장
 - 7.15의 결론이 여기서도 같다 — **탐지가 아니라 구조가 막는다**
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **"음악"은 4음 phrase를 되풀이하는 합성 신호다.** harmonic 6개짜리 음을 0.25초마다 이어 붙였다. 요약표의 "실제 음악: phrase 주기 초과분 +0.421"은 반복이 정확히 주기적인 이 신호에서 잰 값이다. 실제 음악의 반복은 이보다 불규칙하고 길다.
+- **생성 모델은 3-gram이다.** "국소 모델은 long-term 구조를 못 만든다"는 문맥이 두 token뿐인 모델에서 확인한 것이다. 문맥이 긴 Transformer가 어디까지 구조를 만드는지는 이 실험으로 알 수 없다.
+- **CFG의 trade-off는 여기서 재현되지 않았다.** 본문에 적은 대로 조건 분포의 차이가 너무 작았다. 아래 "실제 도구로" 절의 MusicGen에서는 다양성이 줄어드는 쪽은 보였지만, 매 step의 분포는 뾰족해지지 않았다.
+- **FAD의 embedding이 log-mel frame이다.** 실제 FAD는 VGGish나 PANN 같은 학습된 embedding을 쓴다. 42, 917, 151 같은 값은 다른 논문의 FAD와 비교할 수 없다. "표본 수를 맞추지 않으면 무의미하다"는 결론은 embedding과 관계없이 성립한다.
+- **대화 latency 1,250 ms는 단계마다 가정한 값을 더한 것이다.** 실제 system에서 잰 값이 아니다.
+:::
 
 ---
 
