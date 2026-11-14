@@ -247,7 +247,7 @@ _, ne_b = n_params(**big[1]); t_b, _ = n_params(**big[1])
 GPT-2 small은 `{python} f'{ne_s / t_s:.1%}'`, GPT-3는 `{python} f'{ne_b / t_b:.1%}'`다.
 
 - 작은 모델일수록 **embedding이 parameter의 상당 부분**을 먹는다
-- 그래서 scaling law 논문들은 대개 **non-embedding parameter**로 센다 ([7.4](../07_language/04_scaling.qmd))
+- 그래서 scaling law 논문들은 대개 **non-embedding parameter**로 센다 ([5.9](../05_transformer/09_scaling_laws.qmd))
 - 12Ld² 근사도 non-embedding 기준이다 — 작은 모델에 쓰면 크게 빗나간다
 
 **12Ld² 근사의 정확도**
@@ -497,7 +497,7 @@ logit `{python} f'{z}'`에 대해
 #| label: approx-2
 #| code-fold: false
 
-print(f"    순진하게: exp 합 = {naive}  ← **overflow**")
+print(f"    순진하게: exp 합 = {naive}  ← overflow")
 print(f"    안정화:   logsumexp = {stable:.6f}")
 print(f"    검산:     1002 + log(e⁻² + e⁻¹ + 1) = "
       f"{1002 + np.log(np.exp(-2)+np.exp(-1)+1):.6f}")
