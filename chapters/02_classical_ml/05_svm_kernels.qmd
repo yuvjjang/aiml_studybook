@@ -159,8 +159,15 @@ for c in [0.5, 1.0, 2.0, 10.0]:
 # 눈금 고정 후: margin = 1/‖w‖
 c_norm = 1.0 / (y * (pts @ w0 + b0)).min()
 w, b = c_norm * w0, c_norm * b0
-print(f"\n눈금 고정 배율 c = {c_norm:.4f}")
-print(f"  함수값 최솟값 = {(y * (pts @ w + b)).min():.4f}")
+```
+
+눈금 고정 배율 c = `{python} f'{c_norm:.4f}'`
+함수값 최솟값 = `{python} f'{(y * (pts @ w + b)).min():.4f}'`
+
+```{python}
+#| label: margin-scaling-2
+#| code-fold: false
+
 print(f"  1/‖w‖ = {1/np.linalg.norm(w):.4f}")
 ```
 
@@ -261,12 +268,18 @@ def phi_poly2(x):
 
 explicit = phi_poly2(x1) @ phi_poly2(x2)
 kernel = (x1 @ x2 + 1) ** 2
+```
 
-print(f"명시적으로 6차원으로 올려 내적 : {explicit:.10f}")
-print(f"kernel (x·x' + 1)² 로 바로 계산  : {kernel:.10f}")
-print(f"차이: {abs(explicit - kernel):.2e}")
-print()
-print("차원이 커질수록 이 절약이 커진다:")
+명시적으로 6차원으로 올려 내적 : `{python} f'{explicit:.10f}'`
+kernel (x·x' + 1)² 로 바로 계산 : `{python} f'{kernel:.10f}'`
+차이: `{python} f'{abs(explicit - kernel):.2e}'`
+
+차원이 커질수록 이 절약이 커진다:
+
+```{python}
+#| label: kernel-trick-demo-2
+#| code-fold: false
+
 print(f"{'원 차원 d':>10} {'2차 다항 특성 수':>18} {'kernel 계산 비용':>17}")
 print("-" * 48)
 for d in [2, 10, 100, 1000]:
