@@ -149,24 +149,30 @@ fig.update_layout(legend=dict(x=0.02, y=0.15, font=dict(size=11)))
 fig.show()
 ```
 
+최종 train loss
+
 ```{python}
 #| label: degradation-numbers
 #| code-fold: false
 
 import numpy as np
 
-print("최종 train loss")
 print(f"{'block 수':>8} " + " ".join(f"{lbl:>14}" for _, lbl in MODES))
 print("-" * 56)
 for d in depths:
     print(f"{d:>8} " + " ".join(f"{res[(m, d)][0]:>14.4f}" for m, _ in MODES))
-print()
-print("test 정확도")
+```
+
+test 정확도
+
+```{python}
+#| label: degradation-numbers-2
+#| code-fold: false
+
 print(f"{'block 수':>8} " + " ".join(f"{lbl:>14}" for _, lbl in MODES))
 print("-" * 56)
 for d in depths:
     print(f"{d:>8} " + " ".join(f"{res[(m, d)][1]:>14.3f}" for m, _ in MODES))
-print()
 
 CHANCE = np.log(2)
 dead = [d for d in depths if abs(res[("plain", d)][0] - CHANCE) < 0.01]
@@ -595,9 +601,10 @@ print("-" * 44)
 for p in range(0, 8):
     d, w, r = a**p, b**p, c**p
     print(f"{p:>3} {d:>7.2f} {w:>7.2f} {r*224:>11.0f} {d*w**2*r**2:>11.1f}")
-print(f"실제 EfficientNet 의 해상도: {res_px.tolist()}")
-print(f"공식 예측(224·1.15^φ):      {[round(224*c**p) for p in range(8)]}")
 ```
+
+실제 EfficientNet 의 해상도: `{python} f'{res_px.tolist()}'`
+공식 예측(224·1.15\^φ): `{python} f'{[round(224 * c ** p) for p in range(8)]}'`
 
 $\varphi$ 를 올리면 세 축이 함께 자라고 FLOPs는 대략 $2^\varphi$ 배가 된다. 실제 EfficientNet의
 해상도는 공식 예측을 대체로 따라가지만 정확히 일치하지는 않는다 — 논문도 반올림·조정을 했다.
