@@ -52,9 +52,15 @@ stoi = {c: i for i, c in enumerate(chars)}
 itos = {i: c for c, i in stoi.items()}
 data = np.array([stoi[c] for c in TEXT])
 V = len(chars)
+```
 
-print(f"어휘 {V}자: {''.join(chars)!r}")
-print(f"데이터 {len(data)} token")
+어휘 `{python} f'{V}'`자: `{python} f'{''.join(chars)!r}'`
+데이터 `{python} f'{len(data)}'` token
+
+```{python}
+#| label: data-prep-2
+#| code-fold: false
+
 print(f"'to be' → {[stoi[c] for c in 'to be']}")
 ```
 
@@ -70,8 +76,14 @@ i = 0
 x_demo, y_demo = data[i:i + 8], data[i + 1:i + 9]
 print("입력 :", "".join(itos[t] for t in x_demo), "→", x_demo.tolist())
 print("정답 :", "".join(itos[t] for t in y_demo), "→", y_demo.tolist())
-print()
-print("한 sequence에서 8개 예측이 동시에 학습된다 (causal mask 덕분):")
+```
+
+한 sequence에서 8개 예측이 동시에 학습된다 (causal mask 덕분):
+
+```{python}
+#| label: shift-demo-2
+#| code-fold: false
+
 for k in range(4):
     ctx = "".join(itos[t] for t in x_demo[:k + 1])
     print(f'  "{ctx}" → {itos[y_demo[k]]!r}')
@@ -177,12 +189,24 @@ class MiniGPT:
 
 model = MiniGPT(V, block=BLOCK, d=64, h=4, n_layer=3, seed=0)
 idx, tgt = data[:BLOCK], data[1:BLOCK + 1]
+```
 
-print(f"parameter {model.n_params():,}개")
+parameter `{python} f'{model.n_params():,}'`개
+
+```{python}
+#| label: sanity-check-2
+#| code-fold: false
+
 print(f"logit shape {model.forward(idx).shape}   (T, V)")
-print()
 init_loss = float(model.loss(idx, tgt))
-print(f"초기 loss       {init_loss:.4f}")
+```
+
+초기 loss `{python} f'{init_loss:.4f}'`
+
+```{python}
+#| label: sanity-check-3
+#| code-fold: false
+
 print(f"균등 예측이면    {np.log(V):.4f}   (= log V)")
 ```
 
@@ -300,6 +324,8 @@ backward pass는 조용히 틀리기 쉽다. loss는 여전히 조금 내려가�
 
 $$\frac{\partial L}{\partial \theta_i} \approx \frac{L(\theta + \epsilon e_i) - L(\theta - \epsilon e_i)}{2\epsilon}$$
 
+해석적 gradient vs numerical (상대오차)
+
 ```{python}
 #| label: grad-check
 #| code-fold: false
@@ -307,7 +333,6 @@ $$\frac{\partial L}{\partial \theta_i} \approx \frac{L(\theta + \epsilon e_i) - 
 loss0, G = model.loss_and_grads(idx, tgt)
 rng = np.random.default_rng(1)
 
-print("해석적 gradient vs numerical (상대오차)")
 print("-" * 46)
 worst = 0.0
 for key in ["wte", "wpe", "q0", "o1", "f12", "b20", "k2", "v1"]:
@@ -387,7 +412,15 @@ for step in range(1, n_steps + 1):
     hist.append(total); lrs.append(cur_lr); gnorms.append(gnorm)
 
 train_time = time.time() - t0
-print(f"학습 {n_steps} step · {train_time:.1f}초")
+```
+
+학습 `{python} f'{n_steps}'` step · `{python} f'{train_time:.1f}'`초
+
+```{python}
+#| label: training-2
+#| code-fold: show
+#| code-summary: "학습 루프 (펼쳐서 보기)"
+
 print(f"loss {hist[0]:.4f} → {hist[-1]:.4f}")
 print(f"perplexity {np.exp(hist[0]):.1f} → {np.exp(hist[-1]):.1f}  (어휘 {V}자 중)")
 ```
@@ -582,11 +615,17 @@ import time
 n_new = 50
 t0 = time.time(); a = model.generate(ids, n_new, 0.8, 8, seed=3); t_plain = time.time() - t0
 t0 = time.time(); b = model.generate_cached(ids, n_new, 0.8, 8, seed=3); t_cache = time.time() - t0
+```
 
-print(f"cache 없음 : {''.join(itos[i] for i in a)!r}")
-print(f"cache 사용 : {''.join(itos[i] for i in b)!r}")
-print()
-print(f"출력이 완전히 동일한가: {a == b}")
+cache 없음 : `{python} f'{''.join((itos[i] for i in a))!r}'`
+cache 사용 : `{python} f'{''.join((itos[i] for i in b))!r}'`
+
+출력이 완전히 동일한가: `{python} f'{a == b}'`
+
+```{python}
+#| label: kv-verify-2
+#| code-fold: false
+
 print(f"시간   cache 없음 {t_plain*1000:.0f}ms   cache 사용 {t_cache*1000:.0f}ms   "
       f"({t_plain/t_cache:.1f}배 빠름)")
 cache_speedup = t_plain / t_cache
