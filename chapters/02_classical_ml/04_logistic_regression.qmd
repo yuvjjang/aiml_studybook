@@ -986,8 +986,9 @@ for t in range(1, 10**5):
     b -= eta * X.T @ (sigmoid(X @ b) - y) / n
     if np.linalg.norm(b - b_irls) < 1e-6:
         break
-print(f"gradient descent: {t}걸음")
 ```
+
+gradient descent: `{python} f'{t}'`걸음
 :::
 
 ### C2. LDA 공식과 logistic regression 비교
