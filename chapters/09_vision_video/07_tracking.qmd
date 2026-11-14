@@ -471,10 +471,11 @@ ID switch가 `{python} f'{bad[3]:.1f}'`회에서 **`{python} f'{bad[4]:.1f}'`회
 
 ```{python}
 #| label: reid-quality-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if cross:
-    print(f"  역전은 appearance 잡음 {cross[0]} 부근에서 일어난다.")
+    print(f"역전은 appearance 잡음 {cross[0]} 부근에서 일어난다.")
 ```
 
 **왜 나쁜 embedding이 적극적으로 해로운가**
