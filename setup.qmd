@@ -132,7 +132,7 @@ kernel은 `ai-ml-study` 를 고른다.
 
 이 책의 본문 코드는 PyTorch를 쓰지 않는다. 빌드할 때마다 같은 그림이 나오도록 의존성을 NumPy·SciPy·Plotly로 제한했기 때문이다.
 대신 장 끝의 **실제 도구로** 절이, 그 장에서 NumPy로 만든 것을 PyTorch·Hugging Face·scikit-learn으로는 어떻게 쓰는지 보여 준다.
-지금 그 절이 있는 장은 114개다.
+지금 그 절이 있는 장은 119개다.
 
 - **Part 0 수학 기초**
     - [0.0 선형대수](chapters/00_foundations/00_linear_algebra.qmd) — torch.linalg
@@ -202,7 +202,9 @@ kernel은 `ai-ml-study` 를 고른다.
     - [6.3 GAN](chapters/06_generative/03_gan.qmd) — PyTorch로 GAN을 학습시킨다
     - [6.4 normalizing flow](chapters/06_generative/04_normalizing_flows.qmd) — torch.distributions 의 transform
     - [6.5 diffusion model](chapters/06_generative/05_diffusion.qmd) — diffusers의 scheduler
+    - [6.6 score 기반 관점과 SDE](chapters/06_generative/06_score_sde.qmd) — 학습된 DDPM으로 inversion과 sampler를 잰다
     - [6.7 latent diffusion과 텍스트-이미지](chapters/06_generative/07_latent_diffusion.qmd) — Stable Diffusion의 autoencoder로 48배 압축을 직접 해 본다
+    - [6.8 flow matching과 최신 생성 기법](chapters/06_generative/08_flow_matching.qmd) — torchcfm으로 경로를 곧게 펴는 또 다른 방법
 - **Part 7 언어**
     - [7.0 텍스트를 다루기](chapters/07_language/00_text_representation.qmd) — scikit-learn의 CountVectorizer 와 TfidfVectorizer
     - [7.1 tokenization](chapters/07_language/01_tokenization.qmd) — 공개된 tokenizer 두 개
@@ -215,6 +217,8 @@ kernel은 `ai-ml-study` 를 고른다.
     - [7.8 prompting과 in-context learning](chapters/07_language/08_prompting_icl.qmd) — GPT-2에 few-shot prompt를 준다
     - [7.9 decoding 전략](chapters/07_language/09_decoding.qmd) — generate 의 인자들
     - [7.10 RAG](chapters/07_language/10_rag.qmd) — BM25, 문장 embedding, RRF
+    - [7.11 agent와 도구 사용](chapters/07_language/11_agents.qmd) — 작은 instruct 모델에게 도구를 쥐여 준다
+    - [7.12 reasoning model](chapters/07_language/12_reasoning_models.qmd) — 작은 모델에 수학 문제를 여러 번 풀게 한다
     - [7.13 LLM 평가](chapters/07_language/13_evaluation.qmd) — statsmodels로 평가 결과를 검정한다
     - [7.14 inference 최적화](chapters/07_language/14_inference_optimization.qmd) — GPT-2로 KV cache와 quantization을 잰다
     - [7.15 안전성과 신뢰](chapters/07_language/15_safety.qmd) — GPT-2에서 암기와 "모르는 것"을 본다
@@ -246,6 +250,7 @@ kernel은 `ai-ml-study` 를 고른다.
     - [10.2 model-free 학습](chapters/10_rl/02_model_free.qmd) — Gymnasium의 CliffWalking
     - [10.3 deep reinforcement learning](chapters/10_rl/03_deep_rl.qmd) — CartPole에서 DQN을 학습시킨다
     - [10.4 policy gradient](chapters/10_rl/04_policy_gradient.qmd) — CartPole에서 REINFORCE
+    - [10.5 LLM을 위한 reinforcement learning](chapters/10_rl/05_rl_for_llm.qmd) — TRL의 GRPO에 verifier 두 개를 걸어 본다
 - **Part 11 시스템**
     - [11.0 reproducibility와 실험 관리](chapters/11_systems/00_reproducibility.qmd) — PyTorch에서 seed와 흔들림을 잰다
     - [11.1 data pipeline](chapters/11_systems/01_data_pipeline.qmd) — PyTorch DataLoader 와 Parquet
@@ -270,7 +275,7 @@ python -m venv venv-torch
 venv-torch/bin/pip install torch transformers peft          # Windows: venv-torch\Scripts\pip
 ```
 
-장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. Part 1의 절들은 `pandas` 와 `statsmodels` 를, 강화학습 장들은 `gymnasium` 을, 음성 장들은 `librosa`·`soundfile` 을, 9.0은 `pillow` 를, 4.1·9.1은 `torchvision` 을, 1.2는 `matplotlib` 을, 11.1은 `pyarrow` 를, 8.3은 `hmmlearn` 을, 7.5는 `datasketch` 를, 9.7은 `filterpy` 를, 6.5는 `diffusers` 를, 11.5는 `onnx`·`onnxruntime`·`onnxscript` 를, 11.6은 `river` 를 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)·[5.8](chapters/05_transformer/08_mixture_of_experts.qmd)은 `sentencepiece`, [4.6](chapters/04_architectures/06_gnn.qmd)은 `torch_geometric`, 6.7·9.5·9.6은 `scikit-image`(시험 이미지)를, 6.7은 `diffusers` 도 쓴다. 8.10은 Mini LibriSpeech(openslr.org/31)를 따로 내려받는다.
+장에 따라 library가 더 필요하다. 필요한 것은 그 장의 절 첫머리에 적혀 있다. Part 2의 절들은 PyTorch 없이 `scikit-learn` 만 있으면 되고, 몇몇 딥러닝 장도 데이터를 불러오는 데 `scikit-learn` 을 쓴다. Part 1의 절들은 `pandas` 와 `statsmodels` 를, 강화학습 장들은 `gymnasium` 을, 음성 장들은 `librosa`·`soundfile` 을, 9.0은 `pillow` 를, 4.1·9.1은 `torchvision` 을, 1.2는 `matplotlib` 을, 11.1은 `pyarrow` 를, 8.3은 `hmmlearn` 을, 7.5는 `datasketch` 를, 9.7은 `filterpy` 를, 6.5·6.6은 `diffusers` 를, 6.8은 `torchcfm` 을(짝짓기에 쓰는 `POT` 가 함께 설치된다), 10.5는 `trl` 을, 6.6·7.12·10.5는 데이터를 불러오는 데 `datasets` 를, 11.5는 `onnx`·`onnxruntime`·`onnxscript` 를, 11.6은 `river` 를 쓴다. 그 밖에 [7.3](chapters/07_language/03_word_embeddings.qmd)은 `gensim`, [7.10](chapters/07_language/10_rag.qmd)은 `sentence-transformers` 와 `rank_bm25`, [5.5](chapters/05_transformer/05_encoder_decoder.qmd)·[5.8](chapters/05_transformer/08_mixture_of_experts.qmd)은 `sentencepiece`, [4.6](chapters/04_architectures/06_gnn.qmd)은 `torch_geometric`, 6.7·9.5·9.6은 `scikit-image`(시험 이미지)를, 6.7은 `diffusers` 도 쓴다. 8.10은 Mini LibriSpeech(openslr.org/31)를 따로 내려받는다.
 GPU가 있으면 [pytorch.org](https://pytorch.org/get-started/locally/) 의 안내대로 자기 CUDA 버전에 맞는 `torch` 를 설치한다.
 
 **이 절의 코드를 읽을 때 알아 둘 것**
@@ -286,6 +291,7 @@ GPU가 있으면 [pytorch.org](https://pytorch.org/get-started/locally/) 의 안
 |---|---|
 | 층 하나를 직접 구현해 확인하기 | CPU로 충분 |
 | 1억 parameter 안팎의 작은 모델을 수십 step 학습하기 | CPU로 가능 (수십 초에서 몇 분) |
+| 언어모델을 RL(GRPO 등)로 학습하기 | 1억 3,500만 parameter 모델도 step 하나(응답 16개 생성과 갱신 한 번)에 CPU에서 10분 넘게 걸렸다 ([10.5](chapters/10_rl/05_rl_for_llm.qmd)). 끝까지 학습하려면 GPU |
 | 4 bit quantization(`bitsandbytes`)으로 모델 올리기 | CUDA GPU |
 | 수십억 parameter 모델의 fine-tuning | GPU 메모리 수 GB에서 수십 GB. 계산법은 [7.6](chapters/07_language/06_finetuning_peft.qmd) |
 
