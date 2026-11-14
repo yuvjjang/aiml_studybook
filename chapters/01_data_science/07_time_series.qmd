@@ -76,14 +76,14 @@ fig.update_layout(legend=dict(x=0.02, y=0.98, font=dict(size=10)))
 fig.show()
 ```
 
+독립인 random walk 쌍 `{python} f'{N_SIM:,}'`개 (길이 `{python} f'{T_S}'`)
+
 ```{python}
 #| label: spurious-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"독립인 random walk 쌍 {N_SIM:,}개 (길이 {T_S})")
-print()
 print(f"{'':<14} {'|r| 평균':>10} {'|r| 최대':>10} {'p<0.05 비율':>13}")
 print("-" * 50)
 print(f"{'수준 상관':<14} {np.mean(np.abs(lv_r)):>10.4f} "
@@ -153,8 +153,6 @@ for T in [50, 200, 800, 3200]:
     print(f"{T:>8}{(np.abs(r) > 0.5).mean():>16.1%}"
           f"{(t > 1.96).mean():>14.1%}{t.mean():>11.1f}")
 
-# 차분하면 stationary 가 되어 정상적으로 동작한다
-print("\n차분 후 (Δx, Δy 는 white noise)")
 T = 800
 x = rng.normal(0, 1, (reps, T)).cumsum(1)
 y = rng.normal(0, 1, (reps, T)).cumsum(1)
@@ -163,6 +161,14 @@ dxc = dx - dx.mean(1, keepdims=True)
 dyc = dy - dy.mean(1, keepdims=True)
 r = (dxc * dyc).sum(1) / np.sqrt((dxc**2).sum(1) * (dyc**2).sum(1))
 t = np.abs(r) * np.sqrt((T - 3) / np.maximum(1 - r**2, 1e-12))
+```
+
+차분 후 (Δx, Δy 는 white noise)
+
+```{python}
+#| label: spurious-scaling-2
+#| code-fold: false
+
 print(f"  T={T}  |상관|>0.5 비율 {(np.abs(r) > 0.5).mean():.1%}  "
       f"p<0.05 비율 {(t > 1.96).mean():.1%}")
 ```
@@ -300,8 +306,14 @@ SERIES["AR(1) φ=0.7 (정상)"] = ar1
 def half_stats(x):
     h = len(x)//2
     return x[:h].mean(), x[h:].mean(), x[:h].std(), x[h:].std()
+```
 
-print("전반부와 후반부의 통계량 비교 — stationary 면 비슷해야 한다")
+전반부와 후반부의 통계량 비교 — stationary 면 비슷해야 한다
+
+```{python}
+#| label: stationarity-2
+#| code-fold: false
+
 print(f"{'계열':<22} {'전반 평균':>10} {'후반 평균':>10} {'전반 표준편차':>13} "
       f"{'후반 표준편차':>13}  {'판정'}")
 print("-" * 88)
@@ -370,6 +382,8 @@ $h > q$ 면 두 식이 공유하는 $\epsilon$ 이 하나도 없으므로 공분
 **AR($p$) 의 PACF가 $p$ 에서 끊기는 이유**도 같은 종류다.
 $p$ 개의 과거를 통제하고 나면 그보다 먼 과거는 정의상 $X_t$ 에 직접 기여하지 않는다.
 
+MA(2) 의 ACF — 이론상 h>2 에서 정확히 0
+
 ```{python}
 #| label: arma-acf
 #| code-fold: false
@@ -388,7 +402,6 @@ def acf(x, H):
     g0 = (x * x).mean()
     return [1.0] + [float((x[h:] * x[:-h]).mean() / g0) for h in range(1, H + 1)]
 
-print("MA(2) 의 ACF — 이론상 h>2 에서 정확히 0")
 th = [1.0,
       (0.7 + 0.7*0.4) / (1 + 0.7**2 + 0.4**2),
       0.4 / (1 + 0.7**2 + 0.4**2), 0.0, 0.0, 0.0]
@@ -465,14 +478,14 @@ viz.fig_defaults(fig, height=560,
 fig.show()
 ```
 
+유의 경계 ±`{python} f'{BOUND:.4f}'` (±1.96/√n)
+
 ```{python}
 #| label: acf-pacf-numbers
 #| code-fold: false
 
 import numpy as np
 
-print(f"유의 경계 ±{BOUND:.4f}  (±1.96/√n)")
-print()
 for k, x in PROC.items():
     a_, p_ = acf(x, K_A), pacf(x, K_A)
     sig_a = [l for l in range(1, K_A+1) if abs(a_[l]) > BOUND]
@@ -714,8 +727,14 @@ for nm in SCALES:
         v = TABLE[(nm, fn)]
         print(f"  {fn:<20} " + " ".join(f"{x:>12.4f}" for x in v))
     print()
+```
 
-print("스케일이 2,000배 다른 두 계열의 지표 비율 (큰 값 / 작은 값)")
+스케일이 2,000배 다른 두 계열의 지표 비율 (큰 값 / 작은 값)
+
+```{python}
+#| label: metrics-numbers-2
+#| code-fold: false
+
 print(f"  {'예측':<20} {'MAE 비율':>12} {'RMSE 비율':>12} {'MAPE 비율':>12} "
       f"{'MASE 비율':>12}")
 print("-" * 74)
@@ -723,8 +742,14 @@ small, large = list(SCALES)
 for fn in FORECASTS:
     a, b = TABLE[(small, fn)], TABLE[(large, fn)]
     print(f"  {fn:<20} " + " ".join(f"{b[i]/a[i]:>12.1f}" for i in range(4)))
-print()
-print("MASE 판정 (작은 값 계열)")
+```
+
+MASE 판정 (작은 값 계열)
+
+```{python}
+#| label: metrics-numbers-3
+#| code-fold: false
+
 for fn in FORECASTS:
     v = TABLE[(small, fn)][3]
     verd = "naive보다 나음" if v < 1 else "naive보다 못함"
