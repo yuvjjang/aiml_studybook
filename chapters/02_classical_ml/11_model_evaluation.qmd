@@ -348,8 +348,9 @@ s = np.r_[rng.normal(1.0, 1, 400), rng.normal(0, 1, 600)]
 pairs = float((s[y == 1][:, None] > s[y == 0][None, :]).mean())
 auc_direct = float(roc_auc(y, s))
 print(f"\nAUC = {auc_direct:.6f}")
-print(f"양성>음성 순위쌍 비율 = {pairs:.6f}")
 ```
+
+양성>음성 순위쌍 비율 = `{python} f'{pairs:.6f}'`
 
 신호 세기를 고정한 채 $\pi$ 만 50배 바꿔도 ROC-AUC는 거의 그대로다 — 조건부 분포만 보기 때문이다.
 PR-AUC는 크게 떨어진다 — baseline 자체가 $\pi$ 로 내려가기 때문이다.
@@ -519,13 +520,19 @@ fig.show()
 #| code-fold: false
 
 import numpy as np
-
-print(f"grid search  : 중요한 축에서 서로 다른 값을 {len(np.unique(grid_pts[:,0]))}개만 시도")
-print(f"random search: 중요한 축에서 서로 다른 값을 {len(np.unique(rand_pts[:,0].round(3)))}개 시도")
-print()
-print(f"  grid   최고 점수: {score(grid_pts[:,0], grid_pts[:,1]).max():.4f}")
-print(f"  random 최고 점수: {score(rand_pts[:,0], rand_pts[:,1]).max():.4f}")
 ```
+
+grid search : 중요한 축에서 서로 다른 값을 `{python} f'{len(np.unique(grid_pts[:, 0]))}'`개만 시도
+random search: 중요한 축에서 서로 다른 값을 `{python} f'{len(np.unique(rand_pts[:, 0].round(3)))}'`개 시도
+
+```{python}
+#| label: hpo-values-2
+#| code-fold: false
+
+print(f"  grid   최고 점수: {score(grid_pts[:,0], grid_pts[:,1]).max():.4f}")
+```
+
+random 최고 점수: `{python} f'{score(rand_pts[:, 0], rand_pts[:, 1]).max():.4f}'`
 
 grid search는 중요한 축에서 같은 값을 반복 시도하느라 예산을 낭비한다 — 바둑판 위의 점만 찍으면 한 축에서는 값이 4개뿐이다.
 어떤 파라미터가 중요한지 모를 때 random search가 유리하다 (Bergstra & Bengio 2012).
@@ -934,11 +941,12 @@ def auc_trapezoid(pos, neg):
     return np.trapezoid(tpr, fpr)
 
 pairs = (pos[:, None] > neg[None, :]).mean()                    # 모든 쌍 비교
-print(f"ROC 넓이          {auc_trapezoid(pos, neg):.4f}")
-print(f"쌍 비교 비율      {pairs:.4f}")
-print(f"exp(3s) 변환 후   {auc_trapezoid(np.exp(3 * pos), np.exp(3 * neg)):.4f}")
-print(f"이론 Φ(1/√2)      {stats.norm.cdf(1 / np.sqrt(2)):.4f}")
 ```
+
+ROC 넓이 `{python} f'{auc_trapezoid(pos, neg):.4f}'`
+쌍 비교 비율 `{python} f'{pairs:.4f}'`
+exp(3s) 변환 후 `{python} f'{auc_trapezoid(np.exp(3 * pos), np.exp(3 * neg)):.4f}'`
+이론 Φ(1/√2) `{python} f'{stats.norm.cdf(1 / np.sqrt(2)):.4f}'`
 :::
 
 ## 요약
