@@ -440,6 +440,106 @@ Part 6을 지나며 계열들이 서로에게 흡수되었다
 - 지표 하나로 분포를 대신할 수 없다 — FID, likelihood, coverage
 - 품질과 다양성은 손잡이 하나로 이어져 있다 — CFG, truncation, discriminator 강도
 
+---
+
+## 실제 도구로: torchcfm으로 경로를 곧게 펴는 또 다른 방법
+
+G6.8.2는 reflow로 경로를 곧게 폈다. 학습한 모델로 짝을 다시 만들고 재학습하는 두 단계다. flow matching 연구자들이 공개한 library `torchcfm` 에는 다른 방법이 들어 있다. 학습하는 동안 batch 안에서 noise와 데이터를 optimal transport(가장 적게 옮기는 짝짓기)로 맺어 주는 것이다(OT-CFM). 처음부터 교차가 적은 짝으로 학습하는 셈이다. 본문과 같은 8-mode ring에서 독립 짝(I-CFM, 본문의 flow matching과 같은 방식)과 나란히 학습한다.
+아래 코드는 **이 책을 빌드할 때 실행되지 않는다.** 따로 돌려서 확인했고, 코드 아래 주석이 그때 나온 출력이다.
+환경을 만드는 방법은 [실습 환경 만들기](../../setup.qmd)의 6절에 있다.
+
+- 확인한 환경: Python 3.12, `torch` 2.15 (CPU), `torchcfm` 1.0.7 (`pip install torchcfm`, 짝을 계산하는 `POT` 가 함께 설치된다)
+- 신경망은 `torchcfm` 의 MLP(폭 128)이고, Adam(learning rate 0.002)으로 6,000 step 학습했다. sampling은 Euler다. 균형도와 mode 근처 비율은 본문 `src/generative.py` 의 `mode_stats` 와 같은 정의다.
+- 세 모델의 학습 step 수는 같지만 batch 크기가 달라서 본 표본 수는 다르다. b=16은 b=256의 1/16만 본다.
+- batch 1,024도 시도했지만 batch마다 짝을 정확히 푸는 계산이 이 CPU에서 너무 오래 걸려 중단했다.
+
+```python
+# 실행하지 않는 참고 코드 — 위에 적은 환경에서 따로 돌려 확인했다
+import numpy as np, torch
+from torchcfm.conditional_flow_matching import (ConditionalFlowMatcher,
+                                                ExactOptimalTransportConditionalFlowMatcher)
+from torchcfm.models import MLP
+
+# 본문과 같은 데이터: 반지름 3 원 위의 mode 8개, 표준편차 0.2
+a = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+CEN = np.stack([3 * np.cos(a), 3 * np.sin(a)], 1)
+
+
+def sample_data(n, g):
+    k = torch.randint(0, 8, (n,), generator=g)
+    return torch.tensor(CEN, dtype=torch.float32)[k] + 0.2 * torch.randn(n, 2, generator=g)
+
+
+def mode_stats(S, thresh=0.8):        # 본문 src/generative.py 와 같은 정의
+    d = ((S[:, None, :] - CEN[None]) ** 2).sum(-1)
+    near = d.min(1) < thresh ** 2
+    cnt = np.bincount(d.argmin(1)[near], minlength=8).astype(float)
+    p = cnt / max(cnt.sum(), 1); nz = p[p > 0]
+    return float(np.exp(-(nz * np.log(nz)).sum())) if len(nz) else 0.0, float(near.mean())
+
+
+def train(fm, batch, steps=6000, seed=0):
+    torch.manual_seed(seed)
+    g = torch.Generator().manual_seed(seed)
+    net = MLP(dim=2, w=128, time_varying=True)
+    opt = torch.optim.Adam(net.parameters(), 2e-3)
+    for _ in range(steps):
+        x0 = torch.randn(batch, 2, generator=g)          # noise
+        x1 = sample_data(batch, g)                         # data
+        t, xt, ut = fm.sample_location_and_conditional_flow(x0, x1)
+        loss = ((net(torch.cat([xt, t[:, None]], 1)) - ut) ** 2).mean()
+        opt.zero_grad(); loss.backward(); opt.step()
+    return net
+
+
+@torch.no_grad()
+def euler(net, n_steps, n=2000, seed=7):
+    x = torch.randn(n, 2, generator=torch.Generator().manual_seed(seed))
+    path = [x]
+    for i in range(n_steps):
+        t = torch.full((n, 1), i / n_steps)
+        x = x + net(torch.cat([x, t], 1)) / n_steps
+        path.append(x)
+    return torch.stack(path).numpy()
+
+
+def straightness(P):
+    seg = np.linalg.norm(np.diff(P, axis=0), axis=-1).sum(0)
+    return float((seg / np.maximum(np.linalg.norm(P[-1] - P[0], axis=-1), 1e-9)).mean())
+
+
+S_real = sample_data(2000, torch.Generator().manual_seed(3)).numpy()
+print("실제 데이터  균형도 %.2f  mode 근처 %.0f%%" % (mode_stats(S_real)[0], 100 * mode_stats(S_real)[1]))
+print("모델                         straightness |   8 step     4 step     2 step     1 step  (균형도 / mode 근처)")
+for name, fm, batch in [("I-CFM (독립 짝)        b=256", ConditionalFlowMatcher(sigma=0.0), 256),
+                        ("OT-CFM (minibatch OT)  b=16", ExactOptimalTransportConditionalFlowMatcher(sigma=0.0), 16),
+                        ("OT-CFM (minibatch OT)  b=256", ExactOptimalTransportConditionalFlowMatcher(sigma=0.0), 256)]:
+    net = train(fm, batch)
+    st = straightness(euler(net, 100))
+    cells = []
+    for s in [8, 4, 2, 1]:
+        e, nr = mode_stats(euler(net, s)[-1])
+        cells.append(f"{e:4.2f} / {nr:3.0%}")
+    print(f"{name:30s} {st:8.4f}   | " + "  ".join(cells))
+
+# 실제 데이터  균형도 7.98  mode 근처 100%
+# 모델                         straightness |   8 step     4 step     2 step     1 step  (균형도 / mode 근처)
+# I-CFM (독립 짝)        b=256        1.1696   | 7.94 / 92%  7.92 / 83%  7.75 / 56%  0.00 /  0%
+# OT-CFM (minibatch OT)  b=16      1.0031   | 7.85 / 88%  7.86 / 86%  7.87 / 81%  7.84 / 65%
+# OT-CFM (minibatch OT)  b=256     1.0018   | 7.96 / 98%  7.96 / 96%  7.96 / 93%  7.95 / 86%
+```
+
+모델 줄은 (모델과 batch 크기, 100 step 경로의 straightness, 8·4·2·1 step으로 만든 표본의 균형도 / mode 근처 비율)이다. 균형도는 8이 완전 균등이다.
+
+**출력을 본문과 맞춰 읽는다.**
+
+- **독립 짝으로 학습한 flow matching은 본문과 같은 모양이다 (G6.8.1).** 8 step에서 균형도 7.94, mode 근처 92%로 괜찮고, 2 step에서 mode 근처가 56%로 떨어지며, 1 step에서는 균형도 0으로 완전히 실패한다. 본문의 "1 step은 flow matching도 실패한다"가 그대로 나온다. straightness가 1.17로 직선이 아니다.
+- **batch 안에서 OT로 짝지으면 경로가 거의 직선이 된다 (G6.8.2).** b=256에서 straightness가 1.0018이고, 1 step만으로 균형도 7.95, mode 근처 86%다. 본문의 reflow가 보인 "1 step 생성이 가능해진다"와 같은 방향의 결과를, teacher 모델과 재학습 없이 한 번의 학습으로 얻었다. 짝을 정하는 방식만 바꿨다는 점에서 reflow와 생각이 같다. 둘 다 "교차하는 짝을 줄이면 marginal velocity field가 곧아진다"를 이용한다.
+- **batch가 작으면 효과가 준다.** b=16에서는 straightness 1.0031, 1 step의 mode 근처 비율이 65%다. minibatch OT는 batch 안에서만 짝을 고르므로, batch가 작을수록 데이터 전체를 놓고 푼 OT와 멀어진다. 다만 이 실험에서 b=16은 본 표본 수도 1/16이라 두 원인을 갈라내지 않았다.
+- **대가는 짝짓기 계산이다.** 짝을 정확히 푸는 계산이 batch 크기에 따라 빠르게 비싸져서 b=1,024는 끝까지 돌리지 못했다. reflow의 대가(teacher로 짝 생성 + 재학습)가 학습 중의 계산으로 옮겨 간 것이다.
+
+**이 코드가 보여 주지 못하는 것.**
+2차원 데이터 하나, seed 하나다. 이미지처럼 차원이 높은 데이터에서 batch 안의 OT 짝이 얼마나 도움이 되는지는 재지 않았다. 본문의 reflow와 같은 학습량을 맞춰 두 방법을 비교하지도 않았다.
 
 ---
 
