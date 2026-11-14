@@ -364,7 +364,8 @@ hard_row = ROB[-1]
 
 ```{python}
 #| label: robustness-2
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if hard_row[2] < hard_row[1]:
     print(f"**B는 같은 조건에서 {hard_row[2]:.4f}다** — "
@@ -608,17 +609,18 @@ mono = all(STREAM[i][1] >= STREAM[i+1][1] for i in range(len(STREAM)-1))
 
 ```{python}
 #| label: streaming-3
-#| code-fold: false
+#| echo: false
+#| output: asis
 
 if f8_[1] < f0_[1]:
-    print(f"  {(f0_[1]-f8_[1])/max(f0_[1], 1e-9):.0%} 개선을 "
+    print(f"{(f0_[1]-f8_[1])/max(f0_[1], 1e-9):.0%} 개선을 "
           f"{f8_[0]*HOP/SR*1000:.0f}ms latency로 샀다.")
 else:
-    print("  이 규모에서는 미래 문맥의 평균 이득이 뚜렷하지 않다.")
+    print("이 규모에서는 미래 문맥의 평균 이득이 뚜렷하지 않다.")
 if not mono:
-    print("  **다만 F에 따라 단조롭게 좋아지지는 않는다** — "
-          "seed 간 범위가 그 차이만큼 넓다.")
-    print("  이 실험이 확실히 말해 주는 것은 **방향**뿐이고, "
+    print("\n**다만 F에 따라 단조롭게 좋아지지는 않는다** — "
+          "seed 간 범위가 그 차이만큼 넓다. "
+          "이 실험이 확실히 말해 주는 것은 **방향**뿐이고, "
           "정확한 곡선 모양은 아니다.")
 ```
 
@@ -799,6 +801,17 @@ ASR은 pipeline의 한 조각일 뿐이다
 | 거부율 | 모델이 '못 알아들었다'고 말할 수 있는가 |
 | downstream 성공률 | **결국 이것이 유일하게 중요하다** |
 
+
+---
+
+::: {.callout-warning}
+## 이 장의 실험이 보여 주지 못하는 것
+
+- **"다양성이 정확도를 산다"를 Whisper 규모에서 잰 것이 아니다.** 8.4와 같은 합성 phoneme 8종에 화자, channel, noise 세 축의 변이를 넣고, 학습 발화 200개로 작은 CTC 모델을 학습했다. 68만 시간 데이터에서 다양성이 주는 이득의 크기는 이 실험으로 알 수 없다. 앞의 callout에 적은 대로 seed마다 숫자가 크게 움직이므로, 믿을 수 있는 것은 순위다.
+- **세 축은 직접 만든 변형이다.** 화자는 F0와 formant 주파수의 배율, channel은 band-pass filter, noise는 더한 Gaussian 잡음으로 흉내 냈다. 실제 억양, 잔향, 겹쳐 말하기, 낯선 어휘 같은 변이는 들어 있지 않다.
+- **hallucination 실험에서 잰 것은 CTC 쪽뿐이다.** "CTC는 무음에 blank를 낸다"는 이 장의 모델에서 확인했다. "attention decoder는 prior가 지배해 문장을 만든다"는 설명이고, 이 장의 실험에는 attention decoder가 없다. 아래 "실제 도구로" 절에서 Whisper가 무음과 noise에 단어 하나("you")를 내는 것은 확인했다.
+- **streaming의 latency는 계산한 값이다.** "미래 문맥 F frame = F×10 ms"는 frame 간격에서 나온 식이고, 실제 system의 처리 시간이나 network 지연은 들어 있지 않다.
+:::
 
 ---
 
